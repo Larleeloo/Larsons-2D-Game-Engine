@@ -1,5 +1,7 @@
 package com.larsons.engine.demo;
 
+import com.larsons.engine.config.GameContext;
+import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.Menu;
@@ -10,20 +12,25 @@ import java.awt.Font;
 import java.awt.Graphics2D;
 
 /**
- * Demo main menu. Shows how to build a customizable {@link Menu}
- * (requirement #6: menu customization) and how a scene triggers transitions to
- * other scenes.
+ * Main menu for the active game type. Shows the game type's name and lets the
+ * creator play/create a level, edit the type's features, or switch to a
+ * different game type.
  */
 public class MainMenuScene extends AbstractScene {
+    private final GameContext ctx;
     private Menu menu;
+
+    public MainMenuScene(GameContext ctx) { this.ctx = ctx; }
 
     @Override
     public void onEnter() {
-        MenuTheme theme = MenuTheme.dark();
-        menu = new Menu("Larson's 2D Game Engine")
-                .subtitle("a generic 2D engine starter")
-                .theme(theme)
-                .add("Play Demo Level", () -> scenes.transitionTo("play"))
+        GameProfile p = ctx.profile();
+        menu = new Menu(p.name)
+                .subtitle("game type · " + p.perspective)
+                .theme(MenuTheme.dark())
+                .add("Play / Create Level", () -> scenes.transitionTo("play"))
+                .add("Edit Features", () -> scenes.transitionTo("editor"))
+                .add("Change Game Type", () -> scenes.transitionTo("startup"))
                 .add("Quit", () -> System.exit(0));
     }
 
@@ -35,7 +42,6 @@ public class MainMenuScene extends AbstractScene {
     @Override
     public void render(Graphics2D g, float alpha) {
         menu.render(g, viewportWidth, viewportHeight);
-
         g.setColor(new Color(120, 120, 140));
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         g.drawString("Arrow keys / mouse to navigate, Enter to select",

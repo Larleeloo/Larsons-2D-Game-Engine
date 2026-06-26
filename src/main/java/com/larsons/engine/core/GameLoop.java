@@ -32,7 +32,7 @@ public final class GameLoop implements Runnable {
     }
 
     private final int updateRate;
-    private final int targetFps;
+    private volatile int targetFps;   // render cap; adjustable at runtime
     private final Update update;
     private final Render render;
 
@@ -58,10 +58,14 @@ public final class GameLoop implements Runnable {
 
     public double getFps() { return fps; }
 
+    public int getTargetFps() { return targetFps; }
+
+    /** Adjust the render frame cap at runtime (e.g. from a settings menu). */
+    public void setTargetFps(int fps) { this.targetFps = Math.max(1, fps); }
+
     @Override
     public void run() {
         final double nsPerUpdate = 1_000_000_000.0 / updateRate;
-        final long nsPerFrame = (long) (1_000_000_000.0 / targetFps);
 
         long lastTime = System.nanoTime();
         double accumulator = 0;
@@ -91,6 +95,8 @@ public final class GameLoop implements Runnable {
             }
 
             // Frame limiter: sleep the remaining time until the next frame.
+            // Recomputed each iteration so the cap can change at runtime.
+            long nsPerFrame = (long) (1_000_000_000.0 / targetFps);
             long elapsed = System.nanoTime() - frameStart;
             long sleep = nsPerFrame - elapsed;
             if (sleep > 0) {

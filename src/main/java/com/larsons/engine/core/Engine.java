@@ -53,6 +53,11 @@ public class Engine {
 
     public double fps() { return loop.getFps(); }
 
+    public int getTargetFps() { return loop.getTargetFps(); }
+
+    /** Change the render frame cap at runtime (used by game-type settings). */
+    public void setTargetFps(int fps) { loop.setTargetFps(fps); }
+
     public void start() {
         window.show();
         loop.start();

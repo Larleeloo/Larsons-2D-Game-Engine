@@ -4,6 +4,9 @@ import com.larsons.engine.graphics.SpriteSheet;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
+import com.larsons.engine.config.GameContext;
+import com.larsons.engine.config.GameProfile;
+import com.larsons.engine.config.GameTypeStore;
 import com.larsons.engine.scene.SceneManager;
 import com.larsons.engine.ui.Menu;
 import com.larsons.engine.ui.MenuItem;
@@ -75,10 +78,13 @@ class EngineSmokeTest {
 
     @Test
     void demoScenesUpdateAndRenderWithoutErrors() {
+        GameContext ctx = new GameContext(null, new GameTypeStore());
+        ctx.setProfile(new GameProfile("Test Type"));
+
         SceneManager scenes = new SceneManager();
         scenes.setViewport(640, 360);
-        scenes.register("menu", new MainMenuScene());
-        scenes.register("play", new PlayScene("levels/sample_level.json"));
+        scenes.register("menu", new MainMenuScene(ctx));
+        scenes.register("play", new PlayScene(ctx, "levels/sample_level.json"));
 
         InputManager input = new InputManager();
         BufferedImage frame = new BufferedImage(640, 360, BufferedImage.TYPE_INT_ARGB);

@@ -1,13 +1,20 @@
 package com.larsons.engine.core;
 
+import com.larsons.engine.config.GameContext;
+import com.larsons.engine.config.GameTypeStore;
+import com.larsons.engine.demo.GameTypeEditorScene;
 import com.larsons.engine.demo.MainMenuScene;
 import com.larsons.engine.demo.PlayScene;
+import com.larsons.engine.demo.StartupScene;
 
 /**
  * Application entry point.
  *
- * <p>Boots the engine with the bundled demo scenes so the project is runnable
- * out of the box (requirement #4):
+ * <p>Boots into the game-type chooser: the user creates a new game type (naming
+ * it and enabling the features they want) or selects an existing one, then
+ * plays/creates levels within it. Game types persist as JSON under
+ * {@code resources/gametypes/}.
+ *
  * <pre>
  *   ./gradlew run
  *   # or, after `./gradlew jar`:
@@ -23,9 +30,14 @@ public class Main {
                 .updateRate(120);
 
         Engine engine = new Engine(config);
-        engine.scenes().register("menu", new MainMenuScene());
-        engine.scenes().register("play", new PlayScene("levels/sample_level.json"));
-        engine.scenes().setScene("menu");
+        GameContext context = new GameContext(engine, new GameTypeStore());
+
+        engine.scenes().register("startup", new StartupScene(context));
+        engine.scenes().register("editor", new GameTypeEditorScene(context));
+        engine.scenes().register("menu", new MainMenuScene(context));
+        engine.scenes().register("play", new PlayScene(context, "levels/sample_level.json"));
+
+        engine.scenes().setScene("startup");
         engine.start();
     }
 }
