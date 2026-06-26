@@ -5,18 +5,25 @@ import com.larsons.engine.input.InputManager;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
 import com.larsons.engine.scene.SceneManager;
+import com.larsons.engine.ui.Menu;
+import com.larsons.engine.ui.MenuItem;
 import com.larsons.engine.util.Json;
 import com.larsons.engine.demo.MainMenuScene;
 import com.larsons.engine.demo.PlayScene;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
+import java.awt.Canvas;
+import java.awt.Component;
 import java.awt.Graphics2D;
+import java.awt.event.KeyEvent;
+import java.awt.event.MouseEvent;
 import java.awt.image.BufferedImage;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -94,5 +101,87 @@ class EngineSmokeTest {
 
         assertNotNull(scenes.current());
         assertEquals("PlayScene", scenes.current().name());
+    }
+
+    /**
+     * Regression test for the input edge-detection bug: a press that arrives
+     * between ticks (the normal case) must be reported as "just pressed" on the
+     * next tick, exactly once, even while the key/button stays held.
+     */
+    @Test
+    void justPressedFiresOnceForPressesBetweenTicks() {
+        InputManager input = new InputManager();
+        Component src = new Canvas();
+
+        input.newFrame();
+        assertFalse(input.isKeyJustPressed(KeyEvent.VK_ENTER));
+        assertFalse(input.isMouseJustPressed());
+
+        // Press occurs between ticks.
+        input.keyPressed(new KeyEvent(src, KeyEvent.KEY_PRESSED, 0L, 0, KeyEvent.VK_ENTER, '\n'));
+        input.mousePressed(new MouseEvent(src, MouseEvent.MOUSE_PRESSED, 0L, 0, 5, 5, 1, false));
+
+        input.newFrame();
+        assertTrue(input.isKeyJustPressed(KeyEvent.VK_ENTER));
+        assertTrue(input.isMouseJustPressed());
+        assertTrue(input.isKeyDown(KeyEvent.VK_ENTER));
+
+        // Still held on the following tick: must NOT re-fire.
+        input.newFrame();
+        assertFalse(input.isKeyJustPressed(KeyEvent.VK_ENTER));
+        assertFalse(input.isMouseJustPressed());
+        assertTrue(input.isKeyDown(KeyEvent.VK_ENTER));
+    }
+
+    @Test
+    void menuActivatesViaEnterKey() {
+        InputManager input = new InputManager();
+        Component src = new Canvas();
+        boolean[] fired = {false, false};
+        Menu menu = new Menu("Test")
+                .add("First", () -> fired[0] = true)
+                .add("Second", () -> fired[1] = true);
+
+        BufferedImage img = new BufferedImage(640, 360, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        menu.render(g, 640, 360); // computes item hit-boxes
+
+        // Move selection down to the second item, then press Enter.
+        input.keyPressed(new KeyEvent(src, KeyEvent.KEY_PRESSED, 0L, 0, KeyEvent.VK_DOWN, (char) 0));
+        input.newFrame();
+        menu.update(1.0 / 120.0, input);
+        assertEquals(1, menu.getSelectedIndex());
+
+        input.keyPressed(new KeyEvent(src, KeyEvent.KEY_PRESSED, 0L, 0, KeyEvent.VK_ENTER, '\n'));
+        input.newFrame();
+        menu.update(1.0 / 120.0, input);
+
+        g.dispose();
+        assertTrue(fired[1], "Enter should activate the selected item");
+        assertFalse(fired[0]);
+    }
+
+    @Test
+    void menuActivatesViaMouseClick() {
+        InputManager input = new InputManager();
+        Component src = new Canvas();
+        boolean[] fired = {false};
+        Menu menu = new Menu("Test").add("Click Me", () -> fired[0] = true);
+
+        BufferedImage img = new BufferedImage(640, 360, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        menu.render(g, 640, 360); // computes item hit-boxes
+
+        MenuItem item = menu.items().get(0);
+        int cx = item.x + item.width / 2;
+        int cy = item.y + item.height / 2;
+
+        input.mouseMoved(new MouseEvent(src, MouseEvent.MOUSE_MOVED, 0L, 0, cx, cy, 0, false));
+        input.mousePressed(new MouseEvent(src, MouseEvent.MOUSE_PRESSED, 0L, 0, cx, cy, 1, false));
+        input.newFrame();
+        menu.update(1.0 / 120.0, input);
+
+        g.dispose();
+        assertTrue(fired[0], "Clicking a menu item should activate it");
     }
 }

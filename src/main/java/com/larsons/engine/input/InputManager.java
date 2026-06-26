@@ -11,30 +11,53 @@ import java.awt.event.MouseWheelListener;
 /**
  * Keyboard + mouse state tracker.
  *
- * <p>Snapshot model: the game loop calls {@link #newFrame()} once per simulation
- * tick to capture the previous state, so scenes can query edge-triggered
- * "just pressed" input during {@code update}. Querying state (rather than
- * handling raw events in scenes) keeps input polling deterministic and is a
- * good fit for the fixed-timestep loop and for future networked input
- * (requirement #3).
+ * <p>Scenes poll input during {@code update} rather than handling raw events,
+ * which keeps input deterministic and a good fit for the fixed-timestep loop
+ * and future networked input (requirement #3).
+ *
+ * <p><b>Edge detection.</b> AWT delivers input events on the event-dispatch
+ * thread, asynchronously to the game loop. A naive "compare this frame's state
+ * to last frame's" scheme misses presses: a held button stays {@code true} for
+ * many ticks at 120&nbsp;Hz, so by the time the next snapshot is taken the
+ * press has already been folded into the previous state and the rising edge is
+ * never observed. Instead, each press is <em>latched</em> the moment it happens
+ * in the event handler, and {@link #newFrame()} promotes any latched presses to
+ * "just pressed" for exactly the next tick. This way no press is ever lost,
+ * regardless of when the event arrives relative to the loop — and even a press
+ * released within a single frame (a fast tap) is still reported.
  */
 public class InputManager
         implements KeyListener, MouseListener, MouseMotionListener, MouseWheelListener {
 
     private static final int MAX_KEYS = 256;
+
+    // Live physical state, mutated by AWT events on the event-dispatch thread.
     private final boolean[] down = new boolean[MAX_KEYS];
-    private final boolean[] prev = new boolean[MAX_KEYS];
+    // Presses recorded since the last newFrame(); promoted to justPressed there.
+    private final boolean[] pressedLatch = new boolean[MAX_KEYS];
+    // Rising-edge state visible to the current tick's update().
+    private final boolean[] justPressed = new boolean[MAX_KEYS];
 
     private volatile int mouseX, mouseY;
     private volatile boolean mouseDown;
-    private boolean mousePrevDown;
+    private boolean mousePressedLatch;
+    private boolean mouseJustPressed;
     private int wheel;
+    private int wheelLatch;
 
-    /** Snapshot current state as "previous" for edge detection. Call once per tick. */
-    public void newFrame() {
-        System.arraycopy(down, 0, prev, 0, MAX_KEYS);
-        mousePrevDown = mouseDown;
-        wheel = 0;
+    /**
+     * Promote events accumulated since the previous call into the state scenes
+     * read this tick. Call once per simulation tick, before scene updates.
+     */
+    public synchronized void newFrame() {
+        for (int c = 0; c < MAX_KEYS; c++) {
+            justPressed[c] = pressedLatch[c];
+            pressedLatch[c] = false;
+        }
+        mouseJustPressed = mousePressedLatch;
+        mousePressedLatch = false;
+        wheel = wheelLatch;
+        wheelLatch = 0;
     }
 
     public boolean isKeyDown(int keyCode) {
@@ -42,7 +65,7 @@ public class InputManager
     }
 
     public boolean isKeyJustPressed(int keyCode) {
-        return keyCode >= 0 && keyCode < MAX_KEYS && down[keyCode] && !prev[keyCode];
+        return keyCode >= 0 && keyCode < MAX_KEYS && justPressed[keyCode];
     }
 
     public int getMouseX() { return mouseX; }
@@ -51,17 +74,20 @@ public class InputManager
 
     public boolean isMouseDown() { return mouseDown; }
 
-    public boolean isMouseJustPressed() { return mouseDown && !mousePrevDown; }
+    public boolean isMouseJustPressed() { return mouseJustPressed; }
 
     public int getWheelRotation() { return wheel; }
 
     // --- KeyListener ---
-    @Override public void keyPressed(KeyEvent e) {
+    @Override public synchronized void keyPressed(KeyEvent e) {
         int c = e.getKeyCode();
-        if (c >= 0 && c < MAX_KEYS) down[c] = true;
+        if (c >= 0 && c < MAX_KEYS) {
+            if (!down[c]) pressedLatch[c] = true; // record only the rising edge
+            down[c] = true;
+        }
     }
 
-    @Override public void keyReleased(KeyEvent e) {
+    @Override public synchronized void keyReleased(KeyEvent e) {
         int c = e.getKeyCode();
         if (c >= 0 && c < MAX_KEYS) down[c] = false;
     }
@@ -69,13 +95,14 @@ public class InputManager
     @Override public void keyTyped(KeyEvent e) {}
 
     // --- MouseListener ---
-    @Override public void mousePressed(MouseEvent e) {
+    @Override public synchronized void mousePressed(MouseEvent e) {
         mouseDown = true;
+        mousePressedLatch = true;
         mouseX = e.getX();
         mouseY = e.getY();
     }
 
-    @Override public void mouseReleased(MouseEvent e) {
+    @Override public synchronized void mouseReleased(MouseEvent e) {
         mouseDown = false;
         mouseX = e.getX();
         mouseY = e.getY();
@@ -99,7 +126,7 @@ public class InputManager
     }
 
     // --- MouseWheelListener ---
-    @Override public void mouseWheelMoved(MouseWheelEvent e) {
-        wheel += e.getWheelRotation();
+    @Override public synchronized void mouseWheelMoved(MouseWheelEvent e) {
+        wheelLatch += e.getWheelRotation();
     }
 }
