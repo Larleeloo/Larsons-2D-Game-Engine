@@ -45,6 +45,10 @@ public class InputManager
     private int wheel;
     private int wheelLatch;
 
+    // Buffer of printable characters typed since last consumed (for text fields).
+    private final StringBuilder typed = new StringBuilder();
+    private static final int MAX_TYPED_BUFFER = 256;
+
     /**
      * Promote events accumulated since the previous call into the state scenes
      * read this tick. Call once per simulation tick, before scene updates.
@@ -78,6 +82,18 @@ public class InputManager
 
     public int getWheelRotation() { return wheel; }
 
+    /**
+     * Return and clear printable characters typed since the last call (for text
+     * input fields). Control characters (Enter, Backspace, etc.) are excluded;
+     * handle those via {@link #isKeyJustPressed}.
+     */
+    public synchronized String consumeTypedChars() {
+        if (typed.length() == 0) return "";
+        String s = typed.toString();
+        typed.setLength(0);
+        return s;
+    }
+
     // --- KeyListener ---
     @Override public synchronized void keyPressed(KeyEvent e) {
         int c = e.getKeyCode();
@@ -92,7 +108,13 @@ public class InputManager
         if (c >= 0 && c < MAX_KEYS) down[c] = false;
     }
 
-    @Override public void keyTyped(KeyEvent e) {}
+    @Override public synchronized void keyTyped(KeyEvent e) {
+        char c = e.getKeyChar();
+        // Keep only printable characters; drop control chars (Enter/Backspace/etc).
+        if (c >= 0x20 && c != 0x7f && typed.length() < MAX_TYPED_BUFFER) {
+            typed.append(c);
+        }
+    }
 
     // --- MouseListener ---
     @Override public synchronized void mousePressed(MouseEvent e) {

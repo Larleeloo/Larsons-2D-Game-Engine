@@ -45,6 +45,94 @@ public final class Json {
     @SuppressWarnings("unchecked")
     public static List<Object> asArray(Object o) { return (List<Object>) o; }
 
+    // --- Writing -------------------------------------------------------------
+
+    /**
+     * Serialize a tree of {@code Map}/{@code Iterable}/{@code String}/
+     * {@code Number}/{@code Boolean}/{@code null} into pretty-printed JSON
+     * (2-space indent). Used to persist game-type profiles.
+     */
+    public static String stringify(Object value) {
+        StringBuilder sb = new StringBuilder();
+        write(sb, value, 0);
+        return sb.toString();
+    }
+
+    private static void write(StringBuilder sb, Object value, int indent) {
+        if (value == null) { sb.append("null"); return; }
+        if (value instanceof String str) { writeString(sb, str); return; }
+        if (value instanceof Boolean b) { sb.append(b.booleanValue()); return; }
+        if (value instanceof Number n) { writeNumber(sb, n); return; }
+        if (value instanceof Map<?, ?> m) { writeObject(sb, m, indent); return; }
+        if (value instanceof Iterable<?> it) { writeArray(sb, it, indent); return; }
+        writeString(sb, String.valueOf(value)); // fallback
+    }
+
+    private static void writeObject(StringBuilder sb, Map<?, ?> m, int indent) {
+        if (m.isEmpty()) { sb.append("{}"); return; }
+        sb.append("{\n");
+        int i = 0;
+        for (Map.Entry<?, ?> e : m.entrySet()) {
+            indent(sb, indent + 1);
+            writeString(sb, String.valueOf(e.getKey()));
+            sb.append(": ");
+            write(sb, e.getValue(), indent + 1);
+            if (++i < m.size()) sb.append(',');
+            sb.append('\n');
+        }
+        indent(sb, indent);
+        sb.append('}');
+    }
+
+    private static void writeArray(StringBuilder sb, Iterable<?> it, int indent) {
+        java.util.Iterator<?> iter = it.iterator();
+        if (!iter.hasNext()) { sb.append("[]"); return; }
+        sb.append("[\n");
+        while (iter.hasNext()) {
+            indent(sb, indent + 1);
+            write(sb, iter.next(), indent + 1);
+            if (iter.hasNext()) sb.append(',');
+            sb.append('\n');
+        }
+        indent(sb, indent);
+        sb.append(']');
+    }
+
+    private static void writeNumber(StringBuilder sb, Number n) {
+        // Doubles/floats keep a decimal point; integral types print plainly.
+        if (n instanceof Double || n instanceof Float) {
+            sb.append(n.doubleValue());
+        } else {
+            sb.append(n.longValue());
+        }
+    }
+
+    private static void writeString(StringBuilder sb, String s) {
+        sb.append('"');
+        for (int k = 0; k < s.length(); k++) {
+            char c = s.charAt(k);
+            switch (c) {
+                case '"':  sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                case '\b': sb.append("\\b"); break;
+                case '\f': sb.append("\\f"); break;
+                default:
+                    if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
+                    else sb.append(c);
+            }
+        }
+        sb.append('"');
+    }
+
+    private static void indent(StringBuilder sb, int level) {
+        for (int k = 0; k < level; k++) sb.append("  ");
+    }
+
+    // --- Parsing -------------------------------------------------------------
+
     private Object value() {
         char c = peek();
         switch (c) {

@@ -1,0 +1,17 @@
+{
+  "name": "Top Down Adventure",
+  "perspective": "TOP_DOWN",
+  "perspectiveSwitchingEnabled": true,
+  "zoomEnabled": true,
+  "minZoom": 0.75,
+  "maxZoom": 3.0,
+  "defaultZoom": 1.5,
+  "minFps": 60,
+  "maxFps": 120,
+  "gravityEnabled": false,
+  "hudVisible": true,
+  "gridVisible": true,
+  "tileSize": 32,
+  "playerSize": 28,
+  "defaultEntitySize": 32
+}

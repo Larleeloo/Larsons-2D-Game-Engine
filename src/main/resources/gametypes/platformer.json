@@ -1,0 +1,17 @@
+{
+  "name": "Platformer",
+  "perspective": "SIDE_SCROLL",
+  "perspectiveSwitchingEnabled": false,
+  "zoomEnabled": true,
+  "minZoom": 0.5,
+  "maxZoom": 2.0,
+  "defaultZoom": 1.0,
+  "minFps": 30,
+  "maxFps": 120,
+  "gravityEnabled": true,
+  "hudVisible": true,
+  "gridVisible": false,
+  "tileSize": 32,
+  "playerSize": 32,
+  "defaultEntitySize": 32
+}

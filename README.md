@@ -5,6 +5,12 @@ and the essential building blocks for any 2D game — sprite sheets, level
 loading, cameras with multiple perspectives, scenes, input, and a customizable
 menu system — without committing to a single genre.
 
+The engine is built to be **a giant custom level loader**: you define a
+**game type** by enabling only the features your game needs (perspective, zoom,
+framerate bounds, entity sizes, gravity, HUD, …), save it as a named JSON
+profile, and then create levels within that type. Game types and levels are
+stored independently, so one engine drives many different games.
+
 It is a deliberately minimal starting point: a *functional outline you edit*,
 not a finished game. A companion repository, **Side-Scroller-Game-Engine**, is a
 feature-rich example of what a game built on these ideas can grow into; this
@@ -25,7 +31,8 @@ This engine was built against six explicit requirements:
 | 3 | **Online play (later)** | The loop updates the simulation at a **fixed rate**, decoupled from rendering. Deterministic fixed-step updates and polled input are the right foundation for netcode; the seam is documented but not yet implemented. |
 | 4 | **Out of the box on any Java machine** | The engine uses **only the JDK** (Java2D / AWT / Swing). No third-party runtime dependencies — even JSON parsing is in-engine. |
 | 5 | **Shader support (later)** | Rendering goes through a [`Renderer`](src/main/java/com/larsons/engine/graphics/Renderer.java) interface. The default is `Java2DRenderer`; a future GPU/OpenGL backend (likely a separate setup) can implement the same lifecycle. |
-| 6 | **Editing outline of game essentials** | Working, minimal implementations of sprite sheets, level loading, and menu customization, wired together by two demo scenes. |
+| 6 | **Editing outline of game essentials** | Working, minimal implementations of sprite sheets, level loading, and menu customization, wired together by the demo scenes. |
+| ★ | **Feature toggles + game types** | Clickable toggles on launch and in the pause menu enable/disable features; each configuration is saved as a named JSON [`GameProfile`](src/main/java/com/larsons/engine/config/GameProfile.java) ("game type") under `resources/gametypes/` and can be reselected later. |
 
 ---
 
@@ -57,13 +64,19 @@ javac -d out @sources.txt
 java -cp "out:src/main/resources" com.larsons.engine.core.Main
 ```
 
+On launch you'll choose or create a **game type** before playing — see
+[Game types & feature toggles](#game-types--feature-toggles).
+
 ### Demo controls
 
-- **Menu:** arrow keys / mouse to navigate, **Enter** to select.
-- **Level:** `WASD` / arrows to move, **P** to cycle perspective,
-  **+ / -** to zoom, **Esc** to return to the menu.
-  In side-scroll the character has gravity and can jump; in top-down and
-  isometric it moves freely on both axes.
+- **Menus / forms:** arrow keys to move, **Left/Right** to adjust a value,
+  **Enter** to activate, or use the mouse (hover + click the toggles/steppers).
+  In the game-type editor, just type to set the name.
+- **Level:** `WASD` / arrows to move, **P** to cycle perspective (if enabled),
+  **+ / -** to zoom (if enabled), **Esc** to open the pause menu.
+  In side-scroll with gravity enabled the character can jump; otherwise it
+  moves freely on both axes. Which of these are available depends on the active
+  game type.
 
 ---
 
@@ -72,11 +85,15 @@ java -cp "out:src/main/resources" com.larsons.engine.core.Main
 ```
 com.larsons.engine
 ├── core
-│   ├── Main.java          Entry point; wires up the demo scenes
+│   ├── Main.java          Entry point; wires up the scenes + game context
 │   ├── EngineConfig.java  Title, size, target FPS, update rate, perspective
 │   ├── Engine.java        Wires window + renderer + input + scenes + loop
 │   ├── GameWindow.java    JFrame hosting an AWT Canvas (BufferStrategy)
-│   └── GameLoop.java      Fixed-timestep loop, 120 FPS cap, FPS counter
+│   └── GameLoop.java      Fixed-timestep loop, runtime-adjustable FPS cap
+├── config
+│   ├── GameProfile.java   A named "game type": feature toggles + values
+│   ├── GameTypeStore.java List/load/save profiles under resources/gametypes/
+│   └── GameContext.java   Active profile; applies live settings to the engine
 ├── graphics
 │   ├── Renderer.java      Backend abstraction (seam for future shaders)
 │   ├── Java2DRenderer.java Default backend (double-buffered Canvas)
@@ -86,7 +103,7 @@ com.larsons.engine
 │   ├── Animation.java     Delta-timed frame animation
 │   └── AssetLoader.java   Cached image loading + placeholders
 ├── input
-│   └── InputManager.java  Polled keyboard/mouse state (edge detection)
+│   └── InputManager.java  Polled keyboard/mouse + typed-text state
 ├── scene
 │   ├── Scene.java         update(dt,input) / render(g,alpha) lifecycle
 │   ├── AbstractScene.java No-op base with viewport + manager refs
@@ -97,12 +114,16 @@ com.larsons.engine
 ├── ui
 │   ├── Menu.java          Keyboard/mouse menu
 │   ├── MenuItem.java      Label (dynamic) + action
-│   └── MenuTheme.java     Colours, fonts, spacing
+│   ├── MenuTheme.java     Colours, fonts, spacing
+│   └── ConfigForm.java    Clickable toggles / steppers / cyclers / text / buttons
 ├── util
-│   └── Json.java          Tiny dependency-free JSON parser
+│   └── Json.java          Dependency-free JSON parser + writer
 └── demo
-    ├── MainMenuScene.java Customizable menu example
-    └── PlayScene.java     Level + perspectives + animated sprite example
+    ├── StartupScene.java        Choose or create a game type
+    ├── GameTypeEditorScene.java Name + configure a game type's features
+    ├── MainMenuScene.java       Per-game-type main menu
+    ├── PlayScene.java           Level + perspectives + sprite, honours profile
+    └── ProfileForms.java        Shared feature options (editor + pause menu)
 ```
 
 ### The game loop
@@ -138,6 +159,76 @@ different backend entirely — e.g. OpenGL via LWJGL. That backend can implement
 `Renderer` and keep the loop's `beginFrame → draw → present` lifecycle; the main
 porting work is introducing a backend-neutral draw API, since scenes currently
 draw with `Graphics2D`.
+
+---
+
+## Game types & feature toggles
+
+A **game type** is a named set of enabled features and their values, stored as a
+JSON [`GameProfile`](src/main/java/com/larsons/engine/config/GameProfile.java).
+The idea: the engine is one big level loader, and a game type tells it which
+features to turn on so the *same* engine can drive a platformer, a top-down
+adventure, an isometric builder, etc.
+
+**Flow on launch:**
+
+1. **Startup** — pick an existing game type (to keep creating levels within it)
+   or *Create New Game Type*.
+2. **Editor** — name it and flip the feature toggles you want.
+3. **Save** — written to `resources/gametypes/<name>.json`.
+4. **Play** — levels load with only the enabled features active. Press **Esc**
+   for a **pause menu** exposing the *same* toggles, so you can tune features
+   mid-session and save them back to the game type.
+
+**Currently configurable features:**
+
+| Feature | Type | Notes |
+|---------|------|-------|
+| Perspective | cycler | `SIDE_SCROLL` / `TOP_DOWN` / `ISOMETRIC` |
+| Switch perspective in-game | toggle | allow the **P** key to cycle |
+| Zoom enabled | toggle | gates the zoom controls + range |
+| Min / Max / Default zoom | steppers | enabled only when zoom is on |
+| Min / Max framerate | steppers | **Max** is applied live as the render cap |
+| Gravity / jumping | toggle | side-scroll falling + jump |
+| Show HUD | toggle | on-screen info bar |
+| Show grid | toggle | tile grid overlay |
+| Tile / Player / Default entity size | steppers | sizes in world pixels |
+
+Adding a new feature is three edits: a field on `GameProfile` (it auto-serializes
+via `toMap`/`fromMap`), a row in
+[`ProfileForms`](src/main/java/com/larsons/engine/demo/ProfileForms.java), and
+honouring it where it matters (e.g. in `PlayScene`).
+
+```java
+// Programmatic use:
+GameTypeStore store = new GameTypeStore();        // resources/gametypes/
+GameProfile profile = new GameProfile("My Platformer");
+profile.perspective = Perspective.SIDE_SCROLL;
+profile.zoomEnabled = false;
+store.save(profile);                              // -> my_platformer.json
+// later:
+GameProfile reloaded = store.load("My Platformer");
+```
+
+> Game types are written to the **`src/main/resources/gametypes/`** folder, so
+> run from the project root (e.g. `./gradlew run`). Bundled example types ship
+> on the classpath and also load from a packaged jar.
+
+### Building a feature form
+
+`ConfigForm` is the reusable clickable widget behind the editor and pause menu.
+Each control binds to a getter/setter, so it edits your object in place:
+
+```java
+ConfigForm form = new ConfigForm("Settings");
+form.addToggle("Zoom", () -> p.zoomEnabled, v -> p.zoomEnabled = v);
+form.addDouble("Max zoom", () -> p.maxZoom, v -> p.maxZoom = v, 0.1, 8.0, 0.1)
+    .enabledWhen(() -> p.zoomEnabled);            // greyed out + skipped when off
+form.addEnum("Perspective", Perspective.values(), () -> p.perspective, v -> p.perspective = v);
+form.addText("Name", () -> p.name, v -> p.name = v, 40);
+form.addAction("Save", () -> store.save(p));
+// in the scene: form.update(dt, input); form.render(g, w, h);
+```
 
 ---
 
@@ -217,12 +308,17 @@ engine.scenes().setScene("mine"); // or transitionTo for a fade
   fixed-step simulation (input commands in, state snapshots out).
 - **Shaders / GPU rendering (requirement #5):** add an OpenGL `Renderer`
   backend and a backend-neutral draw API.
-- **Audio, particles, tile collision properties, a level editor** — natural next
-  layers, kept out of the basic outline on purpose.
+- **Per-game-type level saving / a level editor** — next step: save levels into
+  the active game type so types and levels are managed together.
+- **Audio, particles, tile collision properties** — natural next layers, kept
+  out of the basic outline on purpose.
 
 ## Tests
 
-`./gradlew test` runs headless smoke tests
-([`EngineSmokeTest`](src/test/java/com/larsons/engine/EngineSmokeTest.java))
-covering JSON parsing, level loading, sprite-sheet slicing, and rendering the
-demo scenes off-screen — so the core is verifiable without a display.
+`./gradlew test` runs headless tests
+([`EngineSmokeTest`](src/test/java/com/larsons/engine/EngineSmokeTest.java),
+[`ConfigFeatureTest`](src/test/java/com/larsons/engine/ConfigFeatureTest.java))
+covering JSON read/write, level loading, sprite-sheet slicing, input edge
+detection, game-type save/load, the `ConfigForm` widget's keyboard/mouse
+interaction, and rendering the scenes off-screen — so the core is verifiable
+without a display.
