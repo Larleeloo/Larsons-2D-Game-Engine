@@ -2,6 +2,7 @@ package com.larsons.engine.core;
 
 import com.larsons.engine.graphics.Java2DRenderer;
 import com.larsons.engine.graphics.Renderer;
+import com.larsons.engine.graphics.shader.ShaderChain;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.scene.SceneManager;
 
@@ -24,6 +25,7 @@ public class Engine {
     private final GameWindow window;
     private final InputManager input;
     private final Renderer renderer;
+    private final ShaderChain shaders;
     private final SceneManager scenes;
     private final GameLoop loop;
 
@@ -37,6 +39,8 @@ public class Engine {
         window.attachInput(input);
 
         this.renderer = new Java2DRenderer(window.getCanvas(), config.backgroundColor);
+        this.shaders = new ShaderChain();
+        this.renderer.setShaderChain(shaders);
         this.scenes = new SceneManager();
         this.scenes.setViewport(config.width, config.height);
         this.lastWidth = config.width;
@@ -50,6 +54,9 @@ public class Engine {
     public EngineConfig config() { return config; }
 
     public InputManager input() { return input; }
+
+    /** The post-processing shader chain applied to every presented frame. */
+    public ShaderChain shaders() { return shaders; }
 
     public double fps() { return loop.getFps(); }
 

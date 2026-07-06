@@ -84,6 +84,32 @@ public class Camera {
         return (int) Math.round((p[1] - c[1]) * zoom + viewportHeight / 2.0);
     }
 
+    /**
+     * Project a world point into {@code out[0]} (screen x) and {@code out[1]}
+     * (screen y) with no allocation — one projection instead of the two that
+     * separate {@link #worldToScreenX}/{@link #worldToScreenY} calls cost.
+     * This is the hot path for tile rendering (four corners per tile).
+     */
+    public void worldToScreen(double wx, double wy, int[] out) {
+        double px, py, cx, cy;
+        if (perspective == Perspective.ISOMETRIC) {
+            double hw = isoTileWidth / 2.0, hh = isoTileHeight / 2.0;
+            double tx = wx / tileSize, ty = wy / tileSize;
+            px = (tx - ty) * hw;
+            py = (tx + ty) * hh;
+            double ctx = x / tileSize, cty = y / tileSize;
+            cx = (ctx - cty) * hw;
+            cy = (ctx + cty) * hh;
+        } else {
+            px = wx;
+            py = wy;
+            cx = x;
+            cy = y;
+        }
+        out[0] = (int) Math.round((px - cx) * zoom + viewportWidth / 2.0);
+        out[1] = (int) Math.round((py - cy) * zoom + viewportHeight / 2.0);
+    }
+
     /** Inverse mapping: screen pixel back to world coordinates. */
     public double[] screenToWorld(int sx, int sy) {
         double[] c = planar(x, y);

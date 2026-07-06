@@ -101,7 +101,13 @@ public final class LevelLoader {
         return lvl;
     }
 
-    private static String readText(String path) {
+    /**
+     * Raw level JSON, resolved from the classpath first then the filesystem, or
+     * {@code null} if not found. Public because a multiplayer server sends the
+     * level text to joining clients (which then {@link #parse} it), so clients
+     * don't need the level file locally.
+     */
+    public static String readText(String path) {
         String cp = path.startsWith("/") ? path : "/" + path;
         try (InputStream in = LevelLoader.class.getResourceAsStream(cp)) {
             if (in != null) return new String(in.readAllBytes(), StandardCharsets.UTF_8);

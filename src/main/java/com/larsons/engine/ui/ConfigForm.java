@@ -164,6 +164,9 @@ public class ConfigForm {
     private String title;
     private int selected;
     private int rowHeight = 44;
+    // First visible row when the form is taller than the viewport; the render
+    // pass keeps the selected row inside the visible window.
+    private int scroll;
 
     public ConfigForm(String title) { this.title = title; }
 
@@ -203,6 +206,10 @@ public class ConfigForm {
 
         if (input.isKeyJustPressed(KeyEvent.VK_DOWN)) move(1);
         if (input.isKeyJustPressed(KeyEvent.VK_UP)) move(-1);
+        // Mouse wheel moves the selection too, which scrolls long forms.
+        for (int w = input.getWheelRotation(); w != 0; w -= Integer.signum(w)) {
+            move(Integer.signum(w));
+        }
 
         Option sel = options.get(selected);
         boolean selText = sel.enabled && sel.isText();
@@ -270,17 +277,29 @@ public class ConfigForm {
         FontMetrics fm = g.getFontMetrics();
         int startY = titleY + 50 + fm.getAscent();
 
+        // Long forms scroll: show as many rows as fit and keep the selected row
+        // inside the window.
+        int visibleCount = Math.max(1, (viewportH - 48 - startY) / rowHeight + 1);
+        int maxScroll = Math.max(0, options.size() - visibleCount);
+        if (selected < scroll) scroll = selected;
+        if (selected >= scroll + visibleCount) scroll = selected - visibleCount + 1;
+        scroll = Math.max(0, Math.min(maxScroll, scroll));
+
         for (int i = 0; i < options.size(); i++) {
             Option o = options.get(i);
-            int baseY = startY + i * rowHeight;
-            int boxTop = baseY - fm.getAscent() - 2;
-            int boxH = fm.getHeight() + 6;
-            o.rowBox.setBounds(contentX - 8, boxTop, contentW + 16, boxH);
 
             // Reset sub-control boxes; only the relevant ones get sizes.
+            o.rowBox.setBounds(0, 0, 0, 0);
             o.decBox.setBounds(0, 0, 0, 0);
             o.incBox.setBounds(0, 0, 0, 0);
             o.mainBox.setBounds(0, 0, 0, 0);
+
+            if (i < scroll || i >= scroll + visibleCount) continue; // off-screen
+
+            int baseY = startY + (i - scroll) * rowHeight;
+            int boxTop = baseY - fm.getAscent() - 2;
+            int boxH = fm.getHeight() + 6;
+            o.rowBox.setBounds(contentX - 8, boxTop, contentW + 16, boxH);
 
             Color labelColor = !o.enabled ? theme.itemDisabled
                     : (i == selected ? theme.itemSelected : theme.item);
@@ -298,6 +317,17 @@ public class ConfigForm {
             g.setColor(labelColor);
             g.drawString(o.label, contentX, baseY);
             renderValue(g, fm, o, contentX, contentW, baseY, boxTop, boxH, labelColor);
+        }
+
+        // Scroll indicators when rows are hidden above/below.
+        g.setColor(theme.itemDisabled);
+        if (scroll > 0) {
+            g.drawString("▲ " + scroll + " more", contentX + contentW - 80, startY - rowHeight / 2);
+        }
+        int below = options.size() - (scroll + visibleCount);
+        if (below > 0) {
+            g.drawString("▼ " + below + " more", contentX + contentW - 80,
+                    startY + visibleCount * rowHeight);
         }
     }
 

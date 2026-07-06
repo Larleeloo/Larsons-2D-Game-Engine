@@ -171,6 +171,37 @@ class ConfigFeatureTest {
         assertEquals(10, val[0], "disabled rows must ignore input");
     }
 
+    @Test
+    void longFormsScrollToKeepTheSelectionVisible() {
+        ConfigForm form = new ConfigForm("T");
+        int n = 30; // far more rows than fit in 540px
+        int[] vals = new int[n];
+        for (int i = 0; i < n; i++) {
+            int k = i;
+            form.addInt("Row " + i, () -> vals[k], v -> vals[k] = v, 0, 9, 1);
+        }
+
+        InputManager input = new InputManager();
+        Component src = new Canvas();
+        renderOnce(form);
+        assertTrue(form.options().get(0).rowBounds().height > 0, "first row starts visible");
+        assertEquals(0, form.options().get(n - 1).rowBounds().height, "last row starts hidden");
+
+        for (int i = 0; i < n - 1; i++) {
+            input.keyPressed(new KeyEvent(src, KeyEvent.KEY_PRESSED, 0L, 0, KeyEvent.VK_DOWN, (char) 0));
+            input.keyReleased(new KeyEvent(src, KeyEvent.KEY_RELEASED, 0L, 0, KeyEvent.VK_DOWN, (char) 0));
+            input.newFrame();
+            form.update(1.0 / 120.0, input);
+        }
+        renderOnce(form);
+
+        Rectangle last = form.options().get(n - 1).rowBounds();
+        assertEquals(n - 1, form.getSelectedIndex());
+        assertTrue(last.height > 0, "selected row must be scrolled into view");
+        assertTrue(last.y + last.height <= 540, "selected row must fit the viewport");
+        assertEquals(0, form.options().get(0).rowBounds().height, "top rows scrolled off");
+    }
+
     private static void renderOnce(ConfigForm form) {
         BufferedImage img = new BufferedImage(960, 540, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();

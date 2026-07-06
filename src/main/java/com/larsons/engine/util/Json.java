@@ -58,6 +58,47 @@ public final class Json {
         return sb.toString();
     }
 
+    /**
+     * Serialize to single-line JSON with no whitespace. Used for the network
+     * protocol, where each message must be exactly one line (newline-delimited
+     * framing over TCP).
+     */
+    public static String stringifyCompact(Object value) {
+        StringBuilder sb = new StringBuilder();
+        writeCompact(sb, value);
+        return sb.toString();
+    }
+
+    private static void writeCompact(StringBuilder sb, Object value) {
+        if (value == null) { sb.append("null"); return; }
+        if (value instanceof String str) { writeString(sb, str); return; }
+        if (value instanceof Boolean b) { sb.append(b.booleanValue()); return; }
+        if (value instanceof Number n) { writeNumber(sb, n); return; }
+        if (value instanceof Map<?, ?> m) {
+            sb.append('{');
+            int i = 0;
+            for (Map.Entry<?, ?> e : m.entrySet()) {
+                if (i++ > 0) sb.append(',');
+                writeString(sb, String.valueOf(e.getKey()));
+                sb.append(':');
+                writeCompact(sb, e.getValue());
+            }
+            sb.append('}');
+            return;
+        }
+        if (value instanceof Iterable<?> it) {
+            sb.append('[');
+            int i = 0;
+            for (Object o : it) {
+                if (i++ > 0) sb.append(',');
+                writeCompact(sb, o);
+            }
+            sb.append(']');
+            return;
+        }
+        writeString(sb, String.valueOf(value)); // fallback
+    }
+
     private static void write(StringBuilder sb, Object value, int indent) {
         if (value == null) { sb.append("null"); return; }
         if (value instanceof String str) { writeString(sb, str); return; }

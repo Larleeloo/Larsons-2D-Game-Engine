@@ -4,6 +4,7 @@ import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameTypeStore;
 import com.larsons.engine.demo.GameTypeEditorScene;
 import com.larsons.engine.demo.MainMenuScene;
+import com.larsons.engine.demo.MultiplayerScene;
 import com.larsons.engine.demo.PlayScene;
 import com.larsons.engine.demo.StartupScene;
 
@@ -22,6 +23,10 @@ import com.larsons.engine.demo.StartupScene;
  * </pre>
  */
 public class Main {
+
+    /** The demo level; also what an in-game host serves to joining players. */
+    public static final String LEVEL = "levels/sample_level.json";
+
     public static void main(String[] args) {
         EngineConfig config = new EngineConfig()
                 .title("Larson's 2D Game Engine")
@@ -35,7 +40,8 @@ public class Main {
         engine.scenes().register("startup", new StartupScene(context));
         engine.scenes().register("editor", new GameTypeEditorScene(context));
         engine.scenes().register("menu", new MainMenuScene(context));
-        engine.scenes().register("play", new PlayScene(context, "levels/sample_level.json"));
+        engine.scenes().register("play", new PlayScene(context, LEVEL));
+        engine.scenes().register("multiplayer", new MultiplayerScene(context, LEVEL));
 
         engine.scenes().setScene("startup");
         engine.start();
