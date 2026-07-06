@@ -34,6 +34,15 @@ tasks.test {
     useJUnitPlatform()
 }
 
+// Headless dedicated multiplayer server (like running a Minecraft server jar):
+//   gradle runServer --args="--port 7777 --level levels/sample_level.json --gametype platformer"
+tasks.register<JavaExec>("runServer") {
+    group = "application"
+    description = "Run the headless dedicated game server"
+    mainClass = "com.larsons.engine.net.ServerMain"
+    classpath = sourceSets["main"].runtimeClasspath
+}
+
 // Make `java -jar build/libs/<name>.jar` work directly (no external deps).
 tasks.jar {
     manifest {

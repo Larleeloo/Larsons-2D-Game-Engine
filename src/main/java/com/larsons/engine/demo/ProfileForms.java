@@ -1,8 +1,12 @@
 package com.larsons.engine.demo;
 
+import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.graphics.Perspective;
+import com.larsons.engine.graphics.shader.Shaders;
 import com.larsons.engine.ui.ConfigForm;
+
+import java.nio.file.Path;
 
 /**
  * Builds the shared set of feature toggles for a {@link GameProfile}, so the
@@ -37,5 +41,31 @@ final class ProfileForms {
         form.addInt("Tile size", () -> p.tileSize, v -> p.tileSize = v, 8, 256, 4);
         form.addInt("Player size", () -> p.playerSize, v -> p.playerSize = v, 8, 256, 4);
         form.addInt("Default entity size", () -> p.defaultEntitySize, v -> p.defaultEntitySize = v, 8, 256, 4);
+
+        form.addToggle("Shaders (post-FX)", () -> p.shadersEnabled, v -> p.shadersEnabled = v);
+        form.addDouble("Shader strength", () -> p.shaderStrength, v -> p.shaderStrength = v, 0.0, 1.0, 0.05)
+                .enabledWhen(() -> p.shadersEnabled);
+        form.addToggle("· Pixelate", () -> p.shaderPixelate, v -> p.shaderPixelate = v)
+                .enabledWhen(() -> p.shadersEnabled);
+        form.addInt("· Pixel size", () -> p.shaderPixelSize, v -> p.shaderPixelSize = v, 1, 64, 1)
+                .enabledWhen(() -> p.shadersEnabled && p.shaderPixelate);
+        form.addToggle("· Wave distortion", () -> p.shaderWave, v -> p.shaderWave = v)
+                .enabledWhen(() -> p.shadersEnabled);
+        form.addToggle("· Chromatic aberration", () -> p.shaderChromatic, v -> p.shaderChromatic = v)
+                .enabledWhen(() -> p.shadersEnabled);
+        form.addToggle("· Bloom", () -> p.shaderBloom, v -> p.shaderBloom = v)
+                .enabledWhen(() -> p.shadersEnabled);
+        form.addToggle("· Grayscale", () -> p.shaderGrayscale, v -> p.shaderGrayscale = v)
+                .enabledWhen(() -> p.shadersEnabled);
+        form.addToggle("· Scanlines (CRT)", () -> p.shaderScanlines, v -> p.shaderScanlines = v)
+                .enabledWhen(() -> p.shadersEnabled);
+        form.addToggle("· Vignette", () -> p.shaderVignette, v -> p.shaderVignette = v)
+                .enabledWhen(() -> p.shadersEnabled);
+        // The GPU bridge: dump this profile's passes (or the whole library if
+        // none are toggled on) as ready-to-compile GLSL files.
+        form.addAction("Export shaders as GLSL (shaders/)", () -> {
+            var passes = GameContext.shaderPassesFor(p);
+            Shaders.writeGlsl(passes.isEmpty() ? Shaders.allBuiltIns() : passes, Path.of("shaders"));
+        });
     }
 }

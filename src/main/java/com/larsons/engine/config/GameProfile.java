@@ -45,6 +45,20 @@ public class GameProfile {
     public int playerSize = 32;
     public int defaultEntitySize = 32;
 
+    // Shaders (requirement #5): a master toggle, a global strength, and one
+    // toggle per built-in post-processing pass. Passes are applied in a fixed
+    // order (distortions -> color -> screen overlays); see GameContext.
+    public boolean shadersEnabled = false;
+    public double shaderStrength = 1.0;
+    public boolean shaderPixelate = false;
+    public int shaderPixelSize = 4;
+    public boolean shaderWave = false;
+    public boolean shaderChromatic = false;
+    public boolean shaderBloom = false;
+    public boolean shaderGrayscale = false;
+    public boolean shaderScanlines = false;
+    public boolean shaderVignette = false;
+
     public GameProfile() {}
 
     public GameProfile(String name) { this.name = name; }
@@ -67,6 +81,16 @@ public class GameProfile {
         m.put("tileSize", tileSize);
         m.put("playerSize", playerSize);
         m.put("defaultEntitySize", defaultEntitySize);
+        m.put("shadersEnabled", shadersEnabled);
+        m.put("shaderStrength", shaderStrength);
+        m.put("shaderPixelate", shaderPixelate);
+        m.put("shaderPixelSize", shaderPixelSize);
+        m.put("shaderWave", shaderWave);
+        m.put("shaderChromatic", shaderChromatic);
+        m.put("shaderBloom", shaderBloom);
+        m.put("shaderGrayscale", shaderGrayscale);
+        m.put("shaderScanlines", shaderScanlines);
+        m.put("shaderVignette", shaderVignette);
         return m;
     }
 
@@ -95,6 +119,16 @@ public class GameProfile {
         p.tileSize = intg(m, "tileSize", p.tileSize);
         p.playerSize = intg(m, "playerSize", p.playerSize);
         p.defaultEntitySize = intg(m, "defaultEntitySize", p.defaultEntitySize);
+        p.shadersEnabled = bool(m, "shadersEnabled", p.shadersEnabled);
+        p.shaderStrength = dbl(m, "shaderStrength", p.shaderStrength);
+        p.shaderPixelate = bool(m, "shaderPixelate", p.shaderPixelate);
+        p.shaderPixelSize = intg(m, "shaderPixelSize", p.shaderPixelSize);
+        p.shaderWave = bool(m, "shaderWave", p.shaderWave);
+        p.shaderChromatic = bool(m, "shaderChromatic", p.shaderChromatic);
+        p.shaderBloom = bool(m, "shaderBloom", p.shaderBloom);
+        p.shaderGrayscale = bool(m, "shaderGrayscale", p.shaderGrayscale);
+        p.shaderScanlines = bool(m, "shaderScanlines", p.shaderScanlines);
+        p.shaderVignette = bool(m, "shaderVignette", p.shaderVignette);
         return p;
     }
 
@@ -108,6 +142,8 @@ public class GameProfile {
         tileSize = Math.max(1, tileSize);
         playerSize = Math.max(1, playerSize);
         defaultEntitySize = Math.max(1, defaultEntitySize);
+        shaderStrength = Math.max(0.0, Math.min(1.0, shaderStrength));
+        shaderPixelSize = Math.max(1, Math.min(64, shaderPixelSize));
     }
 
     private static String str(Map<String, Object> m, String k, String def) {

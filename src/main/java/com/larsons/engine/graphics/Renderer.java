@@ -1,5 +1,7 @@
 package com.larsons.engine.graphics;
 
+import com.larsons.engine.graphics.shader.ShaderChain;
+
 import java.awt.Graphics2D;
 
 /**
@@ -9,15 +11,16 @@ import java.awt.Graphics2D;
  * pipeline. That is what lets the engine run out of the box on any machine with
  * a JRE (requirement #4) — no native libraries, no GPU bindings.
  *
- * <p><b>Shader support (requirement #5) lives behind this seam.</b> Adding
- * shaders will likely need a different backend entirely — e.g. an OpenGL/LWJGL
- * renderer. Such a backend can implement this interface (or a richer successor)
- * so the game loop keeps the same lifecycle: {@code beginFrame() -> draw ->
- * present()}. The one piece of porting work it implies: scenes currently draw
- * via {@link Graphics2D}, so a GPU backend would introduce a backend-neutral
- * draw API (sprite batches, draw calls) that both backends implement. Keeping
- * the loop decoupled from the backend now is what makes that change additive
- * rather than a rewrite.
+ * <p><b>Shader support (requirement #5) lives behind this seam.</b> Every
+ * backend honours a {@link ShaderChain} of post-processing passes. Each
+ * {@link com.larsons.engine.graphics.shader.ShaderPass} is defined GLSL-first
+ * (real GPU fragment shader source) with a semantically identical CPU
+ * fallback; the default backend executes the CPU side, while a GPU backend
+ * (e.g. OpenGL/LWJGL) can implement this same interface, compile each pass's
+ * {@code glsl()} directly, and keep the loop's {@code beginFrame() -> draw ->
+ * present()} lifecycle unchanged. The remaining porting work for full GPU
+ * scene rendering is a backend-neutral draw API, since scenes currently draw
+ * via {@link Graphics2D}.
  */
 public interface Renderer {
 
@@ -32,4 +35,11 @@ public interface Renderer {
     int getHeight();
 
     void dispose();
+
+    /**
+     * Attach the post-processing chain this backend should run on each
+     * presented frame. Backends are free to execute it however they like
+     * (CPU stripes, GPU FBO ping-pong) as long as pass order is preserved.
+     */
+    default void setShaderChain(ShaderChain chain) {}
 }

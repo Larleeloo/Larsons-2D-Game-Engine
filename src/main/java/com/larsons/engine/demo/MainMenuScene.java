@@ -29,6 +29,7 @@ public class MainMenuScene extends AbstractScene {
                 .subtitle("game type · " + p.perspective)
                 .theme(MenuTheme.dark())
                 .add("Play / Create Level", () -> scenes.transitionTo("play"))
+                .add("Multiplayer (Host / Join)", () -> scenes.transitionTo("multiplayer"))
                 .add("Edit Features", () -> scenes.transitionTo("editor"))
                 .add("Change Game Type", () -> scenes.transitionTo("startup"))
                 .add("Quit", () -> System.exit(0));
