@@ -2,6 +2,7 @@ package com.larsons.engine.core;
 
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameTypeStore;
+import com.larsons.engine.demo.CreativeScene;
 import com.larsons.engine.demo.GameTypeEditorScene;
 import com.larsons.engine.demo.MainMenuScene;
 import com.larsons.engine.demo.MultiplayerScene;
@@ -41,6 +42,7 @@ public class Main {
         engine.scenes().register("editor", new GameTypeEditorScene(context));
         engine.scenes().register("menu", new MainMenuScene(context));
         engine.scenes().register("play", new PlayScene(context, LEVEL));
+        engine.scenes().register("creative", new CreativeScene(context));
         engine.scenes().register("multiplayer", new MultiplayerScene(context, LEVEL));
 
         engine.scenes().setScene("startup");

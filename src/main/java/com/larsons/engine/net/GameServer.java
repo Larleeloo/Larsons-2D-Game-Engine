@@ -1,11 +1,15 @@
 package com.larsons.engine.net;
 
 import com.larsons.engine.config.GameProfile;
+import com.larsons.engine.entity.DroppedItem;
+import com.larsons.engine.entity.Mob;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
 import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerPhysics;
 import com.larsons.engine.sim.PlayerState;
+import com.larsons.engine.world.Block;
+import com.larsons.engine.world.World;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -58,8 +62,8 @@ public final class GameServer {
     private static final int OUTBOX_CAPACITY = 256;
 
     private final GameProfile profile;
-    private final String levelJson;
     private final Level level;
+    private final World world;
 
     private ServerSocket serverSocket;
     private Thread acceptThread;
@@ -68,13 +72,21 @@ public final class GameServer {
 
     private final CopyOnWriteArrayList<Connection> connections = new CopyOnWriteArrayList<>();
     private final ConcurrentLinkedQueue<Connection> pendingJoins = new ConcurrentLinkedQueue<>();
+    /** World-edit requests handed from reader threads to the tick thread. */
+    private final ConcurrentLinkedQueue<Map<String, Object>> pendingEdits = new ConcurrentLinkedQueue<>();
     private final AtomicInteger nextId = new AtomicInteger(1);
     private long tick;
 
     public GameServer(GameProfile profile, String levelJson) {
         this.profile = profile;
-        this.levelJson = levelJson;
         this.level = LevelLoader.parse(levelJson); // validate up front
+        this.world = new World(level);
+        this.world.populateFromLevel(profile);
+    }
+
+    /** The live world (level + mobs + items) this server simulates. */
+    public World world() {
+        return world;
     }
 
     /** Bind and start serving. Port {@code 0} picks a free port (see {@link #getPort()}). */
@@ -142,10 +154,14 @@ public final class GameServer {
         final long nsPerTick = 1_000_000_000L / TICK_RATE;
         long next = System.nanoTime();
 
+        world.setPickupListener(this::handlePickup);
+
         while (running) {
             processJoins();
             processDisconnects();
+            processEdits();
             stepPlayers(dt);
+            world.step(dt, joinedPlayers(), profile);
 
             tick++;
             if (tick % SNAPSHOT_EVERY == 0) broadcastState();
@@ -173,7 +189,8 @@ public final class GameServer {
             String name = uniqueName(conn.requestedName, id);
             conn.state = new PlayerState(id, name, level.spawnX, level.spawnY);
             conn.joined = true;
-            conn.send(Protocol.welcome(id, TICK_RATE, profile, levelJson));
+            // Serialize the live level so late joiners see every edit so far.
+            conn.send(Protocol.welcome(id, TICK_RATE, profile, level.toJson()));
             broadcast(Protocol.info(name + " joined"));
             log(name + " joined from " + conn.socket.getRemoteSocketAddress()
                     + " (" + playerCount() + " online)");
@@ -205,15 +222,96 @@ public final class GameServer {
             // its local camera view must not change how it moves on the server.
             PlayerPhysics.step(c.state, in, level, profile, profile.perspective, dt);
             c.state.lastSeq = in.seq;
+
+            // Attacks are edge-triggered by sequence number: the same input is
+            // re-applied every tick until the next one arrives, but a swing
+            // must land only once per click.
+            if (in.attack && profile.combatEnabled && in.seq != c.lastAttackSeq) {
+                c.lastAttackSeq = in.seq;
+                world.playerAttack(c.state, in.aimX, in.aimY, World.FIST_DAMAGE);
+            }
         }
     }
 
-    private void broadcastState() {
+    private List<PlayerState> joinedPlayers() {
         List<PlayerState> players = new ArrayList<>();
         for (Connection c : connections) {
             if (c.joined && !c.closed) players.add(c.state);
         }
-        broadcast(Protocol.state(tick, players));
+        return players;
+    }
+
+    /**
+     * Apply queued world edits (block place/mine, entity paint/erase) on the
+     * tick thread, which owns all world state; broadcast authoritative results.
+     * Feature toggles gate what's allowed: creative painting needs the game
+     * type's creative toggle, play-mode mining needs block editing.
+     */
+    private void processEdits() {
+        Map<String, Object> msg;
+        while ((msg = pendingEdits.poll()) != null) {
+            switch (Protocol.type(msg)) {
+                case "edit" -> {
+                    int col = intOf(msg.get("c"));
+                    int row = intOf(msg.get("r"));
+                    int id = intOf(msg.get("b"));
+                    boolean paint = "paint".equals(msg.get("m"));
+                    if (paint ? !profile.creativeEnabled : !profile.blockEditingEnabled) continue;
+                    boolean changed;
+                    if (id == 0) {
+                        // Mining in play mode pops the block's drop out.
+                        boolean withDrops = !paint && profile.itemsEnabled;
+                        Block mined = world.mineBlock(col, row, withDrops);
+                        changed = mined != null || level.setTile(col, row, 0);
+                    } else {
+                        changed = paint ? level.setTile(col, row, id)
+                                : world.placeBlock(col, row, id);
+                    }
+                    if (changed) broadcast(Protocol.blockSet(col, row, level.tileAt(col, row)));
+                }
+                case "paint" -> {
+                    if (!profile.creativeEnabled) continue;
+                    String kind = msg.get("k") instanceof String s ? s : "";
+                    String type = msg.get("e") instanceof String s ? s : "";
+                    double x = dblOf(msg.get("x"));
+                    double y = dblOf(msg.get("y"));
+                    if ("mob".equals(kind) && profile.mobsEnabled) world.spawnMob(type, x, y);
+                    if ("item".equals(kind) && profile.itemsEnabled) world.spawnItem(type, 1, x, y);
+                }
+                case "erase" -> {
+                    if (profile.creativeEnabled) world.removeEntity(intOf(msg.get("id")));
+                }
+                default -> { /* not an edit */ }
+            }
+        }
+    }
+
+    private void handlePickup(PlayerState player, String itemKey, int count) {
+        for (Connection c : connections) {
+            if (c.joined && !c.closed && c.state == player) {
+                c.inventory.add(itemKey, count);
+                c.send(Protocol.encode(Map.of(
+                        "t", "inv", "items", c.inventory.toList())));
+                return;
+            }
+        }
+    }
+
+    private void broadcastState() {
+        List<PlayerState> players = joinedPlayers();
+        List<Map<String, Object>> mobs = new ArrayList<>(world.mobs().size());
+        for (Mob m : world.mobs()) mobs.add(m.toMap());
+        List<Map<String, Object>> items = new ArrayList<>(world.items().size());
+        for (DroppedItem i : world.items()) items.add(i.toMap());
+        broadcast(Protocol.state(tick, players, mobs, items, world.timeOfDay()));
+    }
+
+    private static int intOf(Object o) {
+        return o instanceof Number n ? n.intValue() : 0;
+    }
+
+    private static double dblOf(Object o) {
+        return o instanceof Number n ? n.doubleValue() : 0;
     }
 
     private void broadcast(String message) {
@@ -246,6 +344,11 @@ public final class GameServer {
         volatile boolean joined;
         volatile boolean closed;
         volatile long lastHeardNanos = System.nanoTime();
+        /** Input sequence whose attack was already applied (tick thread only). */
+        int lastAttackSeq;
+        /** Server-side inventory: what this player has picked up (tick thread only). */
+        final com.larsons.engine.entity.Inventory inventory =
+                new com.larsons.engine.entity.Inventory(world.itemTypes);
 
         Connection(Socket socket) throws IOException {
             this.socket = socket;
@@ -270,6 +373,11 @@ public final class GameServer {
                     switch (Protocol.type(msg)) {
                         case "join" -> handleJoin(msg);
                         case "input" -> latestInput.set(PlayerInput.fromMap(msg));
+                        case "edit", "paint", "erase" -> {
+                            // World edits are applied by the tick thread, which
+                            // owns the level and entities.
+                            if (joined) pendingEdits.add(msg);
+                        }
                         case "ping" -> send(Protocol.pong(
                                 msg.get("p") instanceof Number n ? n.longValue() : 0));
                         default -> { /* unknown message types are ignored */ }

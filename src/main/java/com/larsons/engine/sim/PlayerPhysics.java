@@ -69,7 +69,10 @@ public final class PlayerPhysics {
     public static boolean isSolid(Level level, double worldX, double worldY, double tileSize) {
         int col = (int) Math.floor(worldX / tileSize);
         int row = (int) Math.floor(worldY / tileSize);
-        return level.tileAt(col, row) > 0;
+        // Registry-mode levels distinguish solid terrain from passable
+        // decoration (water, leaves, lights); legacy levels treat any tile as
+        // solid, exactly as before.
+        return level.solidAt(col, row);
     }
 
     private static void clampToLevel(PlayerState s, Level level, double size) {

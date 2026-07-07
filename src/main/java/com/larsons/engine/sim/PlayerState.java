@@ -20,6 +20,10 @@ public final class PlayerState {
     /** Sequence number of the last {@link PlayerInput} the server applied. */
     public int lastSeq;
 
+    /** Hit points; mobs subtract from this, food/potions restore it. */
+    public static final double MAX_HEALTH = 100;
+    public double health = MAX_HEALTH;
+
     public PlayerState() {}
 
     public PlayerState(int id, String name, double x, double y) {
@@ -35,6 +39,7 @@ public final class PlayerState {
         s.facingLeft = facingLeft;
         s.moving = moving;
         s.lastSeq = lastSeq;
+        s.health = health;
         return s;
     }
 
@@ -48,6 +53,7 @@ public final class PlayerState {
         m.put("f", facingLeft);
         m.put("m", moving);
         m.put("q", lastSeq);
+        m.put("h", health);
         return m;
     }
 
@@ -61,6 +67,7 @@ public final class PlayerState {
         s.facingLeft = Boolean.TRUE.equals(m.get("f"));
         s.moving = Boolean.TRUE.equals(m.get("m"));
         s.lastSeq = num(m.get("q"), 0);
+        s.health = m.get("h") instanceof Number n ? n.doubleValue() : MAX_HEALTH;
         return s;
     }
 

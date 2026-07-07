@@ -23,9 +23,16 @@ import java.util.Map;
  *   server -> client   {"t":"welcome","id":1,"tickRate":60,"profile":{...},"level":"&lt;level json&gt;"}
  *                      (or {"t":"error","msg":"..."} and the connection closes)
  *   client -> server   {"t":"input","s":42,"l":false,"r":true,"u":false,"d":false}   (each tick)
- *   server -> client   {"t":"state","tick":1234,"players":[{...},{...}]}             (snapshots)
+ *   server -> client   {"t":"state","tick":1234,"players":[...],"mobs":[...],
+ *                       "items":[...],"time":0.42}                                   (snapshots)
  *   server -> client   {"t":"info","msg":"Larson joined"}                            (events)
  *   client -> server   {"t":"ping","p":123456}    ->    {"t":"pong","p":123456}
+ *
+ *   // world editing (creative painting + play-mode mining/placing):
+ *   client -> server   {"t":"edit","c":col,"r":row,"b":blockId,"m":"paint"|"play"}
+ *   server -> all      {"t":"block","c":col,"r":row,"b":blockId}   (authoritative result)
+ *   client -> server   {"t":"paint","k":"mob"|"item","e":"zombie","x":..,"y":..}
+ *   client -> server   {"t":"erase","id":entityId}
  * </pre>
  *
  * <p>The server is authoritative: clients send only input commands, the server
@@ -38,7 +45,7 @@ import java.util.Map;
 public final class Protocol {
 
     /** Protocol version; bumped on incompatible changes. */
-    public static final int VERSION = 1;
+    public static final int VERSION = 2;
 
     /** Default server port (the engine's "25565"). */
     public static final int DEFAULT_PORT = 7777;
@@ -104,12 +111,67 @@ public final class Protocol {
     }
 
     public static String state(long tick, List<PlayerState> players) {
+        return state(tick, players, List.of(), List.of(), 0.25);
+    }
+
+    /**
+     * A full snapshot: players plus replicated world entities (mobs, dropped
+     * items — already in wire-map form from {@code Mob.toMap()} etc.) and the
+     * time of day driving the clients' lighting.
+     */
+    public static String state(long tick, List<PlayerState> players,
+                               List<Map<String, Object>> mobs,
+                               List<Map<String, Object>> items,
+                               double timeOfDay) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("t", "state");
         m.put("tick", tick);
         List<Object> list = new ArrayList<>(players.size());
         for (PlayerState p : players) list.add(p.toMap());
         m.put("players", list);
+        if (!mobs.isEmpty()) m.put("mobs", new ArrayList<Object>(mobs));
+        if (!items.isEmpty()) m.put("items", new ArrayList<Object>(items));
+        m.put("time", timeOfDay);
+        return encode(m);
+    }
+
+    /** Client asks to change a block; {@code mode} is "paint" or "play". */
+    public static String blockEdit(int col, int row, int blockId, String mode) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t", "edit");
+        m.put("c", col);
+        m.put("r", row);
+        m.put("b", blockId);
+        m.put("m", mode);
+        return encode(m);
+    }
+
+    /** Server tells everyone a block changed (the authoritative result). */
+    public static String blockSet(int col, int row, int blockId) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t", "block");
+        m.put("c", col);
+        m.put("r", row);
+        m.put("b", blockId);
+        return encode(m);
+    }
+
+    /** Client paints an entity (creative mode): kind "mob" or "item". */
+    public static String entityPaint(String kind, String type, double x, double y) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t", "paint");
+        m.put("k", kind);
+        m.put("e", type);
+        m.put("x", x);
+        m.put("y", y);
+        return encode(m);
+    }
+
+    /** Client erases a painted entity by id (creative mode). */
+    public static String entityErase(int entityId) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t", "erase");
+        m.put("id", entityId);
         return encode(m);
     }
 

@@ -38,6 +38,30 @@ final class ProfileForms {
         form.addToggle("Show HUD", () -> p.hudVisible, v -> p.hudVisible = v);
         form.addToggle("Show grid", () -> p.gridVisible, v -> p.gridVisible = v);
 
+        // World features merged in from the Side-Scroller engine.
+        form.addToggle("Mobs (AI creatures)", () -> p.mobsEnabled, v -> p.mobsEnabled = v);
+        form.addToggle("Items & inventory", () -> p.itemsEnabled, v -> p.itemsEnabled = v);
+        form.addToggle("Combat", () -> p.combatEnabled, v -> p.combatEnabled = v)
+                .enabledWhen(() -> p.mobsEnabled);
+        form.addToggle("Mine / place blocks in play", () -> p.blockEditingEnabled, v -> p.blockEditingEnabled = v);
+        form.addToggle("Creative mode (paint objects)", () -> p.creativeEnabled, v -> p.creativeEnabled = v);
+
+        // Lighting rides the shader chain but has its own toggle (gameplay,
+        // not post-FX), so it works with or without the effects below.
+        form.addToggle("Lighting", () -> p.lightingEnabled, v -> p.lightingEnabled = v);
+        form.addToggle("· Day/night cycle", () -> p.dayNightCycle, v -> p.dayNightCycle = v)
+                .enabledWhen(() -> p.lightingEnabled);
+        form.addToggle("· Night (fixed)", () -> p.nightMode, v -> p.nightMode = v)
+                .enabledWhen(() -> p.lightingEnabled && !p.dayNightCycle);
+        form.addDouble("· Night darkness", () -> p.nightDarkness, v -> p.nightDarkness = v, 0.0, 1.0, 0.05)
+                .enabledWhen(() -> p.lightingEnabled);
+        form.addDouble("· Ambient light", () -> p.ambientLight, v -> p.ambientLight = v, 0.0, 1.0, 0.05)
+                .enabledWhen(() -> p.lightingEnabled);
+
+        form.addToggle("Parallax background", () -> p.parallaxEnabled, v -> p.parallaxEnabled = v);
+        form.addToggle("Particles", () -> p.particlesEnabled, v -> p.particlesEnabled = v);
+        form.addToggle("Sound effects", () -> p.audioEnabled, v -> p.audioEnabled = v);
+
         form.addInt("Tile size", () -> p.tileSize, v -> p.tileSize = v, 8, 256, 4);
         form.addInt("Player size", () -> p.playerSize, v -> p.playerSize = v, 8, 256, 4);
         form.addInt("Default entity size", () -> p.defaultEntitySize, v -> p.defaultEntitySize = v, 8, 256, 4);

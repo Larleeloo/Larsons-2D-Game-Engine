@@ -15,6 +15,15 @@ public final class PlayerInput {
     /** Client-assigned sequence number, echoed back in snapshots. */
     public int seq;
 
+    /**
+     * Attack intent this tick (a mouse click, edge-triggered by the sender)
+     * aimed at ({@link #aimX}, {@link #aimY}) in world coordinates. The server
+     * resolves what the swing hits — mobs in reach — so clients can't fabricate
+     * damage. Absent on the wire when false, keeping old messages compatible.
+     */
+    public boolean attack;
+    public double aimX, aimY;
+
     public PlayerInput() {}
 
     public PlayerInput(boolean left, boolean right, boolean up, boolean down, int seq) {
@@ -25,6 +34,13 @@ public final class PlayerInput {
         this.seq = seq;
     }
 
+    public PlayerInput attackAt(double aimX, double aimY) {
+        this.attack = true;
+        this.aimX = aimX;
+        this.aimY = aimY;
+        return this;
+    }
+
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("s", seq);
@@ -32,6 +48,11 @@ public final class PlayerInput {
         m.put("r", right);
         m.put("u", up);
         m.put("d", down);
+        if (attack) {
+            m.put("a", true);
+            m.put("ax", aimX);
+            m.put("ay", aimY);
+        }
         return m;
     }
 
@@ -42,6 +63,9 @@ public final class PlayerInput {
         in.right = Boolean.TRUE.equals(m.get("r"));
         in.up = Boolean.TRUE.equals(m.get("u"));
         in.down = Boolean.TRUE.equals(m.get("d"));
+        in.attack = Boolean.TRUE.equals(m.get("a"));
+        in.aimX = m.get("ax") instanceof Number n ? n.doubleValue() : 0;
+        in.aimY = m.get("ay") instanceof Number n ? n.doubleValue() : 0;
         return in;
     }
 }

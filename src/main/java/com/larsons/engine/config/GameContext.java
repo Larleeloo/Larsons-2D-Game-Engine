@@ -1,6 +1,8 @@
 package com.larsons.engine.config;
 
+import com.larsons.engine.audio.AudioManager;
 import com.larsons.engine.core.Engine;
+import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.graphics.shader.ShaderChain;
 import com.larsons.engine.graphics.shader.ShaderPass;
 import com.larsons.engine.graphics.shader.Shaders;
@@ -27,12 +29,29 @@ public class GameContext {
     private NetSession session; // null when playing offline
     private String lastShaderSig;
 
+    // Cross-cutting feature services scenes share: the lighting shader pass
+    // (one persistent instance so scenes can feed it lights every frame) and
+    // the synthesized sound effects, both gated by profile toggles.
+    private final LightingPass lighting = new LightingPass();
+    private final AudioManager audio = new AudioManager();
+
     public GameContext(Engine engine, GameTypeStore store) {
         this.engine = engine;
         this.store = store;
     }
 
     public GameTypeStore store() { return store; }
+
+    /** The shared lighting pass; scenes set darkness + screen-space lights on it. */
+    public LightingPass lighting() { return lighting; }
+
+    /** Sound effects (no-op when the profile's audio toggle is off or headless). */
+    public AudioManager audio() { return audio; }
+
+    /** Play a sound if the active profile has audio enabled. */
+    public void sfx(AudioManager.Sfx sfx) {
+        if (profile().audioEnabled) audio.play(sfx);
+    }
 
     public GameProfile profile() {
         if (profile == null) profile = new GameProfile();
@@ -59,8 +78,11 @@ public class GameContext {
 
     /** Push profile settings that affect the running engine (FPS cap, shaders). */
     public void applyLiveSettings() {
-        if (engine != null && profile != null) {
+        if (profile != null) {
             profile.normalize();
+            audio.setEnabled(profile.audioEnabled);
+        }
+        if (engine != null && profile != null) {
             engine.setTargetFps(profile.maxFps);
             syncShaders(engine.shaders(), profile);
         }
@@ -83,20 +105,27 @@ public class GameContext {
         String sig = shaderSignature(p);
         if (!sig.equals(lastShaderSig)) {
             lastShaderSig = sig;
-            chain.setPasses(p.shadersEnabled ? shaderPassesFor(p) : List.of());
+            List<ShaderPass> passes = new ArrayList<>();
+            // Lighting is gameplay, not post-FX: it rides the same chain (so it
+            // composes with every effect and GPU backends get it for free) but
+            // has its own toggle, independent of the post-FX master switch.
+            if (p.lightingEnabled) passes.add(lighting);
+            if (p.shadersEnabled) passes.addAll(shaderPassesFor(p));
+            chain.setPasses(passes);
         }
     }
 
     private static String shaderSignature(GameProfile p) {
         return "" + p.shadersEnabled + p.shaderPixelate + p.shaderPixelSize + p.shaderWave
                 + p.shaderChromatic + p.shaderBloom + p.shaderGrayscale
-                + p.shaderScanlines + p.shaderVignette;
+                + p.shaderScanlines + p.shaderVignette + p.lightingEnabled;
     }
 
     /**
-     * The passes a profile's toggles select, in application order: distortions
-     * first (pixelate, wave), then color (chromatic aberration, bloom,
-     * grayscale), then screen-space overlays (scanlines, vignette).
+     * The post-FX passes a profile's toggles select, in application order:
+     * distortions first (pixelate, wave), then color (chromatic aberration,
+     * bloom, grayscale), then screen-space overlays (scanlines, vignette).
+     * (The lighting pass is separate — see {@link #lighting()}.)
      */
     public static List<ShaderPass> shaderPassesFor(GameProfile p) {
         List<ShaderPass> passes = new ArrayList<>();

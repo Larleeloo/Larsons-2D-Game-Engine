@@ -1,0 +1,86 @@
+package com.larsons.engine.level;
+
+import com.larsons.engine.config.GameTypeStore;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Stream;
+
+/**
+ * Saves and lists the levels created inside a game type — the "per-game-type
+ * level saving" the engine's roadmap called for, which the creative editor
+ * (ported from the Side-Scroller engine) needs a home for.
+ *
+ * <p>Levels live under {@code src/main/resources/levels/<game-type>/} so they
+ * sit beside the bundled sample and are managed together with their game
+ * type: switching types switches which levels you see.
+ */
+public final class LevelStore {
+
+    /** Default on-disk location, under the project's resources folder. */
+    public static final String DEFAULT_DIR = "src/main/resources/levels";
+
+    private final Path root;
+    private final String gameType; // sanitized folder name
+
+    public LevelStore(String gameTypeName) {
+        this(DEFAULT_DIR, gameTypeName);
+    }
+
+    public LevelStore(String rootDir, String gameTypeName) {
+        this.root = Path.of(rootDir);
+        String file = GameTypeStore.fileName(gameTypeName); // "<safe>.json"
+        this.gameType = file.substring(0, file.length() - ".json".length());
+    }
+
+    public Path directory() {
+        return root.resolve(gameType);
+    }
+
+    /** Level names (file stems) saved for this game type, sorted. */
+    public List<String> list() {
+        List<String> names = new ArrayList<>();
+        Path dir = directory();
+        if (!Files.isDirectory(dir)) return names;
+        try (Stream<Path> files = Files.list(dir)) {
+            files.filter(p -> p.toString().endsWith(".json"))
+                    .sorted()
+                    .forEach(p -> {
+                        String f = p.getFileName().toString();
+                        names.add(f.substring(0, f.length() - ".json".length()));
+                    });
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return names;
+    }
+
+    public boolean exists(String levelName) {
+        return Files.exists(fileFor(levelName));
+    }
+
+    public Level load(String levelName) {
+        return LevelLoader.load(fileFor(levelName).toString());
+    }
+
+    /** Persist a level; returns the path it was written to. */
+    public Path save(Level level) {
+        Path file = fileFor(level.name);
+        try {
+            Files.createDirectories(directory());
+            Files.writeString(file, level.toJson());
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return file;
+    }
+
+    public Path fileFor(String levelName) {
+        String file = GameTypeStore.fileName(levelName); // sanitizes + ".json"
+        return directory().resolve(file);
+    }
+}

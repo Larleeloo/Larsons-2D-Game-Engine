@@ -56,6 +56,12 @@ public final class LevelLoader {
         if (root.containsKey("tileSize")) lvl.tileSize = intOf(root.get("tileSize"), 32);
         if (root.get("background") instanceof String bg) lvl.background = parseColor(bg, lvl.background);
 
+        // "tileset": "registry" marks tile ids as BlockRegistry block ids
+        // (creative-editor levels); anything else is a legacy palette level.
+        if (root.get("tileset") instanceof String ts) {
+            lvl.registryTiles = "registry".equalsIgnoreCase(ts.trim());
+        }
+
         if (root.get("palette") instanceof List<?> pal && !pal.isEmpty()) {
             Color[] colors = new Color[pal.size()];
             for (int k = 0; k < pal.size(); k++) {
@@ -92,6 +98,7 @@ public final class LevelLoader {
             for (Object o : ents) {
                 if (o instanceof Map<?, ?> e) {
                     lvl.entities.add(new Level.EntitySpawn(
+                            e.get("kind") instanceof String k ? k : "entity",
                             String.valueOf(e.get("type")),
                             doubleOf(e.get("x"), 0),
                             doubleOf(e.get("y"), 0)));

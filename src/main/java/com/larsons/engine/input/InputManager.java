@@ -42,6 +42,14 @@ public class InputManager
     private volatile boolean mouseDown;
     private boolean mousePressedLatch;
     private boolean mouseJustPressed;
+    // Right + middle buttons (the creative editor erases with right-click and
+    // pick-blocks with middle-click); latched exactly like the left button.
+    private volatile boolean rightMouseDown;
+    private boolean rightMousePressedLatch;
+    private boolean rightMouseJustPressed;
+    private volatile boolean middleMouseDown;
+    private boolean middleMousePressedLatch;
+    private boolean middleMouseJustPressed;
     private int wheel;
     private int wheelLatch;
 
@@ -60,6 +68,10 @@ public class InputManager
         }
         mouseJustPressed = mousePressedLatch;
         mousePressedLatch = false;
+        rightMouseJustPressed = rightMousePressedLatch;
+        rightMousePressedLatch = false;
+        middleMouseJustPressed = middleMousePressedLatch;
+        middleMousePressedLatch = false;
         wheel = wheelLatch;
         wheelLatch = 0;
     }
@@ -79,6 +91,12 @@ public class InputManager
     public boolean isMouseDown() { return mouseDown; }
 
     public boolean isMouseJustPressed() { return mouseJustPressed; }
+
+    public boolean isRightMouseDown() { return rightMouseDown; }
+
+    public boolean isRightMouseJustPressed() { return rightMouseJustPressed; }
+
+    public boolean isMiddleMouseJustPressed() { return middleMouseJustPressed; }
 
     public int getWheelRotation() { return wheel; }
 
@@ -118,14 +136,30 @@ public class InputManager
 
     // --- MouseListener ---
     @Override public synchronized void mousePressed(MouseEvent e) {
-        mouseDown = true;
-        mousePressedLatch = true;
+        switch (e.getButton()) {
+            case MouseEvent.BUTTON3 -> {
+                rightMouseDown = true;
+                rightMousePressedLatch = true;
+            }
+            case MouseEvent.BUTTON2 -> {
+                middleMouseDown = true;
+                middleMousePressedLatch = true;
+            }
+            default -> {
+                mouseDown = true;
+                mousePressedLatch = true;
+            }
+        }
         mouseX = e.getX();
         mouseY = e.getY();
     }
 
     @Override public synchronized void mouseReleased(MouseEvent e) {
-        mouseDown = false;
+        switch (e.getButton()) {
+            case MouseEvent.BUTTON3 -> rightMouseDown = false;
+            case MouseEvent.BUTTON2 -> middleMouseDown = false;
+            default -> mouseDown = false;
+        }
         mouseX = e.getX();
         mouseY = e.getY();
     }

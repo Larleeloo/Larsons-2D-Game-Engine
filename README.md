@@ -1,9 +1,9 @@
 # Larson's 2D Game Engine
 
-A small, **generic** 2D game engine in pure Java. It provides a clean game loop
-and the essential building blocks for any 2D game — sprite sheets, level
-loading, cameras with multiple perspectives, scenes, input, a customizable
-menu system, **online multiplayer** (host a server, friends join by IP + port,
+A **generic** 2D game engine in pure Java. It provides a clean game loop
+and the building blocks for any 2D game — sprite sheets, level loading,
+cameras with multiple perspectives, scenes, input, a customizable menu
+system, **online multiplayer** (host a server, friends join by IP + port,
 Minecraft-style), and a **shader system** (GLSL-first post-processing with a
 CPU fallback that runs anywhere) — without committing to a single genre.
 
@@ -13,10 +13,36 @@ framerate bounds, entity sizes, gravity, HUD, …), save it as a named JSON
 profile, and then create levels within that type. Game types and levels are
 stored independently, so one engine drives many different games.
 
-It is a deliberately minimal starting point: a *functional outline you edit*,
-not a finished game. A companion repository, **Side-Scroller-Game-Engine**, is a
-feature-rich example of what a game built on these ideas can grow into; this
-engine keeps only the basics so you can take it in any direction.
+This engine is a **merge**: the minimal outline above, plus the feature
+systems of its feature-rich sibling, **Side-Scroller-Game-Engine**, ported
+over in a generic, data-driven form and wired to the same toggles:
+
+- **Creative Mode** — a level editor for *painting objects into the world*
+  (blocks, lights, mobs, items) with palette categories, drag-painting,
+  erasing, pick-block, pan/zoom, play-testing, and per-game-type level
+  saving. Works offline **and inside a multiplayer session**, where strokes
+  replicate to every player. See [Creative mode](#creative-mode-paint-objects).
+- **Blocks** — a data-driven [`BlockRegistry`](src/main/java/com/larsons/engine/world/BlockRegistry.java)
+  (terrain, ores, decorations, light sources) with solidity, drops, and light
+  emission; mining/placing in play mode with drops and particles.
+- **Mobs** — a data-driven [`MobRegistry`](src/main/java/com/larsons/engine/entity/MobRegistry.java)
+  of species driven by the ported AI state machine (IDLE → WANDER → CHASE →
+  ATTACK → FLEE → DEAD).
+- **Items & inventory** — a data-driven [`ItemRegistry`](src/main/java/com/larsons/engine/entity/ItemRegistry.java)
+  with the original categories + rarity tiers, dropped items with bounce
+  physics and pickup, a hotbar + grid inventory.
+- **Combat** — melee swings, knockback, mob loot, health + respawn.
+- **Lighting** — day/night cycle and point lights, implemented as a
+  [`LightingPass`](src/main/java/com/larsons/engine/graphics/shader/LightingPass.java)
+  in the GLSL-first shader chain, so it composes with every other effect.
+- **Parallax backgrounds, particles, and synthesized sound effects** — all
+  procedural, keeping the engine asset-free and JDK-only.
+
+Everything above **works online**: the authoritative server simulates the
+world (mobs, items, drops, day/night), snapshots replicate entities, and
+block edits broadcast to every client — including players who join later.
+Every feature is a **toggle** on the game type, exactly like the original
+engine's features.
 
 > Author: Larson Sonderman
 
@@ -82,6 +108,11 @@ On launch you'll choose or create a **game type** before playing — see
   In side-scroll with gravity enabled the character can jump; otherwise it
   moves freely on both axes. Which of these are available depends on the active
   game type.
+- **World interaction** (per the game type's toggles): **left-click** mines
+  the aimed block or swings at mobs, **right-click** places the selected
+  hotbar block, **1-5** / mouse wheel select the hotbar slot, **I** opens the
+  inventory, **F** eats the selected food.
+- **Creative mode:** see [Creative mode](#creative-mode-paint-objects).
 - **Multiplayer:** from the main menu, *Multiplayer (Host / Join)* — host a
   server on a port, or type a `host[:port]` address and join (see
   [Online play](#online-play)).
@@ -110,34 +141,53 @@ com.larsons.engine
 │   ├── SpriteSheet.java   Slice a sheet into frames
 │   ├── Animation.java     Delta-timed frame animation
 │   ├── AssetLoader.java   Cached image loading + placeholders
+│   ├── EntitySprites.java Procedural mob/item/block sprites (no assets needed)
+│   ├── ParallaxBackground.java Procedural multi-layer parallax backdrop
 │   └── shader
 │       ├── ShaderPass.java    One pass: GLSL 3.30 source + CPU implementation
 │       ├── ShaderChain.java   Ordered passes, ping-pong buffers, uTime/uStrength
 │       ├── Shaders.java       Built-in library + custom-pass helper + .frag export
 │       ├── BloomPass.java     Multi-stage bloom (downsample → blur → composite)
+│       ├── LightingPass.java  Day/night darkness + point lights (GLSL + CPU)
 │       ├── PixelShader.java   Per-pixel base class for custom effects
 │       ├── ParallelRows.java  All-cores row striping (the CPU's "fragment wave")
 │       └── ShaderContext.java Per-frame uniform values (CPU mirror)
+├── world
+│   ├── Block.java         One block definition (colour, solidity, light, drops)
+│   ├── BlockRegistry.java Data-driven block set with stable ids
+│   └── World.java         Live world: level + mobs + items + clock; one shared sim
+├── entity
+│   ├── MobDef.java / MobRegistry.java    Data-driven mob species
+│   ├── Mob.java           The ported AI state machine + physics
+│   ├── ItemDef.java / ItemRegistry.java  Items with categories + rarities
+│   ├── ItemStack.java / Inventory.java   Hotbar-first stacked inventory
+│   ├── DroppedItem.java   Items in the world (bounce physics, pickup)
+│   └── EntityView.java    Client-side view of a replicated entity
 ├── sim
-│   ├── PlayerState.java   Position/velocity/flags — what snapshots carry
-│   ├── PlayerInput.java   One tick's movement intent — what clients send
+│   ├── PlayerState.java   Position/velocity/health/flags — what snapshots carry
+│   ├── PlayerInput.java   One tick's movement + attack intent — what clients send
 │   └── PlayerPhysics.java The deterministic step shared by SP, prediction, server
 ├── net
 │   ├── Protocol.java      Newline-delimited compact-JSON wire protocol
-│   ├── GameServer.java    Authoritative fixed-tick server (host in-game or headless)
-│   ├── GameClient.java    Dial host:port, send inputs, receive snapshots
-│   ├── Snapshot.java      One state broadcast + arrival time (interpolation)
+│   ├── GameServer.java    Authoritative fixed-tick server + world (mobs, edits)
+│   ├── GameClient.java    Dial host:port, send inputs/edits, receive snapshots
+│   ├── Snapshot.java      One state broadcast: players + mobs + items + time
 │   ├── NetSession.java    Active client + optional integrated server
 │   └── ServerMain.java    Dedicated server entry point (--port/--level/--gametype)
 ├── input
-│   └── InputManager.java  Polled keyboard/mouse + typed-text state
+│   └── InputManager.java  Polled keyboard/mouse (3 buttons + wheel) + typed text
 ├── scene
 │   ├── Scene.java         update(dt,input) / render(g,alpha) lifecycle
 │   ├── AbstractScene.java No-op base with viewport + manager refs
 │   └── SceneManager.java  Named scenes + fade transitions
 ├── level
-│   ├── Level.java         Tile grid + palette + spawns
-│   └── LevelLoader.java   Load a Level from JSON (or raw text, for the server)
+│   ├── Level.java         Tile grid (palette or block-registry mode) + spawns
+│   ├── LevelLoader.java   Load a Level from JSON (or raw text, for the server)
+│   └── LevelStore.java    Per-game-type level saving (creative mode's home)
+├── audio
+│   └── AudioManager.java  Synthesized sound effects (JDK only, headless-safe)
+├── fx
+│   └── Particles.java     Pooled particles (block breaks, hits)
 ├── ui
 │   ├── Menu.java          Keyboard/mouse menu
 │   ├── MenuItem.java      Label (dynamic) + action
@@ -150,7 +200,8 @@ com.larsons.engine
     ├── GameTypeEditorScene.java Name + configure a game type's features
     ├── MainMenuScene.java       Per-game-type main menu
     ├── MultiplayerScene.java    Host a server / join by host[:port]
-    ├── PlayScene.java           Level + perspectives + sprite; doubles as MP client
+    ├── PlayScene.java           Play with every enabled feature; doubles as MP client
+    ├── CreativeScene.java       Creative mode: paint blocks/lights/mobs/items
     └── ProfileForms.java        Shared feature options (editor + pause menu)
 ```
 
@@ -187,6 +238,33 @@ Rendering cost scales with the screen, not the level: `PlayScene` computes the
 visible tile range by inverse-projecting the viewport corners
 (`Camera.screenToWorld`) and only draws those tiles, so arbitrarily large
 levels render at the same speed.
+
+### The world simulation
+
+The systems merged from the Side-Scroller engine all hang off one class:
+[`World`](src/main/java/com/larsons/engine/world/World.java) — a
+[`Level`](src/main/java/com/larsons/engine/level/Level.java) plus the mobs,
+dropped items, and day/night clock simulated inside it. Exactly one `World`
+is authoritative at a time — the local one in single-player and creative
+play-testing, the **server's** in multiplayer (clients render replicated
+entity state) — so every mode runs the identical simulation code, the same
+seam the player netcode was built on.
+
+Content is **data-driven**: the Side-Scroller engine's 18-constant block
+enum, 23 mob classes, and 198 item classes became rows in
+[`BlockRegistry`](src/main/java/com/larsons/engine/world/BlockRegistry.java),
+[`MobRegistry`](src/main/java/com/larsons/engine/entity/MobRegistry.java), and
+[`ItemRegistry`](src/main/java/com/larsons/engine/entity/ItemRegistry.java).
+Adding a block/mob/item is one `register(...)` call — no engine edits. Block
+ids are stable contracts: they're what level grids store and what block
+edits send over the wire. Light sources (torch, campfire, lantern, …) are
+simply non-solid blocks with a light radius, so painting light is painting a
+block, and it replicates online like any other tile.
+
+Sprites are procedural
+([`EntitySprites`](src/main/java/com/larsons/engine/graphics/EntitySprites.java))
+so the engine stays asset-free; a game with real art draws its own images
+per registry key instead.
 
 ### Rendering backend & shaders
 
@@ -257,6 +335,69 @@ Shaders.writeGlsl(Shaders.allBuiltIns(), Path.of("shaders"));
 Multi-stage effects (like `BloomPass`) implement `ShaderPass` directly and run
 whatever internal stages they need, parallelized with `ParallelRows`.
 
+**Lighting is a shader pass.** The Side-Scroller engine's lighting system
+(day/night darkness with point-light cutouts) was ported as
+[`LightingPass`](src/main/java/com/larsons/engine/graphics/shader/LightingPass.java):
+GLSL-first like every pass, with a CPU fallback that computes the light field
+at quarter resolution (the original's trick) and upsamples bilinearly. Scenes
+feed it screen-space lights each frame — every light-emitting block on screen
+plus a small player glow. It rides the same `ShaderChain` as the post-FX
+(so bloom over torchlight Just Works) but has its **own toggle**, independent
+of the post-FX master switch, and it deliberately ignores `uStrength`:
+darkness *is* its strength. In multiplayer the time of day comes from server
+snapshots, so night falls for everyone together.
+
+---
+
+## Creative mode (paint objects)
+
+The Side-Scroller engine's built-in level editor, rebuilt on this engine's
+camera/registry architecture. From the main menu choose **Creative Mode**
+(or from the pause menu in a running game): a palette sidebar lists
+everything the registries know, in categories —
+
+| Category | Contents |
+|----------|----------|
+| Blocks   | every non-light block in `BlockRegistry` (terrain, ores, decoration) |
+| Lights   | light-emitting blocks (torch, campfire, lantern, magic, crystal) |
+| Mobs     | every species in `MobRegistry` |
+| Items    | every item in `ItemRegistry`, sorted by rarity |
+| Tools    | player spawn marker, eraser |
+
+**Editor controls:**
+
+| Input | Function |
+|-------|----------|
+| Left click / drag | paint the selected entry (grid-snapped for blocks; drag keeps painting) |
+| Right click | erase (entities first, then the block cell) |
+| Middle click | pick the hovered block into the palette |
+| WASD / arrows | pan the camera |
+| Mouse wheel | zoom (over the canvas) / scroll the palette (over the sidebar) |
+| Tab | next palette category |
+| G | toggle the grid |
+| P | play-test the level in place (terrain restored on exit) |
+| Ctrl+S / L / N | save / load / new level |
+| Esc | back (with a save prompt offline) |
+
+Painting works in **every perspective** — the palette paints through the
+same `Camera` projection the game renders with, so you can build in
+isometric view if your game type uses it.
+
+**Play-testing** (`P`) drops a player at the spawn marker and simulates the
+painted world with the real `PlayerPhysics`/mob/item code and the game
+type's lighting — then restores the terrain when you return to editing.
+
+**Levels save into the game type** (the roadmap item):
+[`LevelStore`](src/main/java/com/larsons/engine/level/LevelStore.java) writes
+`resources/levels/<game-type>/<level>.json`, and the game type remembers its
+last saved level — *Play Level* and *Host Server* then run it.
+
+**Online**, the editor opens from the pause menu and paints into the
+<em>server's</em> world: strokes become protocol requests, the server
+validates them against the host's feature toggles, and the authoritative
+results broadcast to every player in real time (other players are visible
+while you paint). Save/load/test stay offline-only features.
+
 ---
 
 ## Online play
@@ -301,6 +442,19 @@ designed for: *input commands in, state snapshots out*.
 - **Interpolation:** remote players are drawn ~100 ms in the past, blended
   between the two most recent snapshots, so they move smoothly regardless of
   snapshot timing.
+- **Entity replication:** the server simulates mobs and dropped items (the
+  same `World` code single-player runs) and includes them in snapshots;
+  clients just render them. Snapshots also carry the time of day, so the
+  lighting pass darkens every screen in sync.
+- **World edits:** mining, placing, and creative painting are requests
+  (`edit`/`paint`/`erase`); the server validates them against the host's
+  feature toggles, applies them on the tick thread, and broadcasts the
+  authoritative `block` result to everyone. Late joiners get the *live*
+  level (the server serializes its current world on join), so an
+  hour of collaborative painting is never lost on them.
+- **Combat & pickups:** attack intent rides the input command (edge-triggered
+  by sequence number so one click is one swing); the server resolves hits,
+  loot, and item pickups, and pushes each player's inventory down to them.
 - **Wire protocol:** newline-delimited compact JSON over TCP, built on the
   engine's own `Json` — zero dependencies (requirement #4) and debuggable
   with `telnet`. See [`Protocol`](src/main/java/com/larsons/engine/net/Protocol.java)
@@ -348,6 +502,17 @@ adventure, an isometric builder, etc.
 | Gravity / jumping | toggle | side-scroll falling + jump |
 | Show HUD | toggle | on-screen info bar |
 | Show grid | toggle | tile grid overlay |
+| Mobs (AI creatures) | toggle | spawn + simulate the level's painted mobs |
+| Items & inventory | toggle | drops, pickup, hotbar + inventory UI |
+| Combat | toggle | swings hurt mobs, mobs hurt players; off = ambient wildlife |
+| Mine / place blocks in play | toggle | left-click mine (with drops), right-click place |
+| Creative mode (paint objects) | toggle | the creative editor + online painting |
+| Lighting | toggle | the lighting shader pass (works without post-FX) |
+| Day/night cycle · Night (fixed) | toggles | time-driven darkness, or a constant night |
+| Night darkness · Ambient light | steppers | how dark night gets / the light floor |
+| Parallax background | toggle | procedural multi-layer backdrop (side-scroll) |
+| Particles | toggle | block-break shards, hit sparks |
+| Sound effects | toggle | synthesized SFX (jump, mine, place, pickup, hit…) |
 | Tile / Player / Default entity size | steppers | sizes in world pixels |
 | Shaders (post-FX) | toggle | master switch for the shader chain |
 | Shader strength | stepper | global `uStrength` in [0, 1] |
@@ -430,8 +595,22 @@ the filesystem. Only `tiles` is required:
 Level level = LevelLoader.load("levels/sample_level.json");
 ```
 
-`Level` is intentionally minimal — extend it with tile properties, collision
-flags, multiple layers, etc. as your game needs.
+Levels come in two modes. **Palette mode** (above, the original format):
+tile ids index the colour palette and every tile is solid. **Registry mode**
+(what the creative editor saves; add `"tileset": "registry"`): tile ids are
+`BlockRegistry` block ids, which bring solidity, light emission, and drops.
+Both load with the same `LevelLoader`, and levels serialize back with
+`level.toJson()` — that round-trip is how creative saves and how a
+multiplayer server hands its live, edited world to joining players.
+Entity spawns take a `kind` (`"mob"` / `"item"`) resolved against the
+registries:
+
+```json
+"entities": [
+  { "kind": "mob",  "type": "zombie", "x": 300, "y": 128 },
+  { "kind": "item", "type": "apple",  "x": 200, "y": 100 }
+]
+```
 
 ### Menus
 
@@ -465,16 +644,17 @@ engine.scenes().setScene("mine"); // or transitionTo for a fade
 ## Roadmap
 
 - **GPU renderer backend:** an OpenGL (LWJGL) `Renderer` that compiles each
-  `ShaderPass.glsl()` into FBO ping-pong passes — the shader library needs no
-  changes, by design. Kept out of the core so the engine itself stays
-  JDK-only (requirement #4); the remaining work for GPU *scene* rendering is a
-  backend-neutral draw API, since scenes draw with `Graphics2D`.
-- **Netcode next steps:** entity replication beyond players, interest
-  management for large worlds, lag compensation for hit detection.
-- **Per-game-type level saving / a level editor** — next step: save levels into
-  the active game type so types and levels are managed together.
-- **Audio, particles, tile collision properties** — natural next layers, kept
-  out of the basic outline on purpose.
+  `ShaderPass.glsl()` into FBO ping-pong passes — the shader library
+  (including `LightingPass`) needs no changes, by design. Kept out of the
+  core so the engine itself stays JDK-only (requirement #4); the remaining
+  work for GPU *scene* rendering is a backend-neutral draw API, since scenes
+  draw with `Graphics2D`.
+- **Netcode next steps:** interest management for large worlds, lag
+  compensation for hit detection, server-side eat/consume requests.
+- **Deeper ports from the Side-Scroller engine:** projectiles + ranged
+  weapons, alchemy/crafting recipes, vault storage, equipment overlays,
+  moving blocks, doors/buttons/triggers — the registries and the world-edit
+  protocol are the hooks they'd plug into.
 
 ## Tests
 
@@ -483,11 +663,19 @@ engine.scenes().setScene("mine"); // or transitionTo for a fade
 [`ConfigFeatureTest`](src/test/java/com/larsons/engine/ConfigFeatureTest.java),
 [`ShaderTest`](src/test/java/com/larsons/engine/ShaderTest.java),
 [`PlayerPhysicsTest`](src/test/java/com/larsons/engine/PlayerPhysicsTest.java),
-[`NetworkTest`](src/test/java/com/larsons/engine/NetworkTest.java))
-covering JSON read/write, level loading, sprite-sheet slicing, input edge
-detection, game-type save/load, the `ConfigForm` widget's keyboard/mouse
-interaction (including scrolling), rendering the scenes off-screen,
-pixel-exact shader behavior + the GLSL contract and export, deterministic
-player physics, and full loopback multiplayer (a real server + clients:
-handshake, movement from input commands, join/leave broadcasts, version
-rejection, shutdown) — so everything is verifiable without a display.
+[`NetworkTest`](src/test/java/com/larsons/engine/NetworkTest.java),
+[`WorldFeaturesTest`](src/test/java/com/larsons/engine/WorldFeaturesTest.java),
+[`NetWorldSyncTest`](src/test/java/com/larsons/engine/NetWorldSyncTest.java))
+covering JSON read/write, level loading (both tile modes + round-trips),
+sprite-sheet slicing, input edge detection, game-type save/load, the
+`ConfigForm` widget's keyboard/mouse interaction (including scrolling),
+rendering the scenes off-screen (play + creative), pixel-exact shader
+behavior + the GLSL contract and export (including the lighting pass),
+deterministic player physics, the mob AI state machine, world simulation
+(mining → drops → pickup, melee combat, the day/night curve), per-game-type
+level saving, and full loopback multiplayer (a real server + clients:
+handshake, movement, join/leave, version rejection, shutdown — plus block
+edits replicating to every client and late joiners, painted mobs appearing
+in snapshots and being erased, pickups landing in the server-side inventory,
+and feature toggles gating edits server-side) — so everything is verifiable
+without a display.
