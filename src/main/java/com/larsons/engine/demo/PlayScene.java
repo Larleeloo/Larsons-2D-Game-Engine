@@ -2,10 +2,24 @@ package com.larsons.engine.demo;
 
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
+import com.larsons.engine.audio.AudioManager.Sfx;
+import com.larsons.engine.entity.DroppedItem;
+import com.larsons.engine.entity.EntityView;
+import com.larsons.engine.entity.Inventory;
+import com.larsons.engine.entity.ItemDef;
+import com.larsons.engine.entity.ItemRegistry;
+import com.larsons.engine.entity.ItemStack;
+import com.larsons.engine.entity.Mob;
+import com.larsons.engine.entity.MobDef;
+import com.larsons.engine.entity.MobRegistry;
+import com.larsons.engine.fx.Particles;
 import com.larsons.engine.graphics.Animation;
 import com.larsons.engine.graphics.Camera;
+import com.larsons.engine.graphics.EntitySprites;
+import com.larsons.engine.graphics.ParallaxBackground;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.SpriteSheet;
+import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
@@ -18,8 +32,11 @@ import com.larsons.engine.sim.PlayerPhysics;
 import com.larsons.engine.sim.PlayerState;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.MenuTheme;
+import com.larsons.engine.world.Block;
+import com.larsons.engine.world.World;
 
 import java.awt.AlphaComposite;
+import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Composite;
 import java.awt.Font;
@@ -27,27 +44,32 @@ import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.awt.event.KeyEvent;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
  * Gameplay scene that honours the active {@link GameProfile}: it only enables
- * the features the creator turned on (perspective, zoom + bounds, gravity, HUD,
- * grid, entity sizes) and exposes the same toggles live via a pause menu
+ * the features the creator turned on — perspective, zoom + bounds, gravity,
+ * HUD, grid, entity sizes, and (merged in from the Side-Scroller engine)
+ * mobs, items + inventory, combat, block mining/placing, lighting, parallax,
+ * particles, and sound — and exposes the same toggles live via a pause menu
  * (Esc), so features can be enabled/disabled both on launch and in-game.
  *
  * <p><b>Online play (requirement #3).</b> When the {@link GameContext} carries
  * a {@link NetSession}, this same scene becomes the multiplayer client: the
- * level comes from the server, every tick's input command is sent up, the
- * local player is <em>predicted</em> with the identical
- * {@link PlayerPhysics} the server runs (then smoothly corrected toward the
- * authoritative snapshots), and remote players are interpolated between the
- * two most recent snapshots. Movement code is shared, so single-player and
- * online play can't drift apart.
+ * level comes from the server (and stays in sync as block edits are
+ * broadcast), the local player is <em>predicted</em> with the identical
+ * {@link PlayerPhysics} the server runs, remote players are interpolated, and
+ * mobs/dropped items are rendered from server snapshots (the server is the
+ * only simulation). Mining, placing, and attacks are requests the server
+ * validates and applies.
  *
  * <p>Controls: WASD/arrows move, P cycles perspective (if enabled), +/- zoom
- * (if enabled), Esc pause.
+ * (if enabled), left-click mine/attack, right-click place, 1-5 + wheel hotbar,
+ * I inventory, F eat, Esc pause.
  */
 public class PlayScene extends AbstractScene {
 
@@ -60,8 +82,12 @@ public class PlayScene extends AbstractScene {
     /** How aggressively prediction errors are blended away, per second. */
     private static final double CORRECTION_PER_SEC = 8.0;
 
+    /** Mining / placing reach, in tiles from the player centre. */
+    private static final int REACH_TILES = 5;
+
     private static final Font HUD_FONT = new Font("SansSerif", Font.PLAIN, 14);
     private static final Font NAME_FONT = new Font("SansSerif", Font.BOLD, 12);
+    private static final Font SMALL_FONT = new Font("SansSerif", Font.PLAIN, 11);
 
     private final GameContext ctx;
     private final String levelPath;
@@ -75,6 +101,18 @@ public class PlayScene extends AbstractScene {
 
     private NetSession net; // null in single-player
     private final Map<Integer, Animation> remoteAnims = new HashMap<>();
+
+    // Offline world simulation (mobs, items, drops). Online the server owns it.
+    private World world;
+    private Inventory inventory;
+    private int invSyncVersion = -1;
+    private boolean showInventory;
+
+    private ParallaxBackground parallax;
+    private final Particles particles = new Particles();
+    private double swingTime;      // seconds left on the melee swing visual
+    private double prevVy;
+    private double prevHealth = PlayerState.MAX_HEALTH;
 
     private boolean paused;
     private ConfigForm pauseForm;
@@ -97,13 +135,28 @@ public class PlayScene extends AbstractScene {
         pauseForm = null;
         net = ctx.session();
         remoteAnims.clear();
+        particles.clear();
+        showInventory = false;
+        swingTime = 0;
 
-        // Online, the world is whatever the server sent; offline, load from disk.
-        if (net != null && net.client().levelJson() != null) {
-            level = LevelLoader.parse(net.client().levelJson());
+        // Online, the world is whatever the server runs (one shared Level
+        // instance that block broadcasts keep current); offline, prefer the
+        // game type's last saved creative level, falling back to the bundled
+        // sample.
+        if (net != null && net.client().level() != null) {
+            level = net.client().level();
+            world = null;
         } else {
-            level = LevelLoader.load(levelPath);
+            level = loadOfflineLevel();
+            world = new World(level);
+            world.populateFromLevel(profile());
+            world.setPickupListener((player, key, count) -> {
+                inventory.add(key, count);
+                ctx.sfx(Sfx.PICKUP);
+            });
         }
+        inventory = new Inventory(world != null ? world.itemTypes : ItemRegistry.standard());
+        invSyncVersion = -1;
 
         GameProfile p = profile();
         camera = new Camera(p.perspective, viewportWidth, viewportHeight);
@@ -112,9 +165,23 @@ public class PlayScene extends AbstractScene {
 
         me = new PlayerState(net != null ? net.client().localId() : 0, "",
                 level.spawnX, level.spawnY);
+        prevHealth = me.health;
 
+        parallax = null; // rebuilt lazily against the level's background
         rebuildSprite();
         syncCameraFromProfile();
+    }
+
+    private Level loadOfflineLevel() {
+        String last = profile().lastLevelPath;
+        if (last != null && !last.isEmpty() && Files.exists(Path.of(last))) {
+            try {
+                return LevelLoader.load(last);
+            } catch (RuntimeException e) {
+                System.err.println("PlayScene: failed to load " + last + ": " + e.getMessage());
+            }
+        }
+        return LevelLoader.load(levelPath);
     }
 
     @Override
@@ -139,7 +206,11 @@ public class PlayScene extends AbstractScene {
             return;
         }
         if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
-            openPause();
+            if (showInventory) {
+                showInventory = false;
+            } else {
+                openPause();
+            }
             return;
         }
 
@@ -154,6 +225,8 @@ public class PlayScene extends AbstractScene {
             if (input.isKeyDown(KeyEvent.VK_MINUS)) camera.zoom = clampZoom(camera.zoom - dt * 2, p);
         }
 
+        updateInventoryControls(input, p);
+
         PlayerInput in = new PlayerInput(
                 input.isKeyDown(KeyEvent.VK_A) || input.isKeyDown(KeyEvent.VK_LEFT),
                 input.isKeyDown(KeyEvent.VK_D) || input.isKeyDown(KeyEvent.VK_RIGHT),
@@ -161,20 +234,173 @@ public class PlayScene extends AbstractScene {
                 input.isKeyDown(KeyEvent.VK_S) || input.isKeyDown(KeyEvent.VK_DOWN),
                 ++inputSeq);
 
+        if (!showInventory) handleMouseActions(input, p, in);
+
         // Online, physics must not depend on the local camera view — the server
         // simulates with the profile's perspective, so prediction does too.
         Perspective simPerspective = net != null ? p.perspective : camera.getPerspective();
+        prevVy = me.vy;
         PlayerPhysics.step(me, in, level, p, simPerspective, dt);
+        if (me.vy < -1 && prevVy >= 0) ctx.sfx(Sfx.JUMP);
 
         if (net != null) {
             net.client().sendInput(in);
             reconcile(dt);
             advanceRemoteAnimations(dt);
+            consumeNetFeedback();
+        } else {
+            world.step(dt, List.of(me), p);
         }
+
+        if (me.health < prevHealth - 0.01) ctx.sfx(Sfx.HURT);
+        prevHealth = me.health;
+
+        if (swingTime > 0) swingTime -= dt;
+        if (p.particlesEnabled) particles.update(dt);
 
         double size = ps();
         camera.centerOn(me.x + size / 2.0, me.y + size / 2.0);
         walkAnim.update(me.moving ? dt : 0);
+    }
+
+    // --- items & block interaction ------------------------------------------------
+
+    private void updateInventoryControls(InputManager input, GameProfile p) {
+        if (!p.itemsEnabled) {
+            showInventory = false;
+            return;
+        }
+        if (input.isKeyJustPressed(KeyEvent.VK_I)) showInventory = !showInventory;
+        for (int k = 0; k < Inventory.HOTBAR; k++) {
+            if (input.isKeyJustPressed(KeyEvent.VK_1 + k)) inventory.select(k);
+        }
+        int wheel = input.getWheelRotation();
+        if (wheel != 0) inventory.scrollSelect(wheel > 0 ? 1 : -1);
+
+        // F consumes the selected food/potion (offline only: online the server
+        // owns health and inventory, and doesn't take consume requests yet).
+        if (net == null && input.isKeyJustPressed(KeyEvent.VK_F)) {
+            ItemDef def = inventory.selectedDef();
+            if (def != null && def.heal() > 0 && me.health < PlayerState.MAX_HEALTH
+                    && inventory.consumeSelected()) {
+                me.health = Math.min(PlayerState.MAX_HEALTH, me.health + def.heal());
+                prevHealth = me.health; // don't play the hurt sound on heals
+                ctx.sfx(Sfx.EAT);
+            }
+        }
+    }
+
+    /**
+     * Left click: mine the aimed block (if block editing is on and it's in
+     * reach) or swing at mobs (if combat is on). Right click: place the
+     * selected hotbar block. Online these become server requests.
+     */
+    private void handleMouseActions(InputManager input, GameProfile p, PlayerInput in) {
+        boolean leftClick = input.isMouseJustPressed();
+        boolean rightClick = input.isRightMouseJustPressed();
+        if (!leftClick && !rightClick) return;
+
+        double[] aim = camera.screenToWorld(input.getMouseX(), input.getMouseY());
+        double ts = ts();
+        int col = (int) Math.floor(aim[0] / ts);
+        int row = (int) Math.floor(aim[1] / ts);
+        boolean inReach = Math.hypot(aim[0] - (me.x + ps() / 2), aim[1] - (me.y + ps() / 2))
+                <= REACH_TILES * ts;
+
+        if (leftClick) {
+            if (p.blockEditingEnabled && inReach && level.tileAt(col, row) > 0) {
+                mineAt(col, row, p);
+            } else if (p.combatEnabled) {
+                swingAt(aim[0], aim[1], in, p);
+            }
+        }
+        if (rightClick && p.blockEditingEnabled && inReach) {
+            placeAt(col, row, p);
+        }
+    }
+
+    private void mineAt(int col, int row, GameProfile p) {
+        if (net != null) {
+            net.client().sendBlockEdit(col, row, 0, "play");
+            return; // feedback arrives with the authoritative broadcast
+        }
+        Block mined = world.mineBlock(col, row, p.itemsEnabled);
+        boolean changed = mined != null;
+        if (!changed) changed = level.setTile(col, row, 0); // legacy palette tile
+        if (changed) {
+            ctx.sfx(Sfx.BREAK);
+            if (p.particlesEnabled) {
+                Color c = mined != null ? mined.color() : Color.GRAY;
+                particles.burst((col + 0.5) * ts(), (row + 0.5) * ts(), c, 10);
+            }
+        }
+    }
+
+    private void placeAt(int col, int row, GameProfile p) {
+        ItemDef def = p.itemsEnabled ? inventory.selectedDef() : null;
+        if (p.itemsEnabled && (def == null || def.category() != ItemDef.Category.BLOCK)) {
+            return; // nothing placeable selected
+        }
+        String blockKey = def != null ? def.blockKey() : "dirt";
+        Block b = level.blocks.get(blockKey);
+        if (b == null || level.tileAt(col, row) != 0) return;
+        // Don't wall yourself in.
+        double ts = ts();
+        double size = ps();
+        boolean overlapsMe = me.x + size > col * ts && me.x < (col + 1) * ts
+                && me.y + size > row * ts && me.y < (row + 1) * ts;
+        if (b.solid() && overlapsMe) return;
+
+        if (net != null) {
+            net.client().sendBlockEdit(col, row, b.id(), "play");
+            return;
+        }
+        if (world.placeBlock(col, row, b.id())) {
+            if (p.itemsEnabled) inventory.consumeSelected();
+            ctx.sfx(Sfx.PLACE);
+        }
+    }
+
+    private void swingAt(double aimX, double aimY, PlayerInput in, GameProfile p) {
+        swingTime = 0.2;
+        ItemDef held = p.itemsEnabled ? inventory.selectedDef() : null;
+        double damage = World.FIST_DAMAGE + (held != null ? held.damage() : 0);
+        if (net != null) {
+            in.attackAt(aimX, aimY); // the server resolves the hit
+            return;
+        }
+        Mob hit = world.playerAttack(me, aimX, aimY, damage);
+        if (hit != null) {
+            ctx.sfx(Sfx.HIT);
+            if (p.particlesEnabled) {
+                particles.burst(hit.x + hit.def.size() / 2, hit.y + hit.def.size() / 2,
+                        hit.def.body(), 8);
+            }
+        }
+    }
+
+    /** Online-only: turn server broadcasts into local feedback + inventory sync. */
+    private void consumeNetFeedback() {
+        GameClient client = net.client();
+        for (int[] e : client.pollBlockEvents()) {
+            if (e[2] == 0) {
+                ctx.sfx(Sfx.BREAK);
+                if (profile().particlesEnabled) {
+                    particles.burst((e[0] + 0.5) * ts(), (e[1] + 0.5) * ts(),
+                            new Color(160, 150, 140), 8);
+                }
+            } else {
+                ctx.sfx(Sfx.PLACE);
+            }
+        }
+        if (client.inventoryVersion() != invSyncVersion) {
+            invSyncVersion = client.inventoryVersion();
+            inventory.fromList(client.inventoryData());
+        }
+        // The server owns health online.
+        Snapshot snap = client.latest();
+        PlayerState server = snap != null ? snap.player(me.id) : null;
+        if (server != null) me.health = server.health;
     }
 
     /**
@@ -225,18 +451,77 @@ public class PlayScene extends AbstractScene {
     @Override
     public void render(Graphics2D g, float alpha) {
         GameProfile p = profile();
+        feedLighting(p);
+
         g.setColor(level.background);
         g.fillRect(0, 0, viewportWidth, viewportHeight);
 
+        if (p.parallaxEnabled && camera.getPerspective() == Perspective.SIDE_SCROLL) {
+            if (parallax == null) {
+                parallax = new ParallaxBackground(level.background, level.name.hashCode());
+            }
+            parallax.render(g, camera.x, camera.y, viewportWidth, viewportHeight);
+        }
+
         drawTiles(g);
         if (p.gridVisible && camera.getPerspective() != Perspective.ISOMETRIC) drawGrid(g);
+        drawWorldEntities(g, p);
         if (net != null) drawRemotePlayers(g);
         drawPlayer(g, me.x, me.y, me.facingLeft, walkAnim.current(), null);
+        if (swingTime > 0) drawSwing(g);
+        if (p.particlesEnabled) particles.render(g, camera);
         if (p.hudVisible) drawHud(g);
+        if (p.itemsEnabled) drawHotbar(g);
+        if (p.combatEnabled || p.mobsEnabled) drawHealthBar(g);
         if (net != null) drawEvents(g);
+        if (showInventory) drawInventory(g);
 
         if (paused) drawPauseOverlay(g);
         if (net != null && !net.client().isConnected()) drawDisconnectOverlay(g);
+    }
+
+    /**
+     * Feed this frame's lighting to the shared {@link LightingPass}: darkness
+     * from the time of day (server time online, local world offline), plus
+     * every light-emitting block on screen and a small glow around players so
+     * night stays navigable. The pass runs inside the shader chain, so this
+     * works with (and under) every other enabled effect.
+     */
+    private void feedLighting(GameProfile p) {
+        LightingPass lighting = ctx.lighting();
+        if (!p.lightingEnabled) {
+            lighting.setDarkness(0);
+            return;
+        }
+        double darkness;
+        if (net != null) {
+            Snapshot snap = net.client().latest();
+            double time = snap != null ? snap.timeOfDay() : 0.25;
+            darkness = World.darknessFor(time, p);
+        } else {
+            darkness = world.darkness(p);
+        }
+        // Menus stay readable: the world dims, the pause overlay doesn't.
+        lighting.setDarkness(paused ? 0 : darkness);
+        lighting.setAmbient(p.ambientLight);
+        lighting.clearLights();
+        if (darkness <= 0.001 || paused) return;
+
+        double ts = ts();
+        int[] b = visibleTileBounds();
+        for (int r = b[1]; r <= b[3]; r++) {
+            for (int c = b[0]; c <= b[2]; c++) {
+                Block block = level.blockAt(c, r);
+                if (block == null || !block.emitsLight()) continue;
+                camera.worldToScreen((c + 0.5) * ts, (r + 0.5) * ts, corner);
+                lighting.addLight(corner[0], corner[1],
+                        block.lightRadius() * ts * camera.zoom, block.lightColor());
+            }
+        }
+        // Player glow.
+        camera.worldToScreen(me.x + ps() / 2, me.y + ps() / 2, corner);
+        lighting.addLight(corner[0], corner[1], 2.5 * ts * camera.zoom,
+                new Color(255, 240, 210));
     }
 
     // --- pause ---
@@ -262,12 +547,18 @@ public class PlayScene extends AbstractScene {
         if (net == null) {
             ProfileForms.addFeatureOptions(pauseForm, p);
             pauseForm.addAction("Resume", this::resume);
+            pauseForm.addAction("Creative Editor (paint this world)",
+                            () -> scenes.transitionTo("creative"))
+                    .enabledWhen(() -> p.creativeEnabled);
             pauseForm.addAction("Save Game Type", () -> { p.normalize(); ctx.save(); });
             pauseForm.addAction("Quit to Menu", () -> scenes.transitionTo("menu"));
         } else {
             // Online the server owns the rules: no live feature editing, or the
             // local simulation would no longer match the authoritative one.
             pauseForm.addAction("Resume", this::resume);
+            pauseForm.addAction("Creative Editor (paint this world)",
+                            () -> scenes.transitionTo("creative"))
+                    .enabledWhen(() -> p.creativeEnabled);
             pauseForm.addAction(net.isHost() ? "Stop Server & Quit" : "Disconnect & Quit", () -> {
                 ctx.closeSession();
                 net = null;
@@ -408,6 +699,82 @@ public class PlayScene extends AbstractScene {
         }
     }
 
+    /** Mobs + dropped items: the offline world's, or the server snapshot's. */
+    private void drawWorldEntities(Graphics2D g, GameProfile p) {
+        if (net == null) {
+            for (DroppedItem item : world.items()) {
+                drawItemSprite(g, item.key, item.x, item.y, item.count);
+            }
+            for (Mob m : world.mobs()) {
+                drawMobSprite(g, m.def, m.x, m.y, m.facingLeft, m.health, m.hurting());
+            }
+        } else {
+            Snapshot snap = net.client().latest();
+            if (snap == null) return;
+            for (EntityView item : snap.items()) {
+                drawItemSprite(g, item.key, item.x, item.y, item.count);
+            }
+            MobRegistry mobs = MobRegistry.standard();
+            for (EntityView mv : snap.mobs()) {
+                MobDef def = mobs.get(mv.key);
+                if (def != null) {
+                    drawMobSprite(g, def, mv.x, mv.y, mv.facingLeft, mv.health, false);
+                }
+            }
+        }
+    }
+
+    private void drawMobSprite(Graphics2D g, MobDef def, double x, double y,
+                               boolean facingLeft, double health, boolean hurt) {
+        BufferedImage img = EntitySprites.mob(def, 32);
+        int w = (int) Math.round(def.size() * camera.zoom);
+        camera.worldToScreen(x + def.size() / 2, y + def.size(), corner);
+        int dx = corner[0] - w / 2;
+        int dy = corner[1] - w;
+        if (facingLeft) {
+            g.drawImage(img, dx + w, dy, -w, w, null);
+        } else {
+            g.drawImage(img, dx, dy, w, w, null);
+        }
+        if (hurt) {
+            g.setColor(new Color(255, 60, 60, 90));
+            g.fillRect(dx, dy, w, w);
+        }
+        if (health < def.maxHealth() - 0.01) {
+            int bw = Math.max(14, w);
+            g.setColor(new Color(0, 0, 0, 150));
+            g.fillRect(dx + w / 2 - bw / 2, dy - 7, bw, 4);
+            g.setColor(new Color(90, 220, 90));
+            g.fillRect(dx + w / 2 - bw / 2, dy - 7,
+                    (int) (bw * Math.max(0, health / def.maxHealth())), 4);
+        }
+    }
+
+    private void drawItemSprite(Graphics2D g, String key, double x, double y, int count) {
+        ItemDef def = (world != null ? world.itemTypes : ItemRegistry.standard()).get(key);
+        if (def == null) return;
+        BufferedImage img = EntitySprites.item(def, 16);
+        int w = Math.max(6, (int) Math.round(DroppedItem.SIZE * camera.zoom));
+        camera.worldToScreen(x, y, corner);
+        g.drawImage(img, corner[0], corner[1], w, w, null);
+        if (count > 1) {
+            g.setFont(SMALL_FONT);
+            g.setColor(Color.WHITE);
+            g.drawString("x" + count, corner[0] + w, corner[1] + w);
+        }
+    }
+
+    /** A short arc in front of the player while a melee swing plays. */
+    private void drawSwing(Graphics2D g) {
+        double size = ps();
+        camera.worldToScreen(me.x + size / 2, me.y + size / 2, corner);
+        int r = (int) (size * camera.zoom * 0.9);
+        g.setColor(new Color(255, 255, 255, (int) (150 * Math.max(0, swingTime / 0.2))));
+        g.setStroke(new BasicStroke(3f));
+        int start = me.facingLeft ? 120 : -60;
+        g.drawArc(corner[0] - r, corner[1] - r, r * 2, r * 2, start, 120);
+    }
+
     /** Draw every other player, interpolated between the two latest snapshots. */
     private void drawRemotePlayers(Graphics2D g) {
         GameClient client = net.client();
@@ -480,7 +847,90 @@ public class PlayScene extends AbstractScene {
         hud.append("    |    [Esc] pause");
         if (profile().perspectiveSwitchingEnabled) hud.append("  [P] perspective");
         if (profile().zoomEnabled) hud.append("  [+/-] zoom");
+        if (profile().itemsEnabled) hud.append("  [I] inventory");
         g.drawString(hud.toString(), 12, 24);
+    }
+
+    private void drawHealthBar(Graphics2D g) {
+        int w = 180, h = 14;
+        int x = 12, y = viewportHeight - 28;
+        g.setColor(new Color(0, 0, 0, 160));
+        g.fillRoundRect(x - 2, y - 2, w + 4, h + 4, 6, 6);
+        g.setColor(new Color(120, 30, 30));
+        g.fillRect(x, y, w, h);
+        g.setColor(new Color(220, 60, 60));
+        g.fillRect(x, y, (int) (w * Math.max(0, me.health / PlayerState.MAX_HEALTH)), h);
+        g.setColor(Color.WHITE);
+        g.setFont(SMALL_FONT);
+        g.drawString((int) Math.ceil(me.health) + " / " + (int) PlayerState.MAX_HEALTH,
+                x + w / 2 - 20, y + 11);
+    }
+
+    private void drawHotbar(Graphics2D g) {
+        int slot = 44, pad = 5;
+        int total = Inventory.HOTBAR * (slot + pad) - pad;
+        int x0 = (viewportWidth - total) / 2;
+        int y0 = viewportHeight - slot - 10;
+        for (int i = 0; i < Inventory.HOTBAR; i++) {
+            int x = x0 + i * (slot + pad);
+            boolean sel = inventory.selectedIndex() == i;
+            g.setColor(new Color(0, 0, 0, sel ? 200 : 140));
+            g.fillRoundRect(x, y0, slot, slot, 8, 8);
+            g.setColor(sel ? new Color(255, 220, 120) : new Color(255, 255, 255, 70));
+            g.setStroke(new BasicStroke(sel ? 2.5f : 1f));
+            g.drawRoundRect(x, y0, slot, slot, 8, 8);
+            drawStack(g, inventory.slot(i), x, y0, slot);
+            g.setColor(new Color(255, 255, 255, 130));
+            g.setFont(SMALL_FONT);
+            g.drawString(String.valueOf(i + 1), x + 4, y0 + 12);
+        }
+    }
+
+    private void drawInventory(Graphics2D g) {
+        int slot = 46, pad = 6;
+        int gw = Inventory.COLS * (slot + pad) - pad;
+        int gh = Inventory.ROWS * (slot + pad) - pad;
+        int x0 = (viewportWidth - gw) / 2;
+        int y0 = (viewportHeight - gh) / 2;
+
+        g.setColor(new Color(10, 10, 16, 220));
+        g.fillRoundRect(x0 - 20, y0 - 52, gw + 40, gh + 84, 14, 14);
+        g.setColor(Color.WHITE);
+        g.setFont(new Font("SansSerif", Font.BOLD, 16));
+        g.drawString("Inventory", x0, y0 - 24);
+        g.setFont(SMALL_FONT);
+        g.setColor(new Color(170, 170, 190));
+        g.drawString("Slots 1-5 are the hotbar · [I]/[Esc] close · [F] eat selected", x0, y0 - 8);
+
+        for (int i = 0; i < Inventory.SIZE; i++) {
+            int cx = x0 + (i % Inventory.COLS) * (slot + pad);
+            int cy = y0 + (i / Inventory.COLS) * (slot + pad);
+            boolean hotbar = i < Inventory.HOTBAR;
+            boolean sel = i == inventory.selectedIndex();
+            g.setColor(new Color(255, 255, 255, hotbar ? 36 : 18));
+            g.fillRoundRect(cx, cy, slot, slot, 8, 8);
+            g.setColor(sel ? new Color(255, 220, 120) : new Color(255, 255, 255, 60));
+            g.setStroke(new BasicStroke(sel ? 2.5f : 1f));
+            g.drawRoundRect(cx, cy, slot, slot, 8, 8);
+            drawStack(g, inventory.slot(i), cx, cy, slot);
+        }
+    }
+
+    private void drawStack(Graphics2D g, ItemStack stack, int x, int y, int slot) {
+        if (stack == null) return;
+        ItemDef def = (world != null ? world.itemTypes : ItemRegistry.standard()).get(stack.key);
+        if (def == null) return;
+        BufferedImage img = EntitySprites.item(def, 32);
+        g.drawImage(img, x + 6, y + 6, slot - 12, slot - 12, null);
+        if (stack.count > 1) {
+            g.setFont(SMALL_FONT);
+            g.setColor(Color.BLACK);
+            String n = String.valueOf(stack.count);
+            int tw = g.getFontMetrics().stringWidth(n);
+            g.drawString(n, x + slot - tw - 3, y + slot - 3);
+            g.setColor(Color.WHITE);
+            g.drawString(n, x + slot - tw - 4, y + slot - 4);
+        }
     }
 
     /** Server chat-style event feed ("X joined"), bottom-left. */

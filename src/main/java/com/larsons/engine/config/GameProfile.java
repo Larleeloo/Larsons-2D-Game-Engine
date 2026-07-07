@@ -40,6 +40,28 @@ public class GameProfile {
     public boolean hudVisible = true;
     public boolean gridVisible = false;
 
+    // World features (merged in from the Side-Scroller engine).
+    public boolean mobsEnabled = true;        // spawn + simulate mobs
+    public boolean itemsEnabled = true;       // drops, pickup, inventory + hotbar
+    public boolean combatEnabled = true;      // swings hurt mobs, mobs hurt players
+    public boolean blockEditingEnabled = true; // mine/place blocks while playing
+    public boolean creativeEnabled = true;    // creative mode (paint objects)
+
+    // Lighting (rendered as a shader pass, so it composes with post-FX).
+    public boolean lightingEnabled = false;
+    public boolean dayNightCycle = false;     // time-driven darkness
+    public boolean nightMode = false;         // fixed night when the cycle is off
+    public double nightDarkness = 0.55;       // max darkness at night [0,1]
+    public double ambientLight = 0.25;        // light floor so night stays readable
+
+    // Atmosphere & feedback.
+    public boolean parallaxEnabled = false;   // procedural side-scroll backdrop
+    public boolean particlesEnabled = true;   // block-break / hit particles
+    public boolean audioEnabled = true;       // synthesized sound effects
+
+    // The level last saved/played in this game type ("" = bundled sample).
+    public String lastLevelPath = "";
+
     // Sizes of various entities (world pixels).
     public int tileSize = 32;
     public int playerSize = 32;
@@ -78,6 +100,20 @@ public class GameProfile {
         m.put("gravityEnabled", gravityEnabled);
         m.put("hudVisible", hudVisible);
         m.put("gridVisible", gridVisible);
+        m.put("mobsEnabled", mobsEnabled);
+        m.put("itemsEnabled", itemsEnabled);
+        m.put("combatEnabled", combatEnabled);
+        m.put("blockEditingEnabled", blockEditingEnabled);
+        m.put("creativeEnabled", creativeEnabled);
+        m.put("lightingEnabled", lightingEnabled);
+        m.put("dayNightCycle", dayNightCycle);
+        m.put("nightMode", nightMode);
+        m.put("nightDarkness", nightDarkness);
+        m.put("ambientLight", ambientLight);
+        m.put("parallaxEnabled", parallaxEnabled);
+        m.put("particlesEnabled", particlesEnabled);
+        m.put("audioEnabled", audioEnabled);
+        m.put("lastLevelPath", lastLevelPath);
         m.put("tileSize", tileSize);
         m.put("playerSize", playerSize);
         m.put("defaultEntitySize", defaultEntitySize);
@@ -116,6 +152,20 @@ public class GameProfile {
         p.gravityEnabled = bool(m, "gravityEnabled", p.gravityEnabled);
         p.hudVisible = bool(m, "hudVisible", p.hudVisible);
         p.gridVisible = bool(m, "gridVisible", p.gridVisible);
+        p.mobsEnabled = bool(m, "mobsEnabled", p.mobsEnabled);
+        p.itemsEnabled = bool(m, "itemsEnabled", p.itemsEnabled);
+        p.combatEnabled = bool(m, "combatEnabled", p.combatEnabled);
+        p.blockEditingEnabled = bool(m, "blockEditingEnabled", p.blockEditingEnabled);
+        p.creativeEnabled = bool(m, "creativeEnabled", p.creativeEnabled);
+        p.lightingEnabled = bool(m, "lightingEnabled", p.lightingEnabled);
+        p.dayNightCycle = bool(m, "dayNightCycle", p.dayNightCycle);
+        p.nightMode = bool(m, "nightMode", p.nightMode);
+        p.nightDarkness = dbl(m, "nightDarkness", p.nightDarkness);
+        p.ambientLight = dbl(m, "ambientLight", p.ambientLight);
+        p.parallaxEnabled = bool(m, "parallaxEnabled", p.parallaxEnabled);
+        p.particlesEnabled = bool(m, "particlesEnabled", p.particlesEnabled);
+        p.audioEnabled = bool(m, "audioEnabled", p.audioEnabled);
+        p.lastLevelPath = str(m, "lastLevelPath", p.lastLevelPath);
         p.tileSize = intg(m, "tileSize", p.tileSize);
         p.playerSize = intg(m, "playerSize", p.playerSize);
         p.defaultEntitySize = intg(m, "defaultEntitySize", p.defaultEntitySize);
@@ -144,6 +194,9 @@ public class GameProfile {
         defaultEntitySize = Math.max(1, defaultEntitySize);
         shaderStrength = Math.max(0.0, Math.min(1.0, shaderStrength));
         shaderPixelSize = Math.max(1, Math.min(64, shaderPixelSize));
+        nightDarkness = Math.max(0.0, Math.min(1.0, nightDarkness));
+        ambientLight = Math.max(0.0, Math.min(1.0, ambientLight));
+        if (lastLevelPath == null) lastLevelPath = "";
     }
 
     private static String str(Map<String, Object> m, String k, String def) {

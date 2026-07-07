@@ -1,0 +1,64 @@
+package com.larsons.engine.entity;
+
+import java.awt.Color;
+
+/**
+ * One item definition. Ported from the Side-Scroller engine's {@code Item}
+ * class + 198 per-item subclasses, collapsed into a data row registered with
+ * {@link ItemRegistry}. Categories and rarities are the original enums; the
+ * rarity colour scheme (white → cyan) is kept so drops read the same.
+ *
+ * @param key       stable string key ("iron_sword")
+ * @param name      display name
+ * @param category  primary use
+ * @param rarity    tier; tints the name + dropped-item beam
+ * @param color     icon colour (procedural icons; no image assets)
+ * @param maxStack  stack limit in inventories (1 = unstackable)
+ * @param damage    weapon damage added to melee swings (0 for non-weapons)
+ * @param heal      health restored when consumed (0 for non-food)
+ * @param blockKey  for BLOCK items: the {@code Block} this item places
+ */
+public record ItemDef(String key, String name, Category category, Rarity rarity,
+                      Color color, int maxStack, double damage, double heal,
+                      String blockKey) {
+
+    /** Ported {@code ItemCategory}. */
+    public enum Category {
+        WEAPON, RANGED_WEAPON, TOOL, ARMOR, CLOTHING, BLOCK, FOOD, POTION,
+        MATERIAL, KEY, ACCESSORY, THROWABLE, OTHER
+    }
+
+    /** Ported {@code ItemRarity}, colours intact. */
+    public enum Rarity {
+        COMMON(Color.WHITE, "Common"),
+        UNCOMMON(new Color(30, 255, 30), "Uncommon"),
+        RARE(new Color(30, 100, 255), "Rare"),
+        EPIC(new Color(180, 30, 255), "Epic"),
+        LEGENDARY(new Color(255, 165, 0), "Legendary"),
+        MYTHIC(new Color(0, 255, 255), "Mythic");
+
+        public final Color color;
+        public final String displayName;
+
+        Rarity(Color color, String displayName) {
+            this.color = color;
+            this.displayName = displayName;
+        }
+    }
+
+    public static ItemDef material(String key, String name, Rarity rarity, Color color) {
+        return new ItemDef(key, name, Category.MATERIAL, rarity, color, 64, 0, 0, null);
+    }
+
+    public static ItemDef weapon(String key, String name, Rarity rarity, Color color, double damage) {
+        return new ItemDef(key, name, Category.WEAPON, rarity, color, 1, damage, 0, null);
+    }
+
+    public static ItemDef food(String key, String name, Color color, double heal) {
+        return new ItemDef(key, name, Category.FOOD, Rarity.COMMON, color, 16, 0, heal, null);
+    }
+
+    public static ItemDef block(String key, String name, Color color, String blockKey) {
+        return new ItemDef(key, name, Category.BLOCK, Rarity.COMMON, color, 64, 0, 0, blockKey);
+    }
+}

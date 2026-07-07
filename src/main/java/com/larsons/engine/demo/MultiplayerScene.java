@@ -118,8 +118,15 @@ public class MultiplayerScene extends AbstractScene {
             GameServer server = null;
             try {
                 int port = Integer.parseInt(hostPort.trim());
-                String levelJson = LevelLoader.readText(levelPath);
-                if (levelJson == null) throw new IllegalStateException("Level not found: " + levelPath);
+                // Host the game type's last saved creative level when there is
+                // one, matching what "Play Level" runs offline.
+                String path = levelPath;
+                String last = ctx.profile().lastLevelPath;
+                if (last != null && !last.isEmpty() && LevelLoader.readText(last) != null) {
+                    path = last;
+                }
+                String levelJson = LevelLoader.readText(path);
+                if (levelJson == null) throw new IllegalStateException("Level not found: " + path);
                 server = new GameServer(ctx.profile(), levelJson);
                 server.start(port);
                 GameClient client = GameClient.connect("127.0.0.1", server.getPort(), playerName, 5000);

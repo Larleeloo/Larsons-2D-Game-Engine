@@ -1,6 +1,9 @@
 package com.larsons.engine.net;
 
 import com.larsons.engine.config.GameProfile;
+import com.larsons.engine.entity.EntityView;
+import com.larsons.engine.level.Level;
+import com.larsons.engine.level.LevelLoader;
 import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerState;
 import com.larsons.engine.util.Json;
@@ -49,6 +52,7 @@ public final class GameClient implements Closeable {
     private final int tickRate;
     private final GameProfile profile;
     private final String levelJson;
+    private final Level level; // shared world view; "block" broadcasts apply here
 
     private volatile Snapshot latest;
     private volatile Snapshot previous;
@@ -58,6 +62,14 @@ public final class GameClient implements Closeable {
 
     /** Recent server info messages ("X joined"), newest last, capped. */
     private final ConcurrentLinkedDeque<String> events = new ConcurrentLinkedDeque<>();
+
+    /** Block changes since last polled (scenes spawn particles/sfx from these). */
+    private final ConcurrentLinkedDeque<int[]> blockEvents = new ConcurrentLinkedDeque<>();
+    private static final int MAX_BLOCK_EVENTS = 64;
+
+    /** Server-owned inventory contents, bumped whenever an "inv" message lands. */
+    private volatile List<Object> inventoryData;
+    private volatile int inventoryVersion;
 
     /**
      * Connect and complete the join handshake, or throw with a reason
@@ -116,6 +128,7 @@ public final class GameClient implements Closeable {
         this.profile = welcome.get("profile") instanceof Map<?, ?> m
                 ? GameProfile.fromMap(Json.asObject(m)) : new GameProfile();
         this.levelJson = welcome.get("level") instanceof String s ? s : null;
+        this.level = levelJson != null ? LevelLoader.parse(levelJson) : null;
 
         daemon("client-read", this::readLoop).start();
         daemon("client-write", this::writeLoop).start();
@@ -133,6 +146,31 @@ public final class GameClient implements Closeable {
 
     /** Raw JSON of the level the server is running, or {@code null}. */
     public String levelJson() { return levelJson; }
+
+    /**
+     * The live client-side view of the server's world: parsed once on join,
+     * then kept current by applying every {@code block} broadcast. Both the
+     * play scene and the creative editor render (and edit through) this one
+     * instance, so painting online is immediately visible everywhere.
+     */
+    public Level level() { return level; }
+
+    /**
+     * Drain block changes received since the last call, each as
+     * {@code [col, row, newId]} (for local feedback: particles, sounds).
+     */
+    public List<int[]> pollBlockEvents() {
+        List<int[]> out = new ArrayList<>();
+        int[] e;
+        while ((e = blockEvents.pollFirst()) != null) out.add(e);
+        return out;
+    }
+
+    /** Server-owned inventory contents (see {@code Inventory.fromList}), or null. */
+    public List<Object> inventoryData() { return inventoryData; }
+
+    /** Bumps every time the server sends new inventory contents. */
+    public int inventoryVersion() { return inventoryVersion; }
 
     /** Most recent snapshot, or {@code null} before the first one arrives. */
     public Snapshot latest() { return latest; }
@@ -158,6 +196,21 @@ public final class GameClient implements Closeable {
         if (connected) outbox.offer(Protocol.input(input));
     }
 
+    /** Ask the server to set a block; {@code mode} is "paint" or "play". */
+    public void sendBlockEdit(int col, int row, int blockId, String mode) {
+        if (connected) outbox.offer(Protocol.blockEdit(col, row, blockId, mode));
+    }
+
+    /** Ask the server to spawn a painted entity (kind "mob" or "item"). */
+    public void sendEntityPaint(String kind, String type, double x, double y) {
+        if (connected) outbox.offer(Protocol.entityPaint(kind, type, x, y));
+    }
+
+    /** Ask the server to erase a painted entity. */
+    public void sendEntityErase(int entityId) {
+        if (connected) outbox.offer(Protocol.entityErase(entityId));
+    }
+
     @Override
     public void close() {
         markDisconnected("Left the game");
@@ -173,6 +226,23 @@ public final class GameClient implements Closeable {
                 if (msg == null) continue;
                 switch (Protocol.type(msg)) {
                     case "state" -> handleState(msg);
+                    case "block" -> {
+                        int col = msg.get("c") instanceof Number n ? n.intValue() : -1;
+                        int row = msg.get("r") instanceof Number n ? n.intValue() : -1;
+                        int id = msg.get("b") instanceof Number n ? n.intValue() : 0;
+                        // Tile writes are single ints; a frame that races one
+                        // simply draws it a frame late, which is harmless.
+                        if (level != null && level.setTile(col, row, id)) {
+                            blockEvents.addLast(new int[]{col, row, id});
+                            while (blockEvents.size() > MAX_BLOCK_EVENTS) blockEvents.pollFirst();
+                        }
+                    }
+                    case "inv" -> {
+                        if (msg.get("items") instanceof List<?> list) {
+                            inventoryData = new ArrayList<>(list);
+                            inventoryVersion++;
+                        }
+                    }
                     case "pong" -> {
                         long sent = msg.get("p") instanceof Number n ? n.longValue() : 0;
                         pingMillis = (int) Math.max(0, nowMillis() - sent);
@@ -202,8 +272,20 @@ public final class GameClient implements Closeable {
                 if (o instanceof Map<?, ?> pm) players.add(PlayerState.fromMap(Json.asObject(pm)));
             }
         }
+        List<EntityView> mobs = parseEntities(msg.get("mobs"));
+        List<EntityView> items = parseEntities(msg.get("items"));
+        double time = msg.get("time") instanceof Number n ? n.doubleValue() : 0.25;
         previous = latest;
-        latest = new Snapshot(tick, players, System.nanoTime());
+        latest = new Snapshot(tick, players, mobs, items, time, System.nanoTime());
+    }
+
+    private static List<EntityView> parseEntities(Object o) {
+        if (!(o instanceof List<?> list) || list.isEmpty()) return List.of();
+        List<EntityView> out = new ArrayList<>(list.size());
+        for (Object e : list) {
+            if (e instanceof Map<?, ?> em) out.add(EntityView.fromMap(Json.asObject(em)));
+        }
+        return out;
     }
 
     private void writeLoop() {

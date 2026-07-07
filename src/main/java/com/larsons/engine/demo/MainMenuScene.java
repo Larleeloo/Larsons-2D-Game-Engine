@@ -28,8 +28,11 @@ public class MainMenuScene extends AbstractScene {
         menu = new Menu(p.name)
                 .subtitle("game type · " + p.perspective)
                 .theme(MenuTheme.dark())
-                .add("Play / Create Level", () -> scenes.transitionTo("play"))
-                .add("Multiplayer (Host / Join)", () -> scenes.transitionTo("multiplayer"))
+                .add("Play Level", () -> scenes.transitionTo("play"));
+        if (p.creativeEnabled) {
+            menu.add("Creative Mode (paint a level)", () -> scenes.transitionTo("creative"));
+        }
+        menu.add("Multiplayer (Host / Join)", () -> scenes.transitionTo("multiplayer"))
                 .add("Edit Features", () -> scenes.transitionTo("editor"))
                 .add("Change Game Type", () -> scenes.transitionTo("startup"))
                 .add("Quit", () -> System.exit(0));
