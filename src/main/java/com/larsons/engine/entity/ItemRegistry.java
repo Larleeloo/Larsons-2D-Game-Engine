@@ -77,27 +77,35 @@ public final class ItemRegistry {
         r.register(ItemDef.weapon("battle_axe", "Battle Axe", ItemDef.Rarity.RARE, new Color(140, 120, 110), 14));
         r.register(ItemDef.weapon("legendary_sword", "Legendary Sword", ItemDef.Rarity.LEGENDARY, new Color(255, 180, 60), 22));
         r.register(ItemDef.weapon("frostmourne", "Frostmourne", ItemDef.Rarity.MYTHIC, new Color(140, 220, 255), 28));
-        // Ranged.
-        r.register(new ItemDef("wooden_bow", "Wooden Bow", ItemDef.Category.RANGED_WEAPON,
-                ItemDef.Rarity.COMMON, new Color(150, 110, 60), 1, 6, 0, null));
-        r.register(new ItemDef("longbow", "Longbow", ItemDef.Category.RANGED_WEAPON,
-                ItemDef.Rarity.RARE, new Color(120, 90, 50), 1, 12, 0, null));
-        r.register(new ItemDef("fire_staff", "Fire Staff", ItemDef.Category.RANGED_WEAPON,
-                ItemDef.Rarity.EPIC, new Color(230, 110, 50), 1, 15, 0, null));
-        r.register(new ItemDef("arrow", "Arrow", ItemDef.Category.THROWABLE,
-                ItemDef.Rarity.COMMON, new Color(180, 180, 170), 64, 0, 0, null));
+        // Ranged weapons fire ProjectileRegistry entries; bows consume arrows,
+        // staves fire freely (their rarity is the cost).
+        r.register(ItemDef.ranged("wooden_bow", "Wooden Bow",
+                ItemDef.Rarity.COMMON, new Color(150, 110, 60), 6, "arrow", "arrow"));
+        r.register(ItemDef.ranged("longbow", "Longbow",
+                ItemDef.Rarity.RARE, new Color(120, 90, 50), 12, "arrow", "arrow"));
+        r.register(ItemDef.ranged("arcane_staff", "Arcane Staff",
+                ItemDef.Rarity.RARE, new Color(120, 100, 220), 9, "magic_bolt", null));
+        r.register(ItemDef.ranged("fire_staff", "Fire Staff",
+                ItemDef.Rarity.EPIC, new Color(230, 110, 50), 15, "fireball", null));
+        // Throwables consume themselves; physical ones land as recoverable drops.
+        r.register(ItemDef.throwable("arrow", "Arrow",
+                ItemDef.Rarity.COMMON, new Color(180, 180, 170), 4, "arrow"));
+        r.register(ItemDef.throwable("rock", "Rock",
+                ItemDef.Rarity.COMMON, new Color(140, 135, 130), 5, "rock"));
+        r.register(ItemDef.throwable("throwing_knife", "Throwing Knife",
+                ItemDef.Rarity.UNCOMMON, new Color(190, 195, 205), 8, "knife"));
         // Food.
         r.register(ItemDef.food("apple", "Apple", new Color(210, 60, 50), 10));
         r.register(ItemDef.food("bread", "Bread", new Color(205, 160, 90), 15));
         r.register(ItemDef.food("cheese", "Cheese", new Color(240, 205, 90), 12));
         r.register(ItemDef.food("cooked_meat", "Cooked Meat", new Color(160, 90, 60), 25));
         r.register(new ItemDef("golden_apple", "Golden Apple", ItemDef.Category.FOOD,
-                ItemDef.Rarity.LEGENDARY, new Color(240, 210, 80), 4, 0, 100, null));
+                ItemDef.Rarity.LEGENDARY, new Color(240, 210, 80), 4, 0, 100, null, null, null));
         // Potions & keys.
         r.register(new ItemDef("health_potion", "Health Potion", ItemDef.Category.POTION,
-                ItemDef.Rarity.UNCOMMON, new Color(220, 70, 90), 8, 0, 40, null));
+                ItemDef.Rarity.UNCOMMON, new Color(220, 70, 90), 8, 0, 40, null, null, null));
         r.register(new ItemDef("gold_key", "Gold Key", ItemDef.Category.KEY,
-                ItemDef.Rarity.RARE, new Color(230, 195, 70), 8, 0, 0, null));
+                ItemDef.Rarity.RARE, new Color(230, 195, 70), 8, 0, 0, null, null, null));
         return r;
     }
 }

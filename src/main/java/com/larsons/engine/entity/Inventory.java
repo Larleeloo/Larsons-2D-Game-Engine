@@ -84,6 +84,46 @@ public final class Inventory {
         return left;
     }
 
+    /**
+     * Move the stack in {@code from} onto {@code to}: merge when both hold the
+     * same item (up to {@code maxStack}, leftovers stay behind), swap
+     * otherwise. This is the one primitive the inventory UI needs — pick a
+     * stack up, put it down — and, online, the {@code invmove} request the
+     * server applies to its authoritative copy. Returns whether anything moved.
+     */
+    public boolean move(int from, int to) {
+        if (from < 0 || from >= SIZE || to < 0 || to >= SIZE || from == to) return false;
+        ItemStack src = slots[from];
+        if (src == null) return false;
+        ItemStack dst = slots[to];
+        ItemDef def = registry.get(src.key);
+        if (dst != null && dst.key.equals(src.key) && def != null) {
+            int take = Math.min(src.count, def.maxStack() - dst.count);
+            if (take <= 0) return false;
+            dst.count += take;
+            src.count -= take;
+            if (src.count <= 0) slots[from] = null;
+        } else {
+            slots[from] = dst;
+            slots[to] = src;
+        }
+        return true;
+    }
+
+    /**
+     * Take up to {@code count} items out of one slot (dropping into the
+     * world). Returns how many were actually removed.
+     */
+    public int removeAt(int slot, int count) {
+        if (slot < 0 || slot >= SIZE || count <= 0) return 0;
+        ItemStack s = slots[slot];
+        if (s == null) return 0;
+        int take = Math.min(count, s.count);
+        s.count -= take;
+        if (s.count <= 0) slots[slot] = null;
+        return take;
+    }
+
     /** Remove up to {@code count} of an item; returns how many were removed. */
     public int remove(String key, int count) {
         int removed = 0;

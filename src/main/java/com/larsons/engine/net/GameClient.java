@@ -7,6 +7,7 @@ import com.larsons.engine.level.LevelLoader;
 import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerState;
 import com.larsons.engine.util.Json;
+import com.larsons.engine.world.World;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
@@ -66,6 +67,10 @@ public final class GameClient implements Closeable {
     /** Block changes since last polled (scenes spawn particles/sfx from these). */
     private final ConcurrentLinkedDeque<int[]> blockEvents = new ConcurrentLinkedDeque<>();
     private static final int MAX_BLOCK_EVENTS = 64;
+
+    /** Projectile impacts since last polled (scenes spawn particles/sfx from these). */
+    private final ConcurrentLinkedDeque<World.Impact> fxEvents = new ConcurrentLinkedDeque<>();
+    private static final int MAX_FX_EVENTS = 64;
 
     /** Server-owned inventory contents, bumped whenever an "inv" message lands. */
     private volatile List<Object> inventoryData;
@@ -166,6 +171,18 @@ public final class GameClient implements Closeable {
         return out;
     }
 
+    /**
+     * Drain projectile impacts broadcast since the last call (for local
+     * feedback: particles, sounds) — the online mirror of
+     * {@code World.pollImpacts()}.
+     */
+    public List<World.Impact> pollFxEvents() {
+        List<World.Impact> out = new ArrayList<>();
+        World.Impact e;
+        while ((e = fxEvents.pollFirst()) != null) out.add(e);
+        return out;
+    }
+
     /** Server-owned inventory contents (see {@code Inventory.fromList}), or null. */
     public List<Object> inventoryData() { return inventoryData; }
 
@@ -211,6 +228,21 @@ public final class GameClient implements Closeable {
         if (connected) outbox.offer(Protocol.entityErase(entityId));
     }
 
+    /** Ask the server to move/merge/swap an inventory stack between slots. */
+    public void sendInvMove(int fromSlot, int toSlot) {
+        if (connected) outbox.offer(Protocol.invMove(fromSlot, toSlot));
+    }
+
+    /** Ask the server to drop items from an inventory slot into the world. */
+    public void sendInvDrop(int slot, int count) {
+        if (connected) outbox.offer(Protocol.invDrop(slot, count));
+    }
+
+    /** Ask the server to consume the item in a slot (eat / drink). */
+    public void sendUseItem(int slot) {
+        if (connected) outbox.offer(Protocol.useItem(slot));
+    }
+
     @Override
     public void close() {
         markDisconnected("Left the game");
@@ -243,6 +275,14 @@ public final class GameClient implements Closeable {
                             inventoryVersion++;
                         }
                     }
+                    case "fx" -> {
+                        fxEvents.addLast(new World.Impact(
+                                msg.get("k") instanceof String s ? s : "",
+                                msg.get("x") instanceof Number n ? n.doubleValue() : 0,
+                                msg.get("y") instanceof Number n ? n.doubleValue() : 0,
+                                Boolean.TRUE.equals(msg.get("e"))));
+                        while (fxEvents.size() > MAX_FX_EVENTS) fxEvents.pollFirst();
+                    }
                     case "pong" -> {
                         long sent = msg.get("p") instanceof Number n ? n.longValue() : 0;
                         pingMillis = (int) Math.max(0, nowMillis() - sent);
@@ -274,9 +314,10 @@ public final class GameClient implements Closeable {
         }
         List<EntityView> mobs = parseEntities(msg.get("mobs"));
         List<EntityView> items = parseEntities(msg.get("items"));
+        List<EntityView> shots = parseEntities(msg.get("shots"));
         double time = msg.get("time") instanceof Number n ? n.doubleValue() : 0.25;
         previous = latest;
-        latest = new Snapshot(tick, players, mobs, items, time, System.nanoTime());
+        latest = new Snapshot(tick, players, mobs, items, shots, time, System.nanoTime());
     }
 
     private static List<EntityView> parseEntities(Object o) {

@@ -21,7 +21,7 @@ import java.util.Map;
 public final class AudioManager {
 
     /** The engine's built-in effect vocabulary (the ported {@code SoundAction}s). */
-    public enum Sfx { CLICK, JUMP, PLACE, BREAK, PICKUP, HIT, HURT, EAT }
+    public enum Sfx { CLICK, JUMP, PLACE, BREAK, PICKUP, HIT, HURT, EAT, SHOOT, BOOM }
 
     private static final float SAMPLE_RATE = 22050f;
 
@@ -67,6 +67,8 @@ public final class AudioManager {
             clips.put(Sfx.HIT, clip(mix(noise(0.08, 0.5), sweep(150, 90, 0.08, 0.6))));
             clips.put(Sfx.HURT, clip(sweep(420, 140, 0.16, 0.55)));
             clips.put(Sfx.EAT, clip(concat(noise(0.03, 0.3), sweep(320, 260, 0.06, 0.35))));
+            clips.put(Sfx.SHOOT, clip(mix(noise(0.04, 0.25), sweep(880, 320, 0.09, 0.45))));
+            clips.put(Sfx.BOOM, clip(mix(noise(0.28, 0.6), sweep(140, 45, 0.28, 0.65))));
             available = true;
         } catch (Exception | UnsatisfiedLinkError e) {
             available = false; // headless / no sound device: stay silent
