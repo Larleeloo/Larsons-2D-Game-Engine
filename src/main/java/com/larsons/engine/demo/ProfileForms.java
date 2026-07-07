@@ -43,6 +43,8 @@ final class ProfileForms {
         form.addToggle("Items & inventory", () -> p.itemsEnabled, v -> p.itemsEnabled = v);
         form.addToggle("Combat", () -> p.combatEnabled, v -> p.combatEnabled = v)
                 .enabledWhen(() -> p.mobsEnabled);
+        form.addToggle("Projectiles & ranged weapons", () -> p.projectilesEnabled, v -> p.projectilesEnabled = v)
+                .enabledWhen(() -> p.itemsEnabled);
         form.addToggle("Mine / place blocks in play", () -> p.blockEditingEnabled, v -> p.blockEditingEnabled = v);
         form.addToggle("Creative mode (paint objects)", () -> p.creativeEnabled, v -> p.creativeEnabled = v);
 

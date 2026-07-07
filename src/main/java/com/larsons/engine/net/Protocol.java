@@ -33,6 +33,15 @@ import java.util.Map;
  *   server -> all      {"t":"block","c":col,"r":row,"b":blockId}   (authoritative result)
  *   client -> server   {"t":"paint","k":"mob"|"item","e":"zombie","x":..,"y":..}
  *   client -> server   {"t":"erase","id":entityId}
+ *
+ *   // inventory actions (the server owns each player's inventory; it answers
+ *   // every request with an {"t":"inv","items":[...]} push):
+ *   client -> server   {"t":"invmove","a":fromSlot,"b":toSlot}    (move/merge/swap)
+ *   client -> server   {"t":"invdrop","i":slot,"n":count}         (drop into the world)
+ *   client -> server   {"t":"use","i":slot}                       (eat food / drink potion)
+ *
+ *   // projectile impact feedback (particles + sfx on every client):
+ *   server -> all      {"t":"fx","k":"arrow","x":..,"y":..,"e":true|false}
  * </pre>
  *
  * <p>The server is authoritative: clients send only input commands, the server
@@ -45,7 +54,7 @@ import java.util.Map;
 public final class Protocol {
 
     /** Protocol version; bumped on incompatible changes. */
-    public static final int VERSION = 2;
+    public static final int VERSION = 3;
 
     /** Default server port (the engine's "25565"). */
     public static final int DEFAULT_PORT = 7777;
@@ -111,17 +120,19 @@ public final class Protocol {
     }
 
     public static String state(long tick, List<PlayerState> players) {
-        return state(tick, players, List.of(), List.of(), 0.25);
+        return state(tick, players, List.of(), List.of(), List.of(), 0.25);
     }
 
     /**
      * A full snapshot: players plus replicated world entities (mobs, dropped
-     * items — already in wire-map form from {@code Mob.toMap()} etc.) and the
-     * time of day driving the clients' lighting.
+     * items, projectiles in flight — already in wire-map form from
+     * {@code Mob.toMap()} etc.) and the time of day driving the clients'
+     * lighting.
      */
     public static String state(long tick, List<PlayerState> players,
                                List<Map<String, Object>> mobs,
                                List<Map<String, Object>> items,
+                               List<Map<String, Object>> shots,
                                double timeOfDay) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("t", "state");
@@ -131,6 +142,7 @@ public final class Protocol {
         m.put("players", list);
         if (!mobs.isEmpty()) m.put("mobs", new ArrayList<Object>(mobs));
         if (!items.isEmpty()) m.put("items", new ArrayList<Object>(items));
+        if (!shots.isEmpty()) m.put("shots", new ArrayList<Object>(shots));
         m.put("time", timeOfDay);
         return encode(m);
     }
@@ -172,6 +184,43 @@ public final class Protocol {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("t", "erase");
         m.put("id", entityId);
+        return encode(m);
+    }
+
+    /** Client asks to move/merge/swap an inventory stack between two slots. */
+    public static String invMove(int fromSlot, int toSlot) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t", "invmove");
+        m.put("a", fromSlot);
+        m.put("b", toSlot);
+        return encode(m);
+    }
+
+    /** Client asks to drop {@code count} items from a slot into the world. */
+    public static String invDrop(int slot, int count) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t", "invdrop");
+        m.put("i", slot);
+        m.put("n", count);
+        return encode(m);
+    }
+
+    /** Client asks to consume the item in a slot (eat food, drink a potion). */
+    public static String useItem(int slot) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t", "use");
+        m.put("i", slot);
+        return encode(m);
+    }
+
+    /** Server tells everyone a projectile impacted (feedback: particles, sfx). */
+    public static String fx(String projectileKey, double x, double y, boolean explosion) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t", "fx");
+        m.put("k", projectileKey);
+        m.put("x", x);
+        m.put("y", y);
+        m.put("e", explosion);
         return encode(m);
     }
 

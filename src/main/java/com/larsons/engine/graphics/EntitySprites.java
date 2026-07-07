@@ -2,6 +2,7 @@ package com.larsons.engine.graphics;
 
 import com.larsons.engine.entity.ItemDef;
 import com.larsons.engine.entity.MobDef;
+import com.larsons.engine.entity.ProjectileDef;
 import com.larsons.engine.world.Block;
 
 import java.awt.BasicStroke;
@@ -85,6 +86,14 @@ public final class EntitySprites {
                     g.fillRect(s * 5 / 12, s / 5, s / 6, s / 3);
                 }
                 case BLOCK -> g.fillRect(s / 5, s / 5, s * 3 / 5, s * 3 / 5);
+                case THROWABLE -> { // diagonal dart (arrow / knife / rock icon)
+                    g.setStroke(new BasicStroke(Math.max(2, s / 8f), BasicStroke.CAP_ROUND,
+                            BasicStroke.JOIN_ROUND));
+                    g.drawLine(s / 5, s * 4 / 5, s * 7 / 10, s * 3 / 10);
+                    int[] tx = {s * 7 / 10, s * 4 / 5, s * 11 / 20};
+                    int[] ty = {s / 5, s * 9 / 20, s * 3 / 10};
+                    g.fillPolygon(tx, ty, 3);
+                }
                 case KEY -> {
                     g.fillOval(s / 6, s / 4, s / 3, s / 3);
                     g.fillRect(s / 2, s * 3 / 8, s * 2 / 5, Math.max(2, s / 10));
@@ -100,6 +109,36 @@ public final class EntitySprites {
             g.setStroke(new BasicStroke(Math.max(1.5f, s / 16f)));
             g.setColor(withAlpha(def.rarity().color, 200));
             g.drawRoundRect(1, 1, s - 3, s - 3, s / 4, s / 4);
+        });
+    }
+
+    /**
+     * A projectile sprite, drawn pointing along +X (the scene rotates it to
+     * the velocity): glowing projectiles are layered orbs (ported from the
+     * Side-Scroller engine's magic-bolt/fireball painters), physical ones a
+     * shaft + head + fletching (its arrow/bolt painters).
+     */
+    public static BufferedImage projectile(ProjectileDef def, int size) {
+        return cached("shot:" + def.key() + ":" + size, size, g -> {
+            int s = size;
+            if (def.glows()) {
+                Color c = def.color();
+                g.setColor(withAlpha(c, 90));
+                g.fillOval(0, 0, s, s);
+                g.setColor(c);
+                g.fillOval(s / 4, s / 4, s / 2, s / 2);
+                g.setColor(Color.WHITE);
+                g.fillOval(s * 3 / 8, s * 3 / 8, s / 4, s / 4);
+            } else {
+                g.setColor(def.color());
+                g.fillRect(0, s / 2 - Math.max(1, s / 12), s * 3 / 4, Math.max(2, s / 6));
+                int[] xs = {s * 3 / 4, s, s * 3 / 4};
+                int[] ys = {s / 4, s / 2, s * 3 / 4};
+                g.setColor(def.color().brighter());
+                g.fillPolygon(xs, ys, 3);
+                g.setColor(new Color(200, 70, 60));
+                g.fillRect(0, s / 3, Math.max(2, s / 8), s / 3);
+            }
         });
     }
 

@@ -12,6 +12,9 @@ import com.larsons.engine.entity.ItemStack;
 import com.larsons.engine.entity.Mob;
 import com.larsons.engine.entity.MobDef;
 import com.larsons.engine.entity.MobRegistry;
+import com.larsons.engine.entity.Projectile;
+import com.larsons.engine.entity.ProjectileDef;
+import com.larsons.engine.entity.ProjectileRegistry;
 import com.larsons.engine.fx.Particles;
 import com.larsons.engine.graphics.Animation;
 import com.larsons.engine.graphics.Camera;
@@ -42,6 +45,7 @@ import java.awt.Composite;
 import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
+import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.awt.event.KeyEvent;
 import java.nio.file.Files;
@@ -107,6 +111,9 @@ public class PlayScene extends AbstractScene {
     private Inventory inventory;
     private int invSyncVersion = -1;
     private boolean showInventory;
+    /** Slot picked up by the inventory cursor (-1 = nothing held). */
+    private int cursorSlot = -1;
+    private int mouseX, mouseY; // sampled each update, for render-time UI
 
     private ParallaxBackground parallax;
     private final Particles particles = new Particles();
@@ -137,6 +144,7 @@ public class PlayScene extends AbstractScene {
         remoteAnims.clear();
         particles.clear();
         showInventory = false;
+        cursorSlot = -1;
         swingTime = 0;
 
         // Online, the world is whatever the server runs (one shared Level
@@ -216,6 +224,8 @@ public class PlayScene extends AbstractScene {
 
         GameProfile p = profile();
         enforceProfileConstraints(p);
+        mouseX = input.getMouseX();
+        mouseY = input.getMouseY();
 
         if (p.perspectiveSwitchingEnabled && input.isKeyJustPressed(KeyEvent.VK_P)) {
             camera.setPerspective(camera.getPerspective().next());
@@ -233,6 +243,8 @@ public class PlayScene extends AbstractScene {
                 input.isKeyDown(KeyEvent.VK_W) || input.isKeyDown(KeyEvent.VK_UP),
                 input.isKeyDown(KeyEvent.VK_S) || input.isKeyDown(KeyEvent.VK_DOWN),
                 ++inputSeq);
+        // The server resolves attacks against what this player holds.
+        in.selected = inventory.selectedIndex();
 
         if (!showInventory) handleMouseActions(input, p, in);
 
@@ -248,8 +260,18 @@ public class PlayScene extends AbstractScene {
             reconcile(dt);
             advanceRemoteAnimations(dt);
             consumeNetFeedback();
+            if (p.particlesEnabled) {
+                Snapshot snap = net.client().latest();
+                if (snap != null) {
+                    for (EntityView s : snap.shots()) emitTrail(s.key, s.x, s.y);
+                }
+            }
         } else {
             world.step(dt, List.of(me), p);
+            for (World.Impact im : world.pollImpacts()) impactFeedback(im, p);
+            if (p.particlesEnabled) {
+                for (Projectile pr : world.projectiles()) emitTrail(pr.def.key(), pr.x, pr.y);
+            }
         }
 
         if (me.health < prevHealth - 0.01) ctx.sfx(Sfx.HURT);
@@ -268,31 +290,106 @@ public class PlayScene extends AbstractScene {
     private void updateInventoryControls(InputManager input, GameProfile p) {
         if (!p.itemsEnabled) {
             showInventory = false;
+            cursorSlot = -1;
             return;
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_I)) showInventory = !showInventory;
+        if (input.isKeyJustPressed(KeyEvent.VK_I)) {
+            showInventory = !showInventory;
+            cursorSlot = -1;
+        }
         for (int k = 0; k < Inventory.HOTBAR; k++) {
             if (input.isKeyJustPressed(KeyEvent.VK_1 + k)) inventory.select(k);
         }
         int wheel = input.getWheelRotation();
         if (wheel != 0) inventory.scrollSelect(wheel > 0 ? 1 : -1);
 
-        // F consumes the selected food/potion (offline only: online the server
-        // owns health and inventory, and doesn't take consume requests yet).
-        if (net == null && input.isKeyJustPressed(KeyEvent.VK_F)) {
+        // Q tosses one item from the selected stack into the world.
+        if (input.isKeyJustPressed(KeyEvent.VK_Q)) {
+            dropStack(inventory.selectedIndex(), 1);
+        }
+
+        // F consumes the selected food/potion. Online it's a request — the
+        // server owns health and inventory, checks, heals, and pushes both back.
+        if (input.isKeyJustPressed(KeyEvent.VK_F)) {
             ItemDef def = inventory.selectedDef();
-            if (def != null && def.heal() > 0 && me.health < PlayerState.MAX_HEALTH
-                    && inventory.consumeSelected()) {
+            boolean edible = def != null && def.heal() > 0 && me.health < PlayerState.MAX_HEALTH;
+            if (net != null) {
+                net.client().sendUseItem(inventory.selectedIndex());
+                if (edible) ctx.sfx(Sfx.EAT);
+            } else if (edible && inventory.consumeSelected()) {
                 me.health = Math.min(PlayerState.MAX_HEALTH, me.health + def.heal());
                 prevHealth = me.health; // don't play the hurt sound on heals
                 ctx.sfx(Sfx.EAT);
             }
         }
+
+        if (showInventory) handleInventoryMouse(input);
     }
 
     /**
-     * Left click: mine the aimed block (if block editing is on and it's in
-     * reach) or swing at mobs (if combat is on). Right click: place the
+     * Mouse interaction with the open inventory: click a stack to pick it up,
+     * click another slot to place it (merging same items, swapping different
+     * ones), click outside the panel to drop it into the world. Online each
+     * completed action becomes a request the server applies to its
+     * authoritative copy (the local mirror applies it too, so the UI is
+     * instant; the server's {@code inv} push confirms it).
+     */
+    private void handleInventoryMouse(InputManager input) {
+        if (input.isRightMouseJustPressed()) {
+            cursorSlot = -1; // put it back
+            return;
+        }
+        if (!input.isMouseJustPressed()) return;
+        int slot = slotAt(mouseX, mouseY);
+        if (slot >= 0) {
+            if (cursorSlot < 0) {
+                if (inventory.slot(slot) != null) cursorSlot = slot;
+            } else {
+                moveStack(cursorSlot, slot);
+                cursorSlot = -1;
+            }
+        } else if (cursorSlot >= 0) {
+            if (!insideInventoryPanel(mouseX, mouseY)) {
+                ItemStack held = inventory.slot(cursorSlot);
+                if (held != null) dropStack(cursorSlot, held.count);
+            }
+            cursorSlot = -1;
+        }
+    }
+
+    private void moveStack(int from, int to) {
+        if (from == to) return;
+        if (inventory.move(from, to)) {
+            ctx.sfx(Sfx.CLICK);
+            if (net != null) net.client().sendInvMove(from, to);
+        }
+    }
+
+    private void dropStack(int slot, int count) {
+        ItemStack stack = inventory.slot(slot);
+        if (stack == null || count <= 0) return;
+        if (net != null) {
+            // The server removes the items, spawns the drop, and pushes the
+            // inventory back down.
+            net.client().sendInvDrop(slot, count);
+            ctx.sfx(Sfx.CLICK);
+            return;
+        }
+        String key = stack.key;
+        int removed = inventory.removeAt(slot, count);
+        if (removed <= 0) return;
+        DroppedItem drop = world.spawnItem(key, removed, me.x, me.y);
+        if (drop != null) {
+            drop.toss(me.facingLeft ? -170 : 170, -180);
+            drop.pickupDelay = 1.0; // don't instantly vacuum it back up
+        }
+        ctx.sfx(Sfx.CLICK);
+    }
+
+    /**
+     * Left click: fire the held ranged weapon / throwable (if projectiles are
+     * on), else mine the aimed block (if block editing is on and it's in
+     * reach), else swing at mobs (if combat is on). Right click: place the
      * selected hotbar block. Online these become server requests.
      */
     private void handleMouseActions(InputManager input, GameProfile p, PlayerInput in) {
@@ -308,7 +405,11 @@ public class PlayScene extends AbstractScene {
                 <= REACH_TILES * ts;
 
         if (leftClick) {
-            if (p.blockEditingEnabled && inReach && level.tileAt(col, row) > 0) {
+            ItemDef held = p.itemsEnabled ? inventory.selectedDef() : null;
+            boolean shoots = p.projectilesEnabled && held != null && held.projectile() != null;
+            if (shoots) {
+                shootAt(aim[0], aim[1], in);
+            } else if (p.blockEditingEnabled && inReach && level.tileAt(col, row) > 0) {
                 mineAt(col, row, p);
             } else if (p.combatEnabled) {
                 swingAt(aim[0], aim[1], in, p);
@@ -379,6 +480,53 @@ public class PlayScene extends AbstractScene {
         }
     }
 
+    /**
+     * Fire the held ranged weapon / throwable toward the aim point. Online the
+     * shot rides the attack input — the server sees the held item and spawns
+     * (and owns) the projectile; offline the local world does the same thing.
+     */
+    private void shootAt(double aimX, double aimY, PlayerInput in) {
+        swingTime = 0.1;
+        if (net != null) {
+            in.attackAt(aimX, aimY);
+            ItemDef held = inventory.selectedDef();
+            boolean hasAmmo = held != null
+                    && (held.ammo() == null || inventory.totalOf(held.ammo()) > 0);
+            if (hasAmmo) ctx.sfx(Sfx.SHOOT); // predicted; the server validates
+            return;
+        }
+        if (world.playerShoot(me, inventory, aimX, aimY) != null) {
+            ctx.sfx(Sfx.SHOOT);
+        }
+    }
+
+    /** Particles + sound for a projectile impact (local or replicated). */
+    private void impactFeedback(World.Impact im, GameProfile p) {
+        ProjectileDef def = projectileTypes().get(im.key());
+        Color color = def == null ? Color.GRAY
+                : def.glows() ? def.lightColor() : def.color();
+        if (im.explosion()) {
+            ctx.sfx(Sfx.BOOM);
+            if (p.particlesEnabled) {
+                particles.burst(im.x(), im.y(), color, 22);
+                particles.burst(im.x(), im.y(), new Color(255, 225, 130), 12);
+            }
+        } else {
+            ctx.sfx(Sfx.HIT);
+            if (p.particlesEnabled) particles.burst(im.x(), im.y(), color, 6);
+        }
+    }
+
+    /** One spark per tick behind projectiles that define a trail colour. */
+    private void emitTrail(String key, double x, double y) {
+        ProjectileDef def = projectileTypes().get(key);
+        if (def != null && def.trail() != null) particles.burst(x, y, def.trail(), 1);
+    }
+
+    private ProjectileRegistry projectileTypes() {
+        return world != null ? world.projectileTypes : ProjectileRegistry.standard();
+    }
+
     /** Online-only: turn server broadcasts into local feedback + inventory sync. */
     private void consumeNetFeedback() {
         GameClient client = net.client();
@@ -392,6 +540,9 @@ public class PlayScene extends AbstractScene {
             } else {
                 ctx.sfx(Sfx.PLACE);
             }
+        }
+        for (World.Impact im : client.pollFxEvents()) {
+            impactFeedback(im, profile());
         }
         if (client.inventoryVersion() != invSyncVersion) {
             invSyncVersion = client.inventoryVersion();
@@ -518,10 +669,33 @@ public class PlayScene extends AbstractScene {
                         block.lightRadius() * ts * camera.zoom, block.lightColor());
             }
         }
+        // Glowing projectiles (fireballs, magic bolts) carry their own light —
+        // they ride the same lighting pass, so at night a fireball lights the
+        // terrain it flies over (and bloom, if enabled, blooms it).
+        if (net == null) {
+            for (Projectile pr : world.projectiles()) {
+                addProjectileLight(lighting, pr.def, pr.x, pr.y, ts);
+            }
+        } else {
+            Snapshot snap = net.client().latest();
+            if (snap != null) {
+                for (EntityView s : snap.shots()) {
+                    addProjectileLight(lighting, projectileTypes().get(s.key), s.x, s.y, ts);
+                }
+            }
+        }
         // Player glow.
         camera.worldToScreen(me.x + ps() / 2, me.y + ps() / 2, corner);
         lighting.addLight(corner[0], corner[1], 2.5 * ts * camera.zoom,
                 new Color(255, 240, 210));
+    }
+
+    private void addProjectileLight(LightingPass lighting, ProjectileDef def,
+                                    double x, double y, double ts) {
+        if (def == null || !def.glows()) return;
+        camera.worldToScreen(x, y, corner);
+        lighting.addLight(corner[0], corner[1],
+                def.lightRadius() * ts * camera.zoom, def.lightColor());
     }
 
     // --- pause ---
@@ -699,7 +873,7 @@ public class PlayScene extends AbstractScene {
         }
     }
 
-    /** Mobs + dropped items: the offline world's, or the server snapshot's. */
+    /** Mobs + dropped items + projectiles: the offline world's, or the server snapshot's. */
     private void drawWorldEntities(Graphics2D g, GameProfile p) {
         if (net == null) {
             for (DroppedItem item : world.items()) {
@@ -707,6 +881,9 @@ public class PlayScene extends AbstractScene {
             }
             for (Mob m : world.mobs()) {
                 drawMobSprite(g, m.def, m.x, m.y, m.facingLeft, m.health, m.hurting());
+            }
+            for (Projectile pr : world.projectiles()) {
+                drawProjectileSprite(g, pr.def.key(), pr.x, pr.y, pr.vx, pr.vy);
             }
         } else {
             Snapshot snap = net.client().latest();
@@ -721,7 +898,25 @@ public class PlayScene extends AbstractScene {
                     drawMobSprite(g, def, mv.x, mv.y, mv.facingLeft, mv.health, false);
                 }
             }
+            for (EntityView s : snap.shots()) {
+                drawProjectileSprite(g, s.key, s.x, s.y, s.vx, s.vy);
+            }
         }
+    }
+
+    /** A projectile, rotated to its flight direction. */
+    private void drawProjectileSprite(Graphics2D g, String key, double x, double y,
+                                      double vx, double vy) {
+        ProjectileDef def = projectileTypes().get(key);
+        if (def == null) return;
+        BufferedImage img = EntitySprites.projectile(def, 16);
+        int w = Math.max(8, (int) Math.round(def.radius() * 3.5 * camera.zoom));
+        camera.worldToScreen(x, y, corner);
+        AffineTransform old = g.getTransform();
+        g.translate(corner[0], corner[1]);
+        if (vx != 0 || vy != 0) g.rotate(Math.atan2(vy, vx));
+        g.drawImage(img, -w / 2, -w / 2, w, w, null);
+        g.setTransform(old);
     }
 
     private void drawMobSprite(Graphics2D g, MobDef def, double x, double y,
@@ -886,12 +1081,42 @@ public class PlayScene extends AbstractScene {
         }
     }
 
+    // Inventory panel geometry, shared by rendering and mouse hit-testing.
+    private static final int INV_SLOT = 46;
+    private static final int INV_PAD = 6;
+
+    /** Top-left of the inventory grid: {x0, y0}. */
+    private int[] inventoryOrigin() {
+        int gw = Inventory.COLS * (INV_SLOT + INV_PAD) - INV_PAD;
+        int gh = Inventory.ROWS * (INV_SLOT + INV_PAD) - INV_PAD;
+        return new int[]{(viewportWidth - gw) / 2, (viewportHeight - gh) / 2};
+    }
+
+    /** The inventory slot index under a screen point, or -1. */
+    private int slotAt(int sx, int sy) {
+        int[] o = inventoryOrigin();
+        int col = Math.floorDiv(sx - o[0], INV_SLOT + INV_PAD);
+        int row = Math.floorDiv(sy - o[1], INV_SLOT + INV_PAD);
+        if (col < 0 || col >= Inventory.COLS || row < 0 || row >= Inventory.ROWS) return -1;
+        // Inside the cell, not the padding between cells.
+        if (sx - o[0] - col * (INV_SLOT + INV_PAD) >= INV_SLOT) return -1;
+        if (sy - o[1] - row * (INV_SLOT + INV_PAD) >= INV_SLOT) return -1;
+        return row * Inventory.COLS + col;
+    }
+
+    private boolean insideInventoryPanel(int sx, int sy) {
+        int[] o = inventoryOrigin();
+        int gw = Inventory.COLS * (INV_SLOT + INV_PAD) - INV_PAD;
+        int gh = Inventory.ROWS * (INV_SLOT + INV_PAD) - INV_PAD;
+        return sx >= o[0] - 20 && sx <= o[0] + gw + 20
+                && sy >= o[1] - 52 && sy <= o[1] + gh + 32;
+    }
+
     private void drawInventory(Graphics2D g) {
-        int slot = 46, pad = 6;
-        int gw = Inventory.COLS * (slot + pad) - pad;
-        int gh = Inventory.ROWS * (slot + pad) - pad;
-        int x0 = (viewportWidth - gw) / 2;
-        int y0 = (viewportHeight - gh) / 2;
+        int[] o = inventoryOrigin();
+        int x0 = o[0], y0 = o[1];
+        int gw = Inventory.COLS * (INV_SLOT + INV_PAD) - INV_PAD;
+        int gh = Inventory.ROWS * (INV_SLOT + INV_PAD) - INV_PAD;
 
         g.setColor(new Color(10, 10, 16, 220));
         g.fillRoundRect(x0 - 20, y0 - 52, gw + 40, gh + 84, 14, 14);
@@ -900,19 +1125,31 @@ public class PlayScene extends AbstractScene {
         g.drawString("Inventory", x0, y0 - 24);
         g.setFont(SMALL_FONT);
         g.setColor(new Color(170, 170, 190));
-        g.drawString("Slots 1-5 are the hotbar · [I]/[Esc] close · [F] eat selected", x0, y0 - 8);
+        g.drawString("Click to pick up / place stacks · click outside to drop"
+                + " · [Q] drop one · [F] eat · [I]/[Esc] close", x0, y0 - 8);
 
         for (int i = 0; i < Inventory.SIZE; i++) {
-            int cx = x0 + (i % Inventory.COLS) * (slot + pad);
-            int cy = y0 + (i / Inventory.COLS) * (slot + pad);
+            int cx = x0 + (i % Inventory.COLS) * (INV_SLOT + INV_PAD);
+            int cy = y0 + (i / Inventory.COLS) * (INV_SLOT + INV_PAD);
             boolean hotbar = i < Inventory.HOTBAR;
             boolean sel = i == inventory.selectedIndex();
             g.setColor(new Color(255, 255, 255, hotbar ? 36 : 18));
-            g.fillRoundRect(cx, cy, slot, slot, 8, 8);
+            g.fillRoundRect(cx, cy, INV_SLOT, INV_SLOT, 8, 8);
             g.setColor(sel ? new Color(255, 220, 120) : new Color(255, 255, 255, 60));
             g.setStroke(new BasicStroke(sel ? 2.5f : 1f));
-            g.drawRoundRect(cx, cy, slot, slot, 8, 8);
-            drawStack(g, inventory.slot(i), cx, cy, slot);
+            g.drawRoundRect(cx, cy, INV_SLOT, INV_SLOT, 8, 8);
+            if (i == cursorSlot) continue; // it's on the cursor, not in the grid
+            drawStack(g, inventory.slot(i), cx, cy, INV_SLOT);
+        }
+
+        // The picked-up stack follows the mouse until it's placed or dropped.
+        if (cursorSlot >= 0) {
+            ItemStack held = inventory.slot(cursorSlot);
+            if (held == null) {
+                cursorSlot = -1; // e.g. a server inv push emptied it
+            } else {
+                drawStack(g, held, mouseX - INV_SLOT / 2, mouseY - INV_SLOT / 2, INV_SLOT);
+            }
         }
     }
 

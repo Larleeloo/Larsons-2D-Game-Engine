@@ -18,11 +18,19 @@ public final class PlayerInput {
     /**
      * Attack intent this tick (a mouse click, edge-triggered by the sender)
      * aimed at ({@link #aimX}, {@link #aimY}) in world coordinates. The server
-     * resolves what the swing hits — mobs in reach — so clients can't fabricate
-     * damage. Absent on the wire when false, keeping old messages compatible.
+     * resolves what the swing hits — mobs in reach for melee, a projectile for
+     * a held ranged weapon — so clients can't fabricate damage. Absent on the
+     * wire when false, keeping old messages compatible.
      */
     public boolean attack;
     public double aimX, aimY;
+
+    /**
+     * The hotbar slot the player has selected. Riding the input command keeps
+     * the server's view of "what am I holding" current, which is what melee
+     * weapon damage, ranged shots, and block-place consumption resolve against.
+     */
+    public int selected;
 
     public PlayerInput() {}
 
@@ -48,6 +56,7 @@ public final class PlayerInput {
         m.put("r", right);
         m.put("u", up);
         m.put("d", down);
+        if (selected != 0) m.put("h", selected);
         if (attack) {
             m.put("a", true);
             m.put("ax", aimX);
@@ -63,6 +72,7 @@ public final class PlayerInput {
         in.right = Boolean.TRUE.equals(m.get("r"));
         in.up = Boolean.TRUE.equals(m.get("u"));
         in.down = Boolean.TRUE.equals(m.get("d"));
+        in.selected = m.get("h") instanceof Number n ? n.intValue() : 0;
         in.attack = Boolean.TRUE.equals(m.get("a"));
         in.aimX = m.get("ax") instanceof Number n ? n.doubleValue() : 0;
         in.aimY = m.get("ay") instanceof Number n ? n.doubleValue() : 0;

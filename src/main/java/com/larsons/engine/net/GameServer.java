@@ -2,7 +2,11 @@ package com.larsons.engine.net;
 
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.entity.DroppedItem;
+import com.larsons.engine.entity.Inventory;
+import com.larsons.engine.entity.ItemDef;
+import com.larsons.engine.entity.ItemStack;
 import com.larsons.engine.entity.Mob;
+import com.larsons.engine.entity.Projectile;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
 import com.larsons.engine.sim.PlayerInput;
@@ -72,10 +76,16 @@ public final class GameServer {
 
     private final CopyOnWriteArrayList<Connection> connections = new CopyOnWriteArrayList<>();
     private final ConcurrentLinkedQueue<Connection> pendingJoins = new ConcurrentLinkedQueue<>();
-    /** World-edit requests handed from reader threads to the tick thread. */
-    private final ConcurrentLinkedQueue<Map<String, Object>> pendingEdits = new ConcurrentLinkedQueue<>();
+    /**
+     * World-edit and inventory requests handed from reader threads to the
+     * tick thread, tagged with the connection that sent them (inventory ops
+     * act on that player's server-side inventory).
+     */
+    private final ConcurrentLinkedQueue<ClientRequest> pendingRequests = new ConcurrentLinkedQueue<>();
     private final AtomicInteger nextId = new AtomicInteger(1);
     private long tick;
+
+    private record ClientRequest(Connection conn, Map<String, Object> msg) {}
 
     public GameServer(GameProfile profile, String levelJson) {
         this.profile = profile;
@@ -159,9 +169,10 @@ public final class GameServer {
         while (running) {
             processJoins();
             processDisconnects();
-            processEdits();
+            processRequests();
             stepPlayers(dt);
             world.step(dt, joinedPlayers(), profile);
+            broadcastImpacts();
 
             tick++;
             if (tick % SNAPSHOT_EVERY == 0) broadcastState();
@@ -222,13 +233,32 @@ public final class GameServer {
             // its local camera view must not change how it moves on the server.
             PlayerPhysics.step(c.state, in, level, profile, profile.perspective, dt);
             c.state.lastSeq = in.seq;
+            // The input carries the hotbar selection, so "what is this player
+            // holding" (melee damage, ranged shots, placements) stays current.
+            c.inventory.select(in.selected);
 
             // Attacks are edge-triggered by sequence number: the same input is
             // re-applied every tick until the next one arrives, but a swing
-            // must land only once per click.
-            if (in.attack && profile.combatEnabled && in.seq != c.lastAttackSeq) {
+            // must land only once per click. A held ranged weapon or throwable
+            // fires a projectile instead of swinging; ammo comes out of this
+            // player's server-side inventory, so shots can't be fabricated.
+            boolean canAct = profile.combatEnabled
+                    || (profile.projectilesEnabled && profile.itemsEnabled);
+            if (in.attack && canAct && in.seq != c.lastAttackSeq) {
                 c.lastAttackSeq = in.seq;
-                world.playerAttack(c.state, in.aimX, in.aimY, World.FIST_DAMAGE);
+                Projectile shot = null;
+                if (profile.projectilesEnabled && profile.itemsEnabled) {
+                    shot = world.playerShoot(c.state, c.inventory, in.aimX, in.aimY);
+                }
+                if (shot != null) {
+                    sendInventory(c);
+                } else if (profile.combatEnabled) {
+                    ItemDef held = profile.itemsEnabled ? c.inventory.selectedDef() : null;
+                    boolean melee = held == null || held.projectile() == null;
+                    double damage = World.FIST_DAMAGE
+                            + (melee && held != null ? held.damage() : 0);
+                    world.playerAttack(c.state, in.aimX, in.aimY, damage);
+                }
             }
         }
     }
@@ -242,14 +272,18 @@ public final class GameServer {
     }
 
     /**
-     * Apply queued world edits (block place/mine, entity paint/erase) on the
-     * tick thread, which owns all world state; broadcast authoritative results.
-     * Feature toggles gate what's allowed: creative painting needs the game
-     * type's creative toggle, play-mode mining needs block editing.
+     * Apply queued client requests (block place/mine, entity paint/erase,
+     * inventory move/drop/use) on the tick thread, which owns all world and
+     * inventory state; broadcast authoritative results. Feature toggles gate
+     * what's allowed: creative painting needs the game type's creative toggle,
+     * play-mode mining needs block editing, inventory ops need items.
      */
-    private void processEdits() {
-        Map<String, Object> msg;
-        while ((msg = pendingEdits.poll()) != null) {
+    private void processRequests() {
+        ClientRequest req;
+        while ((req = pendingRequests.poll()) != null) {
+            Connection conn = req.conn();
+            Map<String, Object> msg = req.msg();
+            if (conn.closed || !conn.joined) continue;
             switch (Protocol.type(msg)) {
                 case "edit" -> {
                     int col = intOf(msg.get("c"));
@@ -263,9 +297,10 @@ public final class GameServer {
                         boolean withDrops = !paint && profile.itemsEnabled;
                         Block mined = world.mineBlock(col, row, withDrops);
                         changed = mined != null || level.setTile(col, row, 0);
+                    } else if (paint) {
+                        changed = level.setTile(col, row, id);
                     } else {
-                        changed = paint ? level.setTile(col, row, id)
-                                : world.placeBlock(col, row, id);
+                        changed = placeFromInventory(conn, col, row, id);
                     }
                     if (changed) broadcast(Protocol.blockSet(col, row, level.tileAt(col, row)));
                 }
@@ -281,19 +316,89 @@ public final class GameServer {
                 case "erase" -> {
                     if (profile.creativeEnabled) world.removeEntity(intOf(msg.get("id")));
                 }
-                default -> { /* not an edit */ }
+                case "invmove" -> {
+                    if (!profile.itemsEnabled) continue;
+                    if (conn.inventory.move(intOf(msg.get("a")), intOf(msg.get("b")))) {
+                        sendInventory(conn);
+                    }
+                }
+                case "invdrop" -> {
+                    if (!profile.itemsEnabled) continue;
+                    dropFromInventory(conn, intOf(msg.get("i")), intOf(msg.get("n")));
+                }
+                case "use" -> {
+                    if (!profile.itemsEnabled) continue;
+                    consumeFromInventory(conn, intOf(msg.get("i")));
+                }
+                default -> { /* not a request we know */ }
             }
         }
+    }
+
+    /**
+     * Play-mode placement spends the matching block item from the placer's
+     * inventory (when items are on) — the server-side twin of the client's
+     * "you can only place what you hold" rule, so placements can't be conjured.
+     */
+    private boolean placeFromInventory(Connection conn, int col, int row, int id) {
+        if (!profile.itemsEnabled) return world.placeBlock(col, row, id);
+        Block block = level.blocks.get(id);
+        if (block == null || world.itemTypes.get(block.key()) == null) return false;
+        if (conn.inventory.remove(block.key(), 1) < 1) return false;
+        boolean placed = world.placeBlock(col, row, id);
+        if (!placed) {
+            conn.inventory.add(block.key(), 1); // cell was occupied: refund
+        } else {
+            sendInventory(conn);
+        }
+        return placed;
+    }
+
+    /** Drop items out of a slot into the world at the player's feet. */
+    private void dropFromInventory(Connection conn, int slot, int count) {
+        ItemStack stack = conn.inventory.slot(slot);
+        if (stack == null) return;
+        String key = stack.key;
+        int removed = conn.inventory.removeAt(slot, Math.max(1, count));
+        if (removed <= 0) return;
+        DroppedItem drop = world.spawnItem(key, removed, conn.state.x, conn.state.y);
+        if (drop != null) {
+            drop.toss(conn.state.facingLeft ? -170 : 170, -180);
+            drop.pickupDelay = 1.0; // don't instantly vacuum it back up
+        }
+        sendInventory(conn);
+    }
+
+    /** Eat/drink the item in a slot: heals and consumes server-side. */
+    private void consumeFromInventory(Connection conn, int slot) {
+        ItemStack stack = conn.inventory.slot(slot);
+        ItemDef def = stack == null ? null : world.itemTypes.get(stack.key);
+        if (def == null || def.heal() <= 0) return;
+        if (conn.state.health >= PlayerState.MAX_HEALTH) return;
+        if (conn.inventory.removeAt(slot, 1) < 1) return;
+        conn.state.health = Math.min(PlayerState.MAX_HEALTH, conn.state.health + def.heal());
+        sendInventory(conn);
     }
 
     private void handlePickup(PlayerState player, String itemKey, int count) {
         for (Connection c : connections) {
             if (c.joined && !c.closed && c.state == player) {
                 c.inventory.add(itemKey, count);
-                c.send(Protocol.encode(Map.of(
-                        "t", "inv", "items", c.inventory.toList())));
+                sendInventory(c);
                 return;
             }
+        }
+    }
+
+    /** Push a player's authoritative inventory down to them. */
+    private void sendInventory(Connection c) {
+        c.send(Protocol.encode(Map.of("t", "inv", "items", c.inventory.toList())));
+    }
+
+    /** Broadcast this tick's projectile impacts so every client sees the FX. */
+    private void broadcastImpacts() {
+        for (World.Impact im : world.pollImpacts()) {
+            broadcast(Protocol.fx(im.key(), im.x(), im.y(), im.explosion()));
         }
     }
 
@@ -303,7 +408,9 @@ public final class GameServer {
         for (Mob m : world.mobs()) mobs.add(m.toMap());
         List<Map<String, Object>> items = new ArrayList<>(world.items().size());
         for (DroppedItem i : world.items()) items.add(i.toMap());
-        broadcast(Protocol.state(tick, players, mobs, items, world.timeOfDay()));
+        List<Map<String, Object>> shots = new ArrayList<>(world.projectiles().size());
+        for (Projectile p : world.projectiles()) shots.add(p.toMap());
+        broadcast(Protocol.state(tick, players, mobs, items, shots, world.timeOfDay()));
     }
 
     private static int intOf(Object o) {
@@ -347,8 +454,7 @@ public final class GameServer {
         /** Input sequence whose attack was already applied (tick thread only). */
         int lastAttackSeq;
         /** Server-side inventory: what this player has picked up (tick thread only). */
-        final com.larsons.engine.entity.Inventory inventory =
-                new com.larsons.engine.entity.Inventory(world.itemTypes);
+        final Inventory inventory = new Inventory(world.itemTypes);
 
         Connection(Socket socket) throws IOException {
             this.socket = socket;
@@ -373,10 +479,11 @@ public final class GameServer {
                     switch (Protocol.type(msg)) {
                         case "join" -> handleJoin(msg);
                         case "input" -> latestInput.set(PlayerInput.fromMap(msg));
-                        case "edit", "paint", "erase" -> {
-                            // World edits are applied by the tick thread, which
-                            // owns the level and entities.
-                            if (joined) pendingEdits.add(msg);
+                        case "edit", "paint", "erase", "invmove", "invdrop", "use" -> {
+                            // World edits and inventory ops are applied by the
+                            // tick thread, which owns the level, entities, and
+                            // every player's inventory.
+                            if (joined) pendingRequests.add(new ClientRequest(this, msg));
                         }
                         case "ping" -> send(Protocol.pong(
                                 msg.get("p") instanceof Number n ? n.longValue() : 0));

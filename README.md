@@ -30,8 +30,17 @@ over in a generic, data-driven form and wired to the same toggles:
   ATTACK → FLEE → DEAD).
 - **Items & inventory** — a data-driven [`ItemRegistry`](src/main/java/com/larsons/engine/entity/ItemRegistry.java)
   with the original categories + rarity tiers, dropped items with bounce
-  physics and pickup, a hotbar + grid inventory.
+  physics and pickup, and a fully interactive hotbar + grid inventory:
+  click stacks to move/merge/swap them, drop items back into the world,
+  eat food — all server-authoritative online.
 - **Combat** — melee swings, knockback, mob loot, health + respawn.
+- **Projectiles & ranged weapons** — a data-driven
+  [`ProjectileRegistry`](src/main/java/com/larsons/engine/entity/ProjectileRegistry.java)
+  (arrows, rocks, throwing knives, magic bolts, exploding fireballs): bows
+  consume arrows, throwables throw themselves, physical shots arc under
+  gravity and land as recoverable drops, magic glows through the lighting
+  shader pass. Simulated by the same `World` everywhere, so it all works
+  online (server-side ammo, snapshot replication, impact FX broadcasts).
 - **Lighting** — day/night cycle and point lights, implemented as a
   [`LightingPass`](src/main/java/com/larsons/engine/graphics/shader/LightingPass.java)
   in the GLSL-first shader chain, so it composes with every other effect.
@@ -108,10 +117,13 @@ On launch you'll choose or create a **game type** before playing — see
   In side-scroll with gravity enabled the character can jump; otherwise it
   moves freely on both axes. Which of these are available depends on the active
   game type.
-- **World interaction** (per the game type's toggles): **left-click** mines
-  the aimed block or swings at mobs, **right-click** places the selected
-  hotbar block, **1-5** / mouse wheel select the hotbar slot, **I** opens the
-  inventory, **F** eats the selected food.
+- **World interaction** (per the game type's toggles): **left-click** fires
+  the held ranged weapon / throwable, else mines the aimed block, else swings
+  at mobs; **right-click** places the selected hotbar block; **1-5** / mouse
+  wheel select the hotbar slot; **Q** drops one of the selected item;
+  **F** eats the selected food (a server request online); **I** opens the
+  inventory — click a stack to pick it up, click another slot to place/merge/
+  swap it, click outside the panel to drop it into the world.
 - **Creative mode:** see [Creative mode](#creative-mode-paint-objects).
 - **Multiplayer:** from the main menu, *Multiplayer (Host / Join)* — host a
   server on a port, or type a `host[:port]` address and join (see
@@ -155,13 +167,15 @@ com.larsons.engine
 ├── world
 │   ├── Block.java         One block definition (colour, solidity, light, drops)
 │   ├── BlockRegistry.java Data-driven block set with stable ids
-│   └── World.java         Live world: level + mobs + items + clock; one shared sim
+│   └── World.java         Live world: level + mobs + items + projectiles + clock
 ├── entity
 │   ├── MobDef.java / MobRegistry.java    Data-driven mob species
 │   ├── Mob.java           The ported AI state machine + physics
 │   ├── ItemDef.java / ItemRegistry.java  Items with categories + rarities
-│   ├── ItemStack.java / Inventory.java   Hotbar-first stacked inventory
+│   ├── ItemStack.java / Inventory.java   Hotbar-first stacked inventory (move/merge/swap/drop)
 │   ├── DroppedItem.java   Items in the world (bounce physics, pickup)
+│   ├── ProjectileDef.java / ProjectileRegistry.java  Data-driven projectile kinds
+│   ├── Projectile.java    A shot in flight (arcs, hits, explosions, drops)
 │   └── EntityView.java    Client-side view of a replicated entity
 ├── sim
 │   ├── PlayerState.java   Position/velocity/health/flags — what snapshots carry
@@ -251,11 +265,12 @@ entity state) — so every mode runs the identical simulation code, the same
 seam the player netcode was built on.
 
 Content is **data-driven**: the Side-Scroller engine's 18-constant block
-enum, 23 mob classes, and 198 item classes became rows in
+enum, 23 mob classes, 198 item classes, and projectile type table became rows in
 [`BlockRegistry`](src/main/java/com/larsons/engine/world/BlockRegistry.java),
-[`MobRegistry`](src/main/java/com/larsons/engine/entity/MobRegistry.java), and
-[`ItemRegistry`](src/main/java/com/larsons/engine/entity/ItemRegistry.java).
-Adding a block/mob/item is one `register(...)` call — no engine edits. Block
+[`MobRegistry`](src/main/java/com/larsons/engine/entity/MobRegistry.java),
+[`ItemRegistry`](src/main/java/com/larsons/engine/entity/ItemRegistry.java), and
+[`ProjectileRegistry`](src/main/java/com/larsons/engine/entity/ProjectileRegistry.java).
+Adding a block/mob/item/projectile is one `register(...)` call — no engine edits. Block
 ids are stable contracts: they're what level grids store and what block
 edits send over the wire. Light sources (torch, campfire, lantern, …) are
 simply non-solid blocks with a light radius, so painting light is painting a
@@ -265,6 +280,37 @@ Sprites are procedural
 ([`EntitySprites`](src/main/java/com/larsons/engine/graphics/EntitySprites.java))
 so the engine stays asset-free; a game with real art draws its own images
 per registry key instead.
+
+### Projectiles & ranged weapons
+
+The Side-Scroller engine's `ProjectileEntity` (arrows, bolts, fireballs,
+thrown rocks/knives, explosions, trails) ported into the same data-driven,
+simulation-seam shape as everything else:
+
+- A [`ProjectileDef`](src/main/java/com/larsons/engine/entity/ProjectileDef.java)
+  is a data row — speed, damage, a **gravity factor** (0 = straight-flying
+  magic, ~0.35 = an arrow's arc, ~0.8 = a lobbed rock), collision radius,
+  lifetime, an optional **explosion radius**, an optional **glow** (radius +
+  colour fed to the lighting pass), an optional **trail colour**, and an
+  optional **drop item** (physical shots land as recoverable pickups, exactly
+  like the original's throwing-knife recovery).
+- Items link to projectiles by key: `ItemDef.projectile` is what a
+  **ranged weapon** fires (bows consume `ammo` — arrows — per shot; staves
+  fire freely) or what a **throwable** becomes (it consumes itself).
+  Skeletons drop arrows, so the ammo economy closes.
+- [`World.playerShoot`](src/main/java/com/larsons/engine/world/World.java)
+  resolves a shot from what the player holds, and `World.step` flies every
+  projectile with the same deterministic rules everywhere: single-player,
+  creative play-tests, and the authoritative server. Left-click fires when
+  the held item shoots; otherwise it mines/swings as before.
+- Hits use the combat toggle (with combat off, projectiles are decorative
+  physics), explosions deal area damage with falloff, and every impact is an
+  event — offline it feeds particles + sound directly; online the server
+  broadcasts it as an `fx` message so **every client sees the hit**.
+- **Shaders compose:** a fireball at night carries its own point light
+  through [`LightingPass`](src/main/java/com/larsons/engine/graphics/shader/LightingPass.java)
+  (and blooms, if bloom is on) — projectiles render inside the scene, so the
+  whole post-FX chain applies to them like everything else.
 
 ### Rendering backend & shaders
 
@@ -442,19 +488,29 @@ designed for: *input commands in, state snapshots out*.
 - **Interpolation:** remote players are drawn ~100 ms in the past, blended
   between the two most recent snapshots, so they move smoothly regardless of
   snapshot timing.
-- **Entity replication:** the server simulates mobs and dropped items (the
-  same `World` code single-player runs) and includes them in snapshots;
-  clients just render them. Snapshots also carry the time of day, so the
-  lighting pass darkens every screen in sync.
+- **Entity replication:** the server simulates mobs, dropped items, and
+  projectiles in flight (the same `World` code single-player runs) and
+  includes them in snapshots; clients just render them. Snapshots also carry
+  the time of day, so the lighting pass darkens every screen in sync.
 - **World edits:** mining, placing, and creative painting are requests
   (`edit`/`paint`/`erase`); the server validates them against the host's
   feature toggles, applies them on the tick thread, and broadcasts the
   authoritative `block` result to everyone. Late joiners get the *live*
   level (the server serializes its current world on join), so an
   hour of collaborative painting is never lost on them.
-- **Combat & pickups:** attack intent rides the input command (edge-triggered
-  by sequence number so one click is one swing); the server resolves hits,
-  loot, and item pickups, and pushes each player's inventory down to them.
+- **Combat, shooting & pickups:** attack intent rides the input command
+  (edge-triggered by sequence number so one click is one swing), along with
+  the player's hotbar selection — so the server knows what each player holds
+  and resolves accordingly: a melee swing (weapon damage included), or a
+  **projectile** for a held ranged weapon/throwable, spending ammo from that
+  player's **server-side inventory**. Impacts broadcast as `fx` events so
+  everyone sees the same explosion. Loot and pickups land server-side, and
+  each change pushes the authoritative inventory down to its owner.
+- **Inventory actions:** moving/merging/swapping stacks, dropping items into
+  the world, and eating food are requests (`invmove`/`invdrop`/`use`) the
+  server validates and applies — and play-mode block placement consumes the
+  matching block item from the placer's inventory, so blocks can't be
+  conjured from nothing.
 - **Wire protocol:** newline-delimited compact JSON over TCP, built on the
   engine's own `Json` — zero dependencies (requirement #4) and debuggable
   with `telnet`. See [`Protocol`](src/main/java/com/larsons/engine/net/Protocol.java)
@@ -505,6 +561,7 @@ adventure, an isometric builder, etc.
 | Mobs (AI creatures) | toggle | spawn + simulate the level's painted mobs |
 | Items & inventory | toggle | drops, pickup, hotbar + inventory UI |
 | Combat | toggle | swings hurt mobs, mobs hurt players; off = ambient wildlife |
+| Projectiles & ranged weapons | toggle | bows/staves/throwables fire; off = melee only |
 | Mine / place blocks in play | toggle | left-click mine (with drops), right-click place |
 | Creative mode (paint objects) | toggle | the creative editor + online painting |
 | Lighting | toggle | the lighting shader pass (works without post-FX) |
@@ -650,11 +707,12 @@ engine.scenes().setScene("mine"); // or transitionTo for a fade
   work for GPU *scene* rendering is a backend-neutral draw API, since scenes
   draw with `Graphics2D`.
 - **Netcode next steps:** interest management for large worlds, lag
-  compensation for hit detection, server-side eat/consume requests.
-- **Deeper ports from the Side-Scroller engine:** projectiles + ranged
-  weapons, alchemy/crafting recipes, vault storage, equipment overlays,
-  moving blocks, doors/buttons/triggers — the registries and the world-edit
-  protocol are the hooks they'd plug into.
+  compensation for hit detection.
+- **Deeper ports from the Side-Scroller engine:** alchemy/crafting recipes,
+  vault storage, equipment overlays, moving blocks, doors/buttons/triggers —
+  the registries and the request protocol are the hooks they'd plug into
+  (projectiles + ranged weapons and server-side eat/consume shipped with the
+  inventory/projectile update).
 
 ## Tests
 
@@ -665,17 +723,23 @@ engine.scenes().setScene("mine"); // or transitionTo for a fade
 [`PlayerPhysicsTest`](src/test/java/com/larsons/engine/PlayerPhysicsTest.java),
 [`NetworkTest`](src/test/java/com/larsons/engine/NetworkTest.java),
 [`WorldFeaturesTest`](src/test/java/com/larsons/engine/WorldFeaturesTest.java),
-[`NetWorldSyncTest`](src/test/java/com/larsons/engine/NetWorldSyncTest.java))
+[`ProjectileTest`](src/test/java/com/larsons/engine/ProjectileTest.java),
+[`NetWorldSyncTest`](src/test/java/com/larsons/engine/NetWorldSyncTest.java),
+[`NetProjectileInventoryTest`](src/test/java/com/larsons/engine/NetProjectileInventoryTest.java))
 covering JSON read/write, level loading (both tile modes + round-trips),
 sprite-sheet slicing, input edge detection, game-type save/load, the
 `ConfigForm` widget's keyboard/mouse interaction (including scrolling),
 rendering the scenes off-screen (play + creative), pixel-exact shader
 behavior + the GLSL contract and export (including the lighting pass),
 deterministic player physics, the mob AI state machine, world simulation
-(mining → drops → pickup, melee combat, the day/night curve), per-game-type
-level saving, and full loopback multiplayer (a real server + clients:
-handshake, movement, join/leave, version rejection, shutdown — plus block
-edits replicating to every client and late joiners, painted mobs appearing
-in snapshots and being erased, pickups landing in the server-side inventory,
-and feature toggles gating edits server-side) — so everything is verifiable
-without a display.
+(mining → drops → pickup, melee combat, the day/night curve), projectiles
+(registry + item links, ammo consumption, gravity arcs vs straight magic,
+mob hits, explosions with area damage, recoverable drops, toggle gating),
+inventory primitives (move/merge/swap/removeAt), per-game-type level saving,
+and full loopback multiplayer (a real server + clients: handshake, movement,
+join/leave, version rejection, shutdown — plus block edits replicating to
+every client and late joiners, painted mobs appearing in snapshots and being
+erased, pickups landing in the server-side inventory, feature toggles gating
+edits server-side, shots consuming server-side ammo and replicating with
+impact-fx broadcasts, inventory move/drop/eat requests, and placement
+consuming block items) — so everything is verifiable without a display.

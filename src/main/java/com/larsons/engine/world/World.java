@@ -2,11 +2,15 @@ package com.larsons.engine.world;
 
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.entity.DroppedItem;
+import com.larsons.engine.entity.Inventory;
 import com.larsons.engine.entity.ItemDef;
 import com.larsons.engine.entity.ItemRegistry;
 import com.larsons.engine.entity.Mob;
 import com.larsons.engine.entity.MobDef;
 import com.larsons.engine.entity.MobRegistry;
+import com.larsons.engine.entity.Projectile;
+import com.larsons.engine.entity.ProjectileDef;
+import com.larsons.engine.entity.ProjectileRegistry;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.sim.PlayerState;
 
@@ -16,8 +20,9 @@ import java.util.List;
 
 /**
  * The live world: a {@link Level} plus everything simulated inside it — mobs
- * (ported AI), dropped items (bounce + pickup), block mining/placing with
- * drops, and the day/night clock the lighting system reads.
+ * (ported AI), dropped items (bounce + pickup), projectiles (arrows, thrown
+ * rocks, magic — arcs, hits, explosions, recoverable drops), block
+ * mining/placing with drops, and the day/night clock the lighting system reads.
  *
  * <p>This is the "simulation seam" the engine's netcode was designed around,
  * extended beyond players: exactly one {@code World} is authoritative at a
@@ -39,9 +44,12 @@ public final class World {
     public final Level level;
     public final MobRegistry mobTypes;
     public final ItemRegistry itemTypes;
+    public final ProjectileRegistry projectileTypes;
 
     private final List<Mob> mobs = new ArrayList<>();
     private final List<DroppedItem> items = new ArrayList<>();
+    private final List<Projectile> projectiles = new ArrayList<>();
+    private final List<Impact> impacts = new ArrayList<>();
     private int nextEntityId = 1;
 
     /** Time of day in [0,1): 0 = dawn, 0.25 = noon, 0.5 = dusk, 0.75 = midnight. */
@@ -51,6 +59,13 @@ public final class World {
     public interface PickupListener {
         void onPickup(PlayerState player, String itemKey, int count);
     }
+
+    /**
+     * A projectile impact this tick — where feedback happens (particles, sfx).
+     * The scene polls these offline; the server polls and broadcasts them as
+     * {@code fx} messages so every client sees the same hit.
+     */
+    public record Impact(String key, double x, double y, boolean explosion) {}
 
     private PickupListener pickupListener;
 
@@ -62,6 +77,7 @@ public final class World {
         this.level = level;
         this.mobTypes = mobTypes;
         this.itemTypes = itemTypes;
+        this.projectileTypes = ProjectileRegistry.standard();
     }
 
     public void setPickupListener(PickupListener l) {
@@ -74,6 +90,18 @@ public final class World {
 
     public List<DroppedItem> items() {
         return items;
+    }
+
+    public List<Projectile> projectiles() {
+        return projectiles;
+    }
+
+    /** Drain the impacts since the last call (feedback: particles, sfx, fx messages). */
+    public List<Impact> pollImpacts() {
+        if (impacts.isEmpty()) return List.of();
+        List<Impact> out = new ArrayList<>(impacts);
+        impacts.clear();
+        return out;
     }
 
     public double timeOfDay() {
@@ -184,6 +212,10 @@ public final class World {
             }
         }
 
+        if (!projectiles.isEmpty()) {
+            stepProjectiles(dt, gravityOn, profile);
+        }
+
         // Players: clamp health, respawn on death.
         for (PlayerState p : players) {
             if (p.health > PlayerState.MAX_HEALTH) p.health = PlayerState.MAX_HEALTH;
@@ -227,6 +259,120 @@ public final class World {
     }
 
     /**
+     * Fire what {@code shooter} is holding toward (aimX, aimY): a ranged
+     * weapon launches its projectile (consuming ammo from {@code inv} when the
+     * weapon needs it), a throwable throws one of itself. Returns the spawned
+     * {@link Projectile}, or {@code null} when the selected item doesn't shoot
+     * or the ammo ran out — callers fall back to a melee swing.
+     *
+     * <p>This is the ranged half of the combat seam: the same method resolves
+     * clicks in single-player and {@code attack} inputs on the authoritative
+     * server, so shots can't be fabricated client-side.
+     */
+    public Projectile playerShoot(PlayerState shooter, Inventory inv,
+                                  double aimX, double aimY) {
+        ItemDef held = inv.selectedDef();
+        if (held == null || held.projectile() == null) return null;
+        ProjectileDef def = projectileTypes.get(held.projectile());
+        if (def == null) return null;
+        if (held.ammo() != null && inv.remove(held.ammo(), 1) < 1) return null;
+
+        double dx = aimX - shooter.x, dy = aimY - shooter.y;
+        double len = Math.hypot(dx, dy);
+        if (len < 0.001) {
+            dx = shooter.facingLeft ? -1 : 1;
+            dy = 0;
+            len = 1;
+        }
+        Projectile p = new Projectile(nextEntityId++, def, shooter.id,
+                shooter.x, shooter.y,
+                dx / len * def.speed(), dy / len * def.speed());
+        if (held.damage() > 0) p.damage = held.damage();
+        projectiles.add(p);
+        return p;
+    }
+
+    /**
+     * Advance projectiles: flight (arcing under gravity in side-scroll),
+     * mob hits (combat only — with combat off they're decorative physics),
+     * terrain impacts, explosions, and recoverable drops.
+     */
+    private void stepProjectiles(double dt, boolean gravityOn, GameProfile profile) {
+        Iterator<Projectile> it = projectiles.iterator();
+        while (it.hasNext()) {
+            Projectile p = it.next();
+            boolean landed = p.step(level, gravityOn, dt);
+
+            if (!p.dead() && profile.combatEnabled && profile.mobsEnabled) {
+                Mob hit = mobAt(p.x, p.y, p.def.radius());
+                if (hit != null) {
+                    p.kill();
+                    impacts.add(new Impact(p.def.key(), p.x, p.y, p.def.explosionRadius() > 0));
+                    if (p.def.explosionRadius() > 0) {
+                        explode(p);
+                    } else if (hit.damage(p.damage, p.x - p.vx)) {
+                        mobs.remove(hit);
+                        dropMobLoot(hit);
+                    }
+                    it.remove();
+                    continue;
+                }
+            }
+            if (landed) {
+                impacts.add(new Impact(p.def.key(), p.x, p.y, p.def.explosionRadius() > 0));
+                if (p.def.explosionRadius() > 0 && profile.combatEnabled) {
+                    explode(p);
+                } else if (p.def.dropItem() != null && itemTypes.get(p.def.dropItem()) != null
+                        && profile.itemsEnabled) {
+                    // Physical projectiles land as recoverable items (ported
+                    // throwable-recovery behaviour).
+                    spawnItem(p.def.dropItem(), 1,
+                            p.x - DroppedItem.SIZE / 2, p.y - DroppedItem.SIZE / 2)
+                            .toss(-p.vx * 0.1, -160);
+                }
+                it.remove();
+            }
+        }
+    }
+
+    /** Area damage with linear falloff (100% at the centre, 25% at the edge). */
+    private void explode(Projectile p) {
+        double radius = p.def.explosionRadius();
+        List<Mob> died = null;
+        for (Mob m : mobs) {
+            if (m.dead()) continue;
+            double d = Math.hypot(m.x + m.def.size() / 2 - p.x, m.y + m.def.size() / 2 - p.y);
+            if (d > radius + m.def.size() / 2) continue;
+            double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
+            if (m.damage(p.damage * falloff, p.x)) {
+                if (died == null) died = new ArrayList<>();
+                died.add(m);
+            }
+        }
+        if (died != null) {
+            for (Mob m : died) {
+                mobs.remove(m);
+                dropMobLoot(m);
+            }
+        }
+    }
+
+    /** The nearest living mob whose body overlaps a circle at (x, y). */
+    private Mob mobAt(double x, double y, double radius) {
+        Mob best = null;
+        double bestD = Double.MAX_VALUE;
+        for (Mob m : mobs) {
+            if (m.dead()) continue;
+            double d = Math.hypot(m.x + m.def.size() / 2 - x, m.y + m.def.size() / 2 - y);
+            if (d < m.def.size() / 2 + radius && d < bestD) {
+                bestD = d;
+                best = m;
+            }
+        }
+        return best;
+    }
+
+    /**
      * Mine the block at (col,row). When {@code withDrops}, the block's drop
      * item pops out with a little kick (side-scroller behaviour); creative
      * painting passes {@code false}. Returns the mined block, or {@code null}.
@@ -252,13 +398,17 @@ public final class World {
     }
 
     private void dropMobLoot(Mob m) {
-        String loot = switch (m.def.temperament()) {
+        // Skeletons drop arrows (the ammo economy for bows); everything else
+        // drops by temperament as before.
+        String loot = "skeleton".equals(m.def.key()) ? "arrow"
+                : switch (m.def.temperament()) {
             case PASSIVE -> "cooked_meat";
             case NEUTRAL -> "leather";
             case HOSTILE -> "coal";
         };
+        int count = "arrow".equals(loot) ? 3 : 1;
         if (itemTypes.get(loot) != null) {
-            spawnItem(loot, 1, m.x + m.def.size() / 2, m.y + m.def.size() / 2)
+            spawnItem(loot, count, m.x + m.def.size() / 2, m.y + m.def.size() / 2)
                     .toss(0, -200);
         }
     }

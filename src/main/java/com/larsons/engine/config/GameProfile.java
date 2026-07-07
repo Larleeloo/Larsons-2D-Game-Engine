@@ -44,6 +44,7 @@ public class GameProfile {
     public boolean mobsEnabled = true;        // spawn + simulate mobs
     public boolean itemsEnabled = true;       // drops, pickup, inventory + hotbar
     public boolean combatEnabled = true;      // swings hurt mobs, mobs hurt players
+    public boolean projectilesEnabled = true; // ranged weapons + throwables fire
     public boolean blockEditingEnabled = true; // mine/place blocks while playing
     public boolean creativeEnabled = true;    // creative mode (paint objects)
 
@@ -103,6 +104,7 @@ public class GameProfile {
         m.put("mobsEnabled", mobsEnabled);
         m.put("itemsEnabled", itemsEnabled);
         m.put("combatEnabled", combatEnabled);
+        m.put("projectilesEnabled", projectilesEnabled);
         m.put("blockEditingEnabled", blockEditingEnabled);
         m.put("creativeEnabled", creativeEnabled);
         m.put("lightingEnabled", lightingEnabled);
@@ -155,6 +157,7 @@ public class GameProfile {
         p.mobsEnabled = bool(m, "mobsEnabled", p.mobsEnabled);
         p.itemsEnabled = bool(m, "itemsEnabled", p.itemsEnabled);
         p.combatEnabled = bool(m, "combatEnabled", p.combatEnabled);
+        p.projectilesEnabled = bool(m, "projectilesEnabled", p.projectilesEnabled);
         p.blockEditingEnabled = bool(m, "blockEditingEnabled", p.blockEditingEnabled);
         p.creativeEnabled = bool(m, "creativeEnabled", p.creativeEnabled);
         p.lightingEnabled = bool(m, "lightingEnabled", p.lightingEnabled);
