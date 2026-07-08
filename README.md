@@ -242,6 +242,7 @@ com.larsons.engine
     ├── CreativeScene.java       Creative mode: paint blocks/lights/mobs/items
     ├── AutoBattlerLobbyScene.java  Host/join an auto-battler + the pre-game lobby
     ├── AutoBattlerScene.java    The isometric auto-battler client (shop/board/combat)
+    ├── AutoBattlerGuideScene.java  Illustrated field guide (rules/synergies/items/odds/units)
     └── ProfileForms.java        Shared feature options (editor + pause menu)
 ```
 
@@ -522,6 +523,14 @@ another player's board.
 - **Shaders on:** the mode always runs with its own post-FX look (bloom +
   vignette through the engine's standard `ShaderChain`), independent of the
   active game type's toggles, and restores them on exit.
+
+- **Field guide:** the lobby's **How to Play** button opens an illustrated,
+  tabbed reference built from the same data the game runs on — the round
+  loop and rules, the gold economy, every synergy trait, the item recipe
+  grid, the per-level shop odds, and the full unit roster with all of their
+  statistics. Every icon (trait, item gem, odds cell, phase node, unit card)
+  is clickable and pops a detail card with the fine print — per-tier effects,
+  recipes, and star-scaled stats and abilities.
 
 **Controls:** click a unit, then a cell on your half (rows nearest you) or a
 bench slot, to move it — clicking an occupied spot swaps; right-click
