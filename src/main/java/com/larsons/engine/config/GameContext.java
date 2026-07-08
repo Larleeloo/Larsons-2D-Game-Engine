@@ -94,6 +94,21 @@ public class GameContext {
     }
 
     /**
+     * Replace the engine's shader chain with a mode-specific look — used by
+     * standalone modes like the auto-battler, which always runs with its own
+     * post-FX regardless of the active game type's toggles. The next
+     * {@link #applyLiveSettings()} rebuilds the chain from the profile, so
+     * leaving the mode restores the game type's shaders.
+     */
+    public void overrideShaders(List<ShaderPass> passes, double strength) {
+        lastShaderSig = null; // force the next profile sync to rebuild
+        if (engine != null) {
+            engine.shaders().setStrength((float) strength);
+            engine.shaders().setPasses(passes);
+        }
+    }
+
+    /**
      * Bring the engine's {@link ShaderChain} in line with the profile's shader
      * toggles. Strength is pushed every call (cheap); the pass list is only
      * rebuilt when a toggle actually changed, so calling this every frame from
