@@ -2,6 +2,8 @@ package com.larsons.engine.core;
 
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameTypeStore;
+import com.larsons.engine.demo.AutoBattlerLobbyScene;
+import com.larsons.engine.demo.AutoBattlerScene;
 import com.larsons.engine.demo.CreativeScene;
 import com.larsons.engine.demo.GameTypeEditorScene;
 import com.larsons.engine.demo.MainMenuScene;
@@ -44,6 +46,8 @@ public class Main {
         engine.scenes().register("play", new PlayScene(context, LEVEL));
         engine.scenes().register("creative", new CreativeScene(context));
         engine.scenes().register("multiplayer", new MultiplayerScene(context, LEVEL));
+        engine.scenes().register("autolobby", new AutoBattlerLobbyScene(context));
+        engine.scenes().register("autobattler", new AutoBattlerScene(context));
 
         engine.scenes().setScene("startup");
         engine.start();

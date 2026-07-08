@@ -46,6 +46,14 @@ over in a generic, data-driven form and wired to the same toggles:
   in the GLSL-first shader chain, so it composes with every other effect.
 - **Parallax backgrounds, particles, and synthesized sound effects** — all
   procedural, keeping the engine asset-free and JDK-only.
+- **Auto Battler** — a complete standalone game mode on the main menu: an
+  online auto-battler for **2-10 players** in the style of Dota Auto Chess /
+  Teamfight Tactics, played on an **isometric** board with synergies, rounds,
+  items, and units collected over the game — shops, a shared unit pool,
+  3-copies-combine star-ups, an economy with interest and streaks, PvE creep
+  rounds that drop item components, and deterministic server-simulated
+  battles replicated to every client. See
+  [Auto Battler](#auto-battler-online-2-10-players).
 
 Everything above **works online**: the authoritative server simulates the
 world (mobs, items, drops, day/night), snapshots replicate entities, and
@@ -200,6 +208,21 @@ com.larsons.engine
 │   └── LevelStore.java    Per-game-type level saving (creative mode's home)
 ├── audio
 │   └── AudioManager.java  Synthesized sound effects (JDK only, headless-safe)
+├── autobattler
+│   ├── Trait.java         Synergy traits (origins + classes) with tiers + effects
+│   ├── UnitDef.java / AutoUnits.java   The 28-unit roster, creeps, pool sizes, shop odds
+│   ├── AutoItem.java / AutoItems.java  Item components + the full combination table
+│   ├── UnitInstance.java  An owned unit: star level, items, bench/board position
+│   ├── UnitPool.java      The shared pool shops draw from (scarcity)
+│   ├── AutoPlayer.java    One player's life/economy/bench/board/shop state
+│   ├── BattleSim.java     Deterministic 8x8 auto-battle (move/attack/mana/abilities)
+│   ├── AutoGame.java      Rounds, phases, pairings, damage, elimination — the rules
+│   ├── AutoBot.java       Server-side bot opponents (fill lobbies, solo play)
+│   ├── AutoProto.java     The auto-battler's wire messages (own version + port)
+│   ├── AutoServer.java    Authoritative server: lobby + 2-10 players + bots
+│   ├── AutoClient.java    Client: typed replicated state + action senders
+│   ├── AutoSession.java   Active client + optional integrated server
+│   └── AutoSprites.java   Procedural unit figures / item gems (asset-free)
 ├── fx
 │   └── Particles.java     Pooled particles (block breaks, hits)
 ├── ui
@@ -216,6 +239,8 @@ com.larsons.engine
     ├── MultiplayerScene.java    Host a server / join by host[:port]
     ├── PlayScene.java           Play with every enabled feature; doubles as MP client
     ├── CreativeScene.java       Creative mode: paint blocks/lights/mobs/items
+    ├── AutoBattlerLobbyScene.java  Host/join an auto-battler + the pre-game lobby
+    ├── AutoBattlerScene.java    The isometric auto-battler client (shop/board/combat)
     └── ProfileForms.java        Shared feature options (editor + pause menu)
 ```
 
@@ -443,6 +468,69 @@ last saved level — *Play Level* and *Host Server* then run it.
 validates them against the host's feature toggles, and the authoritative
 results broadcast to every player in real time (other players are visible
 while you paint). Save/load/test stay offline-only features.
+
+---
+
+## Auto Battler (online, 2-10 players)
+
+A complete standalone game inside the engine, launched from the main menu:
+**Auto Battler (2-10 Online)**. It plays like Dota Auto Chess / Teamfight
+Tactics on the engine's **isometric** camera, and it is online-first: one
+player hosts (from the lobby screen, exactly like hosting a world server),
+everyone else joins by `ip:port` (default port **7788**). The host can add
+**bots** to fill seats — so it's playable solo against bots, with 2 friends,
+or with a full lobby of 10.
+
+**The loop.** Each round has a **planning phase** (buy from your personal
+shop, position units on your half of the 8x8 board, equip items) and a
+**combat phase** — a fully automatic battle the server simulates and streams
+to both players. Losing costs player HP scaled by the winner's surviving
+units; at 0 HP you're eliminated, and the last player standing wins. Round 1
+and every 5th round are **PvE creep rounds** whose victories drop **item
+components**. With an odd number of players, one fights a **ghost copy** of
+another player's board.
+
+- **Units & shop:** a 28-unit roster across five cost tiers (1-5 gold) with
+  TFT-style per-level rarity odds, rerolls (2g), and a **shared unit pool** —
+  copies are finite, so contested picks really run out. Three copies of a
+  unit combine into a 2-star (and three 2-stars into a 3-star).
+- **Synergies:** every unit has an **origin** (Forest, Ember, Frost, Storm,
+  Shadow, Holy, Wild, Mech) and a **class** (Warrior, Guardian, Archer, Mage,
+  Assassin, Healer, Brawler). Fielding enough distinct units of a trait
+  activates tiered team buffs — regen, attack damage, enemy slows, crit,
+  team HP, and more. The live synergy panel shows counts and thresholds.
+- **Items:** five components drop from creep rounds; any two combine into
+  one of 15 named completed items (two components on the same unit fuse
+  automatically), all pure stat bundles applied in combat.
+- **Economy:** income = 5 base + interest (1 per 10 gold, max 5) + win/loss
+  streak bonuses + 1 for a win. XP: +2 per round, buy 4 for 4 gold; your
+  **level is your board cap** and shifts shop odds toward rarer units.
+- **Abilities:** units build mana by attacking and being hit, then cast
+  their class ability — fireballs (Mage, with splash), heals on the weakest
+  ally (Healer), armor-ignoring strikes (Assassin, who also leaps to the
+  backline at combat start), and so on.
+- **Netcode:** the same authoritative model as the world game — a fixed-tick
+  server owns every rule (purchases, combines, placement legality, the
+  battles themselves), clients send action requests and render replicated
+  state. Battles are **deterministic and seeded**, simulated only on the
+  server; clients receive ~15 Hz combat snapshots (interpolated for smooth
+  motion) plus event streams for damage numbers, particles, and sounds.
+  Disconnected players' boards fight on; joins after the start are refused.
+- **Shaders on:** the mode always runs with its own post-FX look (bloom +
+  vignette through the engine's standard `ShaderChain`), independent of the
+  active game type's toggles, and restores them on exit.
+
+**Controls:** click a unit, then a cell on your half (rows nearest you) or a
+bench slot, to move it — clicking an occupied spot swaps; right-click
+deselects. Click shop cards to buy; **D** rerolls; **F** buys XP; **S** (or
+the red button) sells the selected unit; click an item gem, then a unit, to
+equip. Hover anything for a tooltip. **Esc** opens the pause overlay (the
+match keeps running online — **L** leaves it).
+
+Customization hooks are deliberately data-driven for what comes next: units,
+traits, items, creep waves, pool sizes, and shop odds are all rows in
+`AutoUnits` / `AutoItems` / `Trait`, and pacing/economy live in
+`AutoGame.Config`.
 
 ---
 
@@ -725,7 +813,10 @@ engine.scenes().setScene("mine"); // or transitionTo for a fade
 [`WorldFeaturesTest`](src/test/java/com/larsons/engine/WorldFeaturesTest.java),
 [`ProjectileTest`](src/test/java/com/larsons/engine/ProjectileTest.java),
 [`NetWorldSyncTest`](src/test/java/com/larsons/engine/NetWorldSyncTest.java),
-[`NetProjectileInventoryTest`](src/test/java/com/larsons/engine/NetProjectileInventoryTest.java))
+[`NetProjectileInventoryTest`](src/test/java/com/larsons/engine/NetProjectileInventoryTest.java),
+[`AutoBattlerTest`](src/test/java/com/larsons/engine/autobattler/AutoBattlerTest.java),
+[`AutoBattlerNetTest`](src/test/java/com/larsons/engine/autobattler/AutoBattlerNetTest.java),
+[`AutoBattlerSceneTest`](src/test/java/com/larsons/engine/AutoBattlerSceneTest.java))
 covering JSON read/write, level loading (both tile modes + round-trips),
 sprite-sheet slicing, input edge detection, game-type save/load, the
 `ConfigForm` widget's keyboard/mouse interaction (including scrolling),
@@ -743,3 +834,11 @@ erased, pickups landing in the server-side inventory, feature toggles gating
 edits server-side, shots consuming server-side ammo and replicating with
 impact-fx broadcasts, inventory move/drop/eat requests, and placement
 consuming block items) — so everything is verifiable without a display.
+
+The auto-battler is covered the same way: registry integrity (every trait
+tier reachable, every component pair combining), pool scarcity + shop odds,
+buy/combine/sell round-trips, placement rules, the economy, deterministic
+seeded battles, whole bot games running headlessly to a winner (PvE rounds,
+ghosts, eliminations, placements), real loopback lobbies with host-only
+controls and combat replication, and both scenes rendering off-screen
+against a live server.
