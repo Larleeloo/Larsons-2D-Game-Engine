@@ -69,7 +69,7 @@ public class AutoBattlerLobbyScene extends AbstractScene {
         form.addAction("Join Game", this::startJoin);
         form.addText("Host on port", () -> hostPort, v -> hostPort = v, 5);
         form.addAction("Host Game", this::startHost);
-        form.addAction("Back", () -> scenes.transitionTo("menu"));
+        form.addAction("Back", () -> scenes.transitionTo("startup"));
     }
 
     @Override
@@ -94,7 +94,7 @@ public class AutoBattlerLobbyScene extends AbstractScene {
 
         if (session == null) {
             if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
-                scenes.transitionTo("menu");
+                scenes.transitionTo("startup");
                 return;
             }
             form.update(dt, input);

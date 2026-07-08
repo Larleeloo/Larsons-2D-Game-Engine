@@ -42,6 +42,7 @@ public class StartupScene extends AbstractScene {
             ctx.setProfile(new GameProfile());
             scenes.transitionTo("editor");
         });
+        menu.add("Auto Battler (2-10 Online)", () -> scenes.transitionTo("autolobby"));
         menu.add("Quit", () -> System.exit(0));
     }
 

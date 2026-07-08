@@ -33,7 +33,6 @@ public class MainMenuScene extends AbstractScene {
             menu.add("Creative Mode (paint a level)", () -> scenes.transitionTo("creative"));
         }
         menu.add("Multiplayer (Host / Join)", () -> scenes.transitionTo("multiplayer"))
-                .add("Auto Battler (2-10 Online)", () -> scenes.transitionTo("autolobby"))
                 .add("Edit Features", () -> scenes.transitionTo("editor"))
                 .add("Change Game Type", () -> scenes.transitionTo("startup"))
                 .add("Quit", () -> System.exit(0));
