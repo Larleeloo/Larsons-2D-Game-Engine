@@ -164,9 +164,21 @@ public class ConfigForm {
     private String title;
     private int selected;
     private int rowHeight = 44;
-    // First visible row when the form is taller than the viewport; the render
-    // pass keeps the selected row inside the visible window.
-    private int scroll;
+
+    // Scrolling state for forms taller than the viewport.
+    private int scroll;              // index of the first visible row
+    private int visibleCount = 1;    // rows that fit; recomputed each render
+    private int maxScroll;           // options.size() - visibleCount, clamped >= 0
+    // A draggable scroll bar down the right edge. Its geometry is computed during
+    // render() and hit-tested a frame later in update() — the same deferred
+    // pattern the row boxes use. Dragging the thumb (or the mouse wheel) scrolls
+    // the view directly without moving the selection; keyboard navigation still
+    // pulls the selected row back into view (see followSelection).
+    private final Rectangle scrollTrack = new Rectangle();
+    private final Rectangle scrollThumb = new Rectangle();
+    private boolean draggingThumb;
+    private int dragGrabOffset;      // cursor offset inside the thumb at grab time
+    private boolean followSelection; // bring the selection into view next render
 
     public ConfigForm(String title) { this.title = title; }
 
@@ -206,10 +218,9 @@ public class ConfigForm {
 
         if (input.isKeyJustPressed(KeyEvent.VK_DOWN)) move(1);
         if (input.isKeyJustPressed(KeyEvent.VK_UP)) move(-1);
-        // Mouse wheel moves the selection too, which scrolls long forms.
-        for (int w = input.getWheelRotation(); w != 0; w -= Integer.signum(w)) {
-            move(Integer.signum(w));
-        }
+        // Mouse wheel scrolls the view directly, leaving the selection put.
+        int wheel = input.getWheelRotation();
+        if (wheel != 0) scroll = clampScroll(scroll + wheel);
 
         Option sel = options.get(selected);
         boolean selText = sel.enabled && sel.isText();
@@ -235,6 +246,10 @@ public class ConfigForm {
         // Mouse: hover selects, click hits sub-controls.
         int mx = input.getMouseX(), my = input.getMouseY();
         boolean click = input.isMouseJustPressed();
+
+        // The scroll bar takes precedence over row interaction while in use.
+        if (handleScrollBar(input, mx, my, click)) return;
+
         for (int i = 0; i < options.size(); i++) {
             Option o = options.get(i);
             if (!o.enabled) continue;
@@ -254,8 +269,44 @@ public class ConfigForm {
         int n = options.size();
         for (int step = 0; step < n; step++) {
             selected = (selected + dir + n) % n;
-            if (options.get(selected).enabled) return;
+            if (options.get(selected).enabled) { followSelection = true; return; }
         }
+    }
+
+    private int clampScroll(int s) {
+        return Math.max(0, Math.min(maxScroll, s));
+    }
+
+    /**
+     * Start/continue/finish a scroll-bar thumb drag, or jump the view when the
+     * track is clicked. Returns true while the pointer is working the bar, so the
+     * caller skips row hit-testing this frame. Geometry comes from the previous
+     * render (see {@link #drawScrollBar}).
+     */
+    private boolean handleScrollBar(InputManager input, int mx, int my, boolean click) {
+        if (draggingThumb) {
+            if (!input.isMouseDown()) { draggingThumb = false; return true; }
+            int travel = scrollTrack.height - scrollThumb.height;
+            if (travel > 0) {
+                int rel = Math.max(0, Math.min(travel, my - dragGrabOffset - scrollTrack.y));
+                scroll = Math.round((float) rel / travel * maxScroll);
+            }
+            return true;
+        }
+        if (!click || maxScroll <= 0 || scrollTrack.width <= 0) return false;
+        if (scrollThumb.contains(mx, my)) {
+            draggingThumb = true;
+            dragGrabOffset = my - scrollThumb.y;
+            return true;
+        }
+        if (scrollTrack.contains(mx, my)) {
+            // Click on the track jumps so the thumb centres on the pointer.
+            int travel = scrollTrack.height - scrollThumb.height;
+            int rel = Math.max(0, Math.min(travel, my - scrollTrack.y - scrollThumb.height / 2));
+            scroll = travel > 0 ? Math.round((float) rel / travel * maxScroll) : 0;
+            return true;
+        }
+        return false;
     }
 
     private void ensureSelectedEnabled(int dir) {
@@ -277,12 +328,17 @@ public class ConfigForm {
         FontMetrics fm = g.getFontMetrics();
         int startY = titleY + 50 + fm.getAscent();
 
-        // Long forms scroll: show as many rows as fit and keep the selected row
-        // inside the window.
-        int visibleCount = Math.max(1, (viewportH - 48 - startY) / rowHeight + 1);
-        int maxScroll = Math.max(0, options.size() - visibleCount);
-        if (selected < scroll) scroll = selected;
-        if (selected >= scroll + visibleCount) scroll = selected - visibleCount + 1;
+        // Long forms scroll. Capture the layout as fields so update() can drive
+        // the scroll bar and wheel on the next frame.
+        visibleCount = Math.max(1, (viewportH - 48 - startY) / rowHeight + 1);
+        maxScroll = Math.max(0, options.size() - visibleCount);
+        // Keyboard navigation pulls the selected row into view; free scrolling
+        // (wheel / scroll-bar drag) leaves the view where the user put it.
+        if (followSelection) {
+            if (selected < scroll) scroll = selected;
+            if (selected >= scroll + visibleCount) scroll = selected - visibleCount + 1;
+            followSelection = false;
+        }
         scroll = Math.max(0, Math.min(maxScroll, scroll));
 
         for (int i = 0; i < options.size(); i++) {
@@ -319,16 +375,37 @@ public class ConfigForm {
             renderValue(g, fm, o, contentX, contentW, baseY, boxTop, boxH, labelColor);
         }
 
-        // Scroll indicators when rows are hidden above/below.
-        g.setColor(theme.itemDisabled);
-        if (scroll > 0) {
-            g.drawString("▲ " + scroll + " more", contentX + contentW - 80, startY - rowHeight / 2);
-        }
-        int below = options.size() - (scroll + visibleCount);
-        if (below > 0) {
-            g.drawString("▼ " + below + " more", contentX + contentW - 80,
-                    startY + visibleCount * rowHeight);
-        }
+        drawScrollBar(g, fm, contentX, contentW, startY, viewportH);
+    }
+
+    /**
+     * Draw a scroll bar down the right margin when the form overflows, sizing the
+     * thumb to the visible fraction and positioning it by {@link #scroll}. Records
+     * the track/thumb boxes for {@link #handleScrollBar} to hit-test next frame.
+     */
+    private void drawScrollBar(Graphics2D g, FontMetrics fm,
+                               int contentX, int contentW, int startY, int viewportH) {
+        scrollTrack.setBounds(0, 0, 0, 0);
+        scrollThumb.setBounds(0, 0, 0, 0);
+        if (maxScroll <= 0) return; // everything fits; no bar needed
+
+        int barW = 10;
+        int barX = contentX + contentW + 14;
+        int barTop = startY - fm.getAscent() - 2;
+        int barBottom = Math.min(viewportH - 24, barTop + visibleCount * rowHeight);
+        int barH = Math.max(rowHeight, barBottom - barTop);
+        scrollTrack.setBounds(barX, barTop, barW, barH);
+
+        int rows = options.size();
+        int thumbH = Math.min(barH, Math.max(28, Math.round((float) visibleCount / rows * barH)));
+        int travel = barH - thumbH;
+        int thumbY = barTop + Math.round((float) scroll / maxScroll * travel);
+        scrollThumb.setBounds(barX, thumbY, barW, thumbH);
+
+        g.setColor(new Color(255, 255, 255, 28));
+        g.fillRoundRect(barX, barTop, barW, barH, barW, barW);
+        g.setColor(draggingThumb ? theme.accent : theme.item);
+        g.fillRoundRect(barX, thumbY, barW, thumbH, barW, barW);
     }
 
     private void renderActionRow(Graphics2D g, FontMetrics fm, Option o,
@@ -396,4 +473,13 @@ public class ConfigForm {
     }
 
     public int getSelectedIndex() { return selected; }
+
+    /** Index of the first visible row (top of the scrolled window). */
+    public int getScroll() { return scroll; }
+
+    /** Scroll-bar track hit box (computed during render; 0-size when the form fits). */
+    public Rectangle scrollTrackBounds() { return scrollTrack; }
+
+    /** Scroll-bar thumb hit box (computed during render; 0-size when the form fits). */
+    public Rectangle scrollThumbBounds() { return scrollThumb; }
 }

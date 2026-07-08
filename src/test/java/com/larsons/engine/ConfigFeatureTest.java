@@ -16,6 +16,7 @@ import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
+import java.awt.event.MouseWheelEvent;
 import java.awt.image.BufferedImage;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -200,6 +201,70 @@ class ConfigFeatureTest {
         assertTrue(last.height > 0, "selected row must be scrolled into view");
         assertTrue(last.y + last.height <= 540, "selected row must fit the viewport");
         assertEquals(0, form.options().get(0).rowBounds().height, "top rows scrolled off");
+    }
+
+    @Test
+    void mouseWheelScrollsWithoutMovingSelection() {
+        ConfigForm form = longForm(30);
+
+        InputManager input = new InputManager();
+        Component src = new Canvas();
+        renderOnce(form); // establishes the scroll metrics the wheel clamps against
+        assertTrue(form.options().get(0).rowBounds().height > 0, "first row starts visible");
+
+        // Roll the wheel down a few notches.
+        input.mouseWheelMoved(new MouseWheelEvent(src, MouseEvent.MOUSE_WHEEL, 0L, 0,
+                10, 10, 0, false, MouseWheelEvent.WHEEL_UNIT_SCROLL, 1, 3));
+        input.newFrame();
+        form.update(1.0 / 120.0, input);
+        renderOnce(form);
+
+        assertEquals(3, form.getScroll(), "wheel scrolls the view by its rotation");
+        assertEquals(0, form.getSelectedIndex(), "wheel must not move the selection");
+        assertEquals(0, form.options().get(0).rowBounds().height, "top row scrolled off");
+    }
+
+    @Test
+    void draggingScrollBarThumbScrollsWithoutMovingSelection() {
+        ConfigForm form = longForm(30);
+
+        InputManager input = new InputManager();
+        Component src = new Canvas();
+        renderOnce(form);
+
+        Rectangle thumb = form.scrollThumbBounds();
+        assertTrue(thumb.height > 0, "overflowing form shows a scroll-bar thumb");
+        int grabX = thumb.x + thumb.width / 2;
+        int grabY = thumb.y + thumb.height / 2;
+
+        // Press on the thumb to begin the drag.
+        input.mouseMoved(new MouseEvent(src, MouseEvent.MOUSE_MOVED, 0L, 0, grabX, grabY, 0, false));
+        input.mousePressed(new MouseEvent(src, MouseEvent.MOUSE_PRESSED, 0L, 0, grabX, grabY, 1, false));
+        input.newFrame();
+        form.update(1.0 / 120.0, input);
+
+        // Drag to the bottom of the track (button still held) — the view follows.
+        Rectangle track = form.scrollTrackBounds();
+        int dragY = track.y + track.height;
+        input.mouseDragged(new MouseEvent(src, MouseEvent.MOUSE_DRAGGED, 0L, 0, grabX, dragY, 0, false));
+        input.newFrame();
+        form.update(1.0 / 120.0, input);
+        renderOnce(form);
+
+        assertTrue(form.getScroll() > 0, "dragging the thumb scrolls the view");
+        assertEquals(0, form.getSelectedIndex(), "dragging the thumb must not move the selection");
+        assertEquals(0, form.options().get(0).rowBounds().height, "top rows scrolled off");
+        assertTrue(form.options().get(29).rowBounds().height > 0, "bottom row scrolled into view");
+    }
+
+    private static ConfigForm longForm(int n) {
+        ConfigForm form = new ConfigForm("T");
+        int[] vals = new int[n];
+        for (int i = 0; i < n; i++) {
+            int k = i;
+            form.addInt("Row " + i, () -> vals[k], v -> vals[k] = v, 0, 9, 1);
+        }
+        return form;
     }
 
     private static void renderOnce(ConfigForm form) {
