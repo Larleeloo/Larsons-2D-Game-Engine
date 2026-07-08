@@ -46,7 +46,8 @@ over in a generic, data-driven form and wired to the same toggles:
   in the GLSL-first shader chain, so it composes with every other effect.
 - **Parallax backgrounds, particles, and synthesized sound effects** — all
   procedural, keeping the engine asset-free and JDK-only.
-- **Auto Battler** — a complete standalone game mode on the main menu: an
+- **Auto Battler** — a complete standalone game mode, its own option on the
+  launch menu: an
   online auto-battler for **2-10 players** in the style of Dota Auto Chess /
   Teamfight Tactics, played on an **isometric** board with synergies, rounds,
   items, and units collected over the game — shops, a shared unit pool,
@@ -473,8 +474,10 @@ while you paint). Save/load/test stay offline-only features.
 
 ## Auto Battler (online, 2-10 players)
 
-A complete standalone game inside the engine, launched from the main menu:
-**Auto Battler (2-10 Online)**. It plays like Dota Auto Chess / Teamfight
+A complete standalone game inside the engine, launched straight from the
+launch menu as its own option:
+**Auto Battler (2-10 Online)** — no need to pick or create a game type first.
+It plays like Dota Auto Chess / Teamfight
 Tactics on the engine's **isometric** camera, and it is online-first: one
 player hosts (from the lobby screen, exactly like hosting a world server),
 everyone else joins by `ip:port` (default port **7788**). The host can add
