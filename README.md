@@ -229,7 +229,7 @@ com.larsons.engine
 │   ├── Menu.java          Keyboard/mouse menu
 │   ├── MenuItem.java      Label (dynamic) + action
 │   ├── MenuTheme.java     Colours, fonts, spacing
-│   └── ConfigForm.java    Clickable toggles / steppers / cyclers / text / buttons; scrolls
+│   └── ConfigForm.java    Clickable toggles / steppers / cyclers / text / buttons; draggable scroll bar
 ├── util
 │   └── Json.java          Dependency-free JSON parser + writer (pretty + compact)
 └── demo

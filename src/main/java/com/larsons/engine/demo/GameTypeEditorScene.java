@@ -59,7 +59,7 @@ public class GameTypeEditorScene extends AbstractScene {
         g.setColor(new Color(140, 200, 140));
         if (!status.isEmpty()) g.drawString(status, 24, viewportHeight - 44);
         g.setColor(new Color(120, 120, 140));
-        g.drawString("Up/Down select · Left/Right adjust · Enter/click activate · type to name",
+        g.drawString("Up/Down select · Left/Right adjust · Enter/click activate · wheel/scroll bar to scroll · type to name",
                 24, viewportHeight - 24);
     }
 }
