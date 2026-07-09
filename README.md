@@ -532,12 +532,14 @@ another player's board.
   is clickable and pops a detail card with the fine print — per-tier effects,
   recipes, and star-scaled stats and abilities.
 
-**Controls:** click a unit, then a cell on your half (rows nearest you) or a
-bench slot, to move it — clicking an occupied spot swaps; right-click
-deselects. Click shop cards to buy; **D** rerolls; **F** buys XP; **S** (or
-the red button) sells the selected unit; click an item gem, then a unit, to
-equip. Hover anything for a tooltip. **Esc** opens the pause overlay (the
-match keeps running online — **L** leaves it).
+**Controls:** drag a unit between the bench and your half of the board (rows
+nearest you) to place it — dropping on an occupied spot swaps them — and drag
+an item gem onto a unit to equip it. A plain click still works as a fallback:
+click a unit then a cell/slot to move it, or click an item gem then a unit to
+equip. Right-click deselects or cancels a drag. Click shop cards to buy; **D**
+rerolls; **F** buys XP; **S** (or the red button) sells the selected unit.
+Hover anything for a tooltip. **Esc** opens the pause overlay (the match keeps
+running online — **L** leaves it).
 
 Customization hooks are deliberately data-driven for what comes next: units,
 traits, items, creep waves, pool sizes, and shop odds are all rows in

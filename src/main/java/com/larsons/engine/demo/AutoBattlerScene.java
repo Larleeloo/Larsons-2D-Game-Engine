@@ -20,8 +20,10 @@ import com.larsons.engine.graphics.shader.Shaders;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.scene.AbstractScene;
 
+import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
+import java.awt.Composite;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.GradientPaint;
@@ -41,7 +43,7 @@ import java.util.Map;
  * The auto-battler client: an isometric 8x8 board (the same diamond
  * projection the engine's {@code Camera} gives every scene) with the full
  * TFT / Auto Chess loop around it — a shop bar with rarity odds, a bench,
- * drag-free click-to-move unit placement on your half, an item bench, a live
+ * drag-and-drop unit placement on your half, an item bench, a live
  * synergy panel, opponent standings, and replicated combat with interpolated
  * unit movement, health/mana bars, floating damage numbers, and particles.
  *
@@ -50,9 +52,11 @@ import java.util.Map;
  * auto-battler's own shader look (bloom + vignette) via
  * {@link GameContext#overrideShaders}.
  *
- * <p>Controls: click a unit, then a cell/slot, to move it (planning phase);
- * click shop cards to buy; <b>D</b> rerolls, <b>F</b> buys XP, <b>S</b> sells
- * the selected unit; click an item gem then a unit to equip; <b>Esc</b> menu.
+ * <p>Controls: drag a unit between the bench and your half of the board to
+ * place it, and drag an item gem onto a unit to equip it (planning phase). A
+ * plain click still works too — click a unit then a cell/slot to move it, and
+ * click an item gem then a unit to equip. Click shop cards to buy; <b>D</b>
+ * rerolls, <b>F</b> buys XP, <b>S</b> sells the selected unit; <b>Esc</b> menu.
  */
 public class AutoBattlerScene extends AbstractScene {
 
@@ -82,6 +86,19 @@ public class AutoBattlerScene extends AbstractScene {
     private int hoverItem = -1;
     private UnitInstance hoverUnit;
     private Trait hoverTrait;
+
+    // Drag-and-drop state. A press over a unit or item gem "grabs" it; once the
+    // pointer moves past a small threshold the grab becomes a drag and drops on
+    // release (moving the unit / equipping the item). A press that never moves
+    // that far falls back to the plain click-to-select/place model, so both
+    // interaction styles coexist. Grabbing only happens during the planning
+    // phase — the only time a board is editable.
+    private static final int DRAG_THRESHOLD = 6; // pixels of travel to start a drag
+    private int grabUnitId = -1;    // unit picked up by the active press, or -1
+    private int grabItemIndex = -1; // item picked up by the active press, or -1
+    private boolean dragging;       // the grab has crossed the movement threshold
+    private int pressX, pressY;     // screen position where the active press began
+    private boolean pointerWasDown; // left-button state last tick, for release edges
 
     // Clickable HUD rectangles, laid out in update so update+render agree.
     private final Rectangle rerollBtn = new Rectangle();
@@ -139,6 +156,8 @@ public class AutoBattlerScene extends AbstractScene {
         layoutCamera();
         selectedUnitId = -1;
         selectedItemIndex = -1;
+        clearGrab();
+        pointerWasDown = false;
         paused = false;
         banner = null;
         toasts.clear();
@@ -231,7 +250,7 @@ public class AutoBattlerScene extends AbstractScene {
         layoutHud();
         computeHover(input);
         handleKeys(input);
-        handleClicks(input);
+        handlePointer(input);
     }
 
     private void leave() {
@@ -447,13 +466,114 @@ public class AutoBattlerScene extends AbstractScene {
         }
     }
 
-    private void handleClicks(InputManager input) {
-        if (!input.isMouseJustPressed()) return;
+    /**
+     * Drive the pointer each tick: turn press/move/release into either a drag
+     * (grab a unit or item, drop it to move/equip) or, when the press never
+     * travels far, a plain click resolved by {@link #resolveClick}.
+     */
+    private void handlePointer(InputManager input) {
         int mx = input.getMouseX();
         int my = input.getMouseY();
-        AutoClient.You you = client.you();
-        if (you == null) return;
+        boolean down = input.isMouseDown();
+        boolean justPressed = input.isMouseJustPressed();
 
+        // Right-click already deselects (handleKeys); it also cancels a drag.
+        if (input.isRightMouseJustPressed()) clearGrab();
+
+        if (justPressed) beginPointer(mx, my);
+
+        // Promote a grab to a drag once the pointer travels past the threshold;
+        // starting a drag supersedes any click-selection.
+        if ((grabUnitId >= 0 || grabItemIndex >= 0) && !dragging
+                && (Math.abs(mx - pressX) > DRAG_THRESHOLD
+                    || Math.abs(my - pressY) > DRAG_THRESHOLD)) {
+            dragging = true;
+            selectedUnitId = -1;
+            selectedItemIndex = -1;
+        }
+
+        // Release: the button went up this tick, or it was a tap that pressed
+        // and released within one tick (never observed as held).
+        boolean released = (pointerWasDown && !down) || (justPressed && !down);
+        if (released) endPointer(mx, my);
+
+        pointerWasDown = down;
+    }
+
+    /** On press, grab whatever draggable sits under the cursor (planning only). */
+    private void beginPointer(int mx, int my) {
+        pressX = mx;
+        pressY = my;
+        dragging = false;
+        grabUnitId = -1;
+        grabItemIndex = -1;
+        AutoClient.You you = client.you();
+        if (you == null || !planning()) return; // boards are only editable while planning
+
+        if (hoverItem >= 0 && hoverItem < you.items().size()) {
+            grabItemIndex = hoverItem;
+        } else if (hoverBench >= 0) {
+            UnitInstance u = benchUnitAt(you, hoverBench);
+            if (u != null) grabUnitId = u.id;
+        } else if (hoverCol >= 0) {
+            UnitInstance u = boardUnitAt(you, hoverCol, hoverRow);
+            if (u != null) grabUnitId = u.id;
+        }
+    }
+
+    /** On release, drop a drag onto its target, or resolve a plain click. */
+    private void endPointer(int mx, int my) {
+        AutoClient.You you = client.you();
+        if (you == null) {
+            clearGrab();
+            return;
+        }
+        if (dragging && grabItemIndex >= 0) {
+            dropItem(you, grabItemIndex);
+        } else if (dragging && grabUnitId >= 0) {
+            dropUnit(you, grabUnitId);
+        } else {
+            resolveClick(you, mx, my);
+        }
+        clearGrab();
+    }
+
+    /** Finish a unit drag: move it to the bench slot or board cell under the cursor. */
+    private void dropUnit(AutoClient.You you, int unitId) {
+        if (!planning() || findOwn(unitId) == null) return;
+        if (hoverBench >= 0) {
+            client.sendMoveToBench(unitId, hoverBench);
+            ctx.sfx(AudioManager.Sfx.CLICK);
+        } else if (hoverCol >= 0 && hoverRow >= BattleSim.ROWS / 2) {
+            client.sendMoveToBoard(unitId, hoverCol, hoverRow);
+            ctx.sfx(AudioManager.Sfx.CLICK);
+        }
+        // Dropped outside a legal target: the unit stays where it was.
+    }
+
+    /** Finish an item drag: equip it on the unit (bench or board) under the cursor. */
+    private void dropItem(AutoClient.You you, int itemIndex) {
+        if (!planning() || itemIndex >= you.items().size()) return;
+        UnitInstance target = null;
+        if (hoverBench >= 0) target = benchUnitAt(you, hoverBench);
+        else if (hoverCol >= 0) target = boardUnitAt(you, hoverCol, hoverRow);
+        if (target != null) {
+            client.sendEquip(itemIndex, target.id);
+            ctx.sfx(AudioManager.Sfx.CLICK);
+        }
+    }
+
+    private void clearGrab() {
+        grabUnitId = -1;
+        grabItemIndex = -1;
+        dragging = false;
+    }
+
+    /**
+     * The original click-to-select/place model, kept as a fallback for presses
+     * that don't turn into a drag (and for phases where dragging is disabled).
+     */
+    private void resolveClick(AutoClient.You you, int mx, int my) {
         if (hoverShop >= 0) {
             client.sendBuy(hoverShop);
             ctx.sfx(AudioManager.Sfx.CLICK);
@@ -556,7 +676,8 @@ public class AutoBattlerScene extends AbstractScene {
         drawItemBench(g);
         drawToasts(g);
         drawBanner(g);
-        drawTooltips(g);
+        drawDrag(g);
+        if (!dragging) drawTooltips(g);
         drawOverlays(g);
     }
 
@@ -985,6 +1106,86 @@ public class AutoBattlerScene extends AbstractScene {
                 g.drawImage(AutoSprites.item(item, r.width - 8), r.x + 4, r.y + 4, null);
             }
         }
+    }
+
+    // --- drag & drop feedback -----------------------------------------------------
+
+    /**
+     * While dragging, highlight the legal drop target under the cursor and draw
+     * the grabbed unit or item gem floating at the pointer.
+     */
+    private void drawDrag(Graphics2D g) {
+        if (!dragging) return;
+        AutoClient.You you = client.you();
+        if (you == null) return;
+
+        if (grabUnitId >= 0) {
+            UnitInstance u = findOwn(grabUnitId);
+            if (u == null || u.def() == null) return;
+            highlightUnitDrop(g);
+            int size = (int) (52 * camera.zoom);
+            BufferedImage img = AutoSprites.unit(u.def(), size, true);
+            drawGhost(g, img, lastMouseX, lastMouseY, size);
+            AutoSprites.drawStars(g, u.star, lastMouseX, lastMouseY - size / 2, 8);
+        } else if (grabItemIndex >= 0 && grabItemIndex < you.items().size()) {
+            AutoItem item = AutoItems.get(you.items().get(grabItemIndex));
+            if (item == null) return;
+            highlightItemDrop(g, you);
+            int size = 40;
+            drawGhost(g, AutoSprites.item(item, size), lastMouseX, lastMouseY, size);
+        }
+    }
+
+    /** Draw a semi-transparent sprite centred on the cursor. */
+    private void drawGhost(Graphics2D g, BufferedImage img, int cx, int cy, int size) {
+        Composite old = g.getComposite();
+        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.8f));
+        g.drawImage(img, cx - size / 2, cy - size / 2, null);
+        g.setComposite(old);
+    }
+
+    /** Green highlight on the bench slot or own-half cell a dragged unit would land on. */
+    private void highlightUnitDrop(Graphics2D g) {
+        Color glow = new Color(130, 225, 150);
+        if (hoverBench >= 0) {
+            Rectangle r = benchSlots[hoverBench];
+            fillGlowRect(g, r, glow);
+        } else if (hoverCol >= 0 && hoverRow >= BattleSim.ROWS / 2) {
+            fillGlowTile(g, tilePolygon(hoverCol, hoverRow), glow);
+        }
+    }
+
+    /** Highlight the unit a dragged item would equip — red if it can hold no more. */
+    private void highlightItemDrop(Graphics2D g, AutoClient.You you) {
+        UnitInstance target = null;
+        if (hoverBench >= 0) target = benchUnitAt(you, hoverBench);
+        else if (hoverCol >= 0) target = boardUnitAt(you, hoverCol, hoverRow);
+        if (target == null) return;
+        boolean full = target.items.size() >= UnitInstance.MAX_ITEMS;
+        Color glow = full ? new Color(235, 120, 110) : new Color(130, 225, 150);
+        if (target.onBoard()) {
+            fillGlowTile(g, tilePolygon(target.col, target.row), glow);
+        } else if (target.bench >= 0 && target.bench < benchSlots.length) {
+            fillGlowRect(g, benchSlots[target.bench], glow);
+        }
+    }
+
+    private void fillGlowRect(Graphics2D g, Rectangle r, Color glow) {
+        g.setColor(new Color(glow.getRed(), glow.getGreen(), glow.getBlue(), 80));
+        g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
+        g.setColor(glow);
+        g.setStroke(new BasicStroke(2.5f));
+        g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
+        g.setStroke(new BasicStroke(1f));
+    }
+
+    private void fillGlowTile(Graphics2D g, Polygon p, Color glow) {
+        g.setColor(new Color(glow.getRed(), glow.getGreen(), glow.getBlue(), 80));
+        g.fillPolygon(p);
+        g.setColor(glow);
+        g.setStroke(new BasicStroke(2.5f));
+        g.drawPolygon(p);
+        g.setStroke(new BasicStroke(1f));
     }
 
     private void drawToasts(Graphics2D g) {
