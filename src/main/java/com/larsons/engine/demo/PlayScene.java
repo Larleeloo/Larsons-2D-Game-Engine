@@ -21,11 +21,15 @@ import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.EntitySprites;
 import com.larsons.engine.graphics.ParallaxBackground;
 import com.larsons.engine.graphics.Perspective;
+import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.SpriteSheet;
 import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.level.DoorDirectory;
+import com.larsons.engine.level.DoorLink;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
+import com.larsons.engine.level.LevelStore;
 import com.larsons.engine.net.GameClient;
 import com.larsons.engine.net.NetSession;
 import com.larsons.engine.net.Snapshot;
@@ -36,6 +40,8 @@ import com.larsons.engine.sim.PlayerState;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.MenuTheme;
 import com.larsons.engine.world.Block;
+import com.larsons.engine.world.Decor;
+import com.larsons.engine.world.DecorRegistry;
 import com.larsons.engine.world.World;
 
 import java.awt.AlphaComposite;
@@ -120,6 +126,10 @@ public class PlayScene extends AbstractScene {
     private double swingTime;      // seconds left on the melee swing visual
     private double prevVy;
     private double prevHealth = PlayerState.MAX_HEALTH;
+    private double animClock;      // drives skinned (sprite-sheet) textures
+    private DoorDirectory doors;   // this game type's external door list
+    // Per-frame cache: block id -> skin frame (null = procedural colour).
+    private final Map<Integer, BufferedImage> tileSkins = new HashMap<>();
 
     private boolean paused;
     private ConfigForm pauseForm;
@@ -146,6 +156,7 @@ public class PlayScene extends AbstractScene {
         showInventory = false;
         cursorSlot = -1;
         swingTime = 0;
+        doors = new DoorDirectory(profile().name);
 
         // Online, the world is whatever the server runs (one shared Level
         // instance that block broadcasts keep current); offline, prefer the
@@ -224,8 +235,15 @@ public class PlayScene extends AbstractScene {
 
         GameProfile p = profile();
         enforceProfileConstraints(p);
+        animClock += dt;
         mouseX = input.getMouseX();
         mouseY = input.getMouseY();
+
+        // Walk into a painted door and press E: load its target level
+        // (single-player only; online the server owns the level).
+        if (net == null && !showInventory && input.isKeyJustPressed(KeyEvent.VK_E)) {
+            tryDoorTravel(p);
+        }
 
         if (p.perspectiveSwitchingEnabled && input.isKeyJustPressed(KeyEvent.VK_P)) {
             camera.setPerspective(camera.getPerspective().next());
@@ -283,6 +301,36 @@ public class PlayScene extends AbstractScene {
         double size = ps();
         camera.centerOn(me.x + size / 2.0, me.y + size / 2.0);
         walkAnim.update(me.moving ? dt : 0);
+    }
+
+    /**
+     * Enter the door the player stands at: its {@link DoorLink} (from the game
+     * type's external door directory) names another saved level, which loads
+     * in place — inventory and health carry through, so a set of levels wired
+     * with doors plays like one continuous world.
+     */
+    private void tryDoorTravel(GameProfile p) {
+        double half = p.playerSize / 2.0;
+        Level.EntitySpawn door = level.doorNear(me.x + half, me.y + half, ts() * 1.3);
+        if (door == null) return;
+        DoorLink link = doors.get(door.type);
+        if (link == null || link.targetLevel().isEmpty()) return;
+        LevelStore store = new LevelStore(p.name);
+        if (!store.exists(link.targetLevel())) return;
+        level = store.load(link.targetLevel());
+        world = new World(level);
+        world.populateFromLevel(p);
+        world.setPickupListener((player, key, count) -> {
+            inventory.add(key, count);
+            ctx.sfx(Sfx.PICKUP);
+        });
+        me.x = level.spawnX;
+        me.y = level.spawnY;
+        me.vy = 0;
+        camera.tileSize = level.tileSize;
+        parallax = null;
+        particles.clear();
+        ctx.sfx(Sfx.CLICK);
     }
 
     // --- items & block interaction ------------------------------------------------
@@ -614,13 +662,17 @@ public class PlayScene extends AbstractScene {
             parallax.render(g, camera.x, camera.y, viewportWidth, viewportHeight);
         }
 
+        drawDecorLayer(g, false); // background scenery behind the terrain
         drawTiles(g);
         if (p.gridVisible && camera.getPerspective() != Perspective.ISOMETRIC) drawGrid(g);
+        drawDoors(g);
         drawWorldEntities(g, p);
         if (net != null) drawRemotePlayers(g);
         drawPlayer(g, me.x, me.y, me.facingLeft, walkAnim.current(), null);
         if (swingTime > 0) drawSwing(g);
+        drawDecorLayer(g, true); // foreground scenery covers players
         if (p.particlesEnabled) particles.render(g, camera);
+        if (net == null) drawDoorHint(g, p);
         if (p.hudVisible) drawHud(g);
         if (p.itemsEnabled) drawHotbar(g);
         if (p.combatEnabled || p.mobsEnabled) drawHealthBar(g);
@@ -835,11 +887,13 @@ public class PlayScene extends AbstractScene {
     private void drawTiles(Graphics2D g) {
         int ts = (int) ts();
         int[] b = visibleTileBounds();
+        boolean flat = camera.getPerspective() != Perspective.ISOMETRIC;
+        tileSkins.clear();
         for (int r = b[1]; r <= b[3]; r++) {
             for (int c = b[0]; c <= b[2]; c++) {
                 int id = level.tileAt(c, r);
                 if (id <= 0) continue;
-                Color col = level.colorFor(id);
+                Block block = level.blockAt(c, r);
                 double wx = c * ts, wy = r * ts;
                 camera.worldToScreen(wx, wy, corner);
                 xs[0] = corner[0]; ys[0] = corner[1];
@@ -849,12 +903,97 @@ public class PlayScene extends AbstractScene {
                 xs[2] = corner[0]; ys[2] = corner[1];
                 camera.worldToScreen(wx, wy + ts, corner);
                 xs[3] = corner[0]; ys[3] = corner[1];
+
+                // Sprite-sheet texture override, when one is assigned.
+                if (flat && block != null) {
+                    BufferedImage skin = tileSkinFor(id, block);
+                    if (skin != null) {
+                        int x = Math.min(xs[0], xs[2]);
+                        int y = Math.min(ys[0], ys[2]);
+                        g.drawImage(skin, x, y, Math.abs(xs[2] - xs[0]) + 1,
+                                Math.abs(ys[2] - ys[0]) + 1, null);
+                        continue;
+                    }
+                }
+
+                Color col = level.colorFor(id);
                 g.setColor(col);
                 g.fillPolygon(xs, ys, 4);
-                g.setColor(col.darker());
-                g.drawPolygon(xs, ys, 4);
+                if (block != null && block.liquid()) {
+                    // Liquids render translucent with a bright surface line.
+                    if (level.liquidAt(c, r - 1) == null) {
+                        g.setColor(new Color(255, 255, 255, 90));
+                        g.drawLine(xs[0], ys[0], xs[1], ys[1]);
+                    }
+                } else {
+                    g.setColor(col.darker());
+                    g.drawPolygon(xs, ys, 4);
+                }
             }
         }
+    }
+
+    private BufferedImage tileSkinFor(int id, Block block) {
+        if (tileSkins.containsKey(id)) return tileSkins.get(id);
+        BufferedImage img = Skins.frame("block/" + block.key(), animClock);
+        tileSkins.put(id, img);
+        return img;
+    }
+
+    /** One decoration layer: background behind the terrain, foreground over players. */
+    private void drawDecorLayer(Graphics2D g, boolean foreground) {
+        String kind = foreground ? "decor_fg" : "decor_bg";
+        DecorRegistry registry = DecorRegistry.standard();
+        for (Level.EntitySpawn e : level.entities) {
+            if (!kind.equals(e.kind)) continue;
+            Decor def = registry.get(e.type);
+            if (def == null) continue;
+            BufferedImage img = Skins.frame("decor/" + e.type, animClock);
+            if (img == null) img = EntitySprites.decor(def, 64);
+            int size = Math.max(8, (int) Math.round(def.sizeTiles() * ts() * camera.zoom));
+            camera.worldToScreen(e.x, e.y, corner);
+            g.drawImage(img, corner[0] - size / 2, corner[1] - size, size, size, null);
+        }
+    }
+
+    /** Painted doors: tinted door shapes anchored at their base. */
+    private void drawDoors(Graphics2D g) {
+        double ts = ts();
+        for (Level.EntitySpawn e : level.entities) {
+            if (!"door".equals(e.kind)) continue;
+            DoorLink link = doors.get(e.type);
+            Color tint = link != null ? link.color() : new Color(150, 105, 60);
+            int dw = Math.max(8, (int) Math.round(ts * 0.9 * camera.zoom));
+            int dh = Math.max(12, (int) Math.round(ts * 1.6 * camera.zoom));
+            camera.worldToScreen(e.x, e.y, corner);
+            int x = corner[0] - dw / 2, y = corner[1] - dh;
+            g.setColor(tint);
+            g.fillRoundRect(x, y, dw, dh, dw / 3, dw / 3);
+            g.setColor(tint.darker());
+            g.setStroke(new BasicStroke(2f));
+            g.drawRoundRect(x, y, dw, dh, dw / 3, dw / 3);
+            g.setColor(new Color(255, 235, 170));
+            int knob = Math.max(2, dw / 6);
+            g.fillOval(x + dw - knob * 2, y + dh / 2, knob, knob);
+        }
+    }
+
+    /** "[E] Enter …" prompt while standing at a linked door. */
+    private void drawDoorHint(Graphics2D g, GameProfile p) {
+        double half = p.playerSize / 2.0;
+        Level.EntitySpawn door = level.doorNear(me.x + half, me.y + half, ts() * 1.3);
+        if (door == null) return;
+        DoorLink link = doors.get(door.type);
+        String text = link == null || link.targetLevel().isEmpty()
+                ? "This door leads nowhere (yet)"
+                : "[E] Enter " + link.label();
+        g.setFont(HUD_FONT);
+        int tw = g.getFontMetrics().stringWidth(text);
+        int x = (viewportWidth - tw) / 2, y = viewportHeight - 88;
+        g.setColor(new Color(0, 0, 0, 170));
+        g.fillRoundRect(x - 10, y - 16, tw + 20, 24, 8, 8);
+        g.setColor(new Color(255, 230, 160));
+        g.drawString(text, x, y);
     }
 
     private void drawGrid(Graphics2D g) {
@@ -880,7 +1019,8 @@ public class PlayScene extends AbstractScene {
                 drawItemSprite(g, item.key, item.x, item.y, item.count);
             }
             for (Mob m : world.mobs()) {
-                drawMobSprite(g, m.def, m.x, m.y, m.facingLeft, m.health, m.hurting());
+                drawMobSprite(g, m.def, m.x, m.y, m.facingLeft, m.health, m.hurting(),
+                        stateKeyFor(m.state.ordinal(), m.hurting()));
             }
             for (Projectile pr : world.projectiles()) {
                 drawProjectileSprite(g, pr.def.key(), pr.x, pr.y, pr.vx, pr.vy);
@@ -895,13 +1035,24 @@ public class PlayScene extends AbstractScene {
             for (EntityView mv : snap.mobs()) {
                 MobDef def = mobs.get(mv.key);
                 if (def != null) {
-                    drawMobSprite(g, def, mv.x, mv.y, mv.facingLeft, mv.health, false);
+                    drawMobSprite(g, def, mv.x, mv.y, mv.facingLeft, mv.health, false,
+                            stateKeyFor(mv.aiState, false));
                 }
             }
             for (EntityView s : snap.shots()) {
                 drawProjectileSprite(g, s.key, s.x, s.y, s.vx, s.vy);
             }
         }
+    }
+
+    /** Skin action state for a mob AI state ordinal (feeds {@code mob/<key>/<state>}). */
+    private static String stateKeyFor(int aiStateOrdinal, boolean hurting) {
+        if (hurting) return "hurt";
+        return switch (aiStateOrdinal) {
+            case 1, 2, 4 -> "walk";   // WANDER, CHASE, FLEE
+            case 3 -> "attack";       // ATTACK
+            default -> "idle";
+        };
     }
 
     /** A projectile, rotated to its flight direction. */
@@ -920,8 +1071,13 @@ public class PlayScene extends AbstractScene {
     }
 
     private void drawMobSprite(Graphics2D g, MobDef def, double x, double y,
-                               boolean facingLeft, double health, boolean hurt) {
-        BufferedImage img = EntitySprites.mob(def, 32);
+                               boolean facingLeft, double health, boolean hurt,
+                               String state) {
+        BufferedImage img = Skins.frame("mob/" + def.key() + "/" + state, animClock);
+        if (img == null && !"idle".equals(state)) {
+            img = Skins.frame("mob/" + def.key() + "/idle", animClock);
+        }
+        if (img == null) img = EntitySprites.mob(def, 32);
         int w = (int) Math.round(def.size() * camera.zoom);
         camera.worldToScreen(x + def.size() / 2, y + def.size(), corner);
         int dx = corner[0] - w / 2;
@@ -948,7 +1104,8 @@ public class PlayScene extends AbstractScene {
     private void drawItemSprite(Graphics2D g, String key, double x, double y, int count) {
         ItemDef def = (world != null ? world.itemTypes : ItemRegistry.standard()).get(key);
         if (def == null) return;
-        BufferedImage img = EntitySprites.item(def, 16);
+        BufferedImage img = Skins.frame("item/" + key, animClock);
+        if (img == null) img = EntitySprites.item(def, 16);
         int w = Math.max(6, (int) Math.round(DroppedItem.SIZE * camera.zoom));
         camera.worldToScreen(x, y, corner);
         g.drawImage(img, corner[0], corner[1], w, w, null);
@@ -1157,7 +1314,8 @@ public class PlayScene extends AbstractScene {
         if (stack == null) return;
         ItemDef def = (world != null ? world.itemTypes : ItemRegistry.standard()).get(stack.key);
         if (def == null) return;
-        BufferedImage img = EntitySprites.item(def, 32);
+        BufferedImage img = Skins.frame("item/" + stack.key, animClock);
+        if (img == null) img = EntitySprites.item(def, 32);
         g.drawImage(img, x + 6, y + 6, slot - 12, slot - 12, null);
         if (stack.count > 1) {
             g.setFont(SMALL_FONT);

@@ -55,12 +55,19 @@ public final class ItemRegistry {
 
     private static ItemRegistry createStandard(BlockRegistry blocks) {
         ItemRegistry r = new ItemRegistry();
-        // One placeable item per block, keyed like the block itself.
+        // One placeable item per block, keyed like the block itself. Flowing
+        // liquid twins are simulation artifacts — not placeable, not items.
         for (Block b : blocks.all()) {
+            if (b.isFlow()) continue;
             r.register(ItemDef.block(b.key(), b.displayName(), b.color(), b.key()));
         }
         // Ores mined from ore blocks (block drops reference these).
         r.register(ItemDef.material("coal", "Coal", ItemDef.Rarity.COMMON, new Color(45, 45, 50)));
+        r.register(ItemDef.material("copper", "Copper", ItemDef.Rarity.COMMON, new Color(190, 120, 85)));
+        r.register(ItemDef.material("silver_ingot", "Silver Ingot", ItemDef.Rarity.UNCOMMON, new Color(210, 215, 225)));
+        r.register(ItemDef.material("ruby", "Ruby", ItemDef.Rarity.EPIC, new Color(220, 70, 90)));
+        r.register(ItemDef.material("emerald", "Emerald", ItemDef.Rarity.RARE, new Color(80, 200, 120)));
+        r.register(ItemDef.material("amethyst", "Amethyst", ItemDef.Rarity.RARE, new Color(180, 130, 235)));
         // Materials (a representative slice of the original catalog).
         r.register(ItemDef.material("iron_ingot", "Iron Ingot", ItemDef.Rarity.UNCOMMON, new Color(200, 200, 205)));
         r.register(ItemDef.material("gold_ingot", "Gold Ingot", ItemDef.Rarity.RARE, new Color(235, 200, 80)));

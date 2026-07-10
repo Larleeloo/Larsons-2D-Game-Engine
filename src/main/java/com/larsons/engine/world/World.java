@@ -50,6 +50,8 @@ public final class World {
     private final List<DroppedItem> items = new ArrayList<>();
     private final List<Projectile> projectiles = new ArrayList<>();
     private final List<Impact> impacts = new ArrayList<>();
+    private final LiquidSim liquids = new LiquidSim();
+    private final List<LiquidSim.Change> blockChanges = new ArrayList<>();
     private int nextEntityId = 1;
 
     /** Time of day in [0,1): 0 = dawn, 0.25 = noon, 0.5 = dusk, 0.75 = midnight. */
@@ -101,6 +103,18 @@ public final class World {
         if (impacts.isEmpty()) return List.of();
         List<Impact> out = new ArrayList<>(impacts);
         impacts.clear();
+        return out;
+    }
+
+    /**
+     * Drain tile changes the simulation made on its own (liquid flow). The
+     * multiplayer server broadcasts these as authoritative block events so
+     * clients' levels stay in sync.
+     */
+    public List<LiquidSim.Change> pollBlockChanges() {
+        if (blockChanges.isEmpty()) return List.of();
+        List<LiquidSim.Change> out = new ArrayList<>(blockChanges);
+        blockChanges.clear();
         return out;
     }
 
@@ -179,12 +193,16 @@ public final class World {
         boolean gravityOn = profile.gravityEnabled
                 && level.perspective == com.larsons.engine.graphics.Perspective.SIDE_SCROLL;
 
+        blockChanges.addAll(liquids.step(level, dt));
+
         if (profile.mobsEnabled) {
             Iterator<Mob> it = mobs.iterator();
             List<Mob> died = null;
             while (it.hasNext()) {
                 Mob m = it.next();
                 m.step(level, players, gravityOn, profile.combatEnabled, dt);
+                Block hazard = hazardAt(m.x + m.def.size() / 2, m.y + m.def.size() / 2);
+                if (hazard != null) m.environmentDamage(hazard.damage() * dt);
                 if (m.dead()) {
                     if (died == null) died = new ArrayList<>();
                     died.add(m);
@@ -216,16 +234,28 @@ public final class World {
             stepProjectiles(dt, gravityOn, profile);
         }
 
-        // Players: clamp health, respawn on death.
+        // Players: hazard blocks burn, clamp health, respawn on death (at a
+        // painted multiplayer spawn point when the level has them).
+        double size = profile.playerSize;
         for (PlayerState p : players) {
+            Block hazard = hazardAt(p.x + size / 2, p.y + size / 2);
+            if (hazard != null) p.health -= hazard.damage() * dt;
             if (p.health > PlayerState.MAX_HEALTH) p.health = PlayerState.MAX_HEALTH;
             if (p.health <= 0) {
                 p.health = PlayerState.MAX_HEALTH;
-                p.x = level.spawnX;
-                p.y = level.spawnY;
+                double[] spawn = level.spawnPointFor(p.id);
+                p.x = spawn[0];
+                p.y = spawn[1];
                 p.vy = 0;
             }
         }
+    }
+
+    /** The damaging block at a world point (lava, spikes…), or {@code null}. */
+    private Block hazardAt(double wx, double wy) {
+        double ts = level.tileSize;
+        Block b = level.blockAt((int) Math.floor(wx / ts), (int) Math.floor(wy / ts));
+        return b != null && b.damage() > 0 ? b : null;
     }
 
     /**
@@ -391,9 +421,9 @@ public final class World {
         return b;
     }
 
-    /** Place block {@code id} at (col,row) if the cell is empty. */
+    /** Place block {@code id} at (col,row) if the cell is empty (or liquid). */
     public boolean placeBlock(int col, int row, int id) {
-        if (level.tileAt(col, row) != 0) return false;
+        if (level.tileAt(col, row) != 0 && level.liquidAt(col, row) == null) return false;
         return level.setTile(col, row, id);
     }
 

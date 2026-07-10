@@ -33,7 +33,7 @@ import java.util.function.Supplier;
 public class ConfigForm {
 
     /** What kind of control a row renders as. */
-    public enum Control { TOGGLE, STEPPER, CYCLER, TEXT, ACTION }
+    public enum Control { TOGGLE, STEPPER, CYCLER, TEXT, ACTION, SLIDER }
 
     /** Base class for a form row. */
     public abstract static class Option {
@@ -159,6 +159,26 @@ public class ConfigForm {
         @Override void activate() { if (action != null) action.run(); }
     }
 
+    /** A draggable horizontal slider over an int range (drag, click, or arrow keys). */
+    static final class SliderOption extends Option {
+        final IntSupplier get; final IntConsumer set; final int min, max;
+        SliderOption(String label, IntSupplier get, IntConsumer set, int min, int max) {
+            super(label); this.get = get; this.set = set; this.min = min; this.max = Math.max(min + 1, max);
+        }
+        @Override Control control() { return Control.SLIDER; }
+        @Override String valueText() { return Integer.toString(get.getAsInt()); }
+        @Override void adjust(int dir) {
+            int step = Math.max(1, (max - min) / 50);
+            set.accept(Math.max(min, Math.min(max, get.getAsInt() + dir * step)));
+        }
+        @Override void activate() { adjust(1); }
+        void setFromMouse(int mx) {
+            if (mainBox.width <= 0) return;
+            double t = (mx - mainBox.x) / (double) mainBox.width;
+            set.accept(min + (int) Math.round(Math.max(0, Math.min(1, t)) * (max - min)));
+        }
+    }
+
     private final List<Option> options = new ArrayList<>();
     private MenuTheme theme = MenuTheme.defaultTheme();
     private String title;
@@ -176,6 +196,7 @@ public class ConfigForm {
     // pulls the selected row back into view (see followSelection).
     private final Rectangle scrollTrack = new Rectangle();
     private final Rectangle scrollThumb = new Rectangle();
+    private SliderOption draggingSlider; // slider thumb being dragged, or null
     private boolean draggingThumb;
     private int dragGrabOffset;      // cursor offset inside the thumb at grab time
     private boolean followSelection; // bring the selection into view next render
@@ -204,6 +225,9 @@ public class ConfigForm {
     }
     public Option addAction(String label, Runnable action) {
         return add(new ActionOption(label, action));
+    }
+    public Option addSlider(String label, IntSupplier get, IntConsumer set, int min, int max) {
+        return add(new SliderOption(label, get, set, min, max));
     }
 
     private Option add(Option o) { options.add(o); return o; }
@@ -247,6 +271,16 @@ public class ConfigForm {
         int mx = input.getMouseX(), my = input.getMouseY();
         boolean click = input.isMouseJustPressed();
 
+        // A slider drag in progress owns the mouse until release.
+        if (draggingSlider != null) {
+            if (!input.isMouseDown()) {
+                draggingSlider = null;
+            } else {
+                draggingSlider.setFromMouse(mx);
+                return;
+            }
+        }
+
         // The scroll bar takes precedence over row interaction while in use.
         if (handleScrollBar(input, mx, my, click)) return;
 
@@ -257,6 +291,10 @@ public class ConfigForm {
                 selected = i;
                 if (click) {
                     if (o.decBox.width > 0 && o.decBox.contains(mx, my)) o.adjust(-1);
+                    else if (o instanceof SliderOption s && s.mainBox.contains(mx, my)) {
+                        draggingSlider = s;
+                        s.setFromMouse(mx);
+                    }
                     else if (o.incBox.width > 0 && o.incBox.contains(mx, my)) o.adjust(1);
                     else if (o.mainBox.width > 0 && o.mainBox.contains(mx, my)) o.activate();
                     else if (o.control() == Control.ACTION) o.activate();
@@ -467,6 +505,24 @@ public class ConfigForm {
                 String shown = value + (editing ? "_" : "");
                 g.setColor(o.enabled ? theme.title : theme.itemDisabled);
                 g.drawString(shown, fx + 8, baseY);
+            }
+            case SLIDER -> {
+                SliderOption s = (SliderOption) o;
+                int valW = Math.max(48, fm.stringWidth(String.valueOf(s.max)) + 12);
+                int trackW = 200;
+                int trackX = rightEdge - valW - trackW;
+                o.mainBox.setBounds(trackX, boxTop, trackW, boxH);
+                double t = (s.get.getAsInt() - s.min) / (double) (s.max - s.min);
+                t = Math.max(0, Math.min(1, t));
+                int cy = boxTop + boxH / 2;
+                g.setColor(o.enabled ? theme.itemDisabled : new Color(80, 80, 90));
+                g.fillRoundRect(trackX, cy - 2, trackW, 4, 4, 4);
+                g.setColor(o.enabled ? theme.accent : theme.itemDisabled);
+                g.fillRoundRect(trackX, cy - 2, (int) (trackW * t), 4, 4, 4);
+                int thumbX = trackX + (int) (trackW * t);
+                g.fillOval(thumbX - 6, cy - 7, 14, 14);
+                g.setColor(color);
+                g.drawString(value, rightEdge - valW + 8, baseY);
             }
             default -> { }
         }

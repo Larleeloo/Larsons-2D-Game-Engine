@@ -456,22 +456,27 @@ everything the registries know, in categories —
 
 | Category | Contents |
 |----------|----------|
-| Blocks   | every non-light block in `BlockRegistry` (terrain, ores, decoration) |
-| Lights   | light-emitting blocks (torch, campfire, lantern, magic, crystal) |
+| Blocks   | every non-light, non-liquid block in `BlockRegistry` — 80+ of them: stone families, woods, bricks, ores, plants, hazards |
+| Liquids  | water, lava, acid — real simulated liquids (see below) |
+| Lights   | light-emitting blocks (torch, campfire, lantern, glowstone, neon…) |
 | Mobs     | every species in `MobRegistry` |
 | Items    | every item in `ItemRegistry`, sorted by rarity |
-| Tools    | player spawn marker, eraser |
+| Decor    | trees, rocks, bushes, crystals… painted into the background or foreground layer |
+| Doors    | the game type's door list (external `doors.json`), each linking to another level |
+| Tools    | player spawn, multiplayer spawn points, eraser, the Generate button |
 
 **Editor controls:**
 
 | Input | Function |
 |-------|----------|
 | Left click / drag | paint the selected entry (grid-snapped for blocks; drag keeps painting) |
-| Right click | erase (entities first, then the block cell) |
+| Right click (canvas) | erase (entities first, then the block cell) |
+| Right click (palette icon) | assign a sprite-sheet texture to that block/item/mob/decoration |
 | Middle click | pick the hovered block into the palette |
 | WASD / arrows | pan the camera |
 | Mouse wheel | zoom (over the canvas) / scroll the palette (over the sidebar) |
 | Tab | next palette category |
+| B | toggle the decoration layer (background / foreground) |
 | G | toggle the grid |
 | P | play-test the level in place (terrain restored on exit) |
 | Ctrl+S / L / N | save / load / new level |
@@ -481,9 +486,52 @@ Painting works in **every perspective** — the palette paints through the
 same `Camera` projection the game renders with, so you can build in
 isometric view if your game type uses it.
 
+**Level size sliders.** The sidebar's bottom panel has live width/height
+sliders: drag to resize the level in place — existing tiles are preserved,
+the spawn is clamped back in, and out-of-bounds entities are dropped.
+
+**Liquids flow.**
+[`LiquidSim`](src/main/java/com/larsons/engine/world/LiquidSim.java) makes
+painted water/lava/acid sources pour: liquid falls freely, spreads a
+per-liquid range along floors via hidden `*_flow` blocks, and drains when
+you remove the source or cut the stream. Water quenches lava into stone
+(obsidian for sources), players swim (buoyant sink, hold up to stroke),
+lava and other hazards burn, and on a server the flow broadcasts to every
+client as authoritative block events.
+
+**Doors reference an external list.**
+[`DoorDirectory`](src/main/java/com/larsons/engine/level/DoorDirectory.java)
+stores the game type's doors in `resources/levels/<game-type>/doors.json`;
+each entry names a label, colour, and target level. *Manage Doors…* edits
+the list; painting stamps a door into the level; walking into one and
+pressing `E` (in play or play-test) loads its target level — retarget the
+directory entry and every painted instance re-routes at once.
+
+**Multiplayer spawn points** (Tools palette) are dealt out round-robin to
+joining players by the server, and respawns use them too. Without any, the
+single spawn marker is used, as before.
+
+**Right-click textures.** Right-clicking a palette icon opens the texture
+dialog: point it at any sprite sheet (frame size, count, fps — 0 = static),
+per action state for mobs (idle/walk/attack/hurt), and the assignment
+applies live everywhere that thing is drawn and persists via the engine's
+`Skins`/`skins.json` system. Remove the override to get the procedural art
+back.
+
+**Generate** (Tools palette) builds a level from Perlin noise
+([`LevelGenerator`](src/main/java/com/larsons/engine/level/LevelGenerator.java)):
+Minecraft-style fractal terrain, caves, depth-scaled ore veins, surface
+lakes and a bottom lava ocean — fused with a Metroidvania network of carved
+rooms and corridors (union-find guarantees everything connects, platform
+ladders make vertical runs climbable), plus torches, decorations, treasure,
+mobs, and multiplayer spawns. Same seed + size ⇒ the identical level.
+
 **Play-testing** (`P`) drops a player at the spawn marker and simulates the
 painted world with the real `PlayerPhysics`/mob/item code and the game
-type's lighting — then restores the terrain when you return to editing.
+type's lighting — with a full working inventory: mine blocks for drops,
+pick up painted items, place from the hotbar, eat, shoot, take lava damage,
+and walk through doors (your inventory carries across levels). The terrain
+is restored when you return to editing.
 
 **Levels save into the game type** (the roadmap item):
 [`LevelStore`](src/main/java/com/larsons/engine/level/LevelStore.java) writes

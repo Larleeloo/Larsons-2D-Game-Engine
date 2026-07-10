@@ -98,6 +98,67 @@ public class Level {
         return blocks.get(tileAt(col, row));
     }
 
+    /** The liquid occupying (col,row), or {@code null} (swim/damage checks). */
+    public Block liquidAt(int col, int row) {
+        Block b = blockAt(col, row);
+        return b != null && b.liquid() ? b : null;
+    }
+
+    /**
+     * Resize the tile grid in place, preserving the overlapping region (the
+     * creative editor's size sliders). Entities that fall outside the new
+     * bounds are dropped and the spawn is clamped back in.
+     */
+    public void resize(int newWidth, int newHeight) {
+        newWidth = Math.max(4, newWidth);
+        newHeight = Math.max(4, newHeight);
+        if (newWidth == width && newHeight == height) return;
+        int[][] next = new int[newHeight][newWidth];
+        if (tiles != null) {
+            for (int r = 0; r < Math.min(height, newHeight); r++) {
+                System.arraycopy(tiles[r], 0, next[r], 0, Math.min(width, newWidth));
+            }
+        }
+        tiles = next;
+        width = newWidth;
+        height = newHeight;
+        double maxX = width * (double) tileSize - 1;
+        double maxY = height * (double) tileSize - 1;
+        spawnX = Math.max(0, Math.min(spawnX, maxX));
+        spawnY = Math.max(0, Math.min(spawnY, maxY));
+        entities.removeIf(e -> e.x > maxX || e.y > maxY);
+    }
+
+    /**
+     * Where player {@code id} spawns: painted multiplayer spawn points are
+     * dealt out round-robin by id; without any, everyone uses the single
+     * spawn marker. Returns {@code {x, y}} in world pixels.
+     */
+    public double[] spawnPointFor(int id) {
+        List<EntitySpawn> points = new ArrayList<>();
+        for (EntitySpawn e : entities) {
+            if ("mp_spawn".equals(e.kind)) points.add(e);
+        }
+        if (points.isEmpty()) return new double[]{spawnX, spawnY};
+        EntitySpawn pick = points.get(Math.floorMod(id, points.size()));
+        return new double[]{pick.x, pick.y};
+    }
+
+    /** The nearest door marker within {@code radius} world px, or {@code null}. */
+    public EntitySpawn doorNear(double x, double y, double radius) {
+        EntitySpawn best = null;
+        double bestD = radius;
+        for (EntitySpawn e : entities) {
+            if (!"door".equals(e.kind)) continue;
+            double d = Math.hypot(e.x - x, e.y - y);
+            if (d <= bestD) {
+                bestD = d;
+                best = e;
+            }
+        }
+        return best;
+    }
+
     /**
      * Set a tile, returns {@code true} if it changed. Out-of-bounds writes and
      * unknown block ids are ignored (the wire can carry garbage; the level
