@@ -39,6 +39,11 @@ public final class BattleSim {
     private static final double MANA_PER_HIT_TAKEN = 8;
     private static final int MAX_EVENTS = 128;
 
+    // How long transient animation states hold, so 15 Hz snapshots catch them.
+    private static final double ATTACK_ANIM_SECONDS = 0.3;
+    private static final double CAST_ANIM_SECONDS = 0.5;
+    private static final double HIT_ANIM_SECONDS = 0.25;
+
     /** One fighting unit, stats fully resolved from def + star + items + traits. */
     public static final class CUnit {
         public final int uid;
@@ -59,6 +64,13 @@ public final class BattleSim {
         public boolean dead;
         CUnit target;
 
+        /** Replicated animation state, plus how long a transient state holds. */
+        public AnimState anim = AnimState.IDLE;
+        double animTimer;
+
+        /** Running combat-stats tallies, replicated for the damage panel. */
+        public double dealtPhysical, dealtMagic, healingDone;
+
         CUnit(int uid, int sourceId, String key, int star, int team) {
             this.uid = uid;
             this.sourceId = sourceId;
@@ -68,8 +80,14 @@ public final class BattleSim {
         }
     }
 
-    /** A combat event for client feedback (damage numbers, particles, sfx). */
-    public record Event(String kind, double x, double y, double amount, int team) {
+    /**
+     * A combat event for client feedback (damage numbers, particles, sfx).
+     * Events that come from a unit carry its uid and position, so clients can
+     * animate projectiles from attacker to target, trigger attack/cast
+     * animations, and identify who died; {@code sourceId} is 0 otherwise.
+     */
+    public record Event(String kind, double x, double y, double amount, int team,
+                        int sourceId, double sx, double sy) {
         public Map<String, Object> toMap() {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("k", kind);
@@ -77,6 +95,11 @@ public final class BattleSim {
             m.put("y", round2(y));
             m.put("a", Math.rint(amount));
             m.put("tm", team);
+            if (sourceId > 0) {
+                m.put("su", sourceId);
+                m.put("sx", round2(sx));
+                m.put("sy", round2(sy));
+            }
             return m;
         }
     }
@@ -257,22 +280,43 @@ public final class BattleSim {
         for (CUnit c : units) {
             if (c.dead) continue;
             if (c.waitTimer > 0) c.waitTimer -= dt;
-            if (c.regen > 0) heal(c, c.maxHp * c.regen * dt, false);
+            if (c.animTimer > 0) c.animTimer -= dt;
+            if (c.regen > 0) heal(c, c, c.maxHp * c.regen * dt, false);
             acquireTarget(c);
-            if (c.target == null) continue; // no living enemies; end detected below
+            if (c.target == null) {
+                settleAnim(c, false);
+                continue; // no living enemies; end detected below
+            }
             if (c.moveC >= 0) {
                 advanceMove(c, dt);
+                settleAnim(c, true);
             } else if (inRange(c, c.target)) {
                 c.atkTimer -= dt;
                 if (c.atkTimer <= 0) {
                     c.atkTimer += 1.0 / Math.min(MAX_ATTACK_SPEED, Math.max(0.1, c.attackSpeed));
                     attack(c, c.target);
                 }
+                settleAnim(c, false);
             } else {
                 startMove(c);
+                settleAnim(c, c.moveC >= 0);
             }
         }
         checkEnd();
+    }
+
+    /** Fall back to WALK/IDLE once any transient state's window has run out. */
+    private static void settleAnim(CUnit c, boolean moving) {
+        if (c.dead) return;
+        if (c.animTimer <= 0) c.anim = moving ? AnimState.WALK : AnimState.IDLE;
+    }
+
+    /** Enter a transient animation state unless something weightier is playing. */
+    private static void flashAnim(CUnit c, AnimState state, double seconds) {
+        if (c.dead) return;
+        if (c.animTimer > 0 && c.anim.priority > state.priority) return;
+        c.anim = state;
+        c.animTimer = seconds;
     }
 
     private void acquireTarget(CUnit c) {
@@ -353,6 +397,7 @@ public final class BattleSim {
     private void attack(CUnit c, CUnit target) {
         boolean crit = c.critChance > 0 && rng.nextDouble() < c.critChance;
         double raw = c.ad * (crit ? CRIT_MULTIPLIER : 1.0);
+        flashAnim(c, AnimState.ATTACK, ATTACK_ANIM_SECONDS);
         dealPhysical(c, target, raw, crit ? "crit" : "hit");
         gainMana(c, MANA_PER_ATTACK);
         gainMana(target, MANA_PER_HIT_TAKEN);
@@ -360,18 +405,25 @@ public final class BattleSim {
 
     private void dealPhysical(CUnit from, CUnit to, double raw, String eventKind) {
         double mitigated = raw * 100.0 / (100.0 + Math.max(0, to.armor));
-        damage(from, to, mitigated, eventKind);
+        damage(from, to, mitigated, eventKind, false);
     }
 
-    private void damage(CUnit from, CUnit to, double amount, String eventKind) {
+    private void damage(CUnit from, CUnit to, double amount, String eventKind, boolean magic) {
         if (to.dead) return;
+        double effective = Math.min(amount, to.hp); // no credit for overkill
+        if (from != null) {
+            if (magic) from.dealtMagic += effective;
+            else from.dealtPhysical += effective;
+        }
         to.hp -= amount;
-        event(eventKind, to.x, to.y, amount, to.team);
+        flashAnim(to, AnimState.HIT, HIT_ANIM_SECONDS);
+        event(eventKind, to.x, to.y, amount, to.team, from);
         if (to.hp <= 0) {
             to.hp = 0;
             to.dead = true;
+            to.anim = AnimState.DEATH;
             releaseCells(to);
-            event("die", to.x, to.y, 0, to.team);
+            event("die", to.x, to.y, 0, to.team, to);
         }
     }
 
@@ -382,12 +434,13 @@ public final class BattleSim {
         c.moveR = -1;
     }
 
-    private void heal(CUnit c, double amount, boolean announce) {
-        if (c.dead || amount <= 0) return;
-        double healed = Math.min(amount, c.maxHp - c.hp);
+    private void heal(CUnit from, CUnit to, double amount, boolean announce) {
+        if (to.dead || amount <= 0) return;
+        double healed = Math.min(amount, to.maxHp - to.hp);
         if (healed <= 0) return;
-        c.hp += healed;
-        if (announce) event("heal", c.x, c.y, healed, c.team);
+        to.hp += healed;
+        if (from != null) from.healingDone += healed;
+        if (announce) event("heal", to.x, to.y, healed, to.team, from);
     }
 
     private void gainMana(CUnit c, double amount) {
@@ -403,7 +456,8 @@ public final class BattleSim {
         c.mana = 0;
         double power = def.spell * UnitDef.starMultiplier(c.star) * (1 + c.spellPower / 100.0);
         CUnit target = c.target;
-        event("cast", c.x, c.y, 0, c.team);
+        flashAnim(c, AnimState.CAST, CAST_ANIM_SECONDS);
+        event("cast", c.x, c.y, 0, c.team, c);
         switch (def.clazz) {
             case WARRIOR -> { // empowered slash
                 if (alive(target)) dealPhysical(c, target, c.ad + power, "hit");
@@ -414,20 +468,20 @@ public final class BattleSim {
             case MAGE -> { // fireball: full damage to the target, splash around it
                 if (alive(target)) {
                     double tx = target.x, ty = target.y;
-                    damage(c, target, power, "hit");
+                    damage(c, target, power, "hit", true);
                     for (CUnit other : units) {
                         if (other.dead || other.team == c.team || other == target) continue;
                         double dx = other.x - tx, dy = other.y - ty;
                         if (dx * dx + dy * dy <= 1.6 * 1.6) {
-                            damage(c, other, power * 0.6, "hit");
+                            damage(c, other, power * 0.6, "hit", true);
                         }
                     }
                 }
             }
             case ASSASSIN -> { // shadow strike: ignores armor
-                if (alive(target)) damage(c, target, c.ad + power, "hit");
+                if (alive(target)) damage(c, target, c.ad + power, "hit", true);
             }
-            case GUARDIAN -> heal(c, power * (1 + c.healPower), true); // bulwark
+            case GUARDIAN -> heal(c, c, power * (1 + c.healPower), true); // bulwark
             case HEALER -> { // mend the weakest ally
                 CUnit lowest = null;
                 for (CUnit other : units) {
@@ -436,11 +490,11 @@ public final class BattleSim {
                         lowest = other;
                     }
                 }
-                if (lowest != null) heal(lowest, power * (1 + c.healPower), true);
+                if (lowest != null) heal(c, lowest, power * (1 + c.healPower), true);
             }
             case BRAWLER -> { // slam: hurt them, shrug it off
-                if (alive(target)) damage(c, target, power * 0.8, "hit");
-                heal(c, power * 0.5 * (1 + c.healPower), true);
+                if (alive(target)) damage(c, target, power * 0.8, "hit", true);
+                heal(c, c, power * 0.5 * (1 + c.healPower), true);
             }
             default -> { /* creeps never cast */ }
         }
@@ -517,6 +571,10 @@ public final class BattleSim {
             m.put("mh", Math.rint(c.maxHp));
             m.put("mn", Math.rint(c.mana));
             m.put("mx", Math.rint(c.manaMax));
+            m.put("st", c.anim.code);
+            if (c.dealtPhysical >= 1) m.put("dp", Math.rint(c.dealtPhysical));
+            if (c.dealtMagic >= 1) m.put("dm", Math.rint(c.dealtMagic));
+            if (c.healingDone >= 1) m.put("dh", Math.rint(c.healingDone));
             if (c.dead) m.put("dd", true);
             out.add(m);
         }
@@ -530,9 +588,11 @@ public final class BattleSim {
         return out;
     }
 
-    private void event(String kind, double x, double y, double amount, int team) {
+    private void event(String kind, double x, double y, double amount, int team, CUnit source) {
         if (events.size() < MAX_EVENTS) {
-            events.add(new Event(kind, x, y, amount, team));
+            events.add(source == null
+                    ? new Event(kind, x, y, amount, team, 0, 0, 0)
+                    : new Event(kind, x, y, amount, team, source.uid, source.x, source.y));
         }
     }
 

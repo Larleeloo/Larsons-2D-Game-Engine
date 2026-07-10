@@ -8,7 +8,9 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Loads and caches images.
@@ -21,6 +23,7 @@ import java.util.Map;
  */
 public final class AssetLoader {
     private static final Map<String, BufferedImage> CACHE = new HashMap<>();
+    private static final Set<String> MISSING = new HashSet<>();
 
     private AssetLoader() {}
 
@@ -32,6 +35,25 @@ public final class AssetLoader {
         if (img == null) {
             System.err.println("AssetLoader: missing image '" + path + "' - using placeholder");
             img = placeholder(64, 64);
+        }
+        CACHE.put(path, img);
+        return img;
+    }
+
+    /**
+     * Like {@link #loadImage}, but a missing image yields {@code null} instead
+     * of the checkerboard placeholder — for optional art (skin overrides)
+     * where the caller has its own fallback. Misses are cached so a bad path
+     * doesn't re-hit the filesystem every frame.
+     */
+    public static synchronized BufferedImage loadImageOrNull(String path) {
+        if (path == null || path.isBlank() || MISSING.contains(path)) return null;
+        BufferedImage cached = CACHE.get(path);
+        if (cached != null) return cached;
+        BufferedImage img = readImage(path);
+        if (img == null) {
+            MISSING.add(path);
+            return null;
         }
         CACHE.put(path, img);
         return img;
@@ -73,5 +95,8 @@ public final class AssetLoader {
         return img;
     }
 
-    public static void clearCache() { CACHE.clear(); }
+    public static synchronized void clearCache() {
+        CACHE.clear();
+        MISSING.clear();
+    }
 }

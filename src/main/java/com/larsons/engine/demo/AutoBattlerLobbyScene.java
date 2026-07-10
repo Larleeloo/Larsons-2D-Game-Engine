@@ -69,6 +69,7 @@ public class AutoBattlerLobbyScene extends AbstractScene {
         form.addAction("Join Game", this::startJoin);
         form.addText("Host on port", () -> hostPort, v -> hostPort = v, 5);
         form.addAction("Host Game", this::startHost);
+        form.addAction("Customize Skins", () -> scenes.transitionTo("skins"));
         form.addAction("How to Play", () -> scenes.transitionTo("autoguide"));
         form.addAction("Back", () -> scenes.transitionTo("startup"));
     }
@@ -227,6 +228,18 @@ public class AutoBattlerLobbyScene extends AbstractScene {
                         + " — friends join your IP:port"
                 : "Connected to " + address;
         drawCentered(g, where, viewportWidth / 2, 124);
+        if (session.isHost()) {
+            // "localhost" only works on this machine; friends on the same
+            // network need this machine's LAN address.
+            String lan = com.larsons.engine.net.Lan.siteLocalAddress();
+            g.setFont(new Font("SansSerif", Font.PLAIN, 15));
+            g.setColor(new Color(140, 200, 150));
+            drawCentered(g, lan != null
+                            ? "Same network? They join:  " + lan + ":"
+                                    + session.hostedServer().getPort()
+                            : "Find your LAN IP (ipconfig / ifconfig) for same-network friends",
+                    viewportWidth / 2, 148);
+        }
 
         // Player list.
         List<AutoClient.LobbyPlayer> players = client.lobby().players();

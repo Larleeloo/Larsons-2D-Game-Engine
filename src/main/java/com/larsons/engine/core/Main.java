@@ -10,7 +10,10 @@ import com.larsons.engine.demo.GameTypeEditorScene;
 import com.larsons.engine.demo.MainMenuScene;
 import com.larsons.engine.demo.MultiplayerScene;
 import com.larsons.engine.demo.PlayScene;
+import com.larsons.engine.demo.SkinEditorScene;
 import com.larsons.engine.demo.StartupScene;
+import com.larsons.engine.graphics.SkinStore;
+import com.larsons.engine.graphics.Skins;
 
 /**
  * Application entry point.
@@ -32,6 +35,14 @@ public class Main {
     public static final String LEVEL = "levels/sample_level.json";
 
     public static void main(String[] args) {
+        // Leave a ready-to-send copy of the game in share/ (built in the
+        // background), so launching from the IDE is all it takes to have
+        // something to hand to friends.
+        ShareJar.writeAsync();
+
+        // The player's saved texture overrides apply from the first frame.
+        Skins.install(new SkinStore().load());
+
         EngineConfig config = new EngineConfig()
                 .title("Larson's 2D Game Engine")
                 .size(1280, 720)
@@ -50,6 +61,7 @@ public class Main {
         engine.scenes().register("autolobby", new AutoBattlerLobbyScene(context));
         engine.scenes().register("autobattler", new AutoBattlerScene(context));
         engine.scenes().register("autoguide", new AutoBattlerGuideScene(context));
+        engine.scenes().register("skins", new SkinEditorScene(context));
 
         engine.scenes().setScene("startup");
         engine.start();

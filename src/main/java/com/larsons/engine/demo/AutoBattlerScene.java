@@ -1,6 +1,7 @@
 package com.larsons.engine.demo;
 
 import com.larsons.engine.audio.AudioManager;
+import com.larsons.engine.autobattler.AnimState;
 import com.larsons.engine.autobattler.AutoClient;
 import com.larsons.engine.autobattler.AutoGame;
 import com.larsons.engine.autobattler.AutoItem;
@@ -16,6 +17,7 @@ import com.larsons.engine.config.GameContext;
 import com.larsons.engine.fx.Particles;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.Perspective;
+import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.shader.Shaders;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.scene.AbstractScene;
@@ -31,7 +33,9 @@ import java.awt.Graphics2D;
 import java.awt.Polygon;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.Shape;
 import java.awt.event.KeyEvent;
+import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -47,6 +51,16 @@ import java.util.Map;
  * synergy panel, opponent standings, and replicated combat with interpolated
  * unit movement, health/mana bars, floating damage numbers, and particles.
  *
+ * <p>Combat is presented with full readability effects: units play replicated
+ * animation states (idle/walk/attack/cast/hit/death), ranged attacks fly as
+ * animated projectiles that deliver their damage number on impact, melee hits
+ * slash, casts flare, and deaths leave fading corpses. During combat the left
+ * panel becomes a per-unit damage meter split by damage type. Clicking a
+ * player in the standings scouts their board (with their public stats) in an
+ * overlay. Every texture — board tiles, units per animation state, items,
+ * projectiles — can be reskinned with sprite sheets via {@link Skins} (see the
+ * lobby's skin customization menu).
+ *
  * <p>Everything authoritative happens on the server; this scene only sends
  * action requests and renders the replicated state. Runs with the
  * auto-battler's own shader look (bloom + vignette) via
@@ -55,13 +69,13 @@ import java.util.Map;
  * <p>Controls: drag a unit between the bench and your half of the board to
  * place it, and drag an item gem onto a unit to equip it (planning phase). A
  * plain click still works too — click a unit then a cell/slot to move it, and
- * click an item gem then a unit to equip. Click shop cards to buy; <b>D</b>
- * rerolls, <b>F</b> buys XP, <b>S</b> sells the selected unit; <b>Esc</b> menu.
+ * click an item gem then a unit to equip. Click shop cards to buy; click a
+ * player's name to scout their board; <b>D</b> rerolls, <b>F</b> buys XP,
+ * <b>S</b> sells the selected unit; <b>Esc</b> closes the scout view / menu.
  */
 public class AutoBattlerScene extends AbstractScene {
 
     private static final int TILE = 32; // world units per board cell
-    private static final Color OWN_HALF = new Color(70, 90, 120);
     private static final Color[] COST_COLORS = {
             new Color(150, 155, 170),  // 1: gray
             new Color(110, 185, 110),  // 2: green
@@ -69,6 +83,15 @@ public class AutoBattlerScene extends AbstractScene {
             new Color(190, 110, 220),  // 4: purple
             new Color(235, 185, 80)    // 5: gold
     };
+
+    // Damage-meter type colours (attack / ability / healing).
+    private static final Color DMG_PHYSICAL = new Color(235, 150, 80);
+    private static final Color DMG_MAGIC = new Color(140, 160, 255);
+    private static final Color DMG_HEAL = new Color(120, 220, 140);
+
+    private static final double MISSILE_SPEED = 340;  // world units per second
+    private static final double SLASH_SECONDS = 0.22;
+    private static final double CORPSE_SECONDS = 0.9;
 
     private final GameContext ctx;
     private AutoSession session;
@@ -110,9 +133,24 @@ public class AutoBattlerScene extends AbstractScene {
     private final List<Rectangle> traitRows = new ArrayList<>();
 
     // Combat presentation.
+    private double animClock; // drives idle/skin animation everywhere
     private final Map<Integer, double[]> displayed = new HashMap<>(); // uid -> smoothed cell pos
+    private final Map<Integer, UnitFx> unitFx = new HashMap<>();      // uid -> anim state clock
     private final List<Floater> floaters = new ArrayList<>();
+    private final List<Missile> missiles = new ArrayList<>();
+    private final List<Slash> slashes = new ArrayList<>();
+    private final List<Corpse> corpses = new ArrayList<>();
     private double hitSfxCooldown;
+
+    // Board scouting (click a standings row). Row rectangles are recorded
+    // while rendering the standings and hit-tested a frame later, the same
+    // deferred pattern ConfigForm uses.
+    private int viewingId = -1;
+    private double viewRefresh;
+    private final Rectangle viewPanelRect = new Rectangle();
+    private final Rectangle viewCloseRect = new Rectangle();
+    private final List<Rectangle> standingRects = new ArrayList<>();
+    private final List<Integer> standingIds = new ArrayList<>();
 
     // Banners & toasts.
     private final List<Toast> toasts = new ArrayList<>();
@@ -132,6 +170,40 @@ public class AutoBattlerScene extends AbstractScene {
 
     private static final class Toast {
         String text;
+        double age;
+    }
+
+    /** Client-side clock per combat unit: how long its anim state has played. */
+    private static final class UnitFx {
+        AnimState state = AnimState.IDLE;
+        double time;
+    }
+
+    /** An animated projectile flying from attacker to target (world coords). */
+    private static final class Missile {
+        double x, y;          // current position
+        double tx, ty;        // impact position
+        double vx, vy;        // velocity (world units / s)
+        double life;          // seconds until impact
+        double trailAccum;
+        String kind;          // arrow | orb | bolt (skin key + procedural style)
+        Color color;
+        String impactText;    // damage floater delivered on arrival, or null
+        Color impactColor;
+    }
+
+    /** A short melee slash arc at the point of impact. */
+    private static final class Slash {
+        double wx, wy;
+        double age;
+        Color color;
+    }
+
+    /** A fading corpse left where a unit died. */
+    private static final class Corpse {
+        UnitDef def;
+        boolean friendly;
+        double wx, wy;
         double age;
     }
 
@@ -160,10 +232,12 @@ public class AutoBattlerScene extends AbstractScene {
         pointerWasDown = false;
         paused = false;
         banner = null;
+        viewingId = -1;
         toasts.clear();
         floaters.clear();
         displayed.clear();
         particles.clear();
+        clearCombatFx();
         lastHp = -1;
         lastItemCount = -1;
         // The auto-battler always plays with shaders on: soft bloom + vignette.
@@ -203,7 +277,7 @@ public class AutoBattlerScene extends AbstractScene {
     }
 
     private int shopBarHeight() {
-        return 116;
+        return AutoHud.SHOP_BAR_HEIGHT;
     }
 
     // ------------------------------------------------------------------ update
@@ -215,8 +289,10 @@ public class AutoBattlerScene extends AbstractScene {
             return;
         }
 
+        animClock += dt;
         drainFeeds(dt);
         particles.update(dt);
+        updateCombatFx(dt);
         for (int i = floaters.size() - 1; i >= 0; i--) {
             Floater f = floaters.get(i);
             f.age += dt;
@@ -239,7 +315,11 @@ public class AutoBattlerScene extends AbstractScene {
                 leave();
                 return;
             }
-            paused = !paused;
+            if (viewingId >= 0) {
+                closeView();
+            } else {
+                paused = !paused;
+            }
         }
         if (paused && input.isKeyJustPressed(KeyEvent.VK_L)) {
             leave();
@@ -249,6 +329,10 @@ public class AutoBattlerScene extends AbstractScene {
 
         layoutHud();
         computeHover(input);
+        if (viewingId >= 0) {
+            updateViewOverlay(dt, input);
+            return; // the overlay captures the pointer; no board edits beneath it
+        }
         handleKeys(input);
         handlePointer(input);
     }
@@ -280,23 +364,22 @@ public class AutoBattlerScene extends AbstractScene {
             double wx = (viewCol(e.x(), home) + 0.5) * TILE;
             double wy = (viewRow(e.y(), home) + 0.5) * TILE;
             switch (e.kind()) {
-                case "hit", "crit" -> {
+                case "hit", "crit" -> handleHitEvent(e, home, wx, wy);
+                case "heal" -> {
                     if (e.amount() >= 1) {
-                        boolean crit = e.kind().equals("crit");
-                        addFloater(wx, wy, "-" + (int) e.amount(),
-                                crit ? new Color(255, 200, 80) : new Color(235, 235, 245));
-                        if (hitSfxCooldown <= 0) {
-                            hitSfxCooldown = 0.09;
-                            ctx.sfx(AudioManager.Sfx.HIT);
-                        }
+                        addFloater(wx, wy, "+" + (int) e.amount(), DMG_HEAL);
                     }
+                    particles.burst(wx, wy, DMG_HEAL, 5);
                 }
-                case "heal" -> addFloater(wx, wy, "+" + (int) e.amount(),
-                        new Color(130, 230, 140));
-                case "cast" -> particles.burst(wx, wy, new Color(140, 170, 255), 8);
+                case "cast" -> {
+                    UnitDef def = defOfCombatUnit(e.sourceId());
+                    Color accent = def != null ? def.accent : new Color(140, 170, 255);
+                    particles.burst(wx, wy, accent, 12);
+                }
                 case "die" -> {
                     particles.burst(wx, wy, new Color(220, 120, 90), 18);
                     ctx.sfx(AudioManager.Sfx.BOOM);
+                    spawnCorpse(e.sourceId(), wx, wy);
                 }
                 default -> { /* unknown fx */ }
             }
@@ -313,6 +396,102 @@ public class AutoBattlerScene extends AbstractScene {
         }
     }
 
+    /**
+     * A damage event: distant attackers launch an animated projectile that
+     * delivers the damage number on impact; adjacent ones read as a melee
+     * slash with the number popping immediately.
+     */
+    private void handleHitEvent(AutoClient.CombatEvent e, boolean home, double wx, double wy) {
+        boolean crit = e.kind().equals("crit");
+        String text = e.amount() >= 1 ? "-" + (int) e.amount() : null;
+        Color color = crit ? new Color(255, 200, 80) : new Color(235, 235, 245);
+
+        double dx = e.sx() - e.x();
+        double dy = e.sy() - e.y();
+        boolean ranged = e.sourceId() > 0 && dx * dx + dy * dy > 1.6 * 1.6;
+        if (ranged) {
+            spawnMissile(e, home, wx, wy, text, color);
+            return;
+        }
+        if (text != null) addFloater(wx, wy, text, color);
+        Slash s = new Slash();
+        s.wx = wx;
+        s.wy = wy;
+        s.color = crit ? new Color(255, 200, 80) : new Color(230, 235, 250);
+        if (slashes.size() < 48) slashes.add(s);
+        playHitSfx();
+    }
+
+    private void spawnMissile(AutoClient.CombatEvent e, boolean home,
+                              double wx, double wy, String text, Color color) {
+        if (missiles.size() >= 48) return;
+        Missile m = new Missile();
+        m.x = (viewCol(e.sx(), home) + 0.5) * TILE;
+        m.y = (viewRow(e.sy(), home) + 0.5) * TILE;
+        m.tx = wx;
+        m.ty = wy;
+        double dx = m.tx - m.x, dy = m.ty - m.y;
+        double dist = Math.max(0.001, Math.sqrt(dx * dx + dy * dy));
+        m.vx = dx / dist * MISSILE_SPEED;
+        m.vy = dy / dist * MISSILE_SPEED;
+        m.life = dist / MISSILE_SPEED;
+        UnitDef def = defOfCombatUnit(e.sourceId());
+        m.kind = missileKind(def);
+        m.color = def != null ? def.accent : new Color(200, 210, 235);
+        m.impactText = text;
+        m.impactColor = color;
+        missiles.add(m);
+    }
+
+    /** Which projectile a unit fires, keyed for skins ({@code projectile/<kind>}). */
+    private static String missileKind(UnitDef def) {
+        if (def == null || def.clazz == null) return "bolt";
+        return switch (def.clazz) {
+            case ARCHER -> "arrow";
+            case MAGE -> "orb";
+            default -> "bolt";
+        };
+    }
+
+    private UnitDef defOfCombatUnit(int uid) {
+        AutoClient.CombatFrame frame = client.combatLatest();
+        if (frame == null || uid <= 0) return null;
+        for (AutoClient.CombatUnit u : frame.units()) {
+            if (u.id() == uid) return AutoUnits.get(u.key());
+        }
+        return null;
+    }
+
+    private void spawnCorpse(int uid, double wx, double wy) {
+        AutoClient.CombatFrame frame = client.combatLatest();
+        if (frame == null || uid <= 0 || corpses.size() >= 32) return;
+        boolean home = isHomeSide();
+        int friendlyTeam = home ? BattleSim.HOME : BattleSim.AWAY;
+        for (AutoClient.CombatUnit u : frame.units()) {
+            if (u.id() != uid) continue;
+            Corpse c = new Corpse();
+            c.def = AutoUnits.get(u.key());
+            c.friendly = u.team() == friendlyTeam;
+            double[] pos = displayed.get(uid);
+            if (pos != null) {
+                c.wx = (pos[0] + 0.5) * TILE;
+                c.wy = (pos[1] + 0.5) * TILE;
+            } else {
+                c.wx = wx;
+                c.wy = wy;
+            }
+            if (c.def != null) corpses.add(c);
+            return;
+        }
+    }
+
+    private void playHitSfx() {
+        if (hitSfxCooldown <= 0) {
+            hitSfxCooldown = 0.09;
+            ctx.sfx(AudioManager.Sfx.HIT);
+        }
+    }
+
     private void addFloater(double wx, double wy, String text, Color color) {
         Floater f = new Floater();
         f.wx = wx;
@@ -322,11 +501,51 @@ public class AutoBattlerScene extends AbstractScene {
         if (floaters.size() < 48) floaters.add(f);
     }
 
+    /** Advance missiles, slashes, corpses, and per-unit anim-state clocks. */
+    private void updateCombatFx(double dt) {
+        for (int i = missiles.size() - 1; i >= 0; i--) {
+            Missile m = missiles.get(i);
+            m.x += m.vx * dt;
+            m.y += m.vy * dt;
+            m.life -= dt;
+            m.trailAccum += dt;
+            if (m.trailAccum >= 0.035) {
+                m.trailAccum = 0;
+                particles.burst(m.x, m.y, m.color, 1);
+            }
+            if (m.life <= 0) {
+                if (m.impactText != null) addFloater(m.tx, m.ty, m.impactText, m.impactColor);
+                particles.burst(m.tx, m.ty, m.color, 7);
+                playHitSfx();
+                missiles.remove(i);
+            }
+        }
+        for (int i = slashes.size() - 1; i >= 0; i--) {
+            Slash s = slashes.get(i);
+            s.age += dt;
+            if (s.age > SLASH_SECONDS) slashes.remove(i);
+        }
+        for (int i = corpses.size() - 1; i >= 0; i--) {
+            Corpse c = corpses.get(i);
+            c.age += dt;
+            if (c.age > CORPSE_SECONDS) corpses.remove(i);
+        }
+        for (UnitFx fx : unitFx.values()) fx.time += dt;
+    }
+
+    private void clearCombatFx() {
+        missiles.clear();
+        slashes.clear();
+        corpses.clear();
+        unitFx.clear();
+    }
+
     /** Ease displayed combat positions toward the latest snapshot. */
     private void smoothCombatPositions(double dt) {
         AutoClient.CombatFrame frame = client.combatLatest();
         if (frame == null) {
             displayed.clear();
+            if (!unitFx.isEmpty() || !missiles.isEmpty()) clearCombatFx();
             return;
         }
         boolean home = isHomeSide();
@@ -340,6 +559,11 @@ public class AutoBattlerScene extends AbstractScene {
             } else {
                 pos[0] += (tx - pos[0]) * blend;
                 pos[1] += (ty - pos[1]) * blend;
+            }
+            UnitFx fx = unitFx.computeIfAbsent(u.id(), k -> new UnitFx());
+            if (fx.state != u.state()) {
+                fx.state = u.state();
+                fx.time = 0;
             }
         }
     }
@@ -363,43 +587,40 @@ public class AutoBattlerScene extends AbstractScene {
         return p != null && p.phase() == AutoGame.Phase.PLAN;
     }
 
+    private boolean fighting() {
+        AutoClient.PhaseState p = client.phase();
+        return p != null && p.phase() == AutoGame.Phase.FIGHT && client.combatLatest() != null;
+    }
+
+    private int itemCount() {
+        AutoClient.You you = client == null ? null : client.you();
+        return you == null ? 0 : you.items().size();
+    }
+
     // --- HUD layout (shared by update hit-testing and render) ---------------------
 
     private void layoutHud() {
         int w = viewportWidth, h = viewportHeight;
-        int shopH = shopBarHeight();
-        int barY = h - shopH;
 
-        // Economy buttons on the left of the shop bar.
-        xpBtn.setBounds(16, barY + 14, 120, 40);
-        rerollBtn.setBounds(16, barY + 62, 120, 40);
-
-        // Five shop cards, centred.
-        int cardW = 150, cardH = shopH - 20;
-        int cardsX = Math.max(152, w / 2 - (cardW * 5 + 4 * 10) / 2);
+        xpBtn.setBounds(AutoHud.xpButton(w, h));
+        rerollBtn.setBounds(AutoHud.rerollButton(w, h));
+        sellBtn.setBounds(AutoHud.sellButton(w, h));
         for (int i = 0; i < 5; i++) {
-            shopCards[i].setBounds(cardsX + i * (cardW + 10), barY + 10, cardW, cardH);
+            shopCards[i].setBounds(AutoHud.shopCard(w, h, i));
         }
-
-        // Sell button on the right of the shop bar.
-        sellBtn.setBounds(w - 170, barY + 34, 150, 48);
-
-        // Bench strip above the shop bar.
-        int slot = 58;
-        int benchX = w / 2 - (slot * 9 + 8 * 4) / 2;
-        int benchY = barY - slot - 10;
         for (int i = 0; i < 9; i++) {
-            benchSlots[i].setBounds(benchX + i * (slot + 4), benchY, slot, slot);
+            benchSlots[i].setBounds(AutoHud.benchSlot(w, h, i));
         }
 
-        // Item bench: two columns on the lower left, above the shop bar.
         itemSlots.clear();
-        AutoClient.You you = client.you();
-        int n = you == null ? 0 : you.items().size();
+        int n = itemCount();
         for (int i = 0; i < n; i++) {
-            int col = i % 2, row = i / 2;
-            itemSlots.add(new Rectangle(14 + col * 40, barY - 60 - row * 40, 36, 36));
+            itemSlots.add(AutoHud.itemSlot(w, h, i));
         }
+
+        viewPanelRect.setBounds(AutoHud.viewPanel(w, h));
+        viewCloseRect.setBounds(viewPanelRect.x + viewPanelRect.width - 36,
+                viewPanelRect.y + 10, 26, 26);
     }
 
     private void computeHover(InputManager input) {
@@ -414,6 +635,7 @@ public class AutoBattlerScene extends AbstractScene {
         hoverItem = -1;
         hoverUnit = null;
         hoverTrait = null;
+        if (viewingId >= 0) return; // the scout overlay owns the pointer
 
         for (int i = 0; i < 9; i++) {
             if (benchSlots[i].contains(mx, my)) hoverBench = i;
@@ -574,6 +796,14 @@ public class AutoBattlerScene extends AbstractScene {
      * that don't turn into a drag (and for phases where dragging is disabled).
      */
     private void resolveClick(AutoClient.You you, int mx, int my) {
+        // Scouting: clicking a standings row opens that player's board.
+        for (int i = 0; i < standingRects.size() && i < standingIds.size(); i++) {
+            if (standingRects.get(i).contains(mx, my)) {
+                openView(standingIds.get(i));
+                ctx.sfx(AudioManager.Sfx.CLICK);
+                return;
+            }
+        }
         if (hoverShop >= 0) {
             client.sendBuy(hoverShop);
             ctx.sfx(AudioManager.Sfx.CLICK);
@@ -646,6 +876,52 @@ public class AutoBattlerScene extends AbstractScene {
         return null;
     }
 
+    // --- board scouting -------------------------------------------------------------
+
+    private void openView(int playerId) {
+        viewingId = playerId;
+        viewRefresh = 0; // request immediately
+    }
+
+    private void closeView() {
+        viewingId = -1;
+    }
+
+    /** While the scout overlay is open: keep it fresh, route clicks, close it. */
+    private void updateViewOverlay(double dt, InputManager input) {
+        viewRefresh -= dt;
+        if (viewRefresh <= 0) {
+            viewRefresh = 1.5; // boards change while scouting; poll for updates
+            client.sendView(viewingId);
+        }
+        if (input.isRightMouseJustPressed()) {
+            closeView();
+            return;
+        }
+        if (!input.isMouseJustPressed()) return;
+        int mx = input.getMouseX();
+        int my = input.getMouseY();
+        // Clicking another standings row switches the scouted player.
+        for (int i = 0; i < standingRects.size() && i < standingIds.size(); i++) {
+            if (standingRects.get(i).contains(mx, my)) {
+                openView(standingIds.get(i));
+                ctx.sfx(AudioManager.Sfx.CLICK);
+                return;
+            }
+        }
+        if (viewCloseRect.contains(mx, my) || !viewPanelRect.contains(mx, my)) {
+            closeView();
+        }
+    }
+
+    private UnitInstance findOwn(int unitId) {
+        AutoClient.You you = client.you();
+        if (you == null) return null;
+        for (UnitInstance u : you.bench()) if (u.id == unitId) return u;
+        for (UnitInstance u : you.board()) if (u.id == unitId) return u;
+        return null;
+    }
+
     // ------------------------------------------------------------------ render
 
     @Override
@@ -659,9 +935,11 @@ public class AutoBattlerScene extends AbstractScene {
 
         layoutHud();
         drawBoard(g);
-        if (client.phase() != null && client.phase().phase() == AutoGame.Phase.FIGHT
-                && client.combatLatest() != null) {
+        if (fighting()) {
+            drawCorpses(g);
             drawCombatUnits(g);
+            drawMissiles(g);
+            drawSlashes(g);
         } else {
             drawPlanningUnits(g);
         }
@@ -669,7 +947,11 @@ public class AutoBattlerScene extends AbstractScene {
         drawFloaters(g);
 
         drawTopHud(g);
-        drawSynergies(g);
+        if (fighting()) {
+            drawDamagePanel(g);
+        } else {
+            drawSynergies(g);
+        }
         drawStandings(g);
         drawBench(g);
         drawShopBar(g);
@@ -677,24 +959,41 @@ public class AutoBattlerScene extends AbstractScene {
         drawToasts(g);
         drawBanner(g);
         drawDrag(g);
-        if (!dragging) drawTooltips(g);
+        if (!dragging && viewingId < 0) drawTooltips(g);
+        drawBoardView(g);
         drawOverlays(g);
     }
 
     private void drawBoard(Graphics2D g) {
         boolean plan = planning();
+        BufferedImage tileA = Skins.frame("board/tile_a", animClock);
+        BufferedImage tileB = Skins.frame("board/tile_b", animClock);
         for (int r = 0; r < BattleSim.ROWS; r++) {
             for (int c = 0; c < BattleSim.COLS; c++) {
                 Polygon p = tilePolygon(c, r);
                 boolean own = r >= BattleSim.ROWS / 2;
-                Color base = (c + r) % 2 == 0
-                        ? new Color(40, 46, 66) : new Color(46, 52, 74);
-                if (plan && own) {
-                    base = (c + r) % 2 == 0
-                            ? new Color(48, 60, 86) : new Color(54, 66, 94);
+                BufferedImage skin = (c + r) % 2 == 0 ? tileA : tileB;
+                if (skin != null) {
+                    // Skinned board: stretch the frame over the tile diamond.
+                    Shape oldClip = g.getClip();
+                    g.clip(p);
+                    Rectangle b = p.getBounds();
+                    g.drawImage(skin, b.x, b.y, b.width, b.height, null);
+                    g.setClip(oldClip);
+                    if (plan && own) {
+                        g.setColor(new Color(90, 130, 200, 40));
+                        g.fillPolygon(p);
+                    }
+                } else {
+                    Color base = (c + r) % 2 == 0
+                            ? new Color(40, 46, 66) : new Color(46, 52, 74);
+                    if (plan && own) {
+                        base = (c + r) % 2 == 0
+                                ? new Color(48, 60, 86) : new Color(54, 66, 94);
+                    }
+                    g.setColor(base);
+                    g.fillPolygon(p);
                 }
-                g.setColor(base);
-                g.fillPolygon(p);
                 if (plan && c == hoverCol && r == hoverRow && own) {
                     g.setColor(new Color(120, 170, 255, 70));
                     g.fillPolygon(p);
@@ -731,6 +1030,58 @@ public class AutoBattlerScene extends AbstractScene {
         return p;
     }
 
+    /**
+     * The image for a unit right now: the assigned skin frame for its
+     * animation state when one exists (falling back to the unit's idle skin),
+     * else the procedural figure. Callers draw it scaled to {@code size}.
+     */
+    private BufferedImage unitImage(UnitDef def, int size, boolean friendly,
+                                    AnimState state, double stateTime) {
+        double t = state == AnimState.IDLE || state == AnimState.WALK ? animClock : stateTime;
+        BufferedImage skin = Skins.unitFrame(def.key, state.key(), t);
+        return skin != null ? skin : AutoSprites.unit(def, size, friendly);
+    }
+
+    /** An item gem image: its skin frame when assigned, else the procedural gem. */
+    private BufferedImage itemImage(AutoItem item, int size) {
+        BufferedImage skin = Skins.frame("item/" + item.key, animClock);
+        return skin != null ? skin : AutoSprites.item(item, size);
+    }
+
+    /**
+     * Draw one unit anchored at its cell's screen point with its animation
+     * state's procedural motion: walking bobs, attacking pops forward,
+     * getting hit jitters, casting glows.
+     */
+    private void drawUnitInWorld(Graphics2D g, UnitDef def, int size, boolean friendly,
+                                 AnimState state, double stateTime, int cx, int cy) {
+        int dx = 0, dy = 0;
+        switch (state) {
+            case WALK -> dy = -(int) (Math.abs(Math.sin(animClock * 9)) * size * 0.06);
+            case ATTACK -> dy = -(int) (size * 0.07);
+            case HIT -> dx = (int) (Math.sin(animClock * 55) * size * 0.05);
+            default -> { }
+        }
+        if (state == AnimState.CAST) {
+            // Casting: a pulsing accent ring on the ground.
+            int rw = (int) (size * (0.8 + 0.15 * Math.sin(animClock * 12)));
+            g.setColor(new Color(def.accent.getRed(), def.accent.getGreen(),
+                    def.accent.getBlue(), 120));
+            g.setStroke(new BasicStroke(2.5f));
+            g.drawOval(cx - rw / 2, cy - rw / 6 + size / 4, rw, rw / 3);
+            g.setStroke(new BasicStroke(1f));
+        }
+        BufferedImage img = unitImage(def, size, friendly, state, stateTime);
+        g.drawImage(img, cx - size / 2 + dx, cy - size + size / 4 + dy, size, size, null);
+        if (state == AnimState.HIT) {
+            // Hit flash: a brief red ring around the figure.
+            g.setColor(new Color(235, 90, 80, 110));
+            g.setStroke(new BasicStroke(2f));
+            g.drawOval(cx - size / 2 + dx, cy - size + size / 4 + dy, size, size);
+            g.setStroke(new BasicStroke(1f));
+        }
+    }
+
     private void drawPlanningUnits(Graphics2D g) {
         AutoClient.You you = client.you();
         if (you == null) return;
@@ -748,8 +1099,7 @@ public class AutoBattlerScene extends AbstractScene {
                 g.drawPolygon(tilePolygon(u.col, u.row));
                 g.setStroke(new BasicStroke(1f));
             }
-            BufferedImage img = AutoSprites.unit(def, size, true);
-            g.drawImage(img, out[0] - size / 2, out[1] - size + size / 4, null);
+            drawUnitInWorld(g, def, size, true, AnimState.IDLE, animClock, out[0], out[1]);
             AutoSprites.drawStars(g, u.star, out[0], out[1] - size + size / 8, 8);
             drawItemPips(g, u, out[0], out[1] + size / 6);
         }
@@ -790,8 +1140,10 @@ public class AutoBattlerScene extends AbstractScene {
             if (def == null || pos == null) continue;
             camera.worldToScreen((pos[0] + 0.5) * TILE, (pos[1] + 0.5) * TILE, out);
             boolean friendly = u.team() == friendlyTeam;
-            BufferedImage img = AutoSprites.unit(def, size, friendly);
-            g.drawImage(img, out[0] - size / 2, out[1] - size + size / 4, null);
+            UnitFx fx = unitFx.get(u.id());
+            AnimState state = fx != null ? fx.state : u.state();
+            double stateTime = fx != null ? fx.time : 0;
+            drawUnitInWorld(g, def, size, friendly, state, stateTime, out[0], out[1]);
             AutoSprites.drawStars(g, u.star(), out[0], out[1] - size + size / 12, 7);
 
             // Health + mana bars.
@@ -808,6 +1160,97 @@ public class AutoBattlerScene extends AbstractScene {
                 g.setColor(new Color(90, 150, 255));
                 g.fillRect(bx, by + 6, (int) (bw * u.mana() / u.manaMax()), 3);
             }
+        }
+    }
+
+    /** Fading corpses where units died, so deaths read on the board. */
+    private void drawCorpses(Graphics2D g) {
+        if (corpses.isEmpty()) return;
+        int size = (int) (46 * camera.zoom);
+        int[] out = new int[2];
+        Composite old = g.getComposite();
+        for (Corpse c : corpses) {
+            float a = (float) Math.max(0, 1 - c.age / CORPSE_SECONDS);
+            camera.worldToScreen(c.wx, c.wy, out);
+            g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, a * 0.8f));
+            BufferedImage img = unitImage(c.def, size, c.friendly, AnimState.DEATH, c.age);
+            int sink = (int) (c.age * 12);
+            g.drawImage(img, out[0] - size / 2, out[1] - size + size / 4 + sink,
+                    size, size, null);
+        }
+        g.setComposite(old);
+    }
+
+    /** In-flight projectiles: skinned frames, or procedural arrows/orbs/bolts. */
+    private void drawMissiles(Graphics2D g) {
+        if (missiles.isEmpty()) return;
+        int[] out = new int[2];
+        int[] ahead = new int[2];
+        for (Missile m : missiles) {
+            camera.worldToScreen(m.x, m.y, out);
+            camera.worldToScreen(m.x + m.vx * 0.05, m.y + m.vy * 0.05, ahead);
+            double angle = Math.atan2(ahead[1] - out[1], ahead[0] - out[0]);
+            int size = (int) (18 * camera.zoom);
+
+            BufferedImage skin = Skins.frame("projectile/" + m.kind, animClock);
+            if (skin != null) {
+                AffineTransform oldTx = g.getTransform();
+                g.translate(out[0], out[1]);
+                g.rotate(angle);
+                g.drawImage(skin, -size / 2, -size / 2, size, size, null);
+                g.setTransform(oldTx);
+                continue;
+            }
+            switch (m.kind) {
+                case "arrow" -> {
+                    int len = size;
+                    int tx = (int) (Math.cos(angle) * len / 2);
+                    int ty = (int) (Math.sin(angle) * len / 2);
+                    g.setColor(m.color);
+                    g.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND,
+                            BasicStroke.JOIN_ROUND));
+                    g.drawLine(out[0] - tx, out[1] - ty, out[0] + tx, out[1] + ty);
+                    g.fillOval(out[0] + tx - 3, out[1] + ty - 3, 6, 6);
+                    g.setStroke(new BasicStroke(1f));
+                }
+                case "orb" -> {
+                    g.setColor(new Color(m.color.getRed(), m.color.getGreen(),
+                            m.color.getBlue(), 90));
+                    g.fillOval(out[0] - size / 2, out[1] - size / 2, size, size);
+                    g.setColor(m.color);
+                    g.fillOval(out[0] - size / 4, out[1] - size / 4, size / 2, size / 2);
+                    g.setColor(Color.WHITE);
+                    g.fillOval(out[0] - size / 8, out[1] - size / 8, size / 4, size / 4);
+                }
+                default -> { // bolt: a small rotated diamond
+                    AffineTransform oldTx = g.getTransform();
+                    g.translate(out[0], out[1]);
+                    g.rotate(angle);
+                    g.setColor(m.color);
+                    int hw = Math.max(4, size / 3);
+                    g.fillPolygon(new int[]{-hw, 0, hw, 0}, new int[]{0, -hw / 2, 0, hw / 2}, 4);
+                    g.setTransform(oldTx);
+                }
+            }
+        }
+    }
+
+    /** Melee impact arcs, expanding and fading over their short life. */
+    private void drawSlashes(Graphics2D g) {
+        if (slashes.isEmpty()) return;
+        int[] out = new int[2];
+        for (Slash s : slashes) {
+            double t = s.age / SLASH_SECONDS;
+            int alpha = (int) (220 * (1 - t));
+            int r = (int) ((14 + t * 22) * camera.zoom);
+            camera.worldToScreen(s.wx, s.wy, out);
+            g.setColor(new Color(s.color.getRed(), s.color.getGreen(),
+                    s.color.getBlue(), Math.max(0, alpha)));
+            g.setStroke(new BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            int startAngle = (int) (40 - t * 60);
+            g.drawArc(out[0] - r, out[1] - r - (int) (10 * camera.zoom), r * 2, r * 2,
+                    startAngle, 100);
+            g.setStroke(new BasicStroke(1f));
         }
     }
 
@@ -840,13 +1283,14 @@ public class AutoBattlerScene extends AbstractScene {
         if (m != null && phase.phase() == AutoGame.Phase.FIGHT && !phase.pve()) {
             title += "  ·  vs " + m.opponent();
         }
+        Rectangle band = AutoHud.titleBand(viewportWidth);
         g.setFont(new Font("SansSerif", Font.BOLD, 20));
         g.setColor(new Color(235, 238, 250));
-        drawCentered(g, title, viewportWidth / 2, 30);
+        drawCentered(g, trim(g, title, band.width), viewportWidth / 2, band.y + 22);
         g.setFont(new Font("SansSerif", Font.PLAIN, 16));
         g.setColor(new Color(160, 168, 190));
         drawCentered(g, phaseName + "  ·  " + (int) Math.ceil(phase.leftNow()) + "s",
-                viewportWidth / 2, 54);
+                viewportWidth / 2, band.y + 46);
 
         int ping = client.pingMillis();
         if (ping >= 0) {
@@ -878,17 +1322,23 @@ public class AutoBattlerScene extends AbstractScene {
     private void drawSynergies(Graphics2D g) {
         traitRows.clear();
         List<TraitCount> rows = synergyRows();
-        int x = 14, y = 80;
+        Rectangle panel = AutoHud.leftPanel(viewportWidth, viewportHeight, itemCount());
+        int x = panel.x + 4, y = panel.y + 16;
         g.setFont(new Font("SansSerif", Font.BOLD, 14));
         g.setColor(new Color(160, 168, 190));
-        g.drawString("Synergies", x, y - 8);
+        g.drawString("Synergies", x, y - 4);
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         if (rows.isEmpty()) {
             g.setColor(new Color(110, 115, 135));
-            g.drawString("Field units to activate traits", x, y + 12);
+            g.drawString("Field units to activate traits", x, y + 16);
             return;
         }
-        for (TraitCount tc : rows) {
+        // Cap the list so it can never grow into the item bench below it.
+        int maxRows = Math.max(1, (panel.y + panel.height - (y + 6)) / 26);
+        int shown = Math.min(rows.size(), rows.size() > maxRows ? maxRows - 1 : maxRows);
+        y += 8;
+        for (int i = 0; i < shown; i++) {
+            TraitCount tc = rows.get(i);
             int tier = tc.trait.tier(tc.count);
             Rectangle row = new Rectangle(x, y - 14, 190, 22);
             traitRows.add(row);
@@ -907,25 +1357,139 @@ public class AutoBattlerScene extends AbstractScene {
             g.drawString(tc.trait.label + "  " + tc.count + "  (" + marks + ")", x + 20, y + 1);
             y += 26;
         }
+        if (shown < rows.size()) {
+            g.setColor(new Color(110, 115, 135));
+            g.drawString("+" + (rows.size() - shown) + " more…", x + 20, y + 1);
+        }
+    }
+
+    /**
+     * The combat damage meter: how much damage each unit in the fight has
+     * dealt, split by type (attack / ability), plus healing done. Replaces the
+     * synergy panel while a battle runs.
+     */
+    private void drawDamagePanel(Graphics2D g) {
+        traitRows.clear(); // no synergy hover targets during combat
+        AutoClient.CombatFrame frame = client.combatLatest();
+        if (frame == null) return;
+        boolean home = isHomeSide();
+        int friendlyTeam = home ? BattleSim.HOME : BattleSim.AWAY;
+
+        List<AutoClient.CombatUnit> rows = new ArrayList<>();
+        double maxTotal = 1;
+        for (AutoClient.CombatUnit u : frame.units()) {
+            double total = u.dmgPhysical() + u.dmgMagic();
+            if (total >= 1 || u.healing() >= 1) rows.add(u);
+            maxTotal = Math.max(maxTotal, total);
+        }
+        rows.sort(Comparator.comparingDouble(
+                (AutoClient.CombatUnit u) -> u.dmgPhysical() + u.dmgMagic()).reversed());
+
+        Rectangle panel = AutoHud.leftPanel(viewportWidth, viewportHeight, itemCount());
+        int x = panel.x + 4, y = panel.y + 16;
+        g.setFont(new Font("SansSerif", Font.BOLD, 14));
+        g.setColor(new Color(160, 168, 190));
+        g.drawString("Damage", x, y - 4);
+        // Legend: the damage-type colours.
+        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        int lx = x + 66;
+        lx = legendSwatch(g, lx, y - 12, DMG_PHYSICAL, "attack");
+        lx = legendSwatch(g, lx, y - 12, DMG_MAGIC, "ability");
+        legendSwatch(g, lx, y - 12, DMG_HEAL, "heal");
+
+        if (rows.isEmpty()) {
+            g.setFont(new Font("SansSerif", Font.PLAIN, 13));
+            g.setColor(new Color(110, 115, 135));
+            g.drawString("No damage dealt yet", x, y + 16);
+            return;
+        }
+
+        int rowH = AutoHud.DAMAGE_ROW_HEIGHT;
+        int maxRows = Math.max(1, (panel.y + panel.height - (y + 4)) / rowH);
+        int shown = Math.min(rows.size(), maxRows);
+        int barMax = panel.width - 18;
+        y += 6;
+        for (int i = 0; i < shown; i++) {
+            AutoClient.CombatUnit u = rows.get(i);
+            UnitDef def = AutoUnits.get(u.key());
+            boolean friendly = u.team() == friendlyTeam;
+            double phys = u.dmgPhysical(), mag = u.dmgMagic(), heal = u.healing();
+            double total = phys + mag;
+
+            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
+            Color nameColor = u.dead() ? new Color(115, 118, 136)
+                    : friendly ? new Color(205, 225, 250) : new Color(240, 185, 175);
+            g.setColor(nameColor);
+            String name = def != null ? def.name : u.key();
+            g.drawString(trim(g, name, barMax - 58), x, y + 10);
+
+            String amount = fmtAmount(total) + (heal >= 1 ? "  +" + fmtAmount(heal) : "");
+            g.setColor(heal >= 1 ? DMG_HEAL : new Color(200, 206, 226));
+            FontMetrics fm = g.getFontMetrics();
+            g.drawString(amount, x + barMax - fm.stringWidth(amount), y + 10);
+
+            // Stacked bar: physical then magic, scaled to the fight's top damage.
+            int bw = (int) (barMax * Math.min(1, total / maxTotal));
+            int physW = total <= 0 ? 0 : (int) (bw * phys / total);
+            g.setColor(new Color(15, 15, 22, 200));
+            g.fillRect(x, y + 14, barMax, 5);
+            g.setColor(DMG_PHYSICAL);
+            g.fillRect(x, y + 14, physW, 5);
+            g.setColor(DMG_MAGIC);
+            g.fillRect(x + physW, y + 14, Math.max(0, bw - physW), 5);
+            y += rowH;
+        }
+    }
+
+    private static int legendSwatch(Graphics2D g, int x, int y, Color color, String label) {
+        g.setColor(color);
+        g.fillRect(x, y, 8, 8);
+        g.setColor(new Color(150, 156, 178));
+        g.drawString(label, x + 11, y + 8);
+        return x + 11 + g.getFontMetrics().stringWidth(label) + 8;
+    }
+
+    /** Compact damage numbers: 843, 1.2k, 24k. */
+    private static String fmtAmount(double v) {
+        if (v >= 10_000) return (int) (v / 1000) + "k";
+        if (v >= 1000) return String.format("%.1fk", v / 1000);
+        return Integer.toString((int) v);
     }
 
     private void drawStandings(Graphics2D g) {
+        standingRects.clear();
+        standingIds.clear();
         List<AutoClient.Standing> rows = new ArrayList<>(client.standings());
         rows.sort((a, b) -> {
             if (a.alive() != b.alive()) return a.alive() ? -1 : 1;
             if (a.alive()) return b.hp() - a.hp();
             return a.place() - b.place();
         });
-        int x = viewportWidth - 205, y = 80;
+        Rectangle panel = AutoHud.standingsPanel(viewportWidth, viewportHeight);
+        int x = panel.x + 6, y = panel.y + 16;
         g.setFont(new Font("SansSerif", Font.BOLD, 14));
         g.setColor(new Color(160, 168, 190));
-        g.drawString("Players", x, y - 8);
+        g.drawString("Players", x, y - 4);
+        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        g.setColor(new Color(110, 115, 135));
+        g.drawString("click a name to scout", x + 66, y - 4);
+
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-        for (AutoClient.Standing s : rows) {
+        int rowH = AutoHud.STANDING_ROW_HEIGHT;
+        int maxRows = Math.max(1, (panel.y + panel.height - (y + 6)) / rowH);
+        int shown = Math.min(rows.size(), rows.size() > maxRows ? maxRows - 1 : maxRows);
+        y += 10;
+        for (int i = 0; i < shown; i++) {
+            AutoClient.Standing s = rows.get(i);
             boolean me = s.id() == client.localId();
-            if (me) {
-                g.setColor(new Color(50, 58, 84, 180));
-                g.fillRoundRect(x - 6, y - 14, 196, 24, 8, 8);
+            Rectangle rowRect = new Rectangle(panel.x, y - 14, panel.width - 4, 24);
+            standingRects.add(rowRect);
+            standingIds.add(s.id());
+            boolean hovered = viewingId < 0
+                    ? rowRect.contains(lastMouseX, lastMouseY) : s.id() == viewingId;
+            if (me || hovered) {
+                g.setColor(hovered ? new Color(62, 72, 104, 200) : new Color(50, 58, 84, 180));
+                g.fillRoundRect(rowRect.x, rowRect.y, rowRect.width, rowRect.height, 8, 8);
             }
             g.setColor(s.alive() ? (me ? new Color(255, 220, 120) : new Color(220, 224, 238))
                     : new Color(105, 108, 126));
@@ -942,7 +1506,11 @@ public class AutoBattlerScene extends AbstractScene {
                 g.drawString(String.valueOf(s.hp()), x + 132, y + 1);
                 g.setFont(new Font("SansSerif", Font.PLAIN, 14));
             }
-            y += 27;
+            y += rowH;
+        }
+        if (shown < rows.size()) {
+            g.setColor(new Color(110, 115, 135));
+            g.drawString("+" + (rows.size() - shown) + " more…", x, y + 2);
         }
     }
 
@@ -974,8 +1542,9 @@ public class AutoBattlerScene extends AbstractScene {
                 g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
                 g.setStroke(new BasicStroke(1f));
             }
-            BufferedImage img = AutoSprites.unit(def, r.width - 10, true);
-            g.drawImage(img, r.x + 5, r.y + 2, null);
+            int size = r.width - 10;
+            BufferedImage img = unitImage(def, size, true, AnimState.IDLE, animClock);
+            g.drawImage(img, r.x + 5, r.y + 2, size, size, null);
             AutoSprites.drawStars(g, u.star, r.x + r.width / 2, r.y + 2, 7);
             drawItemPips(g, u, r.x + r.width / 2, r.y + r.height - 12);
         }
@@ -996,20 +1565,29 @@ public class AutoBattlerScene extends AbstractScene {
         drawButton(g, xpBtn, "Buy XP  4g  (F)", you.gold() >= 4 && you.level() < 9);
         drawButton(g, rerollBtn, "Reroll  2g  (D)", you.gold() >= 2);
 
-        // Gold / level / XP readout above the buttons.
-        g.setFont(new Font("SansSerif", Font.BOLD, 17));
+        // Gold / level / XP / streak readout: two short lines that stay left of
+        // the (centred) bench strip — see AutoHud.economyLine.
+        Rectangle eco = AutoHud.economyLine(w, h);
+        g.setFont(new Font("SansSerif", Font.BOLD, 15));
         g.setColor(new Color(255, 214, 100));
-        g.drawString(you.gold() + " gold", 16, barY - 14);
+        String goldText = you.gold() + "g";
+        g.drawString(goldText, eco.x + 2, eco.y + 14);
+        int cx = eco.x + 2 + g.getFontMetrics().stringWidth(goldText);
         g.setFont(new Font("SansSerif", Font.PLAIN, 13));
         g.setColor(new Color(170, 176, 198));
-        String xp = you.level() >= 9 ? "max" : you.xp() + "/" + you.xpNeed() + " xp";
-        g.drawString("Level " + you.level() + "  ·  " + xp
-                + "  ·  " + you.board().size() + "/" + you.boardCap() + " fielded", 100, barY - 14);
+        String lvl = " · Level " + you.level();
+        g.drawString(lvl, cx, eco.y + 14);
+        cx += g.getFontMetrics().stringWidth(lvl);
         if (you.streak() != 0) {
             g.setColor(you.streak() > 0 ? new Color(130, 220, 140) : new Color(230, 130, 110));
-            g.drawString((you.streak() > 0 ? "W" : "L") + Math.abs(you.streak()) + " streak",
-                    340, barY - 14);
+            g.drawString("  " + (you.streak() > 0 ? "W" : "L") + Math.abs(you.streak()),
+                    cx, eco.y + 14);
         }
+        g.setFont(new Font("SansSerif", Font.PLAIN, 12));
+        g.setColor(new Color(150, 156, 178));
+        String xp = you.level() >= 9 ? "max xp" : you.xp() + "/" + you.xpNeed() + " xp";
+        g.drawString(trim(g, xp + " · " + you.board().size() + "/" + you.boardCap()
+                + " fielded", eco.width - 4), eco.x + 2, eco.y + 34);
 
         // Shop cards.
         for (int i = 0; i < 5; i++) {
@@ -1030,16 +1608,16 @@ public class AutoBattlerScene extends AbstractScene {
             g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
             g.setStroke(new BasicStroke(1f));
 
-            BufferedImage img = AutoSprites.unit(def, 54, true);
-            g.drawImage(img, r.x + 6, r.y + r.height / 2 - 27, null);
+            BufferedImage img = unitImage(def, 54, true, AnimState.IDLE, animClock);
+            g.drawImage(img, r.x + 6, r.y + r.height / 2 - 27, 54, 54, null);
             g.setFont(new Font("SansSerif", Font.BOLD, 14));
             g.setColor(new Color(232, 236, 248));
             g.drawString(trim(g, def.name, r.width - 72), r.x + 62, r.y + 22);
             g.setFont(new Font("SansSerif", Font.PLAIN, 12));
             g.setColor(def.origin.color);
-            g.drawString(def.origin.label, r.x + 62, r.y + 42);
+            g.drawString(trim(g, def.origin.label, r.width - 96), r.x + 62, r.y + 42);
             g.setColor(def.clazz.color);
-            g.drawString(def.clazz.label, r.x + 62, r.y + 58);
+            g.drawString(trim(g, def.clazz.label, r.width - 96), r.x + 62, r.y + 58);
             g.setColor(new Color(255, 214, 100));
             g.setFont(new Font("SansSerif", Font.BOLD, 14));
             g.drawString(def.cost + "g", r.x + r.width - 30, r.y + r.height - 10);
@@ -1057,14 +1635,6 @@ public class AutoBattlerScene extends AbstractScene {
                         new Color(120, 55, 55), new Color(235, 140, 120));
             }
         }
-    }
-
-    private UnitInstance findOwn(int unitId) {
-        AutoClient.You you = client.you();
-        if (you == null) return null;
-        for (UnitInstance u : you.bench()) if (u.id == unitId) return u;
-        for (UnitInstance u : you.board()) if (u.id == unitId) return u;
-        return null;
     }
 
     private void drawButton(Graphics2D g, Rectangle r, String label, boolean enabled) {
@@ -1089,8 +1659,8 @@ public class AutoBattlerScene extends AbstractScene {
         if (you == null || you.items().isEmpty()) return;
         g.setFont(new Font("SansSerif", Font.BOLD, 12));
         g.setColor(new Color(160, 168, 190));
-        Rectangle first = itemSlots.isEmpty() ? null : itemSlots.get(itemSlots.size() - 1);
-        if (first != null) g.drawString("Items", 14, first.y - 6);
+        Rectangle top = itemSlots.isEmpty() ? null : itemSlots.get(itemSlots.size() - 1);
+        if (top != null) g.drawString("Items", 14, top.y - 6);
         for (int i = 0; i < itemSlots.size() && i < you.items().size(); i++) {
             Rectangle r = itemSlots.get(i);
             AutoItem item = AutoItems.get(you.items().get(i));
@@ -1103,7 +1673,8 @@ public class AutoBattlerScene extends AbstractScene {
             g.drawRoundRect(r.x, r.y, r.width, r.height, 8, 8);
             g.setStroke(new BasicStroke(1f));
             if (item != null) {
-                g.drawImage(AutoSprites.item(item, r.width - 8), r.x + 4, r.y + 4, null);
+                g.drawImage(itemImage(item, r.width - 8), r.x + 4, r.y + 4,
+                        r.width - 8, r.height - 8, null);
             }
         }
     }
@@ -1124,7 +1695,7 @@ public class AutoBattlerScene extends AbstractScene {
             if (u == null || u.def() == null) return;
             highlightUnitDrop(g);
             int size = (int) (52 * camera.zoom);
-            BufferedImage img = AutoSprites.unit(u.def(), size, true);
+            BufferedImage img = unitImage(u.def(), size, true, AnimState.IDLE, animClock);
             drawGhost(g, img, lastMouseX, lastMouseY, size);
             AutoSprites.drawStars(g, u.star, lastMouseX, lastMouseY - size / 2, 8);
         } else if (grabItemIndex >= 0 && grabItemIndex < you.items().size()) {
@@ -1132,7 +1703,7 @@ public class AutoBattlerScene extends AbstractScene {
             if (item == null) return;
             highlightItemDrop(g, you);
             int size = 40;
-            drawGhost(g, AutoSprites.item(item, size), lastMouseX, lastMouseY, size);
+            drawGhost(g, itemImage(item, size), lastMouseX, lastMouseY, size);
         }
     }
 
@@ -1140,7 +1711,7 @@ public class AutoBattlerScene extends AbstractScene {
     private void drawGhost(Graphics2D g, BufferedImage img, int cx, int cy, int size) {
         Composite old = g.getComposite();
         g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.8f));
-        g.drawImage(img, cx - size / 2, cy - size / 2, null);
+        g.drawImage(img, cx - size / 2, cy - size / 2, size, size, null);
         g.setComposite(old);
     }
 
@@ -1219,6 +1790,148 @@ public class AutoBattlerScene extends AbstractScene {
         g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(),
                 (int) (255 * fade)));
         drawCentered(g, text, viewportWidth / 2, 120);
+    }
+
+    // --- the scout overlay -----------------------------------------------------------
+
+    /** The board-view overlay: another player's board, bench, and stats. */
+    private void drawBoardView(Graphics2D g) {
+        if (viewingId < 0) return;
+        Rectangle p = viewPanelRect;
+        g.setColor(new Color(8, 9, 16, 120));
+        g.fillRect(0, 0, viewportWidth, viewportHeight);
+        g.setColor(new Color(16, 18, 32, 245));
+        g.fillRoundRect(p.x, p.y, p.width, p.height, 14, 14);
+        g.setColor(new Color(90, 100, 140));
+        g.drawRoundRect(p.x, p.y, p.width, p.height, 14, 14);
+
+        // Close button.
+        g.setColor(new Color(45, 50, 70));
+        g.fillRoundRect(viewCloseRect.x, viewCloseRect.y, viewCloseRect.width,
+                viewCloseRect.height, 8, 8);
+        g.setColor(new Color(200, 206, 226));
+        g.drawRoundRect(viewCloseRect.x, viewCloseRect.y, viewCloseRect.width,
+                viewCloseRect.height, 8, 8);
+        g.setFont(new Font("SansSerif", Font.BOLD, 13));
+        drawCentered(g, "✕", viewCloseRect.x + viewCloseRect.width / 2,
+                viewCloseRect.y + 18);
+
+        AutoClient.BoardView bv = client.boardView();
+        if (bv == null || bv.id() != viewingId) {
+            g.setFont(new Font("SansSerif", Font.PLAIN, 16));
+            g.setColor(new Color(160, 168, 190));
+            drawCentered(g, "Fetching board…", p.x + p.width / 2, p.y + p.height / 2);
+            return;
+        }
+
+        // Title.
+        g.setFont(new Font("SansSerif", Font.BOLD, 20));
+        g.setColor(new Color(235, 238, 250));
+        String title = bv.name() + (bv.bot() ? "  [BOT]" : "");
+        g.drawString(trim(g, title, p.width - 260), p.x + 18, p.y + 32);
+        if (!bv.alive()) {
+            g.setFont(new Font("SansSerif", Font.PLAIN, 13));
+            g.setColor(new Color(230, 130, 110));
+            g.drawString("Eliminated" + (bv.place() > 0 ? "  ·  #" + bv.place() : ""),
+                    p.x + 18, p.y + 50);
+        }
+
+        // Their board (own half: rows 4-7) + bench, drawn as a flat grid.
+        int statsW = 216;
+        int cs = Math.max(24, Math.min(46,
+                Math.min((p.width - statsW - 48) / 8, (p.height - 170) / 5)));
+        int gx = p.x + 18, gy = p.y + 62;
+        for (int r = 0; r < 4; r++) {
+            for (int c = 0; c < 8; c++) {
+                g.setColor((c + r) % 2 == 0 ? new Color(40, 46, 66) : new Color(46, 52, 74));
+                g.fillRect(gx + c * cs, gy + r * cs, cs - 1, cs - 1);
+            }
+        }
+        for (UnitInstance u : bv.board()) {
+            UnitDef def = u.def();
+            int gridRow = u.row - BattleSim.ROWS / 2;
+            if (def == null || u.col < 0 || u.col >= 8 || gridRow < 0 || gridRow >= 4) continue;
+            int ux = gx + u.col * cs, uy = gy + gridRow * cs;
+            BufferedImage img = unitImage(def, cs - 6, true, AnimState.IDLE, animClock);
+            g.drawImage(img, ux + 3, uy + 2, cs - 6, cs - 6, null);
+            AutoSprites.drawStars(g, u.star, ux + cs / 2, uy + 1, 5);
+            drawItemPips(g, u, ux + cs / 2, uy + cs - 8);
+        }
+
+        // Bench strip below the board.
+        int bs = Math.max(18, cs * 8 / 9 - 2);
+        int by = gy + 4 * cs + 10;
+        g.setFont(new Font("SansSerif", Font.BOLD, 11));
+        g.setColor(new Color(130, 136, 156));
+        g.drawString("Bench", gx, by - 2);
+        for (int i = 0; i < 9; i++) {
+            g.setColor(new Color(30, 34, 52, 220));
+            g.fillRect(gx + i * (bs + 2), by + 2, bs, bs);
+        }
+        for (UnitInstance u : bv.bench()) {
+            UnitDef def = u.def();
+            if (def == null || u.bench < 0 || u.bench >= 9) continue;
+            int ux = gx + u.bench * (bs + 2);
+            BufferedImage img = unitImage(def, bs - 4, true, AnimState.IDLE, animClock);
+            g.drawImage(img, ux + 2, by + 4, bs - 4, bs - 4, null);
+            AutoSprites.drawStars(g, u.star, ux + bs / 2, by + 3, 4);
+        }
+
+        // Stats column on the right.
+        int sx = p.x + p.width - statsW;
+        int sy = p.y + 66;
+        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
+        g.setColor(new Color(15, 15, 22, 200));
+        g.fillRect(sx, sy - 12, 130, 14);
+        g.setColor(hpColor(bv.hp()));
+        g.fillRect(sx, sy - 12, (int) (130 * Math.min(1, bv.hp() / 100.0)), 14);
+        g.setColor(new Color(235, 238, 250));
+        g.drawString(bv.hp() + " HP", sx + 138, sy);
+        sy += 26;
+        g.setColor(new Color(200, 206, 226));
+        String xp = bv.xpNeed() > 0 ? bv.xp() + "/" + bv.xpNeed() + " xp" : "max";
+        g.drawString("Level " + bv.level() + "  ·  " + xp, sx, sy);
+        sy += 22;
+        g.setColor(new Color(255, 214, 100));
+        g.drawString(bv.gold() + " gold", sx, sy);
+        if (bv.streak() != 0) {
+            g.setColor(bv.streak() > 0 ? new Color(130, 220, 140) : new Color(230, 130, 110));
+            g.drawString((bv.streak() > 0 ? "W" : "L") + Math.abs(bv.streak()) + " streak",
+                    sx + 92, sy);
+        }
+        sy += 22;
+        g.setColor(new Color(200, 206, 226));
+        g.drawString(bv.board().size() + "/" + bv.boardCap() + " fielded", sx, sy);
+        sy += 28;
+
+        // Their synergies, from the scouted board.
+        g.setFont(new Font("SansSerif", Font.BOLD, 13));
+        g.setColor(new Color(160, 168, 190));
+        g.drawString("Synergies", sx, sy);
+        sy += 18;
+        g.setFont(new Font("SansSerif", Font.PLAIN, 13));
+        Map<Trait, Integer> counts = BattleSim.countTraits(bv.board());
+        List<Map.Entry<Trait, Integer>> traits = new ArrayList<>(counts.entrySet());
+        traits.sort((a, b) -> b.getValue() - a.getValue());
+        int traitBottom = p.y + p.height - 26;
+        if (traits.isEmpty()) {
+            g.setColor(new Color(110, 115, 135));
+            g.drawString("none", sx, sy);
+        }
+        for (Map.Entry<Trait, Integer> e : traits) {
+            if (sy > traitBottom) break;
+            int tier = e.getKey().tier(e.getValue());
+            g.setColor(tier > 0 ? e.getKey().color : new Color(110, 115, 135));
+            g.fillOval(sx, sy - 10, 11, 11);
+            g.setColor(tier > 0 ? new Color(230, 234, 246) : new Color(130, 136, 156));
+            g.drawString(e.getKey().label + "  " + e.getValue(), sx + 17, sy);
+            sy += 20;
+        }
+
+        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        g.setColor(new Color(130, 136, 156));
+        drawCentered(g, "Esc or click outside to close  ·  updates live",
+                p.x + p.width / 2, p.y + p.height - 10);
     }
 
     // --- tooltips ------------------------------------------------------------------

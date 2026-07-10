@@ -59,11 +59,20 @@ public final class AutoClient implements Closeable {
 
     public record CombatUnit(int id, String key, int star, int team, double x, double y,
                              double hp, double maxHp, double mana, double manaMax,
-                             boolean dead) {}
+                             boolean dead, AnimState state,
+                             double dmgPhysical, double dmgMagic, double healing) {}
 
     public record CombatFrame(List<CombatUnit> units, long atNanos) {}
 
-    public record CombatEvent(String kind, double x, double y, double amount, int team) {}
+    /** Source fields are 0 when the event has no originating unit. */
+    public record CombatEvent(String kind, double x, double y, double amount, int team,
+                              int sourceId, double sx, double sy) {}
+
+    /** A scouted board: another player's public stats + roster snapshot. */
+    public record BoardView(int id, String name, boolean bot, int hp, int level,
+                            int xp, int xpNeed, int gold, int streak, boolean alive,
+                            int place, int boardCap, List<UnitInstance> board,
+                            List<UnitInstance> bench, long atNanos) {}
 
     public record RoundResult(boolean won, boolean draw, int damage, String opponent) {}
 
@@ -89,6 +98,7 @@ public final class AutoClient implements Closeable {
     private volatile CombatFrame combatLatest;
     private volatile CombatFrame combatPrevious;
     private volatile GameOver gameOver;
+    private volatile BoardView boardView;
 
     private final ConcurrentLinkedDeque<CombatEvent> combatEvents = new ConcurrentLinkedDeque<>();
     private final ConcurrentLinkedDeque<RoundResult> results = new ConcurrentLinkedDeque<>();
@@ -181,6 +191,9 @@ public final class AutoClient implements Closeable {
 
     public GameOver gameOver() { return gameOver; }
 
+    /** The most recent scouted board ({@link #sendView}); null until one arrives. */
+    public BoardView boardView() { return boardView; }
+
     /** Drain combat events (damage numbers, deaths) since the last call. */
     public List<CombatEvent> pollCombatEvents() {
         List<CombatEvent> out = new ArrayList<>();
@@ -228,6 +241,9 @@ public final class AutoClient implements Closeable {
     }
 
     public void sendEquip(int itemIndex, int unitId) { send(AutoProto.equip(itemIndex, unitId)); }
+
+    /** Ask to scout a player's board; the reply lands in {@link #boardView()}. */
+    public void sendView(int playerId) { send(AutoProto.view(playerId)); }
 
     private void send(Map<String, Object> msg) {
         if (connected) outbox.offer(Protocol.encode(msg));
@@ -326,7 +342,10 @@ public final class AutoClient implements Closeable {
                                     dblOf(u.get("x")), dblOf(u.get("y")),
                                     dblOf(u.get("hp")), dblOf(u.get("mh")),
                                     dblOf(u.get("mn")), dblOf(u.get("mx")),
-                                    Boolean.TRUE.equals(u.get("dd"))));
+                                    Boolean.TRUE.equals(u.get("dd")),
+                                    AnimState.fromCode(str(u.get("st"))),
+                                    dblOf(u.get("dp")), dblOf(u.get("dm")),
+                                    dblOf(u.get("dh"))));
                         }
                     }
                 }
@@ -338,12 +357,21 @@ public final class AutoClient implements Closeable {
                             Map<String, Object> e = Json.asObject(em);
                             combatEvents.addLast(new CombatEvent(str(e.get("k")),
                                     dblOf(e.get("x")), dblOf(e.get("y")),
-                                    dblOf(e.get("a")), intOf(e.get("tm"))));
+                                    dblOf(e.get("a")), intOf(e.get("tm")),
+                                    intOf(e.get("su")),
+                                    dblOf(e.get("sx")), dblOf(e.get("sy"))));
                         }
                     }
                     while (combatEvents.size() > 256) combatEvents.pollFirst();
                 }
             }
+            case "board" -> boardView = new BoardView(intOf(msg.get("p")),
+                    str(msg.get("name")), Boolean.TRUE.equals(msg.get("bot")),
+                    intOf(msg.get("hp")), intOf(msg.get("lvl")), intOf(msg.get("xp")),
+                    intOf(msg.get("need")), intOf(msg.get("gold")), intOf(msg.get("streak")),
+                    Boolean.TRUE.equals(msg.get("alive")), intOf(msg.get("place")),
+                    intOf(msg.get("cap")), parseUnits(msg.get("board")),
+                    parseUnits(msg.get("bench")), System.nanoTime());
             case "result" -> results.addLast(new RoundResult(
                     Boolean.TRUE.equals(msg.get("w")), Boolean.TRUE.equals(msg.get("d")),
                     intOf(msg.get("dmg")), str(msg.get("opp"))));

@@ -24,6 +24,8 @@ import java.util.Map;
  *   client -> server   {"t":"buy","i":slot} {"t":"sell","u":unitId} {"t":"reroll"} {"t":"xp"}
  *   client -> server   {"t":"move","u":id,"b":bench} | {"t":"move","u":id,"c":col,"r":row}
  *   client -> server   {"t":"equip","i":itemIndex,"u":unitId}
+ *   client -> server   {"t":"view","p":playerId}                       (scout a board)
+ *   server -> client   {"t":"board","p":id,"name",stats...,"board":[units],"bench":[units]}
  *   server -> client   {"t":"match","opp":"Kara","ghost":false,"pve":false,"home":true}
  *   server -> client   {"t":"combat","u":[units...],"e":[events...]}            (~15 Hz)
  *   server -> client   {"t":"result","w":true,"d":false,"dmg":0,"opp":"Kara"}
@@ -33,8 +35,12 @@ import java.util.Map;
  */
 public final class AutoProto {
 
-    /** Auto-battler protocol version; independent of the world protocol's. */
-    public static final int VERSION = 1;
+    /**
+     * Auto-battler protocol version; independent of the world protocol's.
+     * v2 added board scouting ({@code view}/{@code board}) and the richer
+     * combat snapshots (animation states, damage tallies, event sources).
+     */
+    public static final int VERSION = 2;
 
     /** Default port for hosted auto-battler games (world servers use 7777). */
     public static final int DEFAULT_PORT = 7788;
@@ -213,6 +219,40 @@ public final class AutoProto {
         Map<String, Object> m = msg("equip");
         m.put("i", itemIndex);
         m.put("u", unitId);
+        return m;
+    }
+
+    /** Ask to scout another player's board (any player, any phase after lobby). */
+    public static Map<String, Object> view(int playerId) {
+        Map<String, Object> m = msg("view");
+        m.put("p", playerId);
+        return m;
+    }
+
+    /**
+     * A scouted board: the target's public stats plus their current board and
+     * bench. Everyone can request anyone's, so no private info leaks unevenly.
+     */
+    public static Map<String, Object> boardView(AutoPlayer p) {
+        Map<String, Object> m = msg("board");
+        m.put("p", p.id);
+        m.put("name", p.name);
+        m.put("bot", p.bot);
+        m.put("hp", Math.max(0, p.hp));
+        m.put("lvl", p.level);
+        m.put("xp", p.xp);
+        m.put("need", p.xpToNext());
+        m.put("gold", p.gold);
+        m.put("streak", p.streak);
+        m.put("alive", p.alive);
+        m.put("place", p.place);
+        m.put("cap", p.boardCap());
+        List<Object> board = new ArrayList<>();
+        for (UnitInstance u : p.boardUnits()) board.add(u.toMap());
+        m.put("board", board);
+        List<Object> bench = new ArrayList<>();
+        for (UnitInstance u : p.benchUnits()) bench.add(u.toMap());
+        m.put("bench", bench);
         return m;
     }
 
