@@ -1,6 +1,7 @@
 package com.larsons.engine.autobattler;
 
 import java.awt.Color;
+import java.util.List;
 
 /**
  * One auto-battler unit species: a data row, exactly like the engine's other
@@ -12,6 +13,11 @@ import java.awt.Color;
  * fireball, every Healer heals the weakest ally, and so on — {@link BattleSim}
  * switches on it when mana fills. {@code spell} is the base magnitude of that
  * ability.
+ *
+ * <p>Elemental affinities are an optional extra layer: a unit may attack with
+ * up to two {@link Element}s, resist up to two, and be weak to up to two —
+ * or carry none at all. {@link BattleSim} amplifies damage into weaknesses and
+ * dampens it into resistances, more strongly in later rounds.
  */
 public final class UnitDef {
 
@@ -37,6 +43,13 @@ public final class UnitDef {
     /** Base ability magnitude (damage / heal / buff size, per the class). */
     public final double spell;
 
+    /** Elements this unit's attacks carry (0-2; empty = plain damage). */
+    public final List<Element> attackElements;
+    /** Elements this unit takes reduced damage from (0-2). */
+    public final List<Element> resistances;
+    /** Elements this unit takes amplified damage from (0-2). */
+    public final List<Element> weaknesses;
+
     public final Color body;
     public final Color accent;
 
@@ -44,6 +57,15 @@ public final class UnitDef {
                    double hp, double ad, double attackSpeed, double range,
                    double armor, double manaMax, double spell,
                    Color body, Color accent) {
+        this(key, name, cost, origin, clazz, hp, ad, attackSpeed, range,
+                armor, manaMax, spell, List.of(), List.of(), List.of(), body, accent);
+    }
+
+    public UnitDef(String key, String name, int cost, Trait origin, Trait clazz,
+                   double hp, double ad, double attackSpeed, double range,
+                   double armor, double manaMax, double spell,
+                   List<Element> attackElements, List<Element> resistances,
+                   List<Element> weaknesses, Color body, Color accent) {
         this.key = key;
         this.name = name;
         this.cost = cost;
@@ -56,6 +78,9 @@ public final class UnitDef {
         this.armor = armor;
         this.manaMax = manaMax;
         this.spell = spell;
+        this.attackElements = List.copyOf(attackElements);
+        this.resistances = List.copyOf(resistances);
+        this.weaknesses = List.copyOf(weaknesses);
         this.body = body;
         this.accent = accent;
     }

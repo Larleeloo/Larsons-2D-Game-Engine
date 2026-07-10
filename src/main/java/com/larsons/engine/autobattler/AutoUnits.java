@@ -8,12 +8,18 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The auto-battler's unit registry: the purchasable roster (28 units across
- * five cost tiers, each with an origin + class synergy) plus the PvE creeps,
+ * The auto-battler's unit registry: the purchasable roster (43 units across
+ * five cost tiers, each with an origin + class synergy, so every synergy has
+ * several carriers and no single build path is forced) plus the PvE creeps,
  * and the two economy tables every auto-battler needs — how many copies of
  * each unit exist in the shared pool, and the shop rarity odds per player
  * level. Data-driven like the engine's other registries: adding a unit is one
  * {@code register(...)} row.
+ *
+ * <p>Elemental affinities ride along per unit ({@code atk}/{@code res}/
+ * {@code weak} helpers, up to two each): Ember units burn and fear Cryo,
+ * Frost units freeze and fear Fire, Mechs fear Corrosive, and so on. Plenty
+ * of units carry none — plain damage is always viable.
  */
 public final class AutoUnits {
 
@@ -43,17 +49,32 @@ public final class AutoUnits {
         register("squire", "Squire", 1, Trait.HOLY, Trait.WARRIOR,
                 600, 45, 0.70, 1, 25, 80, 60, c(228, 214, 160), c(255, 240, 190));
         register("sapling", "Sapling Guard", 1, Trait.FOREST, Trait.GUARDIAN,
-                650, 40, 0.60, 1, 35, 90, 70, c(96, 170, 90), c(60, 120, 60));
+                650, 40, 0.60, 1, 35, 90, 70, c(96, 170, 90), c(60, 120, 60),
+                atk(), res(), weak(Element.FIRE));
         register("ember_imp", "Ember Imp", 1, Trait.EMBER, Trait.MAGE,
-                450, 35, 0.70, 3, 10, 70, 90, c(225, 105, 60), c(255, 190, 90));
+                450, 35, 0.70, 3, 10, 70, 90, c(225, 105, 60), c(255, 190, 90),
+                atk(Element.FIRE), res(Element.FIRE), weak(Element.CRYO));
         register("frost_archer", "Frost Archer", 1, Trait.FROST, Trait.ARCHER,
-                450, 45, 0.75, 4, 10, 90, 70, c(140, 200, 235), c(220, 245, 255));
+                450, 45, 0.75, 4, 10, 90, 70, c(140, 200, 235), c(220, 245, 255),
+                atk(Element.CRYO), res(Element.CRYO), weak(Element.FIRE));
         register("storm_pugilist", "Storm Pugilist", 1, Trait.STORM, Trait.BRAWLER,
-                700, 40, 0.65, 1, 20, 100, 80, c(150, 130, 230), c(210, 200, 255));
+                700, 40, 0.65, 1, 20, 100, 80, c(150, 130, 230), c(210, 200, 255),
+                atk(Element.ELECTRIC), res(Element.ELECTRIC), weak());
         register("shade_rat", "Shade Rat", 1, Trait.SHADOW, Trait.ASSASSIN,
-                500, 50, 0.80, 1, 15, 100, 90, c(115, 100, 140), c(190, 170, 220));
+                500, 50, 0.80, 1, 15, 100, 90, c(115, 100, 140), c(190, 170, 220),
+                atk(Element.CORROSIVE), res(), weak(Element.ELECTRIC));
         register("cog_pup", "Cog Pup", 1, Trait.MECH, Trait.BRAWLER,
-                750, 38, 0.60, 1, 25, 110, 70, c(150, 160, 175), c(220, 225, 235));
+                750, 38, 0.60, 1, 25, 110, 70, c(150, 160, 175), c(220, 225, 235),
+                atk(), res(Element.EXPLOSIVE), weak(Element.CORROSIVE, Element.ELECTRIC));
+        register("moss_shellback", "Moss Shellback", 1, Trait.FOREST, Trait.BRAWLER,
+                780, 35, 0.60, 1, 30, 110, 70, c(105, 150, 85), c(75, 105, 60),
+                atk(), res(Element.CORROSIVE), weak(Element.FIRE));
+        register("coin_page", "Coin Page", 1, Trait.MERCHANT, Trait.WARRIOR,
+                620, 42, 0.70, 1, 22, 90, 60, c(215, 185, 110), c(255, 225, 140));
+        register("star_novice", "Star Novice", 1, Trait.MYSTIC, Trait.MAGE,
+                460, 33, 0.70, 3, 10, 65, 95, c(185, 160, 230), c(235, 220, 255));
+        register("thorn_cub", "Thorn Cub", 1, Trait.WILD, Trait.ASSASSIN,
+                520, 48, 0.85, 1, 12, 100, 85, c(170, 135, 75), c(120, 160, 90));
 
         // --- cost 2 ---------------------------------------------------------
         register("wild_axeman", "Wild Axeman", 2, Trait.WILD, Trait.WARRIOR,
@@ -61,49 +82,96 @@ public final class AutoUnits {
         register("cleric", "Wandering Cleric", 2, Trait.HOLY, Trait.HEALER,
                 550, 40, 0.65, 3, 15, 60, 140, c(240, 230, 190), c(230, 195, 100));
         register("vine_ranger", "Vine Ranger", 2, Trait.FOREST, Trait.ARCHER,
-                550, 60, 0.80, 4, 12, 90, 90, c(110, 185, 100), c(70, 130, 65));
+                550, 60, 0.80, 4, 12, 90, 90, c(110, 185, 100), c(70, 130, 65),
+                atk(Element.CORROSIVE), res(), weak(Element.FIRE));
         register("ember_duelist", "Ember Duelist", 2, Trait.EMBER, Trait.ASSASSIN,
-                650, 65, 0.85, 1, 20, 100, 110, c(235, 120, 70), c(255, 205, 110));
+                650, 65, 0.85, 1, 20, 100, 110, c(235, 120, 70), c(255, 205, 110),
+                atk(Element.FIRE), res(Element.FIRE), weak(Element.CRYO));
         register("frost_adept", "Frost Adept", 2, Trait.FROST, Trait.MAGE,
-                550, 45, 0.70, 3, 12, 60, 130, c(120, 185, 230), c(235, 250, 255));
+                550, 45, 0.70, 3, 12, 60, 130, c(120, 185, 230), c(235, 250, 255),
+                atk(Element.CRYO), res(Element.CRYO), weak(Element.FIRE));
         register("storm_herald", "Storm Herald", 2, Trait.STORM, Trait.MAGE,
-                580, 45, 0.70, 3, 12, 70, 140, c(160, 140, 235), c(220, 210, 255));
+                580, 45, 0.70, 3, 12, 70, 140, c(160, 140, 235), c(220, 210, 255),
+                atk(Element.ELECTRIC), res(Element.ELECTRIC), weak());
         register("iron_sentinel", "Iron Sentinel", 2, Trait.MECH, Trait.GUARDIAN,
-                950, 45, 0.60, 1, 50, 120, 80, c(135, 145, 160), c(200, 210, 225));
+                950, 45, 0.60, 1, 50, 120, 80, c(135, 145, 160), c(200, 210, 225),
+                atk(), res(Element.EXPLOSIVE), weak(Element.CORROSIVE));
+        register("glacier_warden", "Glacier Warden", 2, Trait.FROST, Trait.GUARDIAN,
+                900, 45, 0.60, 1, 45, 110, 85, c(130, 190, 225), c(225, 245, 255),
+                atk(Element.CRYO), res(Element.CRYO), weak(Element.FIRE));
+        register("cinder_priest", "Cinder Priest", 2, Trait.EMBER, Trait.HEALER,
+                580, 42, 0.65, 3, 14, 65, 150, c(220, 120, 75), c(255, 215, 130),
+                atk(Element.FIRE), res(Element.FIRE), weak(Element.CRYO));
+        register("gloom_warden", "Gloom Warden", 2, Trait.SHADOW, Trait.GUARDIAN,
+                880, 48, 0.62, 1, 42, 115, 80, c(105, 90, 135), c(180, 160, 215),
+                atk(), res(Element.CORROSIVE), weak(Element.ELECTRIC));
+        register("gale_runner", "Gale Runner", 2, Trait.STORM, Trait.ASSASSIN,
+                600, 62, 0.85, 1, 16, 95, 110, c(155, 140, 235), c(215, 210, 255),
+                atk(Element.ELECTRIC), res(Element.ELECTRIC), weak());
+        register("rune_dancer", "Rune Dancer", 2, Trait.MYSTIC, Trait.ASSASSIN,
+                620, 60, 0.80, 1, 18, 100, 105, c(175, 150, 225), c(230, 215, 255));
+        register("guild_broker", "Guild Broker", 2, Trait.MERCHANT, Trait.ARCHER,
+                540, 58, 0.75, 4, 12, 95, 90, c(210, 175, 100), c(250, 220, 140));
 
         // --- cost 3 ---------------------------------------------------------
         register("dusk_stalker", "Dusk Stalker", 3, Trait.SHADOW, Trait.ASSASSIN,
-                750, 85, 0.90, 1, 25, 100, 150, c(100, 85, 130), c(200, 170, 235));
+                750, 85, 0.90, 1, 25, 100, 150, c(100, 85, 130), c(200, 170, 235),
+                atk(Element.CORROSIVE), res(), weak(Element.ELECTRIC));
         register("grove_druid", "Grove Druid", 3, Trait.FOREST, Trait.HEALER,
-                700, 50, 0.70, 3, 20, 70, 200, c(85, 160, 85), c(180, 230, 150));
+                700, 50, 0.70, 3, 20, 70, 200, c(85, 160, 85), c(180, 230, 150),
+                atk(), res(), weak(Element.FIRE));
         register("ember_knight", "Ember Knight", 3, Trait.EMBER, Trait.WARRIOR,
-                1050, 75, 0.75, 1, 45, 100, 120, c(215, 95, 55), c(255, 200, 100));
+                1050, 75, 0.75, 1, 45, 100, 120, c(215, 95, 55), c(255, 200, 100),
+                atk(Element.FIRE), res(Element.FIRE), weak(Element.CRYO));
         register("frost_colossus", "Frost Colossus", 3, Trait.FROST, Trait.BRAWLER,
-                1250, 65, 0.60, 1, 35, 120, 130, c(110, 175, 225), c(230, 248, 255));
+                1250, 65, 0.60, 1, 35, 120, 130, c(110, 175, 225), c(230, 248, 255),
+                atk(Element.CRYO), res(Element.CRYO), weak(Element.FIRE));
         register("storm_sniper", "Storm Sniper", 3, Trait.STORM, Trait.ARCHER,
-                650, 85, 0.85, 5, 15, 100, 140, c(145, 125, 230), c(215, 205, 255));
+                650, 85, 0.85, 5, 15, 100, 140, c(145, 125, 230), c(215, 205, 255),
+                atk(Element.ELECTRIC), res(), weak());
         register("dawn_paladin", "Dawn Paladin", 3, Trait.HOLY, Trait.GUARDIAN,
-                1150, 60, 0.65, 1, 55, 110, 130, c(235, 215, 140), c(255, 245, 210));
+                1150, 60, 0.65, 1, 55, 110, 130, c(235, 215, 140), c(255, 245, 210),
+                atk(), res(Element.RADIATION), weak());
+        register("bazaar_golem", "Bazaar Golem", 3, Trait.MERCHANT, Trait.GUARDIAN,
+                1200, 60, 0.60, 1, 55, 120, 120, c(200, 170, 105), c(245, 215, 145),
+                atk(), res(Element.EXPLOSIVE), weak());
+        register("clockwork_archer", "Clockwork Archer", 3, Trait.MECH, Trait.ARCHER,
+                700, 80, 0.85, 4, 20, 100, 135, c(160, 165, 180), c(225, 230, 240),
+                atk(Element.EXPLOSIVE), res(), weak(Element.CORROSIVE));
+        register("moon_oracle", "Moon Oracle", 3, Trait.MYSTIC, Trait.HEALER,
+                720, 48, 0.70, 3, 18, 70, 210, c(170, 150, 220), c(235, 225, 255));
 
         // --- cost 4 ---------------------------------------------------------
         register("wild_monarch", "Wild Monarch", 4, Trait.WILD, Trait.BRAWLER,
                 1500, 95, 0.80, 1, 40, 130, 180, c(200, 155, 75), c(140, 95, 45));
         register("void_reaper", "Void Reaper", 4, Trait.SHADOW, Trait.MAGE,
-                850, 70, 0.75, 3, 20, 80, 260, c(90, 75, 120), c(185, 155, 225));
+                850, 70, 0.75, 3, 20, 80, 260, c(90, 75, 120), c(185, 155, 225),
+                atk(Element.RADIATION, Element.CORROSIVE), res(Element.CORROSIVE), weak());
         register("mech_titan", "Mech Titan", 4, Trait.MECH, Trait.GUARDIAN,
-                1700, 80, 0.60, 1, 70, 140, 160, c(120, 130, 145), c(210, 220, 235));
+                1700, 80, 0.60, 1, 70, 140, 160, c(120, 130, 145), c(210, 220, 235),
+                atk(Element.EXPLOSIVE), res(Element.EXPLOSIVE), weak(Element.CORROSIVE));
         register("ash_phoenix", "Ash Phoenix", 4, Trait.EMBER, Trait.MAGE,
-                900, 75, 0.80, 3, 20, 70, 240, c(240, 130, 60), c(255, 220, 120));
+                900, 75, 0.80, 3, 20, 70, 240, c(240, 130, 60), c(255, 220, 120),
+                atk(Element.FIRE, Element.EXPLOSIVE), res(Element.FIRE), weak(Element.CRYO));
         register("feral_ranger", "Feral Ranger", 4, Trait.WILD, Trait.ARCHER,
                 900, 100, 0.90, 4, 20, 110, 170, c(180, 145, 85), c(230, 200, 140));
+        register("panda_sage", "Panda Sage", 4, Trait.MYSTIC, Trait.BRAWLER,
+                1550, 90, 0.75, 1, 45, 120, 190, c(235, 235, 240), c(45, 45, 55),
+                atk(), res(Element.CRYO), weak());
 
         // --- cost 5 ---------------------------------------------------------
         register("storm_dragon", "Storm Dragon", 5, Trait.STORM, Trait.MAGE,
-                1600, 110, 0.80, 2, 40, 100, 350, c(140, 120, 235), c(235, 225, 255));
+                1600, 110, 0.80, 2, 40, 100, 350, c(140, 120, 235), c(235, 225, 255),
+                atk(Element.ELECTRIC), res(Element.ELECTRIC, Element.CRYO), weak());
         register("high_seraph", "High Seraph", 5, Trait.HOLY, Trait.HEALER,
-                1300, 90, 0.75, 3, 30, 80, 380, c(245, 235, 190), c(255, 215, 120));
+                1300, 90, 0.75, 3, 30, 80, 380, c(245, 235, 190), c(255, 215, 120),
+                atk(), res(Element.RADIATION, Element.CORROSIVE), weak());
         register("eclipse_blade", "Eclipse Blade", 5, Trait.SHADOW, Trait.WARRIOR,
-                1500, 130, 0.90, 1, 45, 100, 300, c(80, 70, 105), c(215, 190, 245));
+                1500, 130, 0.90, 1, 45, 100, 300, c(80, 70, 105), c(215, 190, 245),
+                atk(Element.RADIATION), res(Element.CORROSIVE), weak());
+        register("verdant_avatar", "Verdant Avatar", 5, Trait.FOREST, Trait.GUARDIAN,
+                1900, 100, 0.65, 1, 60, 120, 320, c(90, 165, 95), c(190, 235, 160),
+                atk(), res(Element.CORROSIVE), weak(Element.FIRE));
 
         // --- PvE creeps (cost 0: no traits, never in shops) -------------------
         creep("creep_slime", "Slime", 300, 25, 0.6, 1, 5, c(120, 200, 120));
@@ -122,6 +190,16 @@ public final class AutoUnits {
                 hp, ad, as, range, armor, mana, spell, body, accent));
     }
 
+    private static void register(String key, String name, int cost, Trait origin,
+                                 Trait clazz, double hp, double ad, double as,
+                                 double range, double armor, double mana,
+                                 double spell, Color body, Color accent,
+                                 List<Element> atk, List<Element> res,
+                                 List<Element> weak) {
+        UNITS.put(key, new UnitDef(key, name, cost, origin, clazz,
+                hp, ad, as, range, armor, mana, spell, atk, res, weak, body, accent));
+    }
+
     private static void creep(String key, String name, double hp, double ad,
                               double as, double range, double armor, Color body) {
         UNITS.put(key, new UnitDef(key, name, 0, null, null,
@@ -130,6 +208,18 @@ public final class AutoUnits {
 
     private static Color c(int r, int g, int b) {
         return new Color(r, g, b);
+    }
+
+    private static List<Element> atk(Element... e) {
+        return List.of(e);
+    }
+
+    private static List<Element> res(Element... e) {
+        return List.of(e);
+    }
+
+    private static List<Element> weak(Element... e) {
+        return List.of(e);
     }
 
     public static UnitDef get(String key) {

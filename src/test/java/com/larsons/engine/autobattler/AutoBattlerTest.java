@@ -2,11 +2,17 @@ package com.larsons.engine.autobattler;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -18,7 +24,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Headless tests for the auto-battler's data and rules: registry integrity,
  * the shared pool + shop odds, buying/combining/selling, item combining,
- * placement rules, the economy, and the deterministic battle simulation.
+ * placement rules, the economy, the elemental damage layer, synergy
+ * categories, board cosmetics, and the deterministic battle simulation.
  */
 @Timeout(30)
 class AutoBattlerTest {
@@ -96,9 +103,89 @@ class AutoBattlerTest {
             assertTrue(carriers >= t.thresholds[t.thresholds.length - 1],
                     t.name() + " top tier reachable (" + carriers + " carriers)");
         }
+        // FOREST activates at 2/4.
         assertEquals(0, Trait.FOREST.tier(1));
         assertEquals(1, Trait.FOREST.tier(2));
-        assertEquals(2, Trait.FOREST.tier(3));
+        assertEquals(1, Trait.FOREST.tier(3));
+        assertEquals(2, Trait.FOREST.tier(4));
+    }
+
+    @Test
+    void breakpointLaddersAreVariedNotCopied() {
+        // The design goal: several different breakpoint systems coexist
+        // (even ladders, odd ladders, two- and three-tier ladders) instead of
+        // one copied ladder across the board.
+        Set<String> ladders = new HashSet<>();
+        boolean odd = false, threeTiers = false;
+        for (Trait t : Trait.values()) {
+            ladders.add(Arrays.toString(t.thresholds));
+            for (int th : t.thresholds) odd |= th % 2 == 1;
+            threeTiers |= t.thresholds.length >= 3;
+        }
+        assertTrue(ladders.size() >= 4, "several distinct breakpoint ladders");
+        assertTrue(odd, "odd-number breakpoints exist");
+        assertTrue(threeTiers, "three-tier ladders exist");
+        // Tier values scale super-linearly: each tier is worth more than the
+        // proportional step from the last.
+        for (Trait t : Trait.values()) {
+            for (int i = 1; i < t.values.length; i++) {
+                assertTrue(t.values[i] > t.values[i - 1], t.name() + " values grow");
+            }
+        }
+    }
+
+    @Test
+    void everyTraitHasCategoriesAndSupportSynergiesExist() {
+        boolean multiCategory = false;
+        for (Trait t : Trait.values()) {
+            assertFalse(t.categories.isEmpty(), t.name() + " has a category");
+            multiCategory |= t.categories.size() >= 2;
+        }
+        assertTrue(multiCategory, "synergies can belong to several categories");
+        // Every category is used by at least one trait, so browsing by
+        // category never dead-ends.
+        for (SynergyCategory cat : SynergyCategory.values()) {
+            boolean used = false;
+            for (Trait t : Trait.values()) used |= t.categories.contains(cat);
+            assertTrue(used, cat.name() + " has at least one synergy");
+        }
+        // Team-enhancing synergies are flagged as support.
+        assertTrue(Trait.HEALER.isSupport());
+        assertTrue(Trait.MYSTIC.isSupport());
+        assertFalse(Trait.EMBER.isSupport());
+    }
+
+    @Test
+    void rosterIsExpandedWithValidElementAffinities() {
+        assertTrue(AutoUnits.roster().size() >= 40, "expanded roster");
+        // Every synergy has enough carriers for real variety within it.
+        for (Trait t : Trait.values()) {
+            int carriers = 0;
+            for (UnitDef d : AutoUnits.roster()) {
+                if (d.origin == t || d.clazz == t) carriers++;
+            }
+            assertTrue(carriers >= 3, t.name() + " has " + carriers + " carriers");
+        }
+        boolean anyElemental = false, anyPlain = false;
+        for (UnitDef d : AutoUnits.all()) {
+            assertTrue(d.attackElements.size() <= 2, d.key + " ≤2 attack elements");
+            assertTrue(d.resistances.size() <= 2, d.key + " ≤2 resistances");
+            assertTrue(d.weaknesses.size() <= 2, d.key + " ≤2 weaknesses");
+            for (Element e : d.resistances) {
+                assertFalse(d.weaknesses.contains(e),
+                        d.key + " can't resist and fear " + e);
+            }
+            anyElemental |= !d.attackElements.isEmpty();
+            anyPlain |= !d.isCreep() && d.attackElements.isEmpty();
+        }
+        assertTrue(anyElemental, "elemental attackers exist");
+        assertTrue(anyPlain, "not every attack needs elemental damage");
+        // Radiation is the late-game element: no natural attacker below cost 4.
+        for (UnitDef d : AutoUnits.roster()) {
+            if (d.attackElements.contains(Element.RADIATION)) {
+                assertTrue(d.cost >= 4, d.key + " radiates too early");
+            }
+        }
     }
 
     @Test
@@ -117,6 +204,99 @@ class AutoBattlerTest {
         }
         assertNull(AutoItems.combine("deathblade", "sword"),
                 "combined items don't combine further");
+    }
+
+    @Test
+    void elementalRelicsExistAndNeverCombine() {
+        assertFalse(AutoItems.relicKeys().isEmpty());
+        for (String key : AutoItems.relicKeys()) {
+            AutoItem it = AutoItems.get(key);
+            assertNotNull(it, key);
+            assertTrue(it.isRelic(), key + " is a relic");
+            assertFalse(it.isComponent(), key + " is not a component");
+            assertNotNull(it.effect, key + " has an elemental effect");
+            assertFalse(it.statLine().isEmpty(), key + " describes itself");
+            assertNull(AutoItems.combine(key, AutoItems.SWORD), key + " never combines");
+            assertNull(AutoItems.combine(AutoItems.SWORD, key), key + " never combines");
+        }
+    }
+
+    // --- elements ---------------------------------------------------------------------
+
+    @Test
+    void elementalSwingGrowsWithRounds() {
+        Set<Element> fire = EnumSet.of(Element.FIRE);
+        Set<Element> none = EnumSet.noneOf(Element.class);
+
+        double early = BattleSim.elementalMultiplier(fire, none, fire, 1);
+        double late = BattleSim.elementalMultiplier(fire, none, fire, 20);
+        assertTrue(early > 1.0, "hitting a weakness amplifies");
+        assertTrue(late > early, "the swing grows in later rounds");
+
+        double resisted = BattleSim.elementalMultiplier(fire, fire, none, 10);
+        assertTrue(resisted < 1.0, "hitting a resistance dampens");
+        assertTrue(BattleSim.elementalMultiplier(fire, fire, none, 20) < resisted,
+                "resists also swing harder late");
+
+        assertEquals(1.0, BattleSim.elementalMultiplier(none, fire, fire, 15),
+                "plain attacks ignore the element layer");
+        assertEquals(1.0, BattleSim.elementalMultiplier(fire, none, none, 15),
+                "no matchup, no swing");
+    }
+
+    @Test
+    void relicsRewireElementalAffinityInCombat() {
+        // Volt Coil infuses Electric; Prism Ward resists everything.
+        UnitInstance holder = new UnitInstance(1, "squire"); // no base elements
+        holder.placeBoard(3, 5);
+        holder.items.add("volt_coil");
+        holder.items.add("prism_ward");
+        UnitInstance enemy = new UnitInstance(2, "creep_slime");
+        enemy.placeBoard(3, 4);
+        BattleSim sim = new BattleSim(List.of(holder), List.of(enemy), 1);
+        BattleSim.CUnit c = sim.units().get(0);
+        assertTrue(c.attackElements.contains(Element.ELECTRIC), "infused");
+        assertEquals(EnumSet.allOf(Element.class), c.resistances, "warded");
+        assertTrue(c.weaknesses.isEmpty(), "ward clears weaknesses");
+
+        // The Radiation Core converts all attack elements to pure Radiation.
+        UnitInstance converted = new UnitInstance(3, "ember_imp"); // fire attacker
+        converted.placeBoard(4, 5);
+        converted.items.add("rad_core");
+        BattleSim sim2 = new BattleSim(List.of(converted), List.of(enemy.copy()), 1);
+        assertEquals(EnumSet.of(Element.RADIATION), sim2.units().get(0).attackElements);
+    }
+
+    @Test
+    void merchantSynergyPaysBonusGold() {
+        assertEquals(0, AutoGame.merchantBonus(board(1, 5, "squire", "coin_page")));
+        assertEquals(1, AutoGame.merchantBonus(board(1, 5, "coin_page", "guild_broker")));
+        assertEquals(2, AutoGame.merchantBonus(
+                board(1, 5, "coin_page", "guild_broker", "bazaar_golem")));
+    }
+
+    // --- board cosmetics ---------------------------------------------------------------
+
+    @Test
+    void boardThemeRoundTripsAndStaysCosmetic(@TempDir Path dir) {
+        BoardTheme theme = new BoardTheme(dir);
+        theme.cycleScheme();
+        theme.setBackground("skins/boards/test.png");
+        theme.cycleProp(0);
+        theme.cycleProp(3);
+        theme.save();
+
+        BoardTheme loaded = BoardTheme.load(dir);
+        assertEquals(theme.scheme().name, loaded.scheme().name);
+        assertEquals("skins/boards/test.png", loaded.background());
+        assertEquals(theme.prop(0), loaded.prop(0));
+        assertEquals(theme.prop(3), loaded.prop(3));
+        assertEquals(BoardTheme.Prop.NONE, loaded.prop(1), "untouched slots stay empty");
+
+        // A missing file is just the default theme, never an error.
+        BoardTheme fresh = BoardTheme.load(dir.resolve("nowhere"));
+        assertEquals(BoardTheme.SCHEMES.get(0).name, fresh.scheme().name);
+        assertTrue(fresh.background().isEmpty());
     }
 
     // --- pool & shop -----------------------------------------------------------------
@@ -277,6 +457,16 @@ class AutoBattlerTest {
         assertTrue(sim.survivorStars(BattleSim.HOME) >= 4,
                 "2-star survivors count double toward damage");
         assertEquals(0, sim.livingCount(BattleSim.AWAY));
+    }
+
+    @Test
+    void battlesRunLongEnoughForTanksToMatter() {
+        // Two identical bruisers slugging it out shouldn't end in an instant —
+        // the global damage rescale keeps rounds from being over in seconds.
+        BattleSim sim = new BattleSim(board(1, 4, "squire"), board(10, 4, "squire"), 11);
+        runToCompletion(sim);
+        assertTrue(sim.finished());
+        assertTrue(sim.time() > 8, "a mirrored 1v1 lasts, got " + sim.time() + "s");
     }
 
     @Test

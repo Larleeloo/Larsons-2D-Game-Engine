@@ -1,23 +1,32 @@
 package com.larsons.engine.autobattler;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 /**
  * The deterministic auto-battle: two boards fight on an 8x8 grid with no
  * player input. Units acquire the nearest enemy, path one cell at a time,
  * attack on their attack-speed cadence, build mana, and cast their class
- * ability when it fills — with synergy traits and items folded into their
- * stats up front.
+ * ability when it fills — with synergy traits, items, and elemental
+ * affinities folded into their stats up front.
  *
  * <p>Runs only on the server's tick thread (clients render replicated
  * snapshots), stepped at a fixed dt, and seeded — the same boards and seed
  * always produce the same fight, the property the engine's whole
  * "deterministic fixed-step simulation" netcode model is built on.
+ *
+ * <p>Damage a unit deals is amplified into elemental weaknesses and dampened
+ * into resistances ({@link #elementalMultiplier}); the swing grows with the
+ * round number, so element matching becomes increasingly important as a match
+ * goes on. All hostile damage is also globally rescaled down a notch
+ * ({@link #DAMAGE_SCALE}) so fights run longer, tank builds matter, and
+ * rounds don't end in an instant.
  *
  * <p>Coordinates: the <b>home</b> player's units keep their placement cells
  * (rows 4-7); the <b>away</b> board is mirrored through the board centre onto
@@ -38,6 +47,16 @@ public final class BattleSim {
     private static final double MANA_PER_ATTACK = 10;
     private static final double MANA_PER_HIT_TAKEN = 8;
     private static final int MAX_EVENTS = 128;
+
+    /**
+     * Global multiplier on all hostile damage (heals are untouched): the
+     * "longer battles" knob. Lower = longer fights.
+     */
+    private static final double DAMAGE_SCALE = 0.8;
+    /** Damage bonus into a weakness at intensity 1 (+30%). */
+    private static final double WEAKNESS_BONUS = 0.30;
+    /** Damage reduction into a resistance at intensity 1 (-25%). */
+    private static final double RESIST_REDUCTION = 0.25;
 
     // How long transient animation states hold, so 15 Hz snapshots catch them.
     private static final double ATTACK_ANIM_SECONDS = 0.3;
@@ -64,6 +83,11 @@ public final class BattleSim {
         public boolean dead;
         CUnit target;
 
+        /** Elemental affinities, resolved from the def plus any relics held. */
+        final Set<Element> attackElements = EnumSet.noneOf(Element.class);
+        final Set<Element> resistances = EnumSet.noneOf(Element.class);
+        final Set<Element> weaknesses = EnumSet.noneOf(Element.class);
+
         /** Replicated animation state, plus how long a transient state holds. */
         public AnimState anim = AnimState.IDLE;
         double animTimer;
@@ -85,9 +109,11 @@ public final class BattleSim {
      * Events that come from a unit carry its uid and position, so clients can
      * animate projectiles from attacker to target, trigger attack/cast
      * animations, and identify who died; {@code sourceId} is 0 otherwise.
+     * Damage events carry the attack's leading element code ({@code ""} for
+     * plain damage) so clients can colour the numbers.
      */
     public record Event(String kind, double x, double y, double amount, int team,
-                        int sourceId, double sx, double sy) {
+                        int sourceId, double sx, double sy, String element) {
         public Map<String, Object> toMap() {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("k", kind);
@@ -100,6 +126,7 @@ public final class BattleSim {
                 m.put("sx", round2(sx));
                 m.put("sy", round2(sy));
             }
+            if (!element.isEmpty()) m.put("el", element);
             return m;
         }
     }
@@ -108,12 +135,20 @@ public final class BattleSim {
     private final CUnit[][] occupied = new CUnit[COLS][ROWS];
     private final List<Event> events = new ArrayList<>();
     private final Random rng;
+    private final int round;
     private double time;
     private boolean finished;
     private int winner = -1; // HOME/AWAY, or -1 while running / on a draw
 
     public BattleSim(List<UnitInstance> homeBoard, List<UnitInstance> awayBoard, long seed) {
+        this(homeBoard, awayBoard, seed, 1);
+    }
+
+    /** {@code round} sets how strongly elemental matchups swing the fight. */
+    public BattleSim(List<UnitInstance> homeBoard, List<UnitInstance> awayBoard,
+                     long seed, int round) {
         this.rng = new Random(seed);
+        this.round = Math.max(1, round);
         int uid = 1;
         for (UnitInstance u : homeBoard) {
             units.add(build(uid++, u, HOME, u.col, u.row));
@@ -143,6 +178,10 @@ public final class BattleSim {
         c.range = def.range;
         c.armor = def.armor;
         c.manaMax = def.manaMax;
+        c.attackElements.addAll(def.attackElements);
+        c.resistances.addAll(def.resistances);
+        c.weaknesses.addAll(def.weaknesses);
+        Element convertTo = null;
         for (String key : u.items) {
             AutoItem item = AutoItems.get(key);
             if (item == null) continue;
@@ -151,8 +190,50 @@ public final class BattleSim {
             c.attackSpeed *= 1 + item.atkSpeed;
             c.armor += item.armor;
             c.spellPower += item.spellPower;
+            if (item.effect != null) {
+                switch (item.effect) {
+                    case INFUSE -> c.attackElements.add(item.element);
+                    case CONVERT -> convertTo = item.element; // applied last
+                    case WARD -> {
+                        c.resistances.addAll(EnumSet.allOf(Element.class));
+                        c.weaknesses.clear();
+                    }
+                }
+            }
+        }
+        if (convertTo != null) {
+            c.attackElements.clear();
+            c.attackElements.add(convertTo);
         }
         return c;
+    }
+
+    // --- elemental damage ---------------------------------------------------------
+
+    /**
+     * How strongly elemental matchups swing damage this round: ramps from
+     * ~0.55 in round 1 to a 1.5 cap by round 20, so element matching matters
+     * more and more as the game goes on.
+     */
+    public static double elementIntensity(int round) {
+        return Math.min(1.5, 0.5 + 0.05 * Math.max(1, round));
+    }
+
+    /**
+     * The damage multiplier for an attack carrying {@code attack} elements
+     * into a defender with the given resistances and weaknesses. Plain
+     * (element-less) attacks are always 1.0.
+     */
+    public static double elementalMultiplier(Set<Element> attack, Set<Element> resistances,
+                                             Set<Element> weaknesses, int round) {
+        if (attack.isEmpty()) return 1.0;
+        double intensity = elementIntensity(round);
+        double mult = 1.0;
+        for (Element e : attack) {
+            if (weaknesses.contains(e)) mult *= 1 + WEAKNESS_BONUS * intensity;
+            if (resistances.contains(e)) mult *= 1 - RESIST_REDUCTION * intensity;
+        }
+        return mult;
     }
 
     /**
@@ -165,12 +246,14 @@ public final class BattleSim {
         double holyHp = Trait.HOLY.value(counts.getOrDefault(Trait.HOLY, 0));
         double teamArmor = Trait.GUARDIAN.value(counts.getOrDefault(Trait.GUARDIAN, 0));
         double frostSlow = Trait.FROST.value(counts.getOrDefault(Trait.FROST, 0));
+        double mysticSp = Trait.MYSTIC.value(counts.getOrDefault(Trait.MYSTIC, 0));
 
         for (CUnit c : units) {
             UnitDef def = AutoUnits.get(c.key);
             if (c.team == team) {
                 c.maxHp *= 1 + holyHp;
                 c.armor += teamArmor;
+                c.spellPower += mysticSp;
                 if (def.origin != null) {
                     double v = def.origin.value(counts.getOrDefault(def.origin, 0));
                     switch (def.origin) {
@@ -180,7 +263,7 @@ public final class BattleSim {
                         case SHADOW -> c.critChance += v;
                         case WILD -> c.attackSpeed *= 1 + v;
                         case MECH -> c.armor += v;
-                        default -> { /* HOLY & FROST are team/enemy-wide, above */ }
+                        default -> { /* HOLY, FROST, MYSTIC, MERCHANT: handled elsewhere */ }
                     }
                 }
                 if (def.clazz != null) {
@@ -410,6 +493,11 @@ public final class BattleSim {
 
     private void damage(CUnit from, CUnit to, double amount, String eventKind, boolean magic) {
         if (to.dead) return;
+        amount *= DAMAGE_SCALE;
+        if (from != null) {
+            amount *= elementalMultiplier(from.attackElements, to.resistances,
+                    to.weaknesses, round);
+        }
         double effective = Math.min(amount, to.hp); // no credit for overkill
         if (from != null) {
             if (magic) from.dealtMagic += effective;
@@ -417,14 +505,20 @@ public final class BattleSim {
         }
         to.hp -= amount;
         flashAnim(to, AnimState.HIT, HIT_ANIM_SECONDS);
-        event(eventKind, to.x, to.y, amount, to.team, from);
+        event(eventKind, to.x, to.y, amount, to.team, from, leadElement(from));
         if (to.hp <= 0) {
             to.hp = 0;
             to.dead = true;
             to.anim = AnimState.DEATH;
             releaseCells(to);
-            event("die", to.x, to.y, 0, to.team, to);
+            event("die", to.x, to.y, 0, to.team, to, "");
         }
+    }
+
+    /** The wire code of an attacker's leading element, or "" for plain damage. */
+    private static String leadElement(CUnit from) {
+        if (from == null || from.attackElements.isEmpty()) return "";
+        return from.attackElements.iterator().next().code;
     }
 
     private void releaseCells(CUnit c) {
@@ -440,7 +534,7 @@ public final class BattleSim {
         if (healed <= 0) return;
         to.hp += healed;
         if (from != null) from.healingDone += healed;
-        if (announce) event("heal", to.x, to.y, healed, to.team, from);
+        if (announce) event("heal", to.x, to.y, healed, to.team, from, "");
     }
 
     private void gainMana(CUnit c, double amount) {
@@ -457,7 +551,7 @@ public final class BattleSim {
         double power = def.spell * UnitDef.starMultiplier(c.star) * (1 + c.spellPower / 100.0);
         CUnit target = c.target;
         flashAnim(c, AnimState.CAST, CAST_ANIM_SECONDS);
-        event("cast", c.x, c.y, 0, c.team, c);
+        event("cast", c.x, c.y, 0, c.team, c, "");
         switch (def.clazz) {
             case WARRIOR -> { // empowered slash
                 if (alive(target)) dealPhysical(c, target, c.ad + power, "hit");
@@ -588,11 +682,13 @@ public final class BattleSim {
         return out;
     }
 
-    private void event(String kind, double x, double y, double amount, int team, CUnit source) {
+    private void event(String kind, double x, double y, double amount, int team,
+                       CUnit source, String element) {
         if (events.size() < MAX_EVENTS) {
             events.add(source == null
-                    ? new Event(kind, x, y, amount, team, 0, 0, 0)
-                    : new Event(kind, x, y, amount, team, source.uid, source.x, source.y));
+                    ? new Event(kind, x, y, amount, team, 0, 0, 0, element)
+                    : new Event(kind, x, y, amount, team, source.uid, source.x, source.y,
+                            element));
         }
     }
 

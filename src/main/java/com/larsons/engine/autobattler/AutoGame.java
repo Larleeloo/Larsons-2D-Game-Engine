@@ -44,7 +44,12 @@ public final class AutoGame {
     /** Tunable pacing/economy knobs (tests shrink the timers). */
     public static final class Config {
         public double planSeconds = 30;
-        public double fightMaxSeconds = 30;
+        /**
+         * Combat cap. Generous on purpose: with the sim's global damage
+         * rescale fights run longer, tanky builds get to matter, and rounds
+         * rarely end in an instant.
+         */
+        public double fightMaxSeconds = 45;
         public double postSeconds = 4;
         public int startGold = 8;
         public int startLevel = 3;
@@ -234,6 +239,12 @@ public final class AutoGame {
             if (!p.alive) continue;
             if (round > 1) {
                 p.gold += p.income();
+                int merchant = merchantBonus(p.boardUnits());
+                if (merchant > 0) {
+                    p.gold += merchant;
+                    sink.toPlayer(p.id, AutoProto.info(
+                            "Your merchants earned +" + merchant + " gold"));
+                }
                 p.gainXp(XP_PER_ROUND);
             }
             refreshShop(p);
@@ -254,7 +265,8 @@ public final class AutoGame {
         if (AutoUnits.isCreepRound(round)) {
             for (AutoPlayer p : alive) {
                 matches.add(new Match(p, null, true, null,
-                        new BattleSim(p.boardUnits(), creepBoard(round), rng.nextLong())));
+                        new BattleSim(p.boardUnits(), creepBoard(round),
+                                rng.nextLong(), round)));
             }
         } else {
             List<AutoPlayer> order = new ArrayList<>(alive);
@@ -263,7 +275,8 @@ public final class AutoGame {
                 AutoPlayer home = order.get(i);
                 AutoPlayer away = order.get(i + 1);
                 matches.add(new Match(home, away, false, null,
-                        new BattleSim(home.boardUnits(), away.boardUnits(), rng.nextLong())));
+                        new BattleSim(home.boardUnits(), away.boardUnits(),
+                                rng.nextLong(), round)));
             }
             if (order.size() % 2 == 1) {
                 AutoPlayer odd = order.get(order.size() - 1);
@@ -271,7 +284,7 @@ public final class AutoGame {
                 List<UnitInstance> ghost = new ArrayList<>();
                 for (UnitInstance u : copied.boardUnits()) ghost.add(u.copy());
                 matches.add(new Match(odd, null, false, copied.name,
-                        new BattleSim(odd.boardUnits(), ghost, rng.nextLong())));
+                        new BattleSim(odd.boardUnits(), ghost, rng.nextLong(), round)));
             }
         }
 
@@ -337,8 +350,10 @@ public final class AutoGame {
             if (won) {
                 m.home.gold += 2;
                 if (m.home.items.size() < ITEM_BENCH_CAP) {
-                    List<String> comps = AutoItems.componentKeys();
-                    String drop = comps.get(rng.nextInt(comps.size()));
+                    // Mostly components; sometimes an elemental relic instead.
+                    List<String> table = rng.nextInt(100) < 30
+                            ? AutoItems.relicKeys() : AutoItems.componentKeys();
+                    String drop = table.get(rng.nextInt(table.size()));
                     m.home.items.add(drop);
                     sink.toPlayer(m.home.id, AutoProto.info(
                             "The creeps dropped: " + AutoItems.get(drop).name));
@@ -736,6 +751,12 @@ public final class AutoGame {
         int copies = 1;
         for (int i = 1; i < star; i++) copies *= 3;
         return copies;
+    }
+
+    /** Extra start-of-round gold from the Merchant synergy on a fielded board. */
+    static int merchantBonus(List<UnitInstance> board) {
+        int merchants = BattleSim.countTraits(board).getOrDefault(Trait.MERCHANT, 0);
+        return (int) Trait.MERCHANT.value(merchants);
     }
 
     private static int intOf(Object o) {
