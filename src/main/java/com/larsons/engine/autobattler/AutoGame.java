@@ -380,7 +380,15 @@ public final class AutoGame {
     /** Route one decoded client action; invalid requests get an info toast back. */
     public void handleAction(int playerId, Map<String, Object> msg) {
         AutoPlayer p = byId(playerId);
-        if (p == null || !p.alive || phase == Phase.LOBBY || phase == Phase.OVER) return;
+        if (p == null || phase == Phase.LOBBY) return;
+        // Scouting is read-only: it works for eliminated spectators and after
+        // the game ends, unlike the mutating actions below.
+        if ("view".equals(AutoProto.type(msg))) {
+            AutoPlayer target = byId(intOf(msg.get("p")));
+            if (target != null) sink.toPlayer(p.id, AutoProto.boardView(target));
+            return;
+        }
+        if (!p.alive || phase == Phase.OVER) return;
         switch (AutoProto.type(msg)) {
             case "buy" -> buy(p, intOf(msg.get("i")));
             case "sell" -> sell(p, intOf(msg.get("u")));

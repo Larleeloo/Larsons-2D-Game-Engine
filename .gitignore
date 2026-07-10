@@ -1,5 +1,7 @@
 .gradle
 build/
+# Auto-built shareable game folder (see ShareJar)
+share/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/

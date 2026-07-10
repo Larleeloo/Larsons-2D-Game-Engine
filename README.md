@@ -53,8 +53,21 @@ over in a generic, data-driven form and wired to the same toggles:
   items, and units collected over the game — shops, a shared unit pool,
   3-copies-combine star-ups, an economy with interest and streaks, PvE creep
   rounds that drop item components, and deterministic server-simulated
-  battles replicated to every client. See
+  battles replicated to every client — presented with **replicated animation
+  states**, **animated projectiles**, melee/cast/death effects, a per-unit
+  **damage meter** split by damage type, **board scouting** (click any
+  player's name), and **skinnable textures** (sprite-sheet overrides for
+  units, items, projectiles, and the board). See
   [Auto Battler](#auto-battler-online-2-10-players).
+- **Skins (texture overrides)** — drop PNG sprite sheets in
+  `resources/skins/` and assign them in the lobby's **Customize Skins** menu:
+  frame pixel width/height + frame count + a 0-120 fps playback rate, per
+  texture (units get one per animation state). Saved to your game files and
+  applied live. See [Skins](#skins-texture-overrides).
+- **Share with friends** — launching from IntelliJ/Gradle auto-builds a
+  `share/` folder with a runnable jar, double-click launch scripts, and
+  online-play instructions (including your LAN address). See
+  [Sharing the game](#sharing-the-game--how-joining-works).
 
 Everything above **works online**: the authoritative server simulates the
 world (mobs, items, drops, day/night), snapshots replicate entities, and
@@ -149,7 +162,8 @@ com.larsons.engine
 │   ├── EngineConfig.java  Title, size, target FPS, update rate, perspective
 │   ├── Engine.java        Wires window + renderer + shaders + input + scenes + loop
 │   ├── GameWindow.java    JFrame hosting an AWT Canvas (BufferStrategy)
-│   └── GameLoop.java      Fixed-timestep loop, precise drift-free frame pacing
+│   ├── GameLoop.java      Fixed-timestep loop, precise drift-free frame pacing
+│   └── ShareJar.java      Auto-builds the shareable runnable jar + scripts on launch
 ├── config
 │   ├── GameProfile.java   A named "game type": feature toggles + values
 │   ├── GameTypeStore.java List/load/save profiles under resources/gametypes/
@@ -162,6 +176,9 @@ com.larsons.engine
 │   ├── SpriteSheet.java   Slice a sheet into frames
 │   ├── Animation.java     Delta-timed frame animation
 │   ├── AssetLoader.java   Cached image loading + placeholders
+│   ├── SkinDef.java       One texture override: sheet + frame w/h/count + 0-120 fps
+│   ├── SkinStore.java     Persist skins.json under resources/skins/ (game files)
+│   ├── Skins.java         Runtime resolver: skin frame for a key at a time, or null
 │   ├── EntitySprites.java Procedural mob/item/block sprites (no assets needed)
 │   ├── ParallaxBackground.java Procedural multi-layer parallax backdrop
 │   └── shader
@@ -191,6 +208,7 @@ com.larsons.engine
 │   ├── PlayerInput.java   One tick's movement + attack intent — what clients send
 │   └── PlayerPhysics.java The deterministic step shared by SP, prediction, server
 ├── net
+│   ├── Lan.java           Site-local address discovery (the "join my IP" hint)
 │   ├── Protocol.java      Newline-delimited compact-JSON wire protocol
 │   ├── GameServer.java    Authoritative fixed-tick server + world (mobs, edits)
 │   ├── GameClient.java    Dial host:port, send inputs/edits, receive snapshots
@@ -210,6 +228,7 @@ com.larsons.engine
 ├── audio
 │   └── AudioManager.java  Synthesized sound effects (JDK only, headless-safe)
 ├── autobattler
+│   ├── AnimState.java     Replicated unit animation states (idle/walk/attack/cast/hit/death)
 │   ├── Trait.java         Synergy traits (origins + classes) with tiers + effects
 │   ├── UnitDef.java / AutoUnits.java   The 28-unit roster, creeps, pool sizes, shop odds
 │   ├── AutoItem.java / AutoItems.java  Item components + the full combination table
@@ -243,6 +262,8 @@ com.larsons.engine
     ├── AutoBattlerLobbyScene.java  Host/join an auto-battler + the pre-game lobby
     ├── AutoBattlerScene.java    The isometric auto-battler client (shop/board/combat)
     ├── AutoBattlerGuideScene.java  Illustrated field guide (rules/synergies/items/odds/units)
+    ├── AutoHud.java             The auto-battler HUD's screen geometry (overlap-checked)
+    ├── SkinEditorScene.java     The lobby's skin customization menu (sheet imports)
     └── ProfileForms.java        Shared feature options (editor + pause menu)
 ```
 
@@ -513,6 +534,26 @@ another player's board.
   their class ability — fireballs (Mage, with splash), heals on the weakest
   ally (Healer), armor-ignoring strikes (Assassin, who also leaps to the
   backline at combat start), and so on.
+- **Combat presentation:** every combat snapshot carries each unit's
+  **animation state** (idle / walk / attack / cast / hit / death), so units
+  visibly do what the simulation says — walkers bob, attackers lunge, casters
+  flare, the hit flinch, and the dead fall as fading corpses. Ranged attacks
+  fly as **animated projectiles** (arrows, orbs, bolts by class) that deliver
+  their damage number on impact; melee hits slash. Combat events name their
+  **source unit**, which is what makes attacker→target projectiles possible.
+- **Damage meter:** during combat the left panel lists every unit in the
+  fight with how much damage it has dealt, as a stacked bar split by type —
+  **attack** (physical) vs **ability** (magic) — plus healing done, live from
+  the replicated per-unit tallies.
+- **Board scouting:** click any player's name in the standings to open their
+  board in an overlay — their fielded units (stars + items), bench, and
+  public stats (HP, level/XP, gold, streak, synergies). It refreshes while
+  open, works while eliminated (spectating), and Esc / clicking outside
+  closes it. Clicking another name switches to that player.
+- **Skinnable:** every auto-battler texture — board tiles, unit figures (per
+  animation state), item gems, projectiles — checks the [skin
+  system](#skins-texture-overrides) first and falls back to the procedural
+  art, so a sprite-sheet drop-in reskins the game with zero code.
 - **Netcode:** the same authoritative model as the world game — a fixed-tick
   server owns every rule (purchases, combines, placement legality, the
   battles themselves), clients send action requests and render replicated
@@ -536,15 +577,91 @@ another player's board.
 nearest you) to place it — dropping on an occupied spot swaps them — and drag
 an item gem onto a unit to equip it. A plain click still works as a fallback:
 click a unit then a cell/slot to move it, or click an item gem then a unit to
-equip. Right-click deselects or cancels a drag. Click shop cards to buy; **D**
-rerolls; **F** buys XP; **S** (or the red button) sells the selected unit.
-Hover anything for a tooltip. **Esc** opens the pause overlay (the match keeps
-running online — **L** leaves it).
+equip. Right-click deselects or cancels a drag. Click shop cards to buy;
+click a **player's name** to scout their board; **D** rerolls; **F** buys XP;
+**S** (or the red button) sells the selected unit. Hover anything for a
+tooltip. **Esc** closes the scout view, else opens the pause overlay (the
+match keeps running online — **L** leaves it).
+
+**On-screen text never overlaps.** All HUD geometry lives in one place
+(`AutoHud`) — panels clamp their row counts to the space they actually have
+("+N more…" past that), the economy readout stays clear of the bench, shop
+cards shrink on narrow windows instead of running under the sell button —
+and a layout test asserts every text region stays pairwise disjoint across
+window sizes and worst-case fill (a full 12-item bench, 10 players).
 
 Customization hooks are deliberately data-driven for what comes next: units,
 traits, items, creep waves, pool sizes, and shop odds are all rows in
 `AutoUnits` / `AutoItems` / `Trait`, and pacing/economy live in
 `AutoGame.Config`.
+
+---
+
+## Skins (texture overrides)
+
+Every game texture is overridable with your own art, without touching code:
+
+1. Drop PNG **sprite sheets** anywhere under
+   [`resources/skins/`](src/main/resources/skins/) (`units/`, `items/`,
+   `projectiles/`, `boards/` are provided as a starting layout, kept in the
+   repo with `.gitkeep`).
+2. In the Auto Battler lobby, open **Customize Skins** and pick a target:
+   any **unit** (per **animation state** — idle, walk, attack, cast, hit,
+   death; a unit with only an idle skin uses it everywhere), any **item**,
+   a **projectile** kind (arrow / orb / bolt), or the **board tiles**.
+3. Define the sheet import: **frame pixel width**, **frame pixel height**,
+   **frame count** (sliced left-to-right, top-to-bottom), and a **framerate
+   from 0 to 120** sprite frames per second (0 = static image).
+4. **Apply + Save** — it takes effect live, with a preview right in the menu.
+
+Assignments persist to `resources/skins/skins.json` — part of *your* game
+files ([`SkinStore`](src/main/java/com/larsons/engine/graphics/SkinStore.java)),
+loaded on every launch, and bundled into the [share jar](#sharing-the-game--how-joining-works)
+so friends see your skins too. Anything without a (working) skin keeps the
+engine's procedural art — a bad path never breaks the game. The runtime side
+is [`Skins`](src/main/java/com/larsons/engine/graphics/Skins.java): game code
+asks for a texture key's frame at a point in time and draws the fallback when
+it gets `null`; the key table is documented in
+[`resources/skins/README.md`](src/main/resources/skins/README.md).
+
+---
+
+## Sharing the game & how joining works
+
+**Launching the game from IntelliJ (or `./gradlew run`) automatically
+builds a shareable copy** in `share/`, in the background, on every launch
+([`ShareJar`](src/main/java/com/larsons/engine/core/ShareJar.java) — skipped
+when nothing changed):
+
+```
+share/
+├── larsons-2d-game-engine.jar   # the whole game: java -jar, Java 21+, no deps
+├── run.bat                      # double-click launcher (Windows)
+├── run.sh                       # double-click launcher (Mac/Linux)
+└── HOW_TO_PLAY_ONLINE.txt       # hosting/joining instructions + your LAN IP
+```
+
+Send a friend the `share/` folder (or just the jar) and they can play — and
+because the jar packages your `resources/`, your game types and skins travel
+with it.
+
+**Connecting — which address do I type?**
+
+| You are... | Address to join |
+|------------|-----------------|
+| On the **same machine** as the host (testing with two windows) | `localhost:7788` |
+| On the **same network** (same house / wifi / LAN) | the **host's LAN IP**, e.g. `192.168.1.23:7788` |
+| Somewhere else on the internet | the host's **public IP**, with TCP port 7788 forwarded on their router |
+
+`localhost` (127.0.0.1) always means *"this same computer"* — it loops back
+before ever reaching the network, so it can never reach a host on another
+machine, even on the same wifi. For same-network play the host's **lobby
+screen shows the exact address to share** ("Same network? They join:
+192.168.x.x:7788", via [`Lan`](src/main/java/com/larsons/engine/net/Lan.java)),
+and it's also written into `share/HOW_TO_PLAY_ONLINE.txt`. No port
+forwarding is needed on a LAN — that's only for internet play, exactly like
+hosting a Minecraft server. The world game works the same way on its default
+port 7777.
 
 ---
 
@@ -856,3 +973,17 @@ seeded battles, whole bot games running headlessly to a winner (PvE rounds,
 ghosts, eliminations, placements), real loopback lobbies with host-only
 controls and combat replication, and both scenes rendering off-screen
 against a live server.
+
+The presentation/customization layer has its own suite:
+[`AutoBattlerFxTest`](src/test/java/com/larsons/engine/autobattler/AutoBattlerFxTest.java)
+(replicated animation states, damage-by-type tallies, source-carrying combat
+events, board-scouting requests — including for eliminated spectators),
+[`AutoBattlerScoutTest`](src/test/java/com/larsons/engine/demo/AutoBattlerScoutTest.java)
+(clicking a standings row scouts a live server's board end to end),
+[`SkinsTest`](src/test/java/com/larsons/engine/SkinsTest.java) (skin
+definitions, the 0-120 fps clamp, store round-trips, sheet slicing and
+fallbacks), [`AutoHudTest`](src/test/java/com/larsons/engine/demo/AutoHudTest.java)
+(HUD text regions stay pairwise disjoint across window sizes and fill
+levels), and [`ShareJarTest`](src/test/java/com/larsons/engine/ShareJarTest.java)
+(the auto-built share jar is runnable, scripted, documented, and not
+rebuilt needlessly).
