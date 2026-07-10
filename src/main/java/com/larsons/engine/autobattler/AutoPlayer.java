@@ -1,6 +1,7 @@
 package com.larsons.engine.autobattler;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -41,11 +42,27 @@ public final class AutoPlayer {
     public final List<UnitInstance> units = new ArrayList<>();
     /** Current shop offering: unit keys, {@code null} = empty/bought slot. */
     public final String[] shop = new String[SHOP_SIZE];
+    /** Per-slot gold discount granted by the Bargainer relic (0 = list price). */
+    public final int[] shopDeals = new int[SHOP_SIZE];
+    /** While true, the shop is not re-rolled between rounds. */
+    public boolean shopLocked;
     /** Unequipped item keys (components + combined). */
     public final List<String> items = new ArrayList<>();
 
     /** Result of the player's most recent combat (for income win bonus). */
     public boolean wonLastRound;
+
+    /** Current relic ability; re-dealt every {@link AutoGame#RELIC_INTERVAL} rounds. */
+    public Relic relic;
+    /** Set once a one-shot relic (Mender, Harmonizer, Zealot) has fired. */
+    public boolean relicFired;
+    /** The once-per-round item removal has been spent this round. */
+    public boolean unequipUsed;
+    /**
+     * Permanent trait effectiveness multipliers (Zealot lasts the whole game,
+     * outliving its relic's rotation).
+     */
+    public final Map<Trait, Double> traitBoosts = new EnumMap<>(Trait.class);
 
     public AutoPlayer(int id, String name, boolean bot) {
         this.id = id;
@@ -149,6 +166,17 @@ public final class AutoPlayer {
         List<Object> shopList = new ArrayList<>(SHOP_SIZE);
         for (String key : shop) shopList.add(key);
         m.put("shop", shopList);
+        List<Object> dealList = new ArrayList<>(SHOP_SIZE);
+        for (int deal : shopDeals) dealList.add(deal);
+        m.put("deals", dealList);
+        m.put("lock", shopLocked);
+        m.put("strip", unequipUsed);
+        if (relic != null) m.put("relic", relic.key);
+        if (!traitBoosts.isEmpty()) {
+            List<Object> boosts = new ArrayList<>(traitBoosts.size());
+            for (Trait t : traitBoosts.keySet()) boosts.add(t.name());
+            m.put("boost", boosts);
+        }
         m.put("items", new ArrayList<Object>(items));
         return m;
     }

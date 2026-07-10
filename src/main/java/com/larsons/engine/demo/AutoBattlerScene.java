@@ -11,6 +11,7 @@ import com.larsons.engine.autobattler.AutoSprites;
 import com.larsons.engine.autobattler.BattleSim;
 import com.larsons.engine.autobattler.BoardTheme;
 import com.larsons.engine.autobattler.Element;
+import com.larsons.engine.autobattler.Relic;
 import com.larsons.engine.autobattler.SynergyCategory;
 import com.larsons.engine.autobattler.Trait;
 import com.larsons.engine.autobattler.UnitDef;
@@ -76,6 +77,12 @@ import java.util.Map;
  * click an item gem then a unit to equip. Click shop cards to buy; click a
  * player's name to scout their board; <b>D</b> rerolls, <b>F</b> buys XP,
  * <b>S</b> sells the selected unit; <b>Esc</b> closes the scout view / menu.
+ * The <b>Lock</b> toggle keeps the current shop through the round change;
+ * the <b>Gather / Spread / Flip</b> buttons rearrange the fielded board in
+ * one click; a selected unit with items offers a once-per-round
+ * <b>Remove items</b> button; and dragging a Wisp onto a unit you own a pair
+ * of fuses it as the missing copy. The top-left badge shows your current
+ * relic (hover it for details) — relics re-deal every 10 rounds.
  */
 public class AutoBattlerScene extends AbstractScene {
 
@@ -139,10 +146,17 @@ public class AutoBattlerScene extends AbstractScene {
     private final Rectangle rerollBtn = new Rectangle();
     private final Rectangle xpBtn = new Rectangle();
     private final Rectangle sellBtn = new Rectangle();
+    private final Rectangle lockBtn = new Rectangle();
+    private final Rectangle unequipBtn = new Rectangle();
+    private final Rectangle relicBadge = new Rectangle();
+    private final Rectangle[] arrangeBtns = new Rectangle[3];
+    private static final String[] ARRANGE_MODES = {"front", "spread", "flip"};
+    private static final String[] ARRANGE_LABELS = {"Gather", "Spread", "Flip"};
     private final Rectangle[] shopCards = new Rectangle[5];
     private final Rectangle[] benchSlots = new Rectangle[9];
     private final List<Rectangle> itemSlots = new ArrayList<>();
     private final List<Rectangle> traitRows = new ArrayList<>();
+    private boolean hoverRelic;
 
     // Combat presentation.
     private double animClock; // drives idle/skin animation everywhere
@@ -202,6 +216,7 @@ public class AutoBattlerScene extends AbstractScene {
         Color color;
         String impactText;    // damage floater delivered on arrival, or null
         Color impactColor;
+        Element element;      // elemental payload, for the impact particles
     }
 
     /** A short melee slash arc at the point of impact. */
@@ -223,6 +238,7 @@ public class AutoBattlerScene extends AbstractScene {
         this.ctx = ctx;
         for (int i = 0; i < shopCards.length; i++) shopCards[i] = new Rectangle();
         for (int i = 0; i < benchSlots.length; i++) benchSlots[i] = new Rectangle();
+        for (int i = 0; i < arrangeBtns.length; i++) arrangeBtns[i] = new Rectangle();
     }
 
     /** Called by the lobby scene before transitioning in; takes ownership. */
@@ -433,7 +449,25 @@ public class AutoBattlerScene extends AbstractScene {
         s.wy = wy;
         s.color = crit ? new Color(255, 200, 80) : new Color(230, 235, 250);
         if (slashes.size() < 48) slashes.add(s);
+        if (e.element() != null) elementBurst(e.element(), wx, wy);
         playHitSfx();
+    }
+
+    /**
+     * The element-specific impact effect: fire embers float up, cryo shards
+     * rain down, electric sparks snap, corrosive drips fall, explosive rings
+     * blast outward, radiation motes linger.
+     */
+    private void elementBurst(Element element, double wx, double wy) {
+        Particles.Style style = switch (element) {
+            case FIRE -> Particles.Style.EMBERS;
+            case CRYO -> Particles.Style.SHARDS;
+            case ELECTRIC -> Particles.Style.SPARKS;
+            case CORROSIVE -> Particles.Style.DRIP;
+            case EXPLOSIVE -> Particles.Style.RING;
+            case RADIATION -> Particles.Style.MOTES;
+        };
+        particles.burst(wx, wy, element.color, 9, style);
     }
 
     private void spawnMissile(AutoClient.CombatEvent e, boolean home,
@@ -451,7 +485,11 @@ public class AutoBattlerScene extends AbstractScene {
         m.life = dist / MISSILE_SPEED;
         UnitDef def = defOfCombatUnit(e.sourceId());
         m.kind = missileKind(def);
-        m.color = def != null ? def.accent : new Color(200, 210, 235);
+        // Elemental shots fly in their element's colour so the payload reads
+        // mid-flight, not just on impact.
+        m.element = e.element();
+        m.color = m.element != null ? m.element.color
+                : def != null ? def.accent : new Color(200, 210, 235);
         m.impactText = text;
         m.impactColor = color;
         missiles.add(m);
@@ -529,7 +567,8 @@ public class AutoBattlerScene extends AbstractScene {
             }
             if (m.life <= 0) {
                 if (m.impactText != null) addFloater(m.tx, m.ty, m.impactText, m.impactColor);
-                particles.burst(m.tx, m.ty, m.color, 7);
+                if (m.element != null) elementBurst(m.element, m.tx, m.ty);
+                else particles.burst(m.tx, m.ty, m.color, 7);
                 playHitSfx();
                 missiles.remove(i);
             }
@@ -619,6 +658,12 @@ public class AutoBattlerScene extends AbstractScene {
         xpBtn.setBounds(AutoHud.xpButton(w, h));
         rerollBtn.setBounds(AutoHud.rerollButton(w, h));
         sellBtn.setBounds(AutoHud.sellButton(w, h));
+        lockBtn.setBounds(AutoHud.lockButton(w, h));
+        unequipBtn.setBounds(AutoHud.unequipButton(w, h));
+        relicBadge.setBounds(AutoHud.relicBadge(w));
+        for (int i = 0; i < 3; i++) {
+            arrangeBtns[i].setBounds(AutoHud.arrangeButton(w, i));
+        }
         for (int i = 0; i < 5; i++) {
             shopCards[i].setBounds(AutoHud.shopCard(w, h, i));
         }
@@ -650,7 +695,11 @@ public class AutoBattlerScene extends AbstractScene {
         hoverUnit = null;
         hoverTrait = null;
         hoverCategory = null;
+        hoverRelic = false;
         if (viewingId >= 0) return; // the scout overlay owns the pointer
+
+        AutoClient.You me = client.you();
+        hoverRelic = me != null && me.relic() != null && relicBadge.contains(mx, my);
 
         for (int i = 0; i < 9; i++) {
             if (benchSlots[i].contains(mx, my)) hoverBench = i;
@@ -780,7 +829,18 @@ public class AutoBattlerScene extends AbstractScene {
 
     /** Finish a unit drag: move it to the bench slot or board cell under the cursor. */
     private void dropUnit(AutoClient.You you, int unitId) {
-        if (!planning() || findOwn(unitId) == null) return;
+        UnitInstance dragged = findOwn(unitId);
+        if (!planning() || dragged == null) return;
+        // A 1-star Wisp dropped onto a unit with a pair fuses as the missing
+        // copy (Io-style) instead of swapping places.
+        UnitInstance target = null;
+        if (hoverBench >= 0) target = benchUnitAt(you, hoverBench);
+        else if (hoverCol >= 0) target = boardUnitAt(you, hoverCol, hoverRow);
+        if (target != null && target != dragged && canFuseInto(you, dragged, target)) {
+            client.sendFuse(unitId, target.id);
+            ctx.sfx(AudioManager.Sfx.PICKUP);
+            return;
+        }
         if (hoverBench >= 0) {
             client.sendMoveToBench(unitId, hoverBench);
             ctx.sfx(AudioManager.Sfx.CLICK);
@@ -789,6 +849,22 @@ public class AutoBattlerScene extends AbstractScene {
             ctx.sfx(AudioManager.Sfx.CLICK);
         }
         // Dropped outside a legal target: the unit stays where it was.
+    }
+
+    /** Whether dropping {@code dragged} (a Wisp) on {@code target} completes a merge. */
+    private boolean canFuseInto(AutoClient.You you, UnitInstance dragged,
+                                UnitInstance target) {
+        if (!AutoUnits.WISP.equals(dragged.key) || dragged.star > 1) return false;
+        if (AutoUnits.WISP.equals(target.key) || target.star >= 3) return false;
+        int copies = 0;
+        for (UnitInstance u : you.bench()) {
+            if (u.key.equals(target.key) && u.star == target.star) copies++;
+        }
+        for (UnitInstance u : you.board()) {
+            if (u.key.equals(target.key) && u.star == target.star) copies++;
+        }
+        int need = target.star == 1 && you.relic() == Relic.APPRENTICE ? 2 : 3;
+        return copies >= need - 1;
     }
 
     /** Finish an item drag: equip it on the unit (bench or board) under the cursor. */
@@ -846,9 +922,28 @@ public class AutoBattlerScene extends AbstractScene {
             ctx.sfx(AudioManager.Sfx.CLICK);
             return;
         }
+        if (lockBtn.contains(mx, my)) {
+            client.sendLock();
+            ctx.sfx(AudioManager.Sfx.CLICK);
+            return;
+        }
+        if (planning()) {
+            for (int i = 0; i < arrangeBtns.length; i++) {
+                if (arrangeBtns[i].contains(mx, my)) {
+                    client.sendArrange(ARRANGE_MODES[i]);
+                    ctx.sfx(AudioManager.Sfx.CLICK);
+                    return;
+                }
+            }
+        }
         if (selectedUnitId >= 0 && sellBtn.contains(mx, my)) {
             client.sendSell(selectedUnitId);
             selectedUnitId = -1;
+            ctx.sfx(AudioManager.Sfx.CLICK);
+            return;
+        }
+        if (selectedUnitId >= 0 && unequipBtn.contains(mx, my)) {
+            client.sendUnequip(selectedUnitId);
             ctx.sfx(AudioManager.Sfx.CLICK);
             return;
         }
@@ -1009,16 +1104,23 @@ public class AutoBattlerScene extends AbstractScene {
         g.fillRect(0, 0, w, h);
     }
 
-    /** Decorative rim props (cosmetic only), depth-sorted with the board. */
+    /**
+     * Decorative props (cosmetic only) at their player-placed positions;
+     * slots with an imported image draw that instead of the procedural prop.
+     */
     private void drawProps(Graphics2D g, BoardTheme theme) {
         int size = (int) (40 * camera.zoom);
         int[] out = new int[2];
         for (int i = 0; i < BoardTheme.PROP_SLOTS; i++) {
-            BoardTheme.Prop kind = theme.prop(i);
-            if (kind == BoardTheme.Prop.NONE) continue;
-            double[] cell = BoardTheme.PROP_CELLS[i];
-            camera.worldToScreen((cell[0] + 0.5) * TILE, (cell[1] + 0.5) * TILE, out);
-            BufferedImage img = AutoSprites.prop(kind, size);
+            if (!theme.propVisible(i)) continue;
+            camera.worldToScreen((theme.propCol(i) + 0.5) * TILE,
+                    (theme.propRow(i) + 0.5) * TILE, out);
+            BufferedImage img = theme.propImage(i).isEmpty() ? null
+                    : AssetLoader.loadImageOrNull(theme.propImage(i));
+            if (img == null && theme.prop(i) != BoardTheme.Prop.NONE) {
+                img = AutoSprites.prop(theme.prop(i), size);
+            }
+            if (img == null) continue;
             g.drawImage(img, out[0] - size / 2, out[1] - size + size / 4, size, size, null);
         }
     }
@@ -1398,6 +1500,49 @@ public class AutoBattlerScene extends AbstractScene {
             g.setColor(new Color(110, 115, 135));
             g.drawString(ping + " ms", viewportWidth - 52, 18);
         }
+
+        if (phase.phase() == AutoGame.Phase.PLAN) drawArrangeButtons(g);
+        drawRelicBadge(g, phase.round());
+    }
+
+    /** One-click formation buttons, shown while the board is editable. */
+    private void drawArrangeButtons(Graphics2D g) {
+        AutoClient.You you = client.you();
+        boolean enabled = you != null && !you.board().isEmpty();
+        for (int i = 0; i < arrangeBtns.length; i++) {
+            Rectangle r = arrangeBtns[i];
+            boolean hot = r.contains(lastMouseX, lastMouseY);
+            g.setColor(!enabled ? new Color(30, 33, 48)
+                    : hot ? new Color(58, 66, 96) : new Color(40, 46, 68));
+            g.fillRoundRect(r.x, r.y, r.width, r.height, 8, 8);
+            g.setColor(enabled ? new Color(120, 130, 160) : new Color(60, 64, 84));
+            g.drawRoundRect(r.x, r.y, r.width, r.height, 8, 8);
+            g.setFont(new Font("SansSerif", Font.BOLD, 11));
+            g.setColor(enabled ? new Color(210, 216, 234) : new Color(110, 114, 134));
+            drawCentered(g, ARRANGE_LABELS[i], r.x + r.width / 2, r.y + 15);
+        }
+    }
+
+    /** The current relic in the top-left corner; hover for its description. */
+    private void drawRelicBadge(Graphics2D g, int round) {
+        AutoClient.You you = client.you();
+        if (you == null || you.relic() == null) return;
+        Relic relic = you.relic();
+        Rectangle r = relicBadge;
+        g.setColor(new Color(22, 25, 42, 235));
+        g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
+        g.setColor(hoverRelic ? relic.color : new Color(70, 78, 108));
+        g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
+        g.setColor(relic.color);
+        g.fillOval(r.x + 8, r.y + r.height / 2 - 7, 14, 14);
+        g.setFont(new Font("SansSerif", Font.BOLD, 13));
+        g.setColor(new Color(230, 234, 246));
+        g.drawString(trim(g, "Relic: " + relic.label, r.width - 36), r.x + 28, r.y + 19);
+        int untilSwap = AutoGame.RELIC_INTERVAL - ((round - 1) % AutoGame.RELIC_INTERVAL);
+        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
+        g.setColor(new Color(150, 156, 178));
+        g.drawString("swaps in " + untilSwap + " round" + (untilSwap == 1 ? "" : "s"),
+                r.x + 28, r.y + 36);
     }
 
     private record TraitCount(Trait trait, int count) {}
@@ -1568,9 +1713,15 @@ public class AutoBattlerScene extends AbstractScene {
             double phys = u.dmgPhysical(), mag = u.dmgMagic(), heal = u.healing();
             double total = phys + mag;
 
+            // Your own units glow green so the meter reads at a glance.
+            if (friendly) {
+                g.setColor(new Color(60, 160, 80, 70));
+                g.fillRoundRect(x - 3, y - 2, barMax + 6, rowH - 2, 6, 6);
+            }
+
             g.setFont(new Font("SansSerif", Font.PLAIN, 12));
             Color nameColor = u.dead() ? new Color(115, 118, 136)
-                    : friendly ? new Color(205, 225, 250) : new Color(240, 185, 175);
+                    : friendly ? new Color(150, 235, 160) : new Color(240, 185, 175);
             g.setColor(nameColor);
             String name = def != null ? def.name : u.key();
             g.drawString(trim(g, name, barMax - 58), x, y + 10);
@@ -1580,16 +1731,48 @@ public class AutoBattlerScene extends AbstractScene {
             FontMetrics fm = g.getFontMetrics();
             g.drawString(amount, x + barMax - fm.stringWidth(amount), y + 10);
 
-            // Stacked bar: physical then magic, scaled to the fight's top damage.
-            int bw = (int) (barMax * Math.min(1, total / maxTotal));
-            int physW = total <= 0 ? 0 : (int) (bw * phys / total);
-            g.setColor(new Color(15, 15, 22, 200));
-            g.fillRect(x, y + 14, barMax, 5);
-            g.setColor(DMG_PHYSICAL);
-            g.fillRect(x, y + 14, physW, 5);
-            g.setColor(DMG_MAGIC);
-            g.fillRect(x + physW, y + 14, Math.max(0, bw - physW), 5);
+            drawDamageBar(g, u, x, y + 14, barMax, total, maxTotal, phys);
             y += rowH;
+        }
+    }
+
+    /**
+     * One damage bar, scaled to the fight's top damage and broken down by
+     * element: each attack element gets a segment in its own colour, and
+     * whatever damage wasn't elemental splits into the plain attack/ability
+     * colours.
+     */
+    private void drawDamageBar(Graphics2D g, AutoClient.CombatUnit u, int x, int y,
+                               int barMax, double total, double maxTotal, double phys) {
+        g.setColor(new Color(15, 15, 22, 200));
+        g.fillRect(x, y, barMax, 5);
+        int bw = (int) (barMax * Math.min(1, total / maxTotal));
+        if (bw <= 0 || total <= 0) return;
+
+        double elemental = 0;
+        for (double amount : u.dmgByElement().values()) elemental += amount;
+        elemental = Math.min(elemental, total);
+
+        int drawn = 0;
+        for (Map.Entry<Element, Double> e : u.dmgByElement().entrySet()) {
+            int seg = (int) (bw * e.getValue() / total);
+            if (seg <= 0) continue;
+            g.setColor(e.getKey().color);
+            g.fillRect(x + drawn, y, seg, 5);
+            drawn += seg;
+        }
+        // Plain remainder: attack then ability colours.
+        double plain = total - elemental;
+        if (plain > 0) {
+            double plainPhys = Math.min(phys, plain);
+            int physW = (int) (bw * plainPhys / total);
+            g.setColor(DMG_PHYSICAL);
+            g.fillRect(x + drawn, y, physW, 5);
+            drawn += physW;
+        }
+        if (drawn < bw) {
+            g.setColor(DMG_MAGIC);
+            g.fillRect(x + drawn, y, bw - drawn, 5);
         }
     }
 
@@ -1717,6 +1900,16 @@ public class AutoBattlerScene extends AbstractScene {
         drawButton(g, xpBtn, "Buy XP  4g  (F)", you.gold() >= 4 && you.level() < 9);
         drawButton(g, rerollBtn, "Reroll  2g  (D)", you.gold() >= 2);
 
+        // Shop lock: keep this exact shop through the round change.
+        boolean locked = you.shopLocked();
+        g.setColor(locked ? new Color(200, 165, 60) : new Color(45, 52, 76));
+        g.fillRoundRect(lockBtn.x, lockBtn.y, lockBtn.width, lockBtn.height, 8, 8);
+        g.setColor(locked ? new Color(255, 225, 130) : new Color(120, 130, 158));
+        g.drawRoundRect(lockBtn.x, lockBtn.y, lockBtn.width, lockBtn.height, 8, 8);
+        g.setFont(new Font("SansSerif", Font.BOLD, 11));
+        g.setColor(locked ? new Color(35, 28, 8) : new Color(170, 178, 200));
+        drawCentered(g, "Lock", lockBtn.x + lockBtn.width / 2, lockBtn.y + 17);
+
         // Gold / level / XP / streak readout: two short lines that stay left of
         // the (centred) bench strip — see AutoHud.economyLine.
         Rectangle eco = AutoHud.economyLine(w, h);
@@ -1774,23 +1967,49 @@ public class AutoBattlerScene extends AbstractScene {
             g.drawString(trim(g, def.origin.label, r.width - 96), r.x + 62, r.y + 42);
             g.setColor(def.clazz.color);
             g.drawString(trim(g, def.clazz.label, r.width - 96), r.x + 62, r.y + 58);
-            g.setColor(new Color(255, 214, 100));
+            int price = you.shopPrice(i);
+            boolean discounted = price < def.cost;
+            g.setColor(discounted ? new Color(130, 235, 150) : new Color(255, 214, 100));
             g.setFont(new Font("SansSerif", Font.BOLD, 14));
-            g.drawString(def.cost + "g", r.x + r.width - 30, r.y + r.height - 10);
-            if (you.gold() < def.cost) {
+            g.drawString(price + "g", r.x + r.width - 30, r.y + r.height - 10);
+            if (discounted) {
+                // The Bargainer's slash: the list price, struck through.
+                g.setFont(new Font("SansSerif", Font.PLAIN, 11));
+                g.setColor(new Color(170, 176, 198));
+                String was = def.cost + "g";
+                int wx = r.x + r.width - 30;
+                int wy = r.y + r.height - 24;
+                g.drawString(was, wx, wy);
+                g.drawLine(wx - 1, wy - 4, wx + g.getFontMetrics().stringWidth(was), wy - 4);
+            }
+            if (you.gold() < price) {
                 g.setColor(new Color(10, 10, 18, 130));
                 g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
             }
         }
 
-        // Sell button when a unit is selected.
+        // Sell + item-removal buttons when a unit is selected.
         if (selectedUnitId >= 0) {
             UnitInstance sel = findOwn(selectedUnitId);
             if (sel != null && sel.def() != null) {
-                drawButton(g, sellBtn, "Sell " + sel.def().value(sel.star) + "g  (S)", true,
+                drawButton(g, sellBtn, "Sell " + sellPrice(you, sel) + "g  (S)", true,
                         new Color(120, 55, 55), new Color(235, 140, 120));
+                if (!sel.items.isEmpty()) {
+                    drawButton(g, unequipBtn, you.unequipUsed()
+                                    ? "Items removed this round"
+                                    : "Remove items  (1/round)",
+                            !you.unequipUsed(), new Color(50, 70, 100),
+                            new Color(140, 180, 235));
+                }
             }
         }
+    }
+
+    /** Mirror of the server's sell pricing, for the button label. */
+    private static int sellPrice(AutoClient.You you, UnitInstance u) {
+        if (u.star <= 1) return u.paid >= 0 ? u.paid : u.def().cost;
+        int value = u.def().value(u.star);
+        return you.relic() == Relic.FENCE ? value * 3 : value;
     }
 
     private void drawButton(Graphics2D g, Rectangle r, String label, boolean enabled) {
@@ -2098,7 +2317,20 @@ public class AutoBattlerScene extends AbstractScene {
         List<String> lines = new ArrayList<>();
         List<Color> colors = new ArrayList<>();
 
-        if (hoverCategory != null) {
+        if (hoverRelic && you.relic() != null) {
+            Relic relic = you.relic();
+            lines.add(relic.label + "  (relic)");
+            colors.add(relic.color);
+            lines.add(relic.description);
+            colors.add(new Color(200, 205, 222));
+            for (Trait t : you.traitBoosts()) {
+                lines.add("Zealot boost: " + t.label + " is 1.5x for the rest of the game");
+                colors.add(t.color);
+            }
+            lines.add("Relics are re-dealt at random every "
+                    + AutoGame.RELIC_INTERVAL + " rounds.");
+            colors.add(new Color(150, 156, 178));
+        } else if (hoverCategory != null) {
             lines.add(hoverCategory.label);
             colors.add(hoverCategory.color);
             lines.add(hoverCategory.description);
@@ -2145,6 +2377,14 @@ public class AutoBattlerScene extends AbstractScene {
             }
         } else if (hoverUnit != null) {
             tooltipForDef(hoverUnit.def(), hoverUnit.star, hoverUnit.items, lines, colors);
+            if (hoverUnit.bonusTrait != null) {
+                lines.add("Attuned: also counts as " + hoverUnit.bonusTrait.label);
+                colors.add(hoverUnit.bonusTrait.color);
+            }
+            if (AutoUnits.WISP.equals(hoverUnit.key) && hoverUnit.star == 1) {
+                lines.add("Drag onto a pair to fuse as its missing copy.");
+                colors.add(new Color(180, 225, 245));
+            }
         }
         if (lines.isEmpty()) return;
 

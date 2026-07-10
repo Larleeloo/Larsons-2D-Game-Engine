@@ -35,6 +35,12 @@ class AutoHudTest {
         r.put("xpButton", AutoHud.xpButton(w, h));
         r.put("rerollButton", AutoHud.rerollButton(w, h));
         r.put("sellButton", AutoHud.sellButton(w, h));
+        r.put("lockButton", AutoHud.lockButton(w, h));
+        r.put("unequipButton", AutoHud.unequipButton(w, h));
+        r.put("relicBadge", AutoHud.relicBadge(w));
+        for (int i = 0; i < 3; i++) {
+            r.put("arrangeButton" + i, AutoHud.arrangeButton(w, i));
+        }
         for (int i = 0; i < 5; i++) {
             r.put("shopCard" + i, AutoHud.shopCard(w, h, i));
         }
@@ -89,6 +95,8 @@ class AutoHudTest {
             assertTrue(bar.contains(AutoHud.xpButton(w, h)));
             assertTrue(bar.contains(AutoHud.rerollButton(w, h)));
             assertTrue(bar.contains(AutoHud.sellButton(w, h)));
+            assertTrue(bar.contains(AutoHud.lockButton(w, h)));
+            assertTrue(bar.contains(AutoHud.unequipButton(w, h)));
             for (int i = 0; i < 5; i++) {
                 assertTrue(bar.contains(AutoHud.shopCard(w, h, i)),
                         "card " + i + " inside the bar at " + w + "x" + h);

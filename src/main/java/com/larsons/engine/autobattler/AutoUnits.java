@@ -2,10 +2,10 @@ package com.larsons.engine.autobattler;
 
 import java.awt.Color;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 
 /**
  * The auto-battler's unit registry: the purchasable roster (43 units across
@@ -22,6 +22,13 @@ import java.util.Map;
  * of units carry none — plain damage is always viable.
  */
 public final class AutoUnits {
+
+    /**
+     * The Wisp: the roster's Io. It fights as a modest Mystic Healer, but its
+     * real job is fusing — a 1-star Wisp can stand in for the missing copy of
+     * any pair you own, upgrading them on the spot ({@code fuse} action).
+     */
+    public static final String WISP = "wisp";
 
     private static final Map<String, UnitDef> UNITS = new LinkedHashMap<>();
 
@@ -140,6 +147,8 @@ public final class AutoUnits {
                 atk(Element.EXPLOSIVE), res(), weak(Element.CORROSIVE));
         register("moon_oracle", "Moon Oracle", 3, Trait.MYSTIC, Trait.HEALER,
                 720, 48, 0.70, 3, 18, 70, 210, c(170, 150, 220), c(235, 225, 255));
+        register(WISP, "Wisp", 3, Trait.MYSTIC, Trait.HEALER,
+                560, 38, 0.70, 2, 14, 70, 160, c(200, 235, 250), c(255, 255, 255));
 
         // --- cost 4 ---------------------------------------------------------
         register("wild_monarch", "Wild Monarch", 4, Trait.WILD, Trait.BRAWLER,
@@ -174,10 +183,19 @@ public final class AutoUnits {
                 atk(), res(Element.CORROSIVE), weak(Element.FIRE));
 
         // --- PvE creeps (cost 0: no traits, never in shops) -------------------
-        creep("creep_slime", "Slime", 300, 25, 0.6, 1, 5, c(120, 200, 120));
+        // Round 1 creeps are soft on purpose: everyone starts at level 1 with a
+        // single fielded unit, and the opener should be winnable solo.
+        creep("creep_slime", "Slime", 150, 15, 0.6, 1, 0, c(120, 200, 120));
+        creep("creep_bat", "Cave Bat", 320, 28, 0.9, 1, 5, c(120, 110, 140));
         creep("creep_wolf", "Dire Wolf", 700, 55, 0.8, 1, 15, c(140, 130, 125));
+        creep("creep_spider", "Venom Spider", 620, 48, 0.75, 1, 10, c(110, 160, 80));
+        creep("creep_bandit", "Bandit Cutpurse", 780, 60, 0.8, 1, 15, c(150, 120, 90));
+        creep("creep_shaman", "Gnoll Shaman", 700, 65, 0.7, 3, 10, c(180, 150, 110));
         creep("creep_ogre", "Ogre Bruiser", 1600, 90, 0.6, 1, 35, c(160, 140, 90));
+        creep("creep_golem", "Stone Golem", 2100, 85, 0.5, 1, 55, c(150, 155, 170));
+        creep("creep_wraith", "Grave Wraith", 1500, 115, 0.8, 2, 20, c(130, 140, 170));
         creep("creep_drake", "Elder Drake", 3000, 140, 0.7, 2, 50, c(200, 90, 90));
+        creep("creep_titan", "Ancient Titan", 4600, 175, 0.6, 2, 60, c(190, 170, 120));
     }
 
     private AutoUnits() {}
@@ -246,14 +264,60 @@ public final class AutoUnits {
 
     /**
      * The PvE creep wave for a round (rounds 1, 5, 10, 15... are creep
-     * rounds), scaling up with the stage of the game.
+     * rounds): mixed packs rather than one species, scaling up with the
+     * stage of the game.
      */
     public static List<String> creepWave(int round) {
-        if (round <= 1) return List.of("creep_slime", "creep_slime", "creep_slime");
-        if (round <= 5) return List.of("creep_wolf", "creep_wolf", "creep_wolf", "creep_wolf");
-        if (round <= 10) return List.of("creep_ogre", "creep_ogre", "creep_ogre", "creep_ogre");
-        if (round <= 15) return List.of("creep_drake", "creep_drake", "creep_drake");
-        List<String> wave = new ArrayList<>(Collections.nCopies(5, "creep_drake"));
+        if (round <= 1) return List.of("creep_slime", "creep_slime");
+        if (round <= 5) {
+            return List.of("creep_wolf", "creep_wolf", "creep_bat", "creep_spider");
+        }
+        if (round <= 10) {
+            return List.of("creep_ogre", "creep_ogre", "creep_bandit", "creep_shaman");
+        }
+        if (round <= 15) {
+            return List.of("creep_drake", "creep_golem", "creep_wraith", "creep_shaman");
+        }
+        if (round <= 20) {
+            return List.of("creep_drake", "creep_drake", "creep_wraith", "creep_golem");
+        }
+        return List.of("creep_titan", "creep_drake", "creep_drake",
+                "creep_wraith", "creep_wraith");
+    }
+
+    /**
+     * The species eligible for a round's <em>randomized</em> wave (the Wild
+     * Hunt relic): the stage's regular pack plus its neighbours, so the random
+     * draw stays roughly stage-appropriate while feeling wild.
+     */
+    public static List<String> creepPool(int round) {
+        if (round <= 1) return List.of("creep_slime", "creep_bat");
+        if (round <= 5) {
+            return List.of("creep_wolf", "creep_bat", "creep_spider", "creep_bandit");
+        }
+        if (round <= 10) {
+            return List.of("creep_ogre", "creep_bandit", "creep_shaman",
+                    "creep_spider", "creep_golem");
+        }
+        if (round <= 15) {
+            return List.of("creep_drake", "creep_golem", "creep_wraith",
+                    "creep_shaman", "creep_ogre");
+        }
+        return List.of("creep_titan", "creep_drake", "creep_wraith", "creep_golem");
+    }
+
+    /**
+     * A Wild Hunt wave: one creep bigger than the round's regular pack, drawn
+     * at random from the stage's pool — harder, in exchange for the relic's
+     * richer rewards.
+     */
+    public static List<String> randomCreepWave(int round, Random rng) {
+        List<String> pool = creepPool(round);
+        int size = creepWave(round).size() + 1;
+        List<String> wave = new ArrayList<>(size);
+        for (int i = 0; i < size; i++) {
+            wave.add(pool.get(rng.nextInt(pool.size())));
+        }
         return wave;
     }
 

@@ -23,6 +23,17 @@ public final class UnitInstance {
     /** Item keys held (components + combined), at most {@value MAX_ITEMS}. */
     public final List<String> items = new ArrayList<>();
 
+    /**
+     * Gold actually paid for this unit (relic discounts can undercut the list
+     * price), so selling a 1-star refunds what was spent; -1 = full price.
+     */
+    public int paid = -1;
+    /**
+     * An extra synergy granted by the Harmonizer relic, counted alongside the
+     * def's origin/class traits; {@code null} for almost every unit.
+     */
+    public Trait bonusTrait;
+
     /** Bench slot index, or -1 when fielded on the board. */
     public int bench = -1;
     /** Board cell, or -1/-1 when benched. Rows 4-7 are the player's half. */
@@ -61,6 +72,8 @@ public final class UnitInstance {
         u.bench = bench;
         u.col = col;
         u.row = row;
+        u.paid = paid;
+        u.bonusTrait = bonusTrait;
         return u;
     }
 
@@ -73,6 +86,8 @@ public final class UnitInstance {
         m.put("c", col);
         m.put("r", row);
         if (!items.isEmpty()) m.put("it", new ArrayList<Object>(items));
+        if (paid >= 0) m.put("pd", paid);
+        if (bonusTrait != null) m.put("bt", bonusTrait.name());
         return m;
     }
 
@@ -85,6 +100,14 @@ public final class UnitInstance {
         if (m.get("it") instanceof List<?> list) {
             for (Object o : Json.asArray(list)) {
                 if (o instanceof String s) u.items.add(s);
+            }
+        }
+        if (m.containsKey("pd")) u.paid = intOf(m.get("pd"));
+        if (m.get("bt") instanceof String name) {
+            try {
+                u.bonusTrait = Trait.valueOf(name);
+            } catch (IllegalArgumentException ignored) {
+                // unknown trait names stay null
             }
         }
         return u;

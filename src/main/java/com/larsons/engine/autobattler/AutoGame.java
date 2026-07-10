@@ -3,10 +3,12 @@ package com.larsons.engine.autobattler;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 /**
  * The complete server-side auto-battler: lobby, rounds, phases, the shared
@@ -38,6 +40,12 @@ public final class AutoGame {
     public static final int XP_COST = 4;
     public static final int XP_PER_BUY = 4;
     public static final int XP_PER_ROUND = 2;
+    /** Relics are re-dealt on round 1 and every this-many rounds after. */
+    public static final int RELIC_INTERVAL = 10;
+    /** Chance (%) that a Bargainer shop slot is discounted. */
+    public static final int BARGAIN_CHANCE = 35;
+    /** Gold knocked off a Bargainer-discounted shop slot. */
+    public static final int BARGAIN_DISCOUNT = 3;
 
     public enum Phase { LOBBY, PLAN, FIGHT, POST, OVER }
 
@@ -51,8 +59,9 @@ public final class AutoGame {
          */
         public double fightMaxSeconds = 45;
         public double postSeconds = 4;
-        public int startGold = 8;
-        public int startLevel = 3;
+        /** Dota Auto Chess opening: level 1, 1 gold, one unit on the board. */
+        public int startGold = 1;
+        public int startLevel = 1;
         public int startHp = 100;
         public long seed = new Random().nextLong();
     }
@@ -235,24 +244,122 @@ public final class AutoGame {
         phaseLeft = cfg.planSeconds;
         clockAccum = 0;
         botAccum = 0;
+        boolean relicRound = (round - 1) % RELIC_INTERVAL == 0;
         for (AutoPlayer p : players) {
             if (!p.alive) continue;
+            p.unequipUsed = false;
             if (round > 1) {
                 p.gold += p.income();
                 int merchant = merchantBonus(p.boardUnits());
                 if (merchant > 0) {
+                    merchant = (int) Math.round(merchant
+                            * p.traitBoosts.getOrDefault(Trait.MERCHANT, 1.0));
                     p.gold += merchant;
                     sink.toPlayer(p.id, AutoProto.info(
                             "Your merchants earned +" + merchant + " gold"));
                 }
                 p.gainXp(XP_PER_ROUND);
             }
-            refreshShop(p);
+            if (relicRound) {
+                grantRelic(p, Relic.roll(rng, p.relic));
+            } else if (p.relic != null && p.relic.oneShot && !p.relicFired) {
+                // A one-shot relic that couldn't fire yet (e.g. Harmonizer
+                // dealt before any unit was owned) retries each round.
+                fireOneShot(p);
+            }
+            if (p.shopLocked) {
+                sink.toPlayer(p.id, AutoProto.info("Shop locked — same units kept"));
+            } else {
+                refreshShop(p);
+            }
             sendYou(p);
         }
         broadcastPlayers();
         broadcastPhase();
         runBots();
+    }
+
+    // --- relics ---------------------------------------------------------------------
+
+    /** Hand {@code p} a relic (round 1 and every {@value RELIC_INTERVAL} rounds). */
+    void grantRelic(AutoPlayer p, Relic relic) {
+        p.relic = relic;
+        p.relicFired = false;
+        sink.toPlayer(p.id, AutoProto.info(
+                "Relic: " + relic.label + " — " + relic.description));
+        if (relic.oneShot) fireOneShot(p);
+    }
+
+    /** Apply a one-shot relic's effect; leaves {@code relicFired} false to retry. */
+    private void fireOneShot(AutoPlayer p) {
+        switch (p.relic) {
+            case MENDER -> {
+                int heal = 15 + rng.nextInt(6);
+                int healed = Math.min(cfg.startHp, p.hp + heal) - p.hp;
+                p.hp += healed;
+                p.relicFired = true;
+                sink.toPlayer(p.id, AutoProto.info(
+                        "The Mender restored " + healed + " HP"));
+            }
+            case ZEALOT -> {
+                Trait[] all = Trait.values();
+                Trait t = all[rng.nextInt(all.length)];
+                p.traitBoosts.merge(t, Relic.ZEALOT_BOOST, (a, b) -> a * b);
+                p.relicFired = true;
+                sink.toPlayer(p.id, AutoProto.info(
+                        "Zealot: " + t.label + " is now 1.5x as effective for the rest"
+                                + " of the game"));
+            }
+            case HARMONIZER -> {
+                UnitInstance u = harmonizerTarget(p);
+                if (u == null) return; // no unit yet; retried next round
+                Trait t = harmonizerTrait(p, u);
+                if (t == null) return;
+                u.bonusTrait = t;
+                p.relicFired = true;
+                sink.toPlayer(p.id, AutoProto.info(
+                        "The Harmonizer attuned " + u.def().name + " to " + t.label));
+            }
+            default -> p.relicFired = true; // passive relics have nothing to fire
+        }
+    }
+
+    /** A random owned unit for the Harmonizer, preferring fielded ones. */
+    private UnitInstance harmonizerTarget(AutoPlayer p) {
+        List<UnitInstance> pool = p.boardUnits();
+        if (pool.isEmpty()) pool = p.units;
+        if (pool.isEmpty()) return null;
+        return pool.get(rng.nextInt(pool.size()));
+    }
+
+    /**
+     * A trait for the Harmonizer: drawn from the synergies the player already
+     * fields (its whole point is deepening a build), skipping ones the unit
+     * already carries; any trait as a fallback.
+     */
+    private Trait harmonizerTrait(AutoPlayer p, UnitInstance u) {
+        List<Trait> candidates = new ArrayList<>(
+                BattleSim.countTraits(p.boardUnits()).keySet());
+        candidates.removeIf(t -> t == u.def().origin || t == u.def().clazz
+                || t == u.bonusTrait);
+        if (candidates.isEmpty()) {
+            for (Trait t : Trait.values()) {
+                if (t != u.def().origin && t != u.def().clazz) candidates.add(t);
+            }
+        }
+        return candidates.isEmpty() ? null : candidates.get(rng.nextInt(candidates.size()));
+    }
+
+    /** The combat modifiers a player's relics grant their team. */
+    private BattleSim.TeamMods modsOf(AutoPlayer p) {
+        double amp = p.relic == Relic.VOID_BRAND ? Relic.VOID_BRAND_AMP : 1.0;
+        if (amp == 1.0 && p.traitBoosts.isEmpty()) return BattleSim.TeamMods.NONE;
+        return new BattleSim.TeamMods(amp, Map.copyOf(p.traitBoosts));
+    }
+
+    /** Copies needed to upgrade from {@code star}: the Apprentice relic pairs 2-stars. */
+    private int combineNeed(AutoPlayer p, int star) {
+        return star == 1 && p.relic == Relic.APPRENTICE ? 2 : 3;
     }
 
     private void beginFight() {
@@ -265,8 +372,9 @@ public final class AutoGame {
         if (AutoUnits.isCreepRound(round)) {
             for (AutoPlayer p : alive) {
                 matches.add(new Match(p, null, true, null,
-                        new BattleSim(p.boardUnits(), creepBoard(round),
-                                rng.nextLong(), round)));
+                        new BattleSim(p.boardUnits(), creepBoard(round, p),
+                                rng.nextLong(), round, modsOf(p),
+                                BattleSim.TeamMods.NONE)));
             }
         } else {
             List<AutoPlayer> order = new ArrayList<>(alive);
@@ -276,7 +384,7 @@ public final class AutoGame {
                 AutoPlayer away = order.get(i + 1);
                 matches.add(new Match(home, away, false, null,
                         new BattleSim(home.boardUnits(), away.boardUnits(),
-                                rng.nextLong(), round)));
+                                rng.nextLong(), round, modsOf(home), modsOf(away))));
             }
             if (order.size() % 2 == 1) {
                 AutoPlayer odd = order.get(order.size() - 1);
@@ -284,7 +392,8 @@ public final class AutoGame {
                 List<UnitInstance> ghost = new ArrayList<>();
                 for (UnitInstance u : copied.boardUnits()) ghost.add(u.copy());
                 matches.add(new Match(odd, null, false, copied.name,
-                        new BattleSim(odd.boardUnits(), ghost, rng.nextLong(), round)));
+                        new BattleSim(odd.boardUnits(), ghost, rng.nextLong(), round,
+                                modsOf(odd), modsOf(copied))));
             }
         }
 
@@ -348,8 +457,10 @@ public final class AutoGame {
             applyOutcome(m.home, won, winner == -1,
                     2 + m.sim.survivorStars(BattleSim.AWAY), "Creeps");
             if (won) {
-                m.home.gold += 2;
-                if (m.home.items.size() < ITEM_BENCH_CAP) {
+                boolean wildHunt = m.home.relic == Relic.WILD_HUNT;
+                m.home.gold += wildHunt ? 4 : 2;
+                int drops = wildHunt ? 2 : 1;
+                for (int i = 0; i < drops && m.home.items.size() < ITEM_BENCH_CAP; i++) {
                     // Mostly components; sometimes an elemental relic instead.
                     List<String> table = rng.nextInt(100) < 30
                             ? AutoItems.relicKeys() : AutoItems.componentKeys();
@@ -369,8 +480,29 @@ public final class AutoGame {
                 applyOutcome(m.away, winner == BattleSim.AWAY, draw,
                         2 + m.sim.survivorStars(BattleSim.HOME), m.home.name);
             }
+            if (!draw && m.away != null) {
+                AutoPlayer victor = winner == BattleSim.HOME ? m.home : m.away;
+                AutoPlayer loser = winner == BattleSim.HOME ? m.away : m.home;
+                int dealt = 2 + m.sim.survivorStars(winner);
+                plunder(victor, loser, dealt);
+            }
         }
         broadcastPlayers();
+    }
+
+    /** The Plunderer relic: winning steals gold equal to the damage dealt. */
+    void plunder(AutoPlayer victor, AutoPlayer loser, int damage) {
+        if (victor.relic != Relic.PLUNDERER) return;
+        int steal = Math.min(damage, loser.gold);
+        if (steal <= 0) return;
+        loser.gold -= steal;
+        victor.gold += steal;
+        sink.toPlayer(victor.id, AutoProto.info(
+                "You plundered " + steal + " gold from " + loser.name));
+        sink.toPlayer(loser.id, AutoProto.info(
+                victor.name + " plundered " + steal + " of your gold"));
+        sendYou(victor);
+        sendYou(loser);
     }
 
     /** Update streaks and HP for one player's round result, and tell them. */
@@ -417,6 +549,10 @@ public final class AutoGame {
                 }
             }
             case "equip" -> equip(p, intOf(msg.get("i")), intOf(msg.get("u")));
+            case "lock" -> toggleLock(p);
+            case "unequip" -> unequip(p, intOf(msg.get("u")));
+            case "arrange" -> arrange(p, msg.get("m") instanceof String s ? s : "");
+            case "fuse" -> fuse(p, intOf(msg.get("w")), intOf(msg.get("u")));
             default -> { /* not an action */ }
         }
     }
@@ -425,21 +561,35 @@ public final class AutoGame {
         if (slot < 0 || slot >= AutoPlayer.SHOP_SIZE || p.shop[slot] == null) return false;
         UnitDef def = AutoUnits.get(p.shop[slot]);
         if (def == null) return false;
-        if (p.gold < def.cost) {
+        int price = Math.max(0, def.cost - p.shopDeals[slot]);
+        if (p.gold < price) {
             return reject(p, "Not enough gold");
         }
         int benchSlot = p.freeBenchSlot();
-        if (benchSlot < 0) {
+        if (benchSlot < 0 && !buyWouldCombine(p, def.key)) {
             return reject(p, "Bench is full");
         }
-        p.gold -= def.cost;
+        p.gold -= price;
         p.shop[slot] = null;
+        p.shopDeals[slot] = 0;
         UnitInstance u = new UnitInstance(nextUnitId++, def.key);
-        u.placeBench(benchSlot);
+        u.paid = price;
+        // A full bench still accepts a copy that completes an upgrade: it
+        // waits in an overflow slot that tryCombine immediately merges away.
+        u.placeBench(benchSlot >= 0 ? benchSlot : AutoPlayer.BENCH_SIZE);
         p.units.add(u);
         tryCombine(p, def.key);
         sendYou(p);
         return true;
+    }
+
+    /** Whether buying {@code key} completes an upgrade even with no bench room. */
+    private boolean buyWouldCombine(AutoPlayer p, String key) {
+        int owned = 0;
+        for (UnitInstance u : p.units) {
+            if (u.key.equals(key) && u.star == 1) owned++;
+        }
+        return owned >= combineNeed(p, 1) - 1;
     }
 
     boolean sell(AutoPlayer p, int unitId) {
@@ -448,12 +598,173 @@ public final class AutoGame {
         if (u.onBoard() && phase != Phase.PLAN) {
             return reject(p, "Can't sell fielded units during combat");
         }
-        p.gold += u.def().value(u.star);
+        p.gold += sellValue(p, u);
         pool.giveBack(u.key, copiesIn(u.star));
         for (String item : u.items) {
             if (p.items.size() < ITEM_BENCH_CAP) p.items.add(item);
         }
         p.units.remove(u);
+        sendYou(p);
+        return true;
+    }
+
+    /**
+     * A unit's sell price: 1-stars refund what was actually paid (relic
+     * discounts included); upgraded units refund their combined copy value,
+     * tripled while the Fence relic is held.
+     */
+    int sellValue(AutoPlayer p, UnitInstance u) {
+        if (u.star <= 1) return u.paid >= 0 ? u.paid : u.def().cost;
+        int value = u.def().value(u.star);
+        return p.relic == Relic.FENCE ? value * 3 : value;
+    }
+
+    /** Toggle the shop lock: a locked shop is kept, not re-rolled, next round. */
+    boolean toggleLock(AutoPlayer p) {
+        p.shopLocked = !p.shopLocked;
+        sink.toPlayer(p.id, AutoProto.info(p.shopLocked
+                ? "Shop locked — these units will still be here next round"
+                : "Shop unlocked"));
+        sendYou(p);
+        return true;
+    }
+
+    /** Strip every item off a unit back to the item bench; once per round. */
+    boolean unequip(AutoPlayer p, int unitId) {
+        if (phase != Phase.PLAN) return reject(p, "Wait for the planning phase");
+        UnitInstance u = p.find(unitId);
+        if (u == null || u.items.isEmpty()) return reject(p, "No items to remove");
+        if (p.unequipUsed) return reject(p, "Item removal already used this round");
+        int moved = 0;
+        for (int i = u.items.size() - 1; i >= 0; i--) {
+            if (p.items.size() >= ITEM_BENCH_CAP) break;
+            p.items.add(u.items.remove(i));
+            moved++;
+        }
+        if (moved == 0) return reject(p, "Item bench is full");
+        p.unequipUsed = true;
+        sink.toPlayer(p.id, AutoProto.info(
+                "Removed " + moved + " item" + (moved == 1 ? "" : "s")
+                        + " (once per round)"));
+        sendYou(p);
+        return true;
+    }
+
+    /**
+     * Reposition the whole fielded board with one click: {@code front} packs
+     * everyone toward the front line, {@code spread} disperses them across
+     * the half, {@code flip} mirrors the formation left-to-right.
+     */
+    boolean arrange(AutoPlayer p, String mode) {
+        if (phase != Phase.PLAN) return reject(p, "Wait for the planning phase");
+        List<UnitInstance> board = p.boardUnits();
+        if (board.isEmpty()) return false;
+        switch (mode) {
+            case "flip" -> {
+                for (UnitInstance u : board) {
+                    u.placeBoard(BattleSim.COLS - 1 - u.col, u.row);
+                }
+            }
+            case "front" -> {
+                // Melee lead the charge; everyone packs centre-out from row 4.
+                board.sort(Comparator.comparing(u -> !u.def().melee()));
+                placeAlong(board, frontCells());
+            }
+            case "spread" -> {
+                // Checkerboard spacing: melee fill from the front of the
+                // pattern, ranged from the back — indexes never meet, so
+                // every unit lands on its own cell.
+                List<UnitInstance> melee = new ArrayList<>();
+                List<UnitInstance> ranged = new ArrayList<>();
+                for (UnitInstance u : board) {
+                    (u.def().melee() ? melee : ranged).add(u);
+                }
+                List<int[]> cells = spreadCells();
+                int front = 0, back = cells.size() - 1;
+                for (UnitInstance u : melee) {
+                    if (front > back) break;
+                    int[] cell = cells.get(front++);
+                    u.placeBoard(cell[0], cell[1]);
+                }
+                for (UnitInstance u : ranged) {
+                    if (back < front) break;
+                    int[] cell = cells.get(back--);
+                    u.placeBoard(cell[0], cell[1]);
+                }
+            }
+            default -> {
+                return false;
+            }
+        }
+        sendYou(p);
+        return true;
+    }
+
+    private static void placeAlong(List<UnitInstance> units, List<int[]> cells) {
+        for (int i = 0; i < units.size() && i < cells.size(); i++) {
+            units.get(i).placeBoard(cells.get(i)[0], cells.get(i)[1]);
+        }
+    }
+
+    /** Own-half cells row by row from the front line, centre columns first. */
+    private static List<int[]> frontCells() {
+        int[] cols = {3, 4, 2, 5, 1, 6, 0, 7};
+        List<int[]> cells = new ArrayList<>();
+        for (int r = BattleSim.ROWS / 2; r < BattleSim.ROWS; r++) {
+            for (int c : cols) cells.add(new int[]{c, r});
+        }
+        return cells;
+    }
+
+    /** Every other own-half cell (checkerboard), front rows first. */
+    private static List<int[]> spreadCells() {
+        List<int[]> cells = new ArrayList<>();
+        for (int r = BattleSim.ROWS / 2; r < BattleSim.ROWS; r++) {
+            for (int c = (r % 2 == 0) ? 0 : 1; c < BattleSim.COLS; c += 2) {
+                cells.add(new int[]{c, r});
+            }
+        }
+        return cells;
+    }
+
+    /**
+     * Fuse a Wisp into a pair: the Wisp stands in for the missing copy (Io,
+     * Dota Auto Chess style), consuming itself to upgrade the pair on the
+     * spot. Needs a 1-star Wisp and {@code need - 1} copies of the target.
+     */
+    boolean fuse(AutoPlayer p, int wispId, int targetId) {
+        if (phase != Phase.PLAN) return reject(p, "Wait for the planning phase");
+        UnitInstance wisp = p.find(wispId);
+        UnitInstance target = p.find(targetId);
+        if (wisp == null || target == null || !AutoUnits.WISP.equals(wisp.key)
+                || wisp == target) {
+            return false;
+        }
+        if (wisp.star > 1) return reject(p, "Only 1-star Wisps can fuse");
+        if (AutoUnits.WISP.equals(target.key)) {
+            return reject(p, "A Wisp can't fuse with another Wisp");
+        }
+        if (target.star >= 3) return reject(p, "Already at max stars");
+        int copies = 0;
+        for (UnitInstance u : p.units) {
+            if (u.key.equals(target.key) && u.star == target.star) copies++;
+        }
+        if (copies < combineNeed(p, target.star) - 1) {
+            return reject(p, "Fusing needs a pair of " + target.def().name);
+        }
+        // The wisp dissolves into a stand-in copy, and the usual merge runs.
+        p.units.remove(wisp);
+        pool.giveBack(wisp.key, copiesIn(wisp.star));
+        for (String item : wisp.items) {
+            if (p.items.size() < ITEM_BENCH_CAP) p.items.add(item);
+        }
+        UnitInstance standIn = new UnitInstance(nextUnitId++, target.key);
+        standIn.star = target.star;
+        standIn.placeBench(AutoPlayer.BENCH_SIZE); // overflow; merged immediately
+        p.units.add(standIn);
+        sink.toPlayer(p.id, AutoProto.info(
+                "The Wisp fused into " + target.def().name + "!"));
+        tryCombine(p, target.key);
         sendYou(p);
         return true;
     }
@@ -543,17 +854,19 @@ public final class AutoGame {
     }
 
     /**
-     * Merge three identical units into a starred-up one, cascading (three
-     * 2-stars make a 3-star). Fielded copies are preferred as the keeper so an
+     * Merge identical units into a starred-up one, cascading (upgraded copies
+     * can combine again). Normally three copies make a star; the Apprentice
+     * relic pairs 1-stars. Fielded copies are preferred as the keeper so an
      * upgrade never unfields a unit.
      */
     private void tryCombine(AutoPlayer p, String key) {
         for (int star = 1; star < 3; star++) {
+            int need = combineNeed(p, star);
             List<UnitInstance> same = new ArrayList<>();
             for (UnitInstance u : p.units) {
                 if (u.key.equals(key) && u.star == star) same.add(u);
             }
-            if (same.size() < 3) return;
+            if (same.size() < need) continue;
             UnitInstance keeper = same.get(0);
             for (UnitInstance u : same) {
                 if (u.onBoard()) {
@@ -562,11 +875,21 @@ public final class AutoGame {
                 }
             }
             keeper.star = star + 1;
-            for (UnitInstance u : same) {
-                if (u == keeper) continue;
+            List<UnitInstance> feeders = new ArrayList<>(same);
+            feeders.remove(keeper);
+            // Overflow copies (bench-full buys, wisp stand-ins) must merge
+            // away first — they have no real slot to live in.
+            feeders.sort(Comparator.comparing(u -> u.bench != AutoPlayer.BENCH_SIZE));
+            int consumed = 0;
+            for (UnitInstance u : feeders) {
+                if (consumed >= need - 1) break;
+                consumed++;
                 for (String item : u.items) {
                     if (keeper.items.size() < UnitInstance.MAX_ITEMS) keeper.items.add(item);
                     else if (p.items.size() < ITEM_BENCH_CAP) p.items.add(item);
+                }
+                if (u.bonusTrait != null && keeper.bonusTrait == null) {
+                    keeper.bonusTrait = u.bonusTrait;
                 }
                 p.units.remove(u);
             }
@@ -582,10 +905,21 @@ public final class AutoGame {
                 pool.giveBack(p.shop[i], 1);
                 p.shop[i] = null;
             }
+            p.shopDeals[i] = 0;
         }
-        List<String> rolled = pool.rollShop(p.level, AutoPlayer.SHOP_SIZE, rng);
+        // The Collector relic over-weights units the player already owns.
+        Set<String> favored = Set.of();
+        if (p.relic == Relic.COLLECTOR && !p.units.isEmpty()) {
+            favored = new HashSet<>();
+            for (UnitInstance u : p.units) favored.add(u.key);
+        }
+        List<String> rolled = pool.rollShop(p.level, AutoPlayer.SHOP_SIZE, rng, favored);
         for (int i = 0; i < p.shop.length; i++) {
             p.shop[i] = rolled.get(i);
+            if (p.shop[i] != null && p.relic == Relic.BARGAINER
+                    && rng.nextInt(100) < BARGAIN_CHANCE) {
+                p.shopDeals[i] = BARGAIN_DISCOUNT;
+            }
         }
     }
 
@@ -606,9 +940,12 @@ public final class AutoGame {
     // --- creeps ---------------------------------------------------------------------
 
     /** Build the round's creep board (positions use own-half rows like a player's). */
-    private List<UnitInstance> creepBoard(int round) {
+    private List<UnitInstance> creepBoard(int round, AutoPlayer opponent) {
         List<UnitInstance> creeps = new ArrayList<>();
-        List<String> wave = AutoUnits.creepWave(round);
+        // Wild Hunt boards fight a randomized, larger wave for richer rewards.
+        List<String> wave = opponent != null && opponent.relic == Relic.WILD_HUNT
+                ? AutoUnits.randomCreepWave(round, rng)
+                : AutoUnits.creepWave(round);
         for (int i = 0; i < wave.size(); i++) {
             UnitInstance u = new UnitInstance(nextUnitId++, wave.get(i));
             u.placeBoard(2 + (i % 4), 4 + (i / 4));

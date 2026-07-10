@@ -55,6 +55,14 @@ class AutoBattlerTest {
         AutoPlayer a = game.addPlayer("Alice", false);
         AutoPlayer b = game.addPlayer("Bob", false);
         assertTrue(game.start(a.id));
+        // Round 1 deals random relics; neutralize them so the classic-rules
+        // tests below aren't skewed by a lucky Apprentice or Bargainer.
+        for (AutoPlayer pl : game.players()) {
+            pl.relic = null;
+            pl.relicFired = false;
+            pl.traitBoosts.clear();
+            Arrays.fill(pl.shopDeals, 0);
+        }
         out[0] = a;
         out[1] = b;
         return game;
@@ -284,6 +292,8 @@ class AutoBattlerTest {
         theme.setBackground("skins/boards/test.png");
         theme.cycleProp(0);
         theme.cycleProp(3);
+        theme.placeProp(0, 2.5, 6.25);
+        theme.setPropImage(3, "skins/boards/gnome.png");
         theme.save();
 
         BoardTheme loaded = BoardTheme.load(dir);
@@ -292,6 +302,16 @@ class AutoBattlerTest {
         assertEquals(theme.prop(0), loaded.prop(0));
         assertEquals(theme.prop(3), loaded.prop(3));
         assertEquals(BoardTheme.Prop.NONE, loaded.prop(1), "untouched slots stay empty");
+        assertEquals(2.5, loaded.propCol(0), 0.01, "dragged placement persists");
+        assertEquals(6.25, loaded.propRow(0), 0.01);
+        assertEquals("skins/boards/gnome.png", loaded.propImage(3),
+                "custom decoration images persist");
+        assertTrue(loaded.propVisible(3), "an imaged slot renders even when NONE");
+
+        // Placement clamps near the board so props can't be lost off-screen.
+        theme.placeProp(2, 99, -99);
+        assertTrue(theme.propCol(2) <= BoardTheme.PROP_MAX_COORD);
+        assertTrue(theme.propRow(2) >= BoardTheme.PROP_MIN_COORD);
 
         // A missing file is just the default theme, never an error.
         BoardTheme fresh = BoardTheme.load(dir.resolve("nowhere"));
@@ -372,7 +392,8 @@ class AutoBattlerTest {
     void placementIsRestrictedToOwnHalfAndLevelCap() {
         AutoPlayer[] p = new AutoPlayer[2];
         AutoGame game = newStartedGame(p);
-        AutoPlayer alice = p[0]; // starts level 3
+        AutoPlayer alice = p[0];
+        alice.level = 3; // the cap under test (games now start at level 1)
         alice.gold = 30;
         for (int i = 0; i < 4; i++) {
             alice.shop[0] = i % 2 == 0 ? "sapling" : "frost_archer";

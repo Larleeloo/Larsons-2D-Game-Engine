@@ -15,9 +15,10 @@ import java.util.Map;
 /**
  * The player's personal board cosmetics: a colour scheme for the tiles and
  * backdrop, an optional background image, and decorative props (plants,
- * statues, lanterns...) placed in fixed slots around the board's rim. Purely
- * client-side presentation — combat, placement, and replication never read it,
- * so customisation can't touch gameplay.
+ * statues, lanterns...) in slots that start on the board's rim but can be
+ * dragged anywhere around it — and reskinned with imported images per slot.
+ * Purely client-side presentation — combat, placement, and replication never
+ * read it, so customisation can't touch gameplay.
  *
  * <p>Persists as {@code board_theme.json} next to {@code skins.json} in the
  * player's game files ({@link #save()}/{@link #load}); the customisation menu
@@ -87,13 +88,19 @@ public final class BoardTheme {
     public static final int PROP_SLOTS = 8;
 
     /**
-     * Rim positions of the prop slots in board-cell coordinates (fractional,
-     * just outside the 8x8 grid), matching {@link #SLOT_LABELS} by index.
+     * Default rim positions of the prop slots in board-cell coordinates
+     * (fractional, just outside the 8x8 grid), matching {@link #SLOT_LABELS}
+     * by index. Each slot also carries a player-set offset, so decorations
+     * can be dragged anywhere around (or onto) the board.
      */
     public static final double[][] PROP_CELLS = {
             {-0.7, -0.7}, {8.7, -0.7}, {-0.7, 8.7}, {8.7, 8.7},
             {4.0, -1.0}, {-1.0, 4.0}, {9.0, 4.0}, {4.0, 9.0}
     };
+
+    /** How far (in cells) a decoration may be dragged from the board. */
+    public static final double PROP_MIN_COORD = -2.5;
+    public static final double PROP_MAX_COORD = 10.5;
 
     public static final String[] SLOT_LABELS = {
             "Far corner", "Right corner", "Left corner", "Near corner",
@@ -110,6 +117,10 @@ public final class BoardTheme {
     /** Background image path (classpath-first), or empty for none. */
     private String background = "";
     private final Prop[] props = new Prop[PROP_SLOTS];
+    /** Player-set placement offsets from {@link #PROP_CELLS}, in cells. */
+    private final double[][] propOffsets = new double[PROP_SLOTS][2];
+    /** Custom image path per slot (drawn instead of the procedural prop). */
+    private final String[] propImages = new String[PROP_SLOTS];
     private final Path dir;
 
     public BoardTheme() {
@@ -118,7 +129,10 @@ public final class BoardTheme {
 
     public BoardTheme(Path dir) {
         this.dir = dir;
-        for (int i = 0; i < props.length; i++) props[i] = Prop.NONE;
+        for (int i = 0; i < props.length; i++) {
+            props[i] = Prop.NONE;
+            propImages[i] = "";
+        }
     }
 
     /** The live theme every board render reads; loaded from disk on first use. */
@@ -157,10 +171,58 @@ public final class BoardTheme {
         props[i] = all[(props[i].ordinal() + 1) % all.length];
     }
 
+    /** A slot renders when it has a prop kind or a custom image. */
+    public boolean propVisible(int slot) {
+        int i = Math.floorMod(slot, PROP_SLOTS);
+        return props[i] != Prop.NONE || !propImages[i].isEmpty();
+    }
+
+    /** The slot's current board-cell column (default position + drag offset). */
+    public double propCol(int slot) {
+        int i = Math.floorMod(slot, PROP_SLOTS);
+        return PROP_CELLS[i][0] + propOffsets[i][0];
+    }
+
+    /** The slot's current board-cell row (default position + drag offset). */
+    public double propRow(int slot) {
+        int i = Math.floorMod(slot, PROP_SLOTS);
+        return PROP_CELLS[i][1] + propOffsets[i][1];
+    }
+
+    /** Place a slot at an absolute board-cell position (clamped near the board). */
+    public void placeProp(int slot, double col, double row) {
+        int i = Math.floorMod(slot, PROP_SLOTS);
+        propOffsets[i][0] = clampCoord(col) - PROP_CELLS[i][0];
+        propOffsets[i][1] = clampCoord(row) - PROP_CELLS[i][1];
+    }
+
+    /** Nudge a slot by fractional cells (arrow-key editing). */
+    public void nudgeProp(int slot, double dc, double dr) {
+        placeProp(slot, propCol(slot) + dc, propRow(slot) + dr);
+    }
+
+    private static double clampCoord(double v) {
+        return Math.max(PROP_MIN_COORD, Math.min(PROP_MAX_COORD, v));
+    }
+
+    /** The slot's custom image path, or empty when it uses the procedural prop. */
+    public String propImage(int slot) {
+        return propImages[Math.floorMod(slot, PROP_SLOTS)];
+    }
+
+    public void setPropImage(int slot, String path) {
+        propImages[Math.floorMod(slot, PROP_SLOTS)] = path == null ? "" : path.trim();
+    }
+
     public void reset() {
         schemeIndex = 0;
         background = "";
-        for (int i = 0; i < props.length; i++) props[i] = Prop.NONE;
+        for (int i = 0; i < props.length; i++) {
+            props[i] = Prop.NONE;
+            propImages[i] = "";
+            propOffsets[i][0] = 0;
+            propOffsets[i][1] = 0;
+        }
     }
 
     public Path file() {
@@ -175,6 +237,12 @@ public final class BoardTheme {
         List<Object> list = new ArrayList<>(props.length);
         for (Prop p : props) list.add(p.name());
         root.put("props", list);
+        List<Object> offsets = new ArrayList<>(PROP_SLOTS);
+        for (double[] off : propOffsets) {
+            offsets.add(List.of(round2(off[0]), round2(off[1])));
+        }
+        root.put("offsets", offsets);
+        root.put("images", new ArrayList<Object>(List.of(propImages)));
         try {
             Files.createDirectories(dir);
             Files.writeString(file(), Json.stringify(root));
@@ -207,9 +275,28 @@ public final class BoardTheme {
                     }
                 }
             }
+            if (root.get("offsets") instanceof List<?> list) {
+                for (int i = 0; i < PROP_SLOTS && i < list.size(); i++) {
+                    if (list.get(i) instanceof List<?> pair && pair.size() >= 2
+                            && pair.get(0) instanceof Number dc
+                            && pair.get(1) instanceof Number dr) {
+                        theme.propOffsets[i][0] = dc.doubleValue();
+                        theme.propOffsets[i][1] = dr.doubleValue();
+                    }
+                }
+            }
+            if (root.get("images") instanceof List<?> list) {
+                for (int i = 0; i < PROP_SLOTS && i < list.size(); i++) {
+                    if (list.get(i) instanceof String path) theme.propImages[i] = path;
+                }
+            }
         } catch (IOException | RuntimeException e) {
             System.err.println("BoardTheme: unreadable " + file + " (" + e.getMessage() + ")");
         }
         return theme;
+    }
+
+    private static double round2(double v) {
+        return Math.rint(v * 100) / 100.0;
     }
 }

@@ -24,6 +24,9 @@ import java.util.Map;
  *   client -> server   {"t":"buy","i":slot} {"t":"sell","u":unitId} {"t":"reroll"} {"t":"xp"}
  *   client -> server   {"t":"move","u":id,"b":bench} | {"t":"move","u":id,"c":col,"r":row}
  *   client -> server   {"t":"equip","i":itemIndex,"u":unitId}
+ *   client -> server   {"t":"lock"} | {"t":"unequip","u":unitId}
+ *   client -> server   {"t":"arrange","m":"front|spread|flip"}
+ *   client -> server   {"t":"fuse","w":wispId,"u":unitId}              (Io-style merge)
  *   client -> server   {"t":"view","p":playerId}                       (scout a board)
  *   server -> client   {"t":"board","p":id,"name",stats...,"board":[units],"bench":[units]}
  *   server -> client   {"t":"match","opp":"Kara","ghost":false,"pve":false,"home":true}
@@ -42,8 +45,11 @@ public final class AutoProto {
      * v3 added the elemental damage layer (element codes on damage events)
      * and the expanded unit/trait/item registries, which both sides must
      * share for replicated fights to make sense.
+     * v4 added player relics, the shop lock, once-per-round item removal,
+     * board arrangement, wisp fusing, shop discounts, and per-element damage
+     * tallies in combat snapshots.
      */
-    public static final int VERSION = 3;
+    public static final int VERSION = 4;
 
     /** Default port for hosted auto-battler games (world servers use 7777). */
     public static final int DEFAULT_PORT = 7788;
@@ -221,6 +227,33 @@ public final class AutoProto {
     public static Map<String, Object> equip(int itemIndex, int unitId) {
         Map<String, Object> m = msg("equip");
         m.put("i", itemIndex);
+        m.put("u", unitId);
+        return m;
+    }
+
+    /** Toggle the shop lock (a locked shop is kept, not re-rolled, next round). */
+    public static Map<String, Object> lock() {
+        return msg("lock");
+    }
+
+    /** Strip every item off a unit back to the bench (once per round). */
+    public static Map<String, Object> unequip(int unitId) {
+        Map<String, Object> m = msg("unequip");
+        m.put("u", unitId);
+        return m;
+    }
+
+    /** Rearrange the fielded board: {@code front}, {@code spread}, or {@code flip}. */
+    public static Map<String, Object> arrange(String mode) {
+        Map<String, Object> m = msg("arrange");
+        m.put("m", mode);
+        return m;
+    }
+
+    /** Fuse a Wisp into a pair of {@code unitId}'s species as the missing copy. */
+    public static Map<String, Object> fuse(int wispId, int unitId) {
+        Map<String, Object> m = msg("fuse");
+        m.put("w", wispId);
         m.put("u", unitId);
         return m;
     }
