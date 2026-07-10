@@ -96,6 +96,20 @@ public final class Mob {
     }
 
     /**
+     * Continuous environmental damage (lava, spikes) — no knockback, no
+     * aggro change, just a hurt tint and eventual death.
+     */
+    public void environmentDamage(double amount) {
+        if (dead() || amount <= 0) return;
+        health -= amount;
+        hurtTimer = HURT_FLASH;
+        if (health <= 0) {
+            health = 0;
+            state = AIState.DEAD;
+        }
+    }
+
+    /**
      * Advance one tick. {@code gravityOn} mirrors the profile's gravity toggle
      * (top-down game types walk mobs on a plane instead); with {@code combatOn}
      * false, hostiles behave like ambient wildlife — no chasing, no damage.

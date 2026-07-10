@@ -21,6 +21,13 @@ public final class PlayerPhysics {
     public static final double GRAVITY = 1500;  // px/sec^2
     public static final double JUMP = 560;      // px/sec
 
+    // Swimming (the player's centre is inside a liquid block).
+    public static final double SWIM_SPEED_FACTOR = 0.6;  // drag on horizontal speed
+    public static final double SWIM_UP = 900;            // upward accel while holding up
+    public static final double SWIM_SINK = 350;          // passive sink accel
+    public static final double SWIM_MAX_RISE = 200;      // px/sec
+    public static final double SWIM_MAX_SINK = 140;      // px/sec
+
     private PlayerPhysics() {}
 
     /**
@@ -34,13 +41,29 @@ public final class PlayerPhysics {
         double size = profile.playerSize;
         double ts = level.tileSize;
 
+        boolean inLiquid = level.liquidAt(
+                (int) Math.floor((s.x + size / 2.0) / ts),
+                (int) Math.floor((s.y + size / 2.0) / ts)) != null;
+        double speed = inLiquid ? SPEED * SWIM_SPEED_FACTOR : SPEED;
+
         double dx = 0;
-        if (in.left) { dx -= SPEED * dt; s.facingLeft = true; }
-        if (in.right) { dx += SPEED * dt; s.facingLeft = false; }
+        if (in.left) { dx -= speed * dt; s.facingLeft = true; }
+        if (in.right) { dx += speed * dt; s.facingLeft = false; }
         boolean moving = dx != 0;
 
         boolean sideScroll = perspective == Perspective.SIDE_SCROLL && profile.gravityEnabled;
-        if (sideScroll) {
+        if (sideScroll && inLiquid) {
+            // Swimming: buoyant sink by default, stroke upward while held —
+            // fast enough to climb out of a one-tile lip at the surface.
+            s.vy += (in.up ? -SWIM_UP : SWIM_SINK) * dt;
+            s.vy = Math.max(-SWIM_MAX_RISE, Math.min(SWIM_MAX_SINK, s.vy));
+            s.y += s.vy * dt;
+            if (s.vy > 0 && isSolid(level, s.x + size / 2.0, s.y + size, ts)) {
+                s.y = Math.floor((s.y + size) / ts) * ts - size;
+                s.vy = 0;
+            }
+            moving = moving || in.up || in.down;
+        } else if (sideScroll) {
             boolean grounded = isSolid(level, s.x + size / 2.0, s.y + size + 1, ts);
             if (grounded && s.vy >= 0) {
                 s.vy = 0;
@@ -55,8 +78,8 @@ public final class PlayerPhysics {
             }
         } else {
             double dy = 0;
-            if (in.up) dy -= SPEED * dt;
-            if (in.down) dy += SPEED * dt;
+            if (in.up) dy -= speed * dt;
+            if (in.down) dy += speed * dt;
             s.y += dy;
             moving = moving || dy != 0;
         }

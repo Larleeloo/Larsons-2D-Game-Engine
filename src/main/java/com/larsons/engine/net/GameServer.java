@@ -173,6 +173,11 @@ public final class GameServer {
             stepPlayers(dt);
             world.step(dt, joinedPlayers(), profile);
             broadcastImpacts();
+            // Tiles the simulation changed on its own (liquid flow) are
+            // authoritative block events like any player edit.
+            for (var change : world.pollBlockChanges()) {
+                broadcast(Protocol.blockSet(change.col(), change.row(), change.id()));
+            }
 
             tick++;
             if (tick % SNAPSHOT_EVERY == 0) broadcastState();
@@ -198,7 +203,9 @@ public final class GameServer {
             if (conn.closed) continue;
             int id = nextId.getAndIncrement();
             String name = uniqueName(conn.requestedName, id);
-            conn.state = new PlayerState(id, name, level.spawnX, level.spawnY);
+            // Painted multiplayer spawn points deal players out round-robin.
+            double[] spawn = level.spawnPointFor(id);
+            conn.state = new PlayerState(id, name, spawn[0], spawn[1]);
             conn.joined = true;
             // Serialize the live level so late joiners see every edit so far.
             conn.send(Protocol.welcome(id, TICK_RATE, profile, level.toJson()));

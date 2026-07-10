@@ -4,6 +4,7 @@ import com.larsons.engine.entity.ItemDef;
 import com.larsons.engine.entity.MobDef;
 import com.larsons.engine.entity.ProjectileDef;
 import com.larsons.engine.world.Block;
+import com.larsons.engine.world.Decor;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -162,6 +163,110 @@ public final class EntitySprites {
                 // Passable blocks get a hollow corner mark.
                 g.setColor(new Color(255, 255, 255, 120));
                 g.drawLine(s - s / 4, 3, s - 3, s / 4);
+            }
+        });
+    }
+
+    /**
+     * A decoration sprite (tree, rock, bush…), drawn to fill the square and
+     * sit on its bottom edge — scenes anchor it bottom-centre so painting on
+     * a floor line plants it.
+     */
+    public static BufferedImage decor(Decor d, int size) {
+        return cached("decor:" + d.key() + ":" + size, size, g -> {
+            int s = size;
+            Color a = d.primary(), b = d.secondary();
+            switch (d.shape()) {
+                case TREE -> {
+                    g.setColor(b);
+                    g.fillRect(s * 7 / 16, s / 2, s / 8, s / 2);
+                    g.setColor(a);
+                    g.fillOval(s / 8, s / 12, s * 3 / 4, s * 3 / 5);
+                    g.setColor(a.brighter());
+                    g.fillOval(s / 4, s / 8, s / 3, s / 4);
+                }
+                case PINE -> {
+                    g.setColor(b);
+                    g.fillRect(s * 7 / 16, s * 3 / 4, s / 8, s / 4);
+                    g.setColor(a);
+                    for (int i = 0; i < 3; i++) {
+                        int top = s / 12 + i * s / 4;
+                        int half = s / 5 + i * s / 9;
+                        g.fillPolygon(new int[]{s / 2 - half, s / 2, s / 2 + half},
+                                new int[]{top + s / 4, top, top + s / 4}, 3);
+                    }
+                }
+                case DEAD_TREE -> {
+                    g.setColor(a);
+                    g.setStroke(new BasicStroke(Math.max(2, s / 10f), BasicStroke.CAP_ROUND,
+                            BasicStroke.JOIN_ROUND));
+                    g.drawLine(s / 2, s, s / 2, s / 4);
+                    g.drawLine(s / 2, s / 2, s / 4, s / 4);
+                    g.drawLine(s / 2, s * 2 / 5, s * 3 / 4, s / 5);
+                }
+                case ROCK -> {
+                    g.setColor(a);
+                    g.fillOval(s / 8, s / 3, s * 3 / 4, s * 2 / 3);
+                    g.setColor(b);
+                    g.fillArc(s / 8, s / 3, s * 3 / 4, s * 2 / 3, 200, 120);
+                }
+                case STONES -> {
+                    g.setColor(a);
+                    g.fillOval(s / 10, s * 3 / 5, s * 2 / 5, s * 2 / 5);
+                    g.fillOval(s / 2, s * 7 / 10, s / 3, s * 3 / 10);
+                    g.setColor(b);
+                    g.fillOval(s * 2 / 5, s / 2, s / 4, s / 4);
+                }
+                case BUSH -> {
+                    g.setColor(a);
+                    g.fillOval(s / 10, s * 2 / 5, s * 2 / 5, s * 3 / 5);
+                    g.fillOval(s * 2 / 5, s / 4, s / 2, s * 3 / 4);
+                    g.setColor(b);
+                    int dot = Math.max(2, s / 9);
+                    g.fillOval(s / 3, s / 2, dot, dot);
+                    g.fillOval(s * 3 / 5, s * 2 / 5, dot, dot);
+                    g.fillOval(s / 2, s * 7 / 10, dot, dot);
+                }
+                case MUSHROOM -> {
+                    g.setColor(b);
+                    g.fillRect(s / 4, s * 3 / 5, s / 8, s * 2 / 5);
+                    g.fillRect(s * 5 / 8, s * 7 / 10, s / 9, s * 3 / 10);
+                    g.setColor(a);
+                    g.fillArc(s / 8, s * 2 / 5, s * 2 / 5, s * 2 / 5, 0, 180);
+                    g.fillArc(s / 2, s * 11 / 20, s * 2 / 5, s * 2 / 5, 0, 180);
+                }
+                case CACTUS -> {
+                    g.setColor(a);
+                    g.fillRoundRect(s * 2 / 5, s / 8, s / 5, s * 7 / 8, s / 6, s / 6);
+                    g.fillRoundRect(s / 8, s / 3, s / 6, s / 4, s / 8, s / 8);
+                    g.fillRoundRect(s * 7 / 10, s / 4, s / 6, s / 4, s / 8, s / 8);
+                    g.setColor(b);
+                    g.fillRect(s / 8, s * 5 / 12, s * 2 / 5, Math.max(2, s / 16));
+                }
+                case STALAGMITE -> {
+                    g.setColor(a);
+                    g.fillPolygon(new int[]{s / 5, s * 2 / 5, s * 3 / 5},
+                            new int[]{s, s / 4, s}, 3);
+                    g.setColor(b);
+                    g.fillPolygon(new int[]{s / 2, s * 7 / 10, s * 9 / 10},
+                            new int[]{s, s / 2, s}, 3);
+                }
+                case CRYSTAL -> {
+                    g.setColor(a);
+                    g.fillPolygon(new int[]{s / 6, s * 2 / 6, s / 2},
+                            new int[]{s, s / 5, s}, 3);
+                    g.fillPolygon(new int[]{s * 2 / 5, s * 3 / 5, s * 4 / 5},
+                            new int[]{s, s / 3, s}, 3);
+                    g.setColor(withAlpha(b, 220));
+                    g.fillPolygon(new int[]{s * 3 / 10, s * 2 / 6, s * 2 / 5},
+                            new int[]{s, s / 3, s}, 3);
+                }
+                case LOG -> {
+                    g.setColor(a);
+                    g.fillRoundRect(s / 10, s * 3 / 5, s * 4 / 5, s * 3 / 10, s / 5, s / 5);
+                    g.setColor(b);
+                    g.fillOval(s * 4 / 5, s * 3 / 5, s / 7, s * 3 / 10);
+                }
             }
         });
     }
