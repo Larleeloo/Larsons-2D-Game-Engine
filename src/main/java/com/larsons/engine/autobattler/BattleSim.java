@@ -1,6 +1,7 @@
 package com.larsons.engine.autobattler;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -82,6 +83,8 @@ public final class BattleSim {
         double atkTimer;
         public boolean dead;
         CUnit target;
+        /** Harmonizer-granted extra synergy carried over from the instance. */
+        Trait bonusTrait;
 
         /** Elemental affinities, resolved from the def plus any relics held. */
         final Set<Element> attackElements = EnumSet.noneOf(Element.class);
@@ -94,6 +97,8 @@ public final class BattleSim {
 
         /** Running combat-stats tallies, replicated for the damage panel. */
         public double dealtPhysical, dealtMagic, healingDone;
+        /** Damage dealt per attack element (plain damage stays out of this map). */
+        public final Map<Element, Double> dealtByElement = new EnumMap<>(Element.class);
 
         CUnit(int uid, int sourceId, String key, int star, int team) {
             this.uid = uid;
@@ -131,11 +136,26 @@ public final class BattleSim {
         }
     }
 
+    /**
+     * Per-team modifiers a player's relics feed into the fight: a flat
+     * damage amplifier (Void Brand) and per-trait effectiveness multipliers
+     * (Zealot). {@link #NONE} is the neutral default for creeps and pre-relic
+     * boards.
+     */
+    public record TeamMods(double damageAmp, Map<Trait, Double> traitBoosts) {
+        public static final TeamMods NONE = new TeamMods(1.0, Map.of());
+
+        public double boost(Trait t) {
+            return traitBoosts.getOrDefault(t, 1.0);
+        }
+    }
+
     private final List<CUnit> units = new ArrayList<>();
     private final CUnit[][] occupied = new CUnit[COLS][ROWS];
     private final List<Event> events = new ArrayList<>();
     private final Random rng;
     private final int round;
+    private final double[] teamDamageAmp = {1.0, 1.0};
     private double time;
     private boolean finished;
     private int winner = -1; // HOME/AWAY, or -1 while running / on a draw
@@ -147,8 +167,16 @@ public final class BattleSim {
     /** {@code round} sets how strongly elemental matchups swing the fight. */
     public BattleSim(List<UnitInstance> homeBoard, List<UnitInstance> awayBoard,
                      long seed, int round) {
+        this(homeBoard, awayBoard, seed, round, TeamMods.NONE, TeamMods.NONE);
+    }
+
+    /** Full form: each side brings the modifiers its player's relics grant. */
+    public BattleSim(List<UnitInstance> homeBoard, List<UnitInstance> awayBoard,
+                     long seed, int round, TeamMods homeMods, TeamMods awayMods) {
         this.rng = new Random(seed);
         this.round = Math.max(1, round);
+        teamDamageAmp[HOME] = homeMods.damageAmp();
+        teamDamageAmp[AWAY] = awayMods.damageAmp();
         int uid = 1;
         for (UnitInstance u : homeBoard) {
             units.add(build(uid++, u, HOME, u.col, u.row));
@@ -157,8 +185,8 @@ public final class BattleSim {
             // Mirror the away board through the centre onto rows 0-3.
             units.add(build(uid++, u, AWAY, COLS - 1 - u.col, ROWS - 1 - u.row));
         }
-        applyTraits(homeBoard, HOME);
-        applyTraits(awayBoard, AWAY);
+        applyTraits(homeBoard, HOME, homeMods);
+        applyTraits(awayBoard, AWAY, awayMods);
         for (CUnit c : units) {
             c.hp = c.maxHp;
             place(c, clampFree(c.cellC, c.cellR));
@@ -172,6 +200,7 @@ public final class BattleSim {
         CUnit c = new CUnit(uid, u.id, u.key, u.star, team);
         c.cellC = col;
         c.cellR = row;
+        c.bonusTrait = u.bonusTrait;
         c.maxHp = def.hp * mult;
         c.ad = def.ad * mult;
         c.attackSpeed = def.attackSpeed;
@@ -238,15 +267,21 @@ public final class BattleSim {
 
     /**
      * Fold each team's active synergies into its units' stats. Counts are of
-     * <em>distinct</em> fielded species per trait, TFT-style.
+     * <em>distinct</em> fielded species per trait, TFT-style; a Zealot trait
+     * boost in {@code mods} multiplies the boosted trait's tier values.
      */
-    private void applyTraits(List<UnitInstance> board, int team) {
+    private void applyTraits(List<UnitInstance> board, int team, TeamMods mods) {
         Map<Trait, Integer> counts = countTraits(board);
 
-        double holyHp = Trait.HOLY.value(counts.getOrDefault(Trait.HOLY, 0));
-        double teamArmor = Trait.GUARDIAN.value(counts.getOrDefault(Trait.GUARDIAN, 0));
-        double frostSlow = Trait.FROST.value(counts.getOrDefault(Trait.FROST, 0));
-        double mysticSp = Trait.MYSTIC.value(counts.getOrDefault(Trait.MYSTIC, 0));
+        double holyHp = Trait.HOLY.value(counts.getOrDefault(Trait.HOLY, 0))
+                * mods.boost(Trait.HOLY);
+        double teamArmor = Trait.GUARDIAN.value(counts.getOrDefault(Trait.GUARDIAN, 0))
+                * mods.boost(Trait.GUARDIAN);
+        double frostSlow = Math.min(0.9,
+                Trait.FROST.value(counts.getOrDefault(Trait.FROST, 0))
+                        * mods.boost(Trait.FROST));
+        double mysticSp = Trait.MYSTIC.value(counts.getOrDefault(Trait.MYSTIC, 0))
+                * mods.boost(Trait.MYSTIC);
 
         for (CUnit c : units) {
             UnitDef def = AutoUnits.get(c.key);
@@ -254,34 +289,38 @@ public final class BattleSim {
                 c.maxHp *= 1 + holyHp;
                 c.armor += teamArmor;
                 c.spellPower += mysticSp;
-                if (def.origin != null) {
-                    double v = def.origin.value(counts.getOrDefault(def.origin, 0));
-                    switch (def.origin) {
-                        case FOREST -> c.regen += v;
-                        case EMBER -> c.ad += v;
-                        case STORM -> c.spellPower += v * 100;
-                        case SHADOW -> c.critChance += v;
-                        case WILD -> c.attackSpeed *= 1 + v;
-                        case MECH -> c.armor += v;
-                        default -> { /* HOLY, FROST, MYSTIC, MERCHANT: handled elsewhere */ }
-                    }
-                }
-                if (def.clazz != null) {
-                    double v = def.clazz.value(counts.getOrDefault(def.clazz, 0));
-                    switch (def.clazz) {
-                        case WARRIOR -> c.armor += v;
-                        case ARCHER -> c.attackSpeed *= 1 + v;
-                        case MAGE -> c.mana += v;
-                        case ASSASSIN -> c.critChance += v;
-                        case HEALER -> c.healPower += v;
-                        case BRAWLER -> c.maxHp += v;
-                        default -> { /* GUARDIAN is team-wide, above */ }
-                    }
+                applyMemberBonus(c, def.origin, counts, mods);
+                applyMemberBonus(c, def.clazz, counts, mods);
+                // A Harmonizer bonus trait makes the unit a full member.
+                if (c.bonusTrait != def.origin && c.bonusTrait != def.clazz) {
+                    applyMemberBonus(c, c.bonusTrait, counts, mods);
                 }
             } else {
                 // Frost slows the opposing team.
                 c.attackSpeed *= 1 - frostSlow;
             }
+        }
+    }
+
+    /** The per-unit stat effect of belonging to {@code t} at its active tier. */
+    private static void applyMemberBonus(CUnit c, Trait t, Map<Trait, Integer> counts,
+                                         TeamMods mods) {
+        if (t == null) return;
+        double v = t.value(counts.getOrDefault(t, 0)) * mods.boost(t);
+        switch (t) {
+            case FOREST -> c.regen += v;
+            case EMBER -> c.ad += v;
+            case STORM -> c.spellPower += v * 100;
+            case SHADOW -> c.critChance += v;
+            case WILD -> c.attackSpeed *= 1 + v;
+            case MECH -> c.armor += v;
+            case WARRIOR -> c.armor += v;
+            case ARCHER -> c.attackSpeed *= 1 + v;
+            case MAGE -> c.mana += v;
+            case ASSASSIN -> c.critChance += v;
+            case HEALER -> c.healPower += v;
+            case BRAWLER -> c.maxHp += v;
+            default -> { /* HOLY, FROST, MYSTIC, GUARDIAN, MERCHANT: team-wide / economy */ }
         }
     }
 
@@ -292,7 +331,7 @@ public final class BattleSim {
         for (UnitInstance u : board) {
             UnitDef def = u.def();
             if (def == null) continue;
-            for (Trait t : new Trait[]{def.origin, def.clazz}) {
+            for (Trait t : new Trait[]{def.origin, def.clazz, u.bonusTrait}) {
                 if (t == null) continue;
                 List<String> keys = seen.computeIfAbsent(t, k -> new ArrayList<>());
                 if (!keys.contains(u.key)) {
@@ -495,6 +534,7 @@ public final class BattleSim {
         if (to.dead) return;
         amount *= DAMAGE_SCALE;
         if (from != null) {
+            amount *= teamDamageAmp[from.team];
             amount *= elementalMultiplier(from.attackElements, to.resistances,
                     to.weaknesses, round);
         }
@@ -502,6 +542,10 @@ public final class BattleSim {
         if (from != null) {
             if (magic) from.dealtMagic += effective;
             else from.dealtPhysical += effective;
+            if (!from.attackElements.isEmpty()) {
+                from.dealtByElement.merge(from.attackElements.iterator().next(),
+                        effective, Double::sum);
+            }
         }
         to.hp -= amount;
         flashAnim(to, AnimState.HIT, HIT_ANIM_SECONDS);
@@ -669,6 +713,15 @@ public final class BattleSim {
             if (c.dealtPhysical >= 1) m.put("dp", Math.rint(c.dealtPhysical));
             if (c.dealtMagic >= 1) m.put("dm", Math.rint(c.dealtMagic));
             if (c.healingDone >= 1) m.put("dh", Math.rint(c.healingDone));
+            if (!c.dealtByElement.isEmpty()) {
+                Map<String, Object> byElement = new LinkedHashMap<>();
+                for (Map.Entry<Element, Double> e : c.dealtByElement.entrySet()) {
+                    if (e.getValue() >= 1) {
+                        byElement.put(e.getKey().code, Math.rint(e.getValue()));
+                    }
+                }
+                if (!byElement.isEmpty()) m.put("de", byElement);
+            }
             if (c.dead) m.put("dd", true);
             out.add(m);
         }

@@ -31,13 +31,15 @@ import java.nio.file.StandardCopyOption;
 /**
  * The board customization menu, reached from the auto-battler lobby: pick a
  * colour scheme for your personal board, set a background image, and place
- * decorative props (plants, statues, lanterns...) around the board's rim.
+ * decorative props (plants, statues, lanterns...) anywhere around the board —
+ * click a decoration in the preview to select it, drag it to move it (or
+ * nudge with the arrow keys), and import a custom image per decoration slot.
  * Everything is cosmetic — none of it touches gameplay — and everything
  * applies live to {@link BoardTheme#active()} with a board preview beside the
  * form, persisting to {@code board_theme.json} in your game files.
  *
- * <p>Background images import automatically: click <em>Import background
- * image…</em>, pick a file in the browser, and it's copied into
+ * <p>Background and decoration images import automatically: click the import
+ * action, pick a file in the browser, and it's copied into
  * {@code resources/skins/boards/} and assigned — no paths to type.
  */
 public class BoardCustomizeScene extends AbstractScene {
@@ -51,6 +53,14 @@ public class BoardCustomizeScene extends AbstractScene {
     private String status = "";
     private Color statusColor = new Color(140, 200, 150);
 
+    // The preview's decoration editor: the selected slot, live drag state, and
+    // the preview's screen geometry (recorded while rendering, like the HUD's
+    // deferred hit-rects, so update-time hit tests agree with what's drawn).
+    private int selectedSlot;
+    private boolean draggingProp;
+    private final Rectangle previewRect = new Rectangle();
+    private double previewOx, previewOy, previewTw, previewTh;
+
     public BoardCustomizeScene(GameContext ctx) {
         this.ctx = ctx;
     }
@@ -59,6 +69,8 @@ public class BoardCustomizeScene extends AbstractScene {
     public void onEnter() {
         theme = BoardTheme.active();
         status = "";
+        selectedSlot = 0;
+        draggingProp = false;
         buildForm();
     }
 
@@ -79,11 +91,22 @@ public class BoardCustomizeScene extends AbstractScene {
         }
         for (int i = 0; i < BoardTheme.PROP_SLOTS; i++) {
             final int slot = i;
-            form.addAction("Prop — " + BoardTheme.SLOT_LABELS[i] + ":  "
-                    + pretty(theme.prop(i).name()), () -> {
+            String custom = theme.propImage(i).isEmpty() ? "" : " [custom image]";
+            form.addAction((i == selectedSlot ? "▶ " : "") + "Prop — "
+                    + BoardTheme.SLOT_LABELS[i] + ":  "
+                    + pretty(theme.prop(i).name()) + custom, () -> {
+                selectedSlot = slot;
                 theme.cycleProp(slot);
                 persist(BoardTheme.SLOT_LABELS[slot] + ": "
                         + pretty(theme.prop(slot).name()));
+            });
+        }
+        form.addAction("Import image for selected prop…  (opens a file browser)",
+                this::importPropImage);
+        if (!theme.propImage(selectedSlot).isEmpty()) {
+            form.addAction("Clear selected prop's image", () -> {
+                theme.setPropImage(selectedSlot, "");
+                persist("Prop image cleared");
             });
         }
         form.addAction("Reset to defaults", () -> {
@@ -120,6 +143,25 @@ public class BoardCustomizeScene extends AbstractScene {
             AssetLoader.clearCache(); // the path may have been cached as missing
             theme.setBackground(dest.toString().replace('\\', '/'));
             persist("Imported " + picked.getName());
+            ctx.sfx(AudioManager.Sfx.PICKUP);
+        } catch (IOException e) {
+            setStatus("Could not import '" + picked.getName() + "': " + e.getMessage(), true);
+        }
+    }
+
+    /** Import an image for the selected decoration slot, copied like backgrounds. */
+    private void importPropImage() {
+        File picked = chooseImage();
+        if (picked == null) return;
+        try {
+            Path dest = Path.of(BoardTheme.DEFAULT_DIR, "boards",
+                    sanitizeFileName(picked.getName()));
+            Files.createDirectories(dest.getParent());
+            Files.copy(picked.toPath(), dest, StandardCopyOption.REPLACE_EXISTING);
+            AssetLoader.clearCache();
+            theme.setPropImage(selectedSlot, dest.toString().replace('\\', '/'));
+            persist(BoardTheme.SLOT_LABELS[selectedSlot] + " now shows "
+                    + picked.getName());
             ctx.sfx(AudioManager.Sfx.PICKUP);
         } catch (IOException e) {
             setStatus("Could not import '" + picked.getName() + "': " + e.getMessage(), true);
@@ -169,7 +211,85 @@ public class BoardCustomizeScene extends AbstractScene {
             scenes.transitionTo("autolobby");
             return;
         }
+        updatePropEditor(input);
         form.update(dt, input);
+    }
+
+    /**
+     * The preview's decoration editor: click a decoration (or an empty slot
+     * marker) to select it, drag it to reposition, arrow keys nudge by a
+     * quarter cell. Placement persists when the drag or nudge ends.
+     */
+    private void updatePropEditor(InputManager input) {
+        int mx = input.getMouseX();
+        int my = input.getMouseY();
+        boolean down = input.isMouseDown();
+
+        if (input.isMouseJustPressed() && previewRect.contains(mx, my)
+                && previewTw > 0) {
+            int hit = slotAt(mx, my);
+            if (hit >= 0) {
+                if (hit != selectedSlot) {
+                    selectedSlot = hit;
+                    buildForm(); // move the ▶ marker
+                }
+                draggingProp = true;
+            }
+        }
+        if (draggingProp) {
+            if (down) {
+                double[] cell = screenToCell(mx, my);
+                theme.placeProp(selectedSlot, cell[0] - 0.5, cell[1] - 0.5);
+            } else {
+                draggingProp = false;
+                persist(BoardTheme.SLOT_LABELS[selectedSlot] + " placed");
+            }
+            return;
+        }
+        if (previewTw > 0) {
+            double step = 0.25;
+            double dc = 0, dr = 0;
+            if (input.isKeyJustPressed(KeyEvent.VK_LEFT)) dc -= step;
+            if (input.isKeyJustPressed(KeyEvent.VK_RIGHT)) dc += step;
+            if (input.isKeyJustPressed(KeyEvent.VK_UP)) dr -= step;
+            if (input.isKeyJustPressed(KeyEvent.VK_DOWN)) dr += step;
+            if (dc != 0 || dr != 0) {
+                theme.nudgeProp(selectedSlot, dc, dr);
+                persist(BoardTheme.SLOT_LABELS[selectedSlot] + " nudged");
+            }
+        }
+    }
+
+    /** The decoration slot whose marker sits under the pointer, or -1. */
+    private int slotAt(int mx, int my) {
+        int best = -1;
+        double bestDist = 16 * 16; // pixels of grab slack
+        for (int i = 0; i < BoardTheme.PROP_SLOTS; i++) {
+            int[] p = slotScreen(i);
+            double dx = mx - p[0], dy = my - p[1];
+            double d = dx * dx + dy * dy;
+            if (d < bestDist) {
+                bestDist = d;
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    /** A slot's screen position inside the preview. */
+    private int[] slotScreen(int slot) {
+        double col = theme.propCol(slot) + 0.5;
+        double row = theme.propRow(slot) + 0.5;
+        int cx = (int) (previewOx + (col - row) * previewTw / 2);
+        int cy = (int) (previewOy + (col + row) * previewTh / 2);
+        return new int[]{cx, cy};
+    }
+
+    /** Invert the preview's isometric transform: screen point -> board cell. */
+    private double[] screenToCell(int mx, int my) {
+        double a = (mx - previewOx) / (previewTw / 2);
+        double b = (my - previewOy) / (previewTh / 2);
+        return new double[]{(b + a) / 2, (b - a) / 2};
     }
 
     @Override
@@ -194,10 +314,11 @@ public class BoardCustomizeScene extends AbstractScene {
         int px = viewportWidth - pw - 30;
         int py = Math.max(60, viewportHeight / 8);
         if (px < viewportWidth / 2 + 40) px = viewportWidth / 2 + 40;
+        previewRect.setBounds(px, py, pw, ph);
 
         g.setFont(new Font("SansSerif", Font.BOLD, 13));
         g.setColor(new Color(160, 168, 190));
-        g.drawString("Preview", px, py - 6);
+        g.drawString("Preview  —  click & drag a decoration, arrows nudge", px, py - 6);
 
         Shape oldClip = g.getClip();
         g.clip(new Rectangle(px, py, pw, ph));
@@ -219,6 +340,10 @@ public class BoardCustomizeScene extends AbstractScene {
         // Miniature isometric board.
         double tw = 22, th = 11;
         double ox = px + pw / 2.0, oy = py + ph / 2.0 - 4.5 * th;
+        previewOx = ox;
+        previewOy = oy;
+        previewTw = tw;
+        previewTh = th;
         for (int r = 0; r < 8; r++) {
             for (int c = 0; c < 8; c++) {
                 boolean own = r >= 4;
@@ -232,16 +357,28 @@ public class BoardCustomizeScene extends AbstractScene {
             }
         }
 
-        // Props at their rim slots.
+        // Decorations at their (dragged) positions; the selected slot is
+        // ringed even while empty so it can always be found and moved.
         for (int i = 0; i < BoardTheme.PROP_SLOTS; i++) {
-            BoardTheme.Prop kind = theme.prop(i);
-            if (kind == BoardTheme.Prop.NONE) continue;
-            double[] cell = BoardTheme.PROP_CELLS[i];
-            int cx = (int) (ox + (cell[0] + 0.5 - (cell[1] + 0.5)) * tw / 2);
-            int cy = (int) (oy + (cell[0] + 0.5 + (cell[1] + 0.5)) * th / 2);
+            int[] p = slotScreen(i);
             int size = 22;
-            g.drawImage(AutoSprites.prop(kind, size),
-                    cx - size / 2, cy - size + size / 4, size, size, null);
+            if (i == selectedSlot) {
+                g.setColor(new Color(255, 220, 110));
+                g.drawOval(p[0] - size / 2 - 3, p[1] - size / 2 - 3, size + 6, size + 6);
+            }
+            BufferedImage custom = theme.propImage(i).isEmpty() ? null
+                    : AssetLoader.loadImageOrNull(theme.propImage(i));
+            if (custom != null) {
+                g.drawImage(custom, p[0] - size / 2, p[1] - size + size / 4,
+                        size, size, null);
+            } else if (theme.prop(i) != BoardTheme.Prop.NONE) {
+                g.drawImage(AutoSprites.prop(theme.prop(i), size),
+                        p[0] - size / 2, p[1] - size + size / 4, size, size, null);
+            } else {
+                // Empty slot: a faint marker so it stays clickable.
+                g.setColor(new Color(200, 206, 226, i == selectedSlot ? 160 : 70));
+                g.drawOval(p[0] - 4, p[1] - 4, 8, 8);
+            }
         }
         g.setClip(oldClip);
         g.setColor(new Color(90, 100, 140));

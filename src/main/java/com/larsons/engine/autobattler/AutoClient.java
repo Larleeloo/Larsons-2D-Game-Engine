@@ -13,6 +13,7 @@ import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedDeque;
@@ -50,7 +51,19 @@ public final class AutoClient implements Closeable {
     /** Your private state: economy plus everything you own. */
     public record You(int gold, int hp, int level, int xp, int xpNeed, int boardCap,
                       int streak, boolean alive, List<UnitInstance> bench,
-                      List<UnitInstance> board, List<String> shop, List<String> items) {}
+                      List<UnitInstance> board, List<String> shop, List<String> items,
+                      List<Integer> deals, boolean shopLocked, boolean unequipUsed,
+                      Relic relic, List<Trait> traitBoosts) {
+
+        /** The actual gold price of a shop slot after any relic discount. */
+        public int shopPrice(int slot) {
+            String key = slot >= 0 && slot < shop.size() ? shop.get(slot) : null;
+            UnitDef def = key == null ? null : AutoUnits.get(key);
+            if (def == null) return 0;
+            int deal = slot < deals.size() ? deals.get(slot) : 0;
+            return Math.max(0, def.cost - deal);
+        }
+    }
 
     public record Standing(int id, String name, int hp, int level, boolean alive,
                            int streak, boolean bot, int place) {}
@@ -60,7 +73,8 @@ public final class AutoClient implements Closeable {
     public record CombatUnit(int id, String key, int star, int team, double x, double y,
                              double hp, double maxHp, double mana, double manaMax,
                              boolean dead, AnimState state,
-                             double dmgPhysical, double dmgMagic, double healing) {}
+                             double dmgPhysical, double dmgMagic, double healing,
+                             Map<Element, Double> dmgByElement) {}
 
     public record CombatFrame(List<CombatUnit> units, long atNanos) {}
 
@@ -245,6 +259,18 @@ public final class AutoClient implements Closeable {
 
     public void sendEquip(int itemIndex, int unitId) { send(AutoProto.equip(itemIndex, unitId)); }
 
+    /** Toggle the shop lock; a locked shop survives the round change. */
+    public void sendLock() { send(AutoProto.lock()); }
+
+    /** Strip a unit's items back to the item bench (once per round). */
+    public void sendUnequip(int unitId) { send(AutoProto.unequip(unitId)); }
+
+    /** One-click formation: {@code front}, {@code spread}, or {@code flip}. */
+    public void sendArrange(String mode) { send(AutoProto.arrange(mode)); }
+
+    /** Fuse a Wisp into a pair as the missing copy (Io-style). */
+    public void sendFuse(int wispId, int unitId) { send(AutoProto.fuse(wispId, unitId)); }
+
     /** Ask to scout a player's board; the reply lands in {@link #boardView()}. */
     public void sendView(int playerId) { send(AutoProto.view(playerId)); }
 
@@ -340,6 +366,14 @@ public final class AutoClient implements Closeable {
                     for (Object o : list) {
                         if (o instanceof Map<?, ?> um) {
                             Map<String, Object> u = Json.asObject(um);
+                            Map<Element, Double> byElement = new EnumMap<>(Element.class);
+                            if (u.get("de") instanceof Map<?, ?> dm) {
+                                for (Map.Entry<String, Object> e
+                                        : Json.asObject(dm).entrySet()) {
+                                    Element el = Element.fromCode(e.getKey());
+                                    if (el != null) byElement.put(el, dblOf(e.getValue()));
+                                }
+                            }
                             units.add(new CombatUnit(intOf(u.get("id")), str(u.get("k")),
                                     intOf(u.get("s")), intOf(u.get("tm")),
                                     dblOf(u.get("x")), dblOf(u.get("y")),
@@ -348,7 +382,7 @@ public final class AutoClient implements Closeable {
                                     Boolean.TRUE.equals(u.get("dd")),
                                     AnimState.fromCode(str(u.get("st"))),
                                     dblOf(u.get("dp")), dblOf(u.get("dm")),
-                                    dblOf(u.get("dh"))));
+                                    dblOf(u.get("dh")), byElement));
                         }
                     }
                 }
@@ -420,10 +454,29 @@ public final class AutoClient implements Closeable {
                 if (o instanceof String s) items.add(s);
             }
         }
+        List<Integer> deals = new ArrayList<>();
+        if (msg.get("deals") instanceof List<?> list) {
+            for (Object o : list) deals.add(o instanceof Number n ? n.intValue() : 0);
+        }
+        List<Trait> boosts = new ArrayList<>();
+        if (msg.get("boost") instanceof List<?> list) {
+            for (Object o : list) {
+                if (o instanceof String s) {
+                    try {
+                        boosts.add(Trait.valueOf(s));
+                    } catch (IllegalArgumentException ignored) {
+                        // unknown trait names are dropped
+                    }
+                }
+            }
+        }
         return new You(intOf(msg.get("gold")), intOf(msg.get("hp")), intOf(msg.get("lvl")),
                 intOf(msg.get("xp")), intOf(msg.get("need")), intOf(msg.get("cap")),
                 intOf(msg.get("streak")), Boolean.TRUE.equals(msg.get("alive")),
-                bench, board, shop, items);
+                bench, board, shop, items, deals,
+                Boolean.TRUE.equals(msg.get("lock")),
+                Boolean.TRUE.equals(msg.get("strip")),
+                Relic.fromKey(str(msg.get("relic"))), boosts);
     }
 
     private static List<UnitInstance> parseUnits(Object o) {

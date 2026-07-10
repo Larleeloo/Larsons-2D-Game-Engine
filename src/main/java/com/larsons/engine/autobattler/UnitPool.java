@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 /**
  * The shared unit pool: every copy of every unit that exists in one match.
@@ -40,25 +41,41 @@ public final class UnitPool {
         }
     }
 
+    /** How much the Collector relic over-weights already-owned units in draws. */
+    public static final int FAVORED_WEIGHT = 4;
+
     /**
      * Draw a random unit of the given cost tier (weighted by remaining copies,
      * so nearly-drained units show up less). Returns {@code null} when the
      * tier is exhausted. The drawn copy is removed from the pool.
      */
     public String draw(int cost, Random rng) {
+        return draw(cost, rng, Set.of());
+    }
+
+    /**
+     * Like {@link #draw(int, Random)}, but keys in {@code favored} count
+     * {@value FAVORED_WEIGHT}x their remaining copies — the Collector relic's
+     * "more likely to roll what you already own".
+     */
+    public String draw(int cost, Random rng, Set<String> favored) {
         List<UnitDef> tier = AutoUnits.byCost(cost);
         int total = 0;
-        for (UnitDef d : tier) total += remaining(d.key);
+        for (UnitDef d : tier) total += weight(d.key, favored);
         if (total <= 0) return null;
         int pick = rng.nextInt(total);
         for (UnitDef d : tier) {
-            pick -= remaining(d.key);
+            pick -= weight(d.key, favored);
             if (pick < 0) {
                 take(d.key);
                 return d.key;
             }
         }
         return null; // unreachable
+    }
+
+    private int weight(String key, Set<String> favored) {
+        return remaining(key) * (favored.contains(key) ? FAVORED_WEIGHT : 1);
     }
 
     /** For tests/debugging: total copies left across a cost tier. */
@@ -70,6 +87,14 @@ public final class UnitPool {
 
     /** Draw a full shop of {@code slots} units using the level's rarity odds. */
     public List<String> rollShop(int level, int slots, Random rng) {
+        return rollShop(level, slots, rng, Set.of());
+    }
+
+    /**
+     * Roll a shop with {@code favored} unit keys over-weighted within each
+     * tier (see {@link #draw(int, Random, Set)}).
+     */
+    public List<String> rollShop(int level, int slots, Random rng, Set<String> favored) {
         int[] odds = AutoUnits.SHOP_ODDS[Math.max(1, Math.min(9, level)) - 1];
         List<String> shop = new ArrayList<>(slots);
         for (int i = 0; i < slots; i++) {
@@ -82,9 +107,9 @@ public final class UnitPool {
                     break;
                 }
             }
-            String key = draw(cost, rng);
+            String key = draw(cost, rng, favored);
             // A drained tier falls back to cheaper tiers, then to nothing.
-            for (int c = cost - 1; key == null && c >= 1; c--) key = draw(c, rng);
+            for (int c = cost - 1; key == null && c >= 1; c--) key = draw(c, rng, favored);
             shop.add(key); // may be null (empty card)
         }
         return shop;

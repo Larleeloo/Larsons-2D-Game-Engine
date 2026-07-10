@@ -51,6 +51,28 @@ final class AutoHud {
         return new Rectangle(w - 170, shopBarY(h) + 34, 150, 48);
     }
 
+    /** The shop-lock toggle, tucked above the sell button in the bar's corner. */
+    static Rectangle lockButton(int w, int h) {
+        return new Rectangle(w - 52, shopBarY(h) + 4, 38, 26);
+    }
+
+    /** The once-per-round "remove items" button, under the sell button. */
+    static Rectangle unequipButton(int w, int h) {
+        return new Rectangle(w - 170, shopBarY(h) + 86, 150, 24);
+    }
+
+    /** One of the three formation buttons (gather/spread/flip) under the title. */
+    static Rectangle arrangeButton(int w, int index) {
+        int bw = 86, gap = 8;
+        int x = w / 2 - (bw * 3 + gap * 2) / 2 + index * (bw + gap);
+        return new Rectangle(x, 62, bw, 22);
+    }
+
+    /** The current-relic badge in the free top-left corner. */
+    static Rectangle relicBadge(int w) {
+        return new Rectangle(10, 8, 195, 46);
+    }
+
     /**
      * Shop cards shrink on narrow viewports so five of them always fit between
      * the economy buttons (left) and the sell button (right) without touching
