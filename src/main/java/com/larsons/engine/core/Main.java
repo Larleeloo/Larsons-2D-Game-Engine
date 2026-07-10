@@ -5,6 +5,7 @@ import com.larsons.engine.config.GameTypeStore;
 import com.larsons.engine.demo.AutoBattlerGuideScene;
 import com.larsons.engine.demo.AutoBattlerLobbyScene;
 import com.larsons.engine.demo.AutoBattlerScene;
+import com.larsons.engine.demo.BoardCustomizeScene;
 import com.larsons.engine.demo.CreativeScene;
 import com.larsons.engine.demo.GameTypeEditorScene;
 import com.larsons.engine.demo.MainMenuScene;
@@ -62,6 +63,7 @@ public class Main {
         engine.scenes().register("autobattler", new AutoBattlerScene(context));
         engine.scenes().register("autoguide", new AutoBattlerGuideScene(context));
         engine.scenes().register("skins", new SkinEditorScene(context));
+        engine.scenes().register("boardtheme", new BoardCustomizeScene(context));
 
         engine.scenes().setScene("startup");
         engine.start();

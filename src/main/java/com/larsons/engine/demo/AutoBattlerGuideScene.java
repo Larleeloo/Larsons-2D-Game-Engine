@@ -7,6 +7,9 @@ import com.larsons.engine.autobattler.AutoItems;
 import com.larsons.engine.autobattler.AutoPlayer;
 import com.larsons.engine.autobattler.AutoSprites;
 import com.larsons.engine.autobattler.AutoUnits;
+import com.larsons.engine.autobattler.BattleSim;
+import com.larsons.engine.autobattler.Element;
+import com.larsons.engine.autobattler.SynergyCategory;
 import com.larsons.engine.autobattler.Trait;
 import com.larsons.engine.autobattler.UnitDef;
 import com.larsons.engine.config.GameContext;
@@ -55,7 +58,7 @@ public class AutoBattlerGuideScene extends AbstractScene {
 
     private enum Tab {
         OVERVIEW("Rules"), ECONOMY("Economy"), TRAITS("Synergies"),
-        ITEMS("Items"), ODDS("Shop Odds"), UNITS("Units");
+        ELEMENTS("Elements"), ITEMS("Items"), ODDS("Shop Odds"), UNITS("Units");
         final String label;
         Tab(String label) { this.label = label; }
     }
@@ -100,6 +103,8 @@ public class AutoBattlerGuideScene extends AbstractScene {
     private Tab tab = Tab.OVERVIEW;
     private int scroll;
     private int contentHeight;
+    /** Synergies-tab category filter; null shows every trait. */
+    private SynergyCategory traitFilter;
 
     private final Rectangle backBtn = new Rectangle();
     private final List<Rectangle> tabRects = new ArrayList<>();
@@ -117,6 +122,7 @@ public class AutoBattlerGuideScene extends AbstractScene {
         tab = Tab.OVERVIEW;
         scroll = 0;
         detail = null;
+        traitFilter = null;
         hotspots.clear();
     }
 
@@ -238,6 +244,7 @@ public class AutoBattlerGuideScene extends AbstractScene {
             case OVERVIEW -> drawOverview(g, startY);
             case ECONOMY -> drawEconomy(g, startY);
             case TRAITS -> drawTraits(g, startY);
+            case ELEMENTS -> drawElements(g, startY);
             case ITEMS -> drawItems(g, startY);
             case ODDS -> drawOdds(g, startY);
             case UNITS -> drawUnits(g, startY);
@@ -572,7 +579,14 @@ public class AutoBattlerGuideScene extends AbstractScene {
                 + "a trait to activate it at a tier — the more you stack, the stronger the bonus, "
                 + "for your whole team, all combat. Click a trait for its per-tier effect.",
                 new Color(200, 206, 224));
-        y += 24;
+        y = paragraph(g, x, y + 6, w,
+                "Every synergy belongs to one or more functional categories — its role icons "
+                + "sit on the right of each row. Click a category chip to browse just the "
+                + "Healing, Shielding, Damage (…) synergies. Support synergies mainly power "
+                + "up the rest of your team.", new Color(170, 178, 202));
+        y += 16;
+        y = drawCategoryFilter(g, x, y, w);
+        y += 16;
 
         int colGap = 24;
         int colW = (w - colGap) / 2;
@@ -585,16 +599,69 @@ public class AutoBattlerGuideScene extends AbstractScene {
         g.drawString("Classes", rightX, y);
         y += 8;
 
-        int startY = y;
         int leftY = y, rightY = y;
         for (Trait t : Trait.values()) {
+            if (traitFilter != null && !t.categories.contains(traitFilter)) continue;
             if (t.kind == Trait.Kind.ORIGIN) {
                 leftY = drawTraitRow(g, leftX, leftY, colW, t);
             } else {
                 rightY = drawTraitRow(g, rightX, rightY, colW, t);
             }
         }
+        if (leftY == y && rightY == y) {
+            g.setColor(new Color(140, 146, 168));
+            g.setFont(new Font("SansSerif", Font.PLAIN, 14));
+            g.drawString("No synergies in this category yet.", x, y + 24);
+            return y + 48;
+        }
         return Math.max(leftY, rightY) + 20;
+    }
+
+    /** The clickable category chip row ("All" plus one chip per category). */
+    private int drawCategoryFilter(Graphics2D g, int x, int y, int w) {
+        int chipH = 24;
+        int cx = x;
+        g.setFont(new Font("SansSerif", Font.BOLD, 12));
+        FontMetrics fm = g.getFontMetrics();
+
+        int allW = fm.stringWidth("All") + 20;
+        if (drawChip(g, cx, y, allW, chipH, "All", null, traitFilter == null)) {
+            hot(cx, y, allW, chipH, () -> traitFilter = null);
+        }
+        cx += allW + 8;
+        for (SynergyCategory cat : SynergyCategory.values()) {
+            int cw = fm.stringWidth(cat.label) + 20 + 16;
+            if (cx + cw > x + w) {
+                cx = x;
+                y += chipH + 8;
+            }
+            final SynergyCategory picked = cat;
+            if (drawChip(g, cx, y, cw, chipH, cat.label, cat, traitFilter == cat)) {
+                hot(cx, y, cw, chipH,
+                        () -> traitFilter = traitFilter == picked ? null : picked);
+            }
+            cx += cw + 8;
+        }
+        return y + chipH + 4;
+    }
+
+    /** One filter chip; returns true so callers can register its hotspot. */
+    private boolean drawChip(Graphics2D g, int x, int y, int w, int h, String label,
+                             SynergyCategory cat, boolean active) {
+        boolean hot = hovered(x, y, w, h);
+        g.setColor(active ? new Color(70, 82, 118) : hot ? new Color(44, 50, 74)
+                : new Color(30, 34, 52));
+        g.fillRoundRect(x, y, w, h, 12, 12);
+        g.setColor(active ? new Color(150, 170, 220) : new Color(56, 62, 88));
+        g.drawRoundRect(x, y, w, h, 12, 12);
+        int tx = x + 10;
+        if (cat != null) {
+            g.drawImage(AutoSprites.categoryIcon(cat, 14), x + 8, y + h / 2 - 7, null);
+            tx = x + 26;
+        }
+        g.setColor(active ? new Color(235, 238, 250) : new Color(180, 186, 208));
+        g.drawString(label, tx, y + h / 2 + 4);
+        return true;
     }
 
     private int drawTraitRow(Graphics2D g, int x, int y, int w, Trait t) {
@@ -615,7 +682,7 @@ public class AutoBattlerGuideScene extends AbstractScene {
         g.setFont(new Font("SansSerif", Font.BOLD, 15));
         g.drawString(t.label, x + 40, y + h / 2 - 2);
 
-        // Threshold pips ("2 / 3").
+        // Threshold pips ("2 / 4 / 6").
         StringBuilder marks = new StringBuilder();
         for (int th : t.thresholds) {
             if (marks.length() > 0) marks.append(" / ");
@@ -628,7 +695,15 @@ public class AutoBattlerGuideScene extends AbstractScene {
         int count = countUnitsWithTrait(t);
         g.setColor(new Color(120, 126, 148));
         String tag = count + " unit" + (count == 1 ? "" : "s");
-        g.drawString(tag, x + w - g.getFontMetrics().stringWidth(tag) - 12, y + h / 2 + 4);
+        g.drawString(tag, x + w - g.getFontMetrics().stringWidth(tag) - 12, y + h / 2 + 14);
+
+        // Role icons, top-right of the row.
+        int icon = 13;
+        int ix = x + w - icon - 10;
+        for (int ci = t.categories.size() - 1; ci >= 0; ci--) {
+            g.drawImage(AutoSprites.categoryIcon(t.categories.get(ci), icon),
+                    ix - ci * (icon + 3), y + 7, null);
+        }
 
         hot(x, y, w, h, () -> traitDetail(t));
         return y + h + 8;
@@ -641,6 +716,14 @@ public class AutoBattlerGuideScene extends AbstractScene {
         d.blank();
         for (int i = 0; i < t.thresholds.length; i++) {
             d.line("◆ " + t.thresholds[i] + " units  —  tier " + (i + 1), t.color);
+        }
+        d.blank();
+        List<String> cats = new ArrayList<>();
+        for (SynergyCategory cat : t.categories) cats.add(cat.label);
+        d.line("Role: " + String.join(" · ", cats), new Color(180, 186, 208));
+        if (t.isSupport()) {
+            d.line("Support synergy — enhances the rest of your team.",
+                    SynergyCategory.SUPPORT.color);
         }
         d.blank();
         List<String> members = new ArrayList<>();
@@ -657,6 +740,101 @@ public class AutoBattlerGuideScene extends AbstractScene {
             if (def.origin == t || def.clazz == t) n++;
         }
         return n;
+    }
+
+    // ------------------------------------------------------------------ ELEMENTS
+
+    private int drawElements(Graphics2D g, int y) {
+        int x = contentX(), w = contentWidth();
+        y = heading(g, x, y + 12, "Elemental Damage");
+        y = paragraph(g, x, y, w,
+                "Elements are a second strategic layer on top of synergies — they never replace "
+                + "them. A unit can attack with up to two elements, resist up to two, and be "
+                + "weak to up to two; plenty of units carry none, and plain damage is always "
+                + "fine. Damage into a weakness is amplified, damage into a resistance is "
+                + "dampened. Click an element for who uses and fears it.",
+                new Color(200, 206, 224));
+        int r10 = (int) Math.round(30 * BattleSim.elementIntensity(10));
+        int r20 = (int) Math.round(30 * BattleSim.elementIntensity(20));
+        y = paragraph(g, x, y + 6, w,
+                "The swing GROWS round over round (about +" + r10 + "% into a weakness by "
+                + "round 10, +" + r20 + "% by round 20), so scout your opponents and adapt: "
+                + "late-game, countering the lobby's elements matters as much as your own "
+                + "synergy bonuses.", new Color(170, 178, 202));
+        y += 20;
+
+        for (Element e : Element.values()) {
+            int h = 46;
+            boolean hot = hovered(x, y, w, h);
+            g.setColor(hot ? new Color(40, 46, 70) : new Color(28, 32, 50));
+            g.fillRoundRect(x, y, w, h, 10, 10);
+            g.setColor(new Color(56, 62, 88));
+            g.drawRoundRect(x, y, w, h, 10, 10);
+
+            // Element diamond.
+            int d = 18;
+            int dx = x + 14, dy = y + h / 2 - d / 2;
+            g.setColor(e.color);
+            g.fillPolygon(new int[]{dx + d / 2, dx + d, dx + d / 2, dx},
+                    new int[]{dy, dy + d / 2, dy + d, dy + d / 2}, 4);
+
+            g.setColor(new Color(232, 236, 248));
+            g.setFont(new Font("SansSerif", Font.BOLD, 15));
+            g.drawString(e.label, x + 44, y + h / 2 - 2);
+            g.setColor(new Color(150, 156, 178));
+            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
+            g.drawString(trim(g, e.description, w - 200), x + 44, y + h / 2 + 14);
+
+            int users = countElementUsers(e);
+            g.setColor(new Color(120, 126, 148));
+            String tag = users + " attacker" + (users == 1 ? "" : "s");
+            g.drawString(tag, x + w - g.getFontMetrics().stringWidth(tag) - 12,
+                    y + h / 2 + 4);
+
+            final Element fixed = e;
+            hot(x, y, w, h, () -> elementDetail(fixed));
+            y += h + 8;
+        }
+
+        y = heading(g, x, y + 16, "Adapting Your Build");
+        y = paragraph(g, x, y, w,
+                "Elemental relics drop from creep rounds (see the Items tab): infusion charms "
+                + "add an element to any unit's attacks, the Radiation Core converts a unit to "
+                + "pure Radiation, and the Prism Ward grants resistance to everything. Use them "
+                + "to counter what your opponents are building without giving up your synergies.",
+                new Color(180, 186, 208));
+        return y + 24;
+    }
+
+    private int countElementUsers(Element e) {
+        int n = 0;
+        for (UnitDef def : AutoUnits.roster()) {
+            if (def.attackElements.contains(e)) n++;
+        }
+        return n;
+    }
+
+    private void elementDetail(Element e) {
+        Detail d = new Detail(e.label, e.color, null);
+        d.line(e.description, new Color(210, 216, 232));
+        d.blank();
+        List<String> attackers = new ArrayList<>();
+        List<String> resisters = new ArrayList<>();
+        List<String> weaklings = new ArrayList<>();
+        for (UnitDef def : AutoUnits.roster()) {
+            if (def.attackElements.contains(e)) attackers.add(def.name);
+            if (def.resistances.contains(e)) resisters.add(def.name);
+            if (def.weaknesses.contains(e)) weaklings.add(def.name);
+        }
+        d.line("Attacks with it: " + (attackers.isEmpty() ? "nobody (relics only)"
+                : String.join(", ", attackers)), e.color);
+        d.blank();
+        d.line("Resists it: " + (resisters.isEmpty() ? "nobody"
+                : String.join(", ", resisters)), new Color(150, 200, 170));
+        d.blank();
+        d.line("Weak to it: " + (weaklings.isEmpty() ? "nobody"
+                : String.join(", ", weaklings)), new Color(235, 150, 130));
+        detail = d;
     }
 
     // ------------------------------------------------------------------ ITEMS
@@ -729,6 +907,37 @@ public class AutoBattlerGuideScene extends AbstractScene {
                 "The grid is symmetric — order doesn't matter. Two of the same component make "
                 + "the strongest single-stat items (e.g. two swords → Deathblade).",
                 new Color(170, 178, 202));
+
+        // Elemental relics.
+        y = heading(g, x, y + 18, "Elemental Relics");
+        y = paragraph(g, x, y, w,
+                "Relics also drop from creep rounds (less often than components). They carry "
+                + "no stats — instead they rewire a unit's elemental affinity, and they never "
+                + "combine. See the Elements tab for the damage rules.",
+                new Color(200, 206, 224));
+        y += 14;
+        List<String> relics = AutoItems.relicKeys();
+        int relicCellW = Math.max(150, w / Math.min(4, relics.size()));
+        int rx = x, gem2 = 30;
+        for (String key : relics) {
+            AutoItem it = AutoItems.get(key);
+            if (rx + relicCellW > x + w + 4) {
+                rx = x;
+                y += gem2 + 18;
+            }
+            drawItemGem(g, it, rx, y, gem2);
+            g.setColor(new Color(226, 230, 244));
+            g.setFont(new Font("SansSerif", Font.BOLD, 12));
+            g.drawString(it.name, rx + gem2 + 8, y + 13);
+            g.setColor(new Color(160, 168, 190));
+            g.setFont(new Font("SansSerif", Font.PLAIN, 11));
+            g.drawString(trim(g, it.statLine(), relicCellW - gem2 - 16),
+                    rx + gem2 + 8, y + 27);
+            AutoItem fixed = it;
+            hot(rx, y, relicCellW - 6, gem2, () -> itemDetail(fixed));
+            rx += relicCellW;
+        }
+        y += gem2 + 8;
         return y + 20;
     }
 
@@ -739,11 +948,17 @@ public class AutoBattlerGuideScene extends AbstractScene {
     private void itemDetail(AutoItem it) {
         Detail d = new Detail(it.name, it.color, AutoSprites.item(it, 48));
         d.line(it.isComponent() ? "Component (drops from creep rounds)"
+                : it.isRelic() ? "Elemental relic (rarer creep-round drop)"
                 : "Combined item", new Color(180, 186, 208));
         d.blank();
-        d.line("Stats: " + (it.statLine().isEmpty() ? "—" : it.statLine()),
+        d.line((it.isRelic() ? "Effect: " : "Stats: ")
+                        + (it.statLine().isEmpty() ? "—" : it.statLine()),
                 new Color(210, 216, 232));
-        if (!it.isComponent()) {
+        if (it.isRelic()) {
+            d.blank();
+            d.line("Relics never combine — they rewire elemental affinity instead.",
+                    new Color(160, 168, 190));
+        } else if (!it.isComponent()) {
             AutoItem a = AutoItems.get(it.partA);
             AutoItem b = AutoItems.get(it.partB);
             d.blank();
@@ -938,6 +1153,10 @@ public class AutoBattlerGuideScene extends AbstractScene {
             g.drawString(def.origin.label, tx, y + 38);
             g.setColor(def.clazz.color);
             g.drawString(def.clazz.label, tx, y + 54);
+            if (!def.attackElements.isEmpty()) {
+                AutoSprites.drawElementPips(g, def.attackElements,
+                        x + w - 8 - def.attackElements.size() * 6, y + 32, 9);
+            }
         } else {
             g.setColor(new Color(160, 168, 190));
             g.setFont(new Font("SansSerif", Font.PLAIN, 12));
@@ -977,6 +1196,22 @@ public class AutoBattlerGuideScene extends AbstractScene {
         d.line("Armor: " + (int) def.armor
                 + (def.manaMax > 0 ? "   ·   Mana: " + (int) def.manaMax : ""),
                 new Color(200, 206, 224));
+        if (!def.attackElements.isEmpty() || !def.resistances.isEmpty()
+                || !def.weaknesses.isEmpty()) {
+            d.blank();
+            if (!def.attackElements.isEmpty()) {
+                d.line("Attacks with: " + elementNames(def.attackElements),
+                        def.attackElements.get(0).color);
+            }
+            if (!def.resistances.isEmpty()) {
+                d.line("Resists: " + elementNames(def.resistances),
+                        new Color(150, 200, 170));
+            }
+            if (!def.weaknesses.isEmpty()) {
+                d.line("Weak to: " + elementNames(def.weaknesses),
+                        new Color(235, 150, 130));
+            }
+        }
         if (!def.isCreep() && def.clazz != null) {
             d.blank();
             d.line("Ability (" + def.clazz.label + "):", new Color(255, 214, 100));
@@ -986,6 +1221,15 @@ public class AutoBattlerGuideScene extends AbstractScene {
                     + " copies in the shared pool.", new Color(160, 168, 190));
         }
         detail = d;
+    }
+
+    private static String elementNames(List<Element> elements) {
+        StringBuilder sb = new StringBuilder();
+        for (Element e : elements) {
+            if (sb.length() > 0) sb.append(" + ");
+            sb.append(e.label);
+        }
+        return sb.toString();
     }
 
     private static String abilityText(Trait clazz) {

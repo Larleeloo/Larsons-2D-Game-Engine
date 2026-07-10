@@ -39,8 +39,11 @@ public final class AutoProto {
      * Auto-battler protocol version; independent of the world protocol's.
      * v2 added board scouting ({@code view}/{@code board}) and the richer
      * combat snapshots (animation states, damage tallies, event sources).
+     * v3 added the elemental damage layer (element codes on damage events)
+     * and the expanded unit/trait/item registries, which both sides must
+     * share for replicated fights to make sense.
      */
-    public static final int VERSION = 2;
+    public static final int VERSION = 3;
 
     /** Default port for hosted auto-battler games (world servers use 7777). */
     public static final int DEFAULT_PORT = 7788;

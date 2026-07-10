@@ -70,6 +70,7 @@ public class AutoBattlerLobbyScene extends AbstractScene {
         form.addText("Host on port", () -> hostPort, v -> hostPort = v, 5);
         form.addAction("Host Game", this::startHost);
         form.addAction("Customize Skins", () -> scenes.transitionTo("skins"));
+        form.addAction("Customize Board", () -> scenes.transitionTo("boardtheme"));
         form.addAction("How to Play", () -> scenes.transitionTo("autoguide"));
         form.addAction("Back", () -> scenes.transitionTo("startup"));
     }

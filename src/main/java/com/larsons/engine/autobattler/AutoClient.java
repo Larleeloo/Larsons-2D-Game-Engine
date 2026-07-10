@@ -64,9 +64,12 @@ public final class AutoClient implements Closeable {
 
     public record CombatFrame(List<CombatUnit> units, long atNanos) {}
 
-    /** Source fields are 0 when the event has no originating unit. */
+    /**
+     * Source fields are 0 when the event has no originating unit;
+     * {@code element} is null for plain (element-less) damage.
+     */
     public record CombatEvent(String kind, double x, double y, double amount, int team,
-                              int sourceId, double sx, double sy) {}
+                              int sourceId, double sx, double sy, Element element) {}
 
     /** A scouted board: another player's public stats + roster snapshot. */
     public record BoardView(int id, String name, boolean bot, int hp, int level,
@@ -359,7 +362,8 @@ public final class AutoClient implements Closeable {
                                     dblOf(e.get("x")), dblOf(e.get("y")),
                                     dblOf(e.get("a")), intOf(e.get("tm")),
                                     intOf(e.get("su")),
-                                    dblOf(e.get("sx")), dblOf(e.get("sy"))));
+                                    dblOf(e.get("sx")), dblOf(e.get("sy")),
+                                    Element.fromCode(str(e.get("el")))));
                         }
                     }
                     while (combatEvents.size() > 256) combatEvents.pollFirst();

@@ -98,7 +98,10 @@ public final class AutoSprites {
         });
     }
 
-    /** An item gem: components are single drops, combined items twin-toned. */
+    /**
+     * An item gem: components are single drops, combined items twin-toned,
+     * elemental relics ringed in their element's colour.
+     */
     public static BufferedImage item(AutoItem item, int size) {
         return cached("item:" + item.key + ":" + size, size, g -> {
             int s = size;
@@ -108,12 +111,180 @@ public final class AutoSprites {
             g.fillPolygon(xs, ys, 4);
             g.setColor(item.color.brighter());
             g.drawLine(s / 2, s / 8, s / 6, s / 2);
-            if (!item.isComponent()) {
+            if (item.isRelic()) {
+                g.setColor(withAlpha(item.color.brighter(), 220));
+                g.setStroke(new BasicStroke(Math.max(1.5f, s / 14f)));
+                g.drawOval(s / 8, s / 8, s * 3 / 4, s * 3 / 4);
+            } else if (!item.isComponent()) {
                 g.setColor(new Color(255, 255, 255, 170));
                 g.setStroke(new BasicStroke(Math.max(1.5f, s / 12f)));
                 g.drawPolygon(xs, ys, 4);
             }
         });
+    }
+
+    /**
+     * A small icon for a synergy category, drawn procedurally like everything
+     * else: a sword for Damage, a cross for Healing, a coin for Economy...
+     * used by the synergy panel's filter chips and per-trait role markers.
+     */
+    public static BufferedImage categoryIcon(SynergyCategory cat, int size) {
+        return cached("cat:" + cat.name() + ":" + size, size, g -> {
+            int s = size;
+            int c = s / 2;
+            g.setColor(cat.color);
+            g.setStroke(new BasicStroke(Math.max(1.5f, s / 8f), BasicStroke.CAP_ROUND,
+                    BasicStroke.JOIN_ROUND));
+            switch (cat) {
+                case SUPPORT -> { // upward chevron over a dot: lifting others
+                    g.drawLine(s / 4, c, c, s / 5);
+                    g.drawLine(c, s / 5, s * 3 / 4, c);
+                    g.fillOval(c - s / 8, s * 3 / 5, s / 4, s / 4);
+                }
+                case DAMAGE -> { // sword
+                    g.drawLine(s / 4, s * 3 / 4, s * 3 / 4, s / 4);
+                    g.drawLine(s / 3, s / 2 - s / 12, s / 2 + s / 12, s * 2 / 3);
+                }
+                case TANK -> { // filled shield
+                    int[] xs = {s / 4, s * 3 / 4, s * 3 / 4, c, s / 4};
+                    int[] ys = {s / 5, s / 5, s / 2, s * 4 / 5, s / 2};
+                    g.fillPolygon(xs, ys, 5);
+                }
+                case HEALING -> { // cross
+                    g.drawLine(c, s / 5, c, s * 4 / 5);
+                    g.drawLine(s / 5, c, s * 4 / 5, c);
+                }
+                case SHIELDING -> { // shield outline (a bubble, not a wall)
+                    int[] xs = {s / 4, s * 3 / 4, s * 3 / 4, c, s / 4};
+                    int[] ys = {s / 5, s / 5, s / 2, s * 4 / 5, s / 2};
+                    g.drawPolygon(xs, ys, 5);
+                }
+                case RANGE -> { // arrow
+                    g.drawLine(s / 5, s * 4 / 5, s * 3 / 4, s / 4);
+                    g.drawLine(s * 3 / 4, s / 4, s * 3 / 4, s / 2);
+                    g.drawLine(s * 3 / 4, s / 4, s / 2, s / 4);
+                }
+                case CROWD_CONTROL -> { // snowflake-ish asterisk: slows/stops
+                    g.drawLine(c, s / 5, c, s * 4 / 5);
+                    g.drawLine(s / 4, s / 3, s * 3 / 4, s * 2 / 3);
+                    g.drawLine(s / 4, s * 2 / 3, s * 3 / 4, s / 3);
+                }
+                case MAGIC -> { // orb with a highlight
+                    g.fillOval(s / 4, s / 4, s / 2, s / 2);
+                    g.setColor(Color.WHITE);
+                    g.fillOval(c - s / 10, s / 3, s / 6, s / 6);
+                }
+                case MOBILITY -> { // double chevron right
+                    g.drawLine(s / 4, s / 4, s / 2, c);
+                    g.drawLine(s / 4, s * 3 / 4, s / 2, c);
+                    g.drawLine(s / 2, s / 4, s * 3 / 4, c);
+                    g.drawLine(s / 2, s * 3 / 4, s * 3 / 4, c);
+                }
+                case ECONOMY -> { // coin
+                    g.drawOval(s / 5, s / 5, s * 3 / 5, s * 3 / 5);
+                    g.drawLine(c, s / 3, c, s * 2 / 3);
+                }
+                case UTILITY -> { // four gear studs around a hub
+                    g.fillOval(c - s / 8, c - s / 8, s / 4, s / 4);
+                    g.drawLine(c, s / 6, c, s / 3);
+                    g.drawLine(c, s * 2 / 3, c, s * 5 / 6);
+                    g.drawLine(s / 6, c, s / 3, c);
+                    g.drawLine(s * 2 / 3, c, s * 5 / 6, c);
+                }
+            }
+        });
+    }
+
+    /**
+     * A decorative board prop (cosmetic only): plants, statues, lanterns and
+     * friends, drawn in the same procedural style as the unit figures. Kinds
+     * are the {@link BoardTheme.Prop} names.
+     */
+    public static BufferedImage prop(BoardTheme.Prop kind, int size) {
+        return cached("prop:" + kind.name() + ":" + size, size, g -> {
+            int s = size;
+            int c = s / 2;
+            switch (kind) {
+                case PLANT -> {
+                    g.setColor(new Color(120, 85, 55));
+                    g.fillRect(c - s / 8, s * 5 / 8, s / 4, s / 4);
+                    g.setColor(new Color(90, 170, 90));
+                    for (int i = -1; i <= 1; i++) {
+                        g.fillOval(c - s / 8 + i * s / 6, s / 4 + Math.abs(i) * s / 10,
+                                s / 4, s * 2 / 5);
+                    }
+                }
+                case STATUE -> {
+                    Color stone = new Color(165, 170, 185);
+                    g.setColor(stone.darker());
+                    g.fillRect(s / 4, s * 3 / 4, s / 2, s / 6);
+                    g.setColor(stone);
+                    g.fillRect(c - s / 8, s * 2 / 5, s / 4, s * 2 / 5);
+                    g.fillOval(c - s / 7, s / 6, s * 2 / 7, s * 2 / 7);
+                }
+                case LANTERN -> {
+                    g.setColor(new Color(90, 80, 70));
+                    g.fillRect(c - s / 24, s / 3, s / 12, s / 2);
+                    g.setColor(new Color(255, 210, 110));
+                    g.fillOval(c - s / 7, s / 8, s * 2 / 7, s * 2 / 7);
+                    g.setColor(new Color(255, 240, 190, 120));
+                    g.fillOval(c - s / 4, s / 24, s / 2, s / 2);
+                }
+                case BANNER -> {
+                    g.setColor(new Color(120, 105, 85));
+                    g.fillRect(c - s / 24, s / 8, s / 12, s * 3 / 4);
+                    g.setColor(new Color(90, 140, 220));
+                    int[] xs = {c, c + s * 2 / 5, c + s / 4, c + s * 2 / 5, c};
+                    int[] ys = {s / 8, s / 8, s / 4, s * 3 / 8, s * 3 / 8};
+                    g.fillPolygon(xs, ys, 5);
+                }
+                case MUSHROOM -> {
+                    g.setColor(new Color(235, 230, 215));
+                    g.fillRect(c - s / 10, s / 2, s / 5, s * 2 / 5);
+                    g.setColor(new Color(210, 90, 80));
+                    g.fillArc(s / 6, s / 5, s * 2 / 3, s * 3 / 5, 0, 180);
+                    g.setColor(new Color(250, 245, 235));
+                    g.fillOval(s / 3, s / 3, s / 8, s / 8);
+                    g.fillOval(s * 3 / 5, s * 2 / 7, s / 9, s / 9);
+                }
+                case CRYSTAL -> {
+                    g.setColor(new Color(140, 200, 245));
+                    int[] xs = {c, c + s / 4, c + s / 8, c - s / 8, c - s / 4};
+                    int[] ys = {s / 8, s / 2, s * 7 / 8, s * 7 / 8, s / 2};
+                    g.fillPolygon(xs, ys, 5);
+                    g.setColor(new Color(220, 245, 255));
+                    g.drawLine(c, s / 8, c - s / 8, s * 7 / 8);
+                }
+                case FOUNTAIN -> {
+                    g.setColor(new Color(150, 155, 170));
+                    g.fillArc(s / 8, s / 2, s * 3 / 4, s * 2 / 5, 0, 180);
+                    g.setColor(new Color(110, 180, 235));
+                    g.fillOval(s / 4, s * 5 / 9, s / 2, s / 5);
+                    g.setColor(new Color(170, 215, 250));
+                    g.drawLine(c, s / 6, c, s * 5 / 9);
+                    g.drawLine(c, s / 6, c - s / 8, s * 2 / 5);
+                    g.drawLine(c, s / 6, c + s / 8, s * 2 / 5);
+                }
+                default -> { /* NONE renders nothing */ }
+            }
+        });
+    }
+
+    /** A row of small element pips (diamonds) centred on {@code cx}. */
+    public static void drawElementPips(Graphics2D g, java.util.List<Element> elements,
+                                       int cx, int y, int size) {
+        if (elements.isEmpty()) return;
+        int total = elements.size() * size + (elements.size() - 1) * 2;
+        int x = cx - total / 2;
+        for (Element e : elements) {
+            int[] xs = {x + size / 2, x + size, x + size / 2, x};
+            int[] ys = {y, y + size / 2, y + size, y + size / 2};
+            g.setColor(e.color);
+            g.fillPolygon(xs, ys, 4);
+            g.setColor(new Color(20, 22, 32));
+            g.drawPolygon(xs, ys, 4);
+            x += size + 2;
+        }
     }
 
     /** Star pips drawn above upgraded units. */

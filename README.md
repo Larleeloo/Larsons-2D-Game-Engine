@@ -52,12 +52,16 @@ over in a generic, data-driven form and wired to the same toggles:
   Teamfight Tactics, played on an **isometric** board with synergies, rounds,
   items, and units collected over the game — shops, a shared unit pool,
   3-copies-combine star-ups, an economy with interest and streaks, PvE creep
-  rounds that drop item components, and deterministic server-simulated
-  battles replicated to every client — presented with **replicated animation
-  states**, **animated projectiles**, melee/cast/death effects, a per-unit
+  rounds that drop item components, an **elemental damage layer**
+  (attack elements, resistances, and weaknesses whose impact grows round
+  over round), **synergy categories** with filterable UI, and deterministic
+  server-simulated battles replicated to every client — presented with
+  **replicated animation states**, per-unit **cartoony idle animations**,
+  **animated projectiles**, melee/cast/death effects, a per-unit
   **damage meter** split by damage type, **board scouting** (click any
-  player's name), and **skinnable textures** (sprite-sheet overrides for
-  units, items, projectiles, and the board). See
+  player's name), **skinnable textures** (sprite-sheet overrides for
+  units, items, projectiles, and the board), and **personal board
+  customization** (color schemes, background images, decorative props). See
   [Auto Battler](#auto-battler-online-2-10-players).
 - **Skins (texture overrides)** — drop PNG sprite sheets in
   `resources/skins/` and assign them in the lobby's **Customize Skins** menu:
@@ -515,18 +519,38 @@ and every 5th round are **PvE creep rounds** whose victories drop **item
 components**. With an odd number of players, one fights a **ghost copy** of
 another player's board.
 
-- **Units & shop:** a 28-unit roster across five cost tiers (1-5 gold) with
+- **Units & shop:** a 43-unit roster across five cost tiers (1-5 gold) with
   TFT-style per-level rarity odds, rerolls (2g), and a **shared unit pool** —
   copies are finite, so contested picks really run out. Three copies of a
-  unit combine into a 2-star (and three 2-stars into a 3-star).
+  unit combine into a 2-star (and three 2-stars into a 3-star). Every synergy
+  has several carriers, so no single build path is forced.
 - **Synergies:** every unit has an **origin** (Forest, Ember, Frost, Storm,
-  Shadow, Holy, Wild, Mech) and a **class** (Warrior, Guardian, Archer, Mage,
-  Assassin, Healer, Brawler). Fielding enough distinct units of a trait
-  activates tiered team buffs — regen, attack damage, enemy slows, crit,
-  team HP, and more. The live synergy panel shows counts and thresholds.
+  Shadow, Holy, Wild, Mech, Mystic, Merchant) and a **class** (Warrior,
+  Guardian, Archer, Mage, Assassin, Healer, Brawler). Fielding enough
+  distinct units of a trait activates tiered team buffs — regen, attack
+  damage, enemy slows, crit, team HP, team spell power, even bonus gold
+  (Merchant). Breakpoint ladders are deliberately **varied** (2/4, 3/5,
+  1/3/5, 2/4/6…) rather than one copied system, with super-linear tier
+  values. The live synergy panel shows counts and thresholds.
+- **Synergy categories:** every synergy belongs to one or more functional
+  **categories** (Support, Damage, Tank, Healing, Shielding, Range, Crowd
+  Control, Magic, Mobility, Economy, Utility), each with its own icon.
+  The synergy panel and the field guide both **filter by category**, and
+  **support synergies** (Holy, Guardian, Healer, Mystic) are flagged as
+  team-enhancers rather than standalone archetypes.
+- **Elemental damage:** a second strategic layer on top of synergies. Units
+  can attack with up to two **elements** (Fire, Cryo, Corrosive, Explosive,
+  Electric, Radiation), resist up to two, and be weak to up to two — many
+  carry none. Damage into a weakness is amplified, into a resistance
+  dampened, and the swing **grows round over round** (Borderlands-style), so
+  scouting opponents and adapting your build matters more and more late.
+  Radiation is the late-game element: only cost 4+ units carry it natively.
 - **Items:** five components drop from creep rounds; any two combine into
   one of 15 named completed items (two components on the same unit fuse
-  automatically), all pure stat bundles applied in combat.
+  automatically), all pure stat bundles applied in combat. Creep rounds also
+  occasionally drop **elemental relics**: infusion charms that add an attack
+  element, a Radiation Core that converts a unit's attacks entirely, and a
+  Prism Ward that grants resistance to every element.
 - **Economy:** income = 5 base + interest (1 per 10 gold, max 5) + win/loss
   streak bonuses + 1 for a win. XP: +2 per round, buy 4 for 4 gold; your
   **level is your board cap** and shifts shop odds toward rarer units.
@@ -534,12 +558,20 @@ another player's board.
   their class ability — fireballs (Mage, with splash), heals on the weakest
   ally (Healer), armor-ignoring strikes (Assassin, who also leaps to the
   backline at combat start), and so on.
+- **Longer battles:** all hostile damage is globally rescaled down (heals
+  untouched) and the combat cap raised, so fights build instead of ending in
+  an instant, tank-oriented builds get to matter, and abilities actually come
+  online before someone's board evaporates.
 - **Combat presentation:** every combat snapshot carries each unit's
   **animation state** (idle / walk / attack / cast / hit / death), so units
   visibly do what the simulation says — walkers bob, attackers lunge, casters
-  flare, the hit flinch, and the dead fall as fading corpses. Ranged attacks
+  flare, the hit flinch, and the dead fall as fading corpses. Idle units play
+  **exaggerated, cartoony personality animations** — every species bounces,
+  breathes, sways, or wiggles in its own way (phase-shifted per unit, so a
+  bench of triplets never moves in lockstep). Ranged attacks
   fly as **animated projectiles** (arrows, orbs, bolts by class) that deliver
-  their damage number on impact; melee hits slash. Combat events name their
+  their damage number on impact; melee hits slash, and elemental hits colour
+  their damage numbers by element. Combat events name their
   **source unit**, which is what makes attacker→target projectiles possible.
 - **Damage meter:** during combat the left panel lists every unit in the
   fight with how much damage it has dealt, as a stacked bar split by type —
@@ -553,7 +585,17 @@ another player's board.
 - **Skinnable:** every auto-battler texture — board tiles, unit figures (per
   animation state), item gems, projectiles — checks the [skin
   system](#skins-texture-overrides) first and falls back to the procedural
-  art, so a sprite-sheet drop-in reskins the game with zero code.
+  art, so a sprite-sheet drop-in reskins the game with zero code. Both the
+  skin menu and the board menu have an **Import… file browser** that copies
+  a picked image into the skins folder and assigns it automatically — no
+  paths to type.
+- **Board customization:** the lobby's **Customize Board** menu personalises
+  your board — six **color schemes** (tiles, backdrop, edge glow), an
+  optional **background image** (imported via the file browser), and
+  **decorative props** (plants, statues, lanterns, banners, mushrooms,
+  crystals, fountains) in eight slots around the board's rim, with a live
+  preview. All of it is **cosmetic only** — combat and replication never
+  read it — and persists to `board_theme.json` in your game files.
 - **Netcode:** the same authoritative model as the world game — a fixed-tick
   server owns every rule (purchases, combines, placement legality, the
   battles themselves), clients send action requests and render replicated
@@ -567,9 +609,12 @@ another player's board.
 
 - **Field guide:** the lobby's **How to Play** button opens an illustrated,
   tabbed reference built from the same data the game runs on — the round
-  loop and rules, the gold economy, every synergy trait, the item recipe
-  grid, the per-level shop odds, and the full unit roster with all of their
-  statistics. Every icon (trait, item gem, odds cell, phase node, unit card)
+  loop and rules, the gold economy, every synergy trait (**filterable by
+  category**, with role icons), the **elements** (who attacks with, resists,
+  and fears each one, plus the round-scaling rules), the item recipe
+  grid and elemental relics, the per-level shop odds, and the full unit
+  roster with all of their statistics. Every icon (trait, element, item gem,
+  odds cell, phase node, unit card)
   is clickable and pops a detail card with the fine print — per-tier effects,
   recipes, and star-scaled stats and abilities.
 

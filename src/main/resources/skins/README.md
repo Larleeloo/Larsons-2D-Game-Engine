@@ -7,6 +7,14 @@ menu. Every game texture is overridable: units (per animation state), items,
 projectiles, and the game board tiles. Anything you don't skin keeps its
 built-in procedural art.
 
+You don't have to place files by hand: the **Import sheet image…** button in
+the skin menu (and **Import background image…** in the **Customize Board**
+menu) opens a file browser, copies your picked image into the right subfolder
+here, and fills the path in automatically.
+
+The **Customize Board** menu also saves its board cosmetics — color scheme,
+background image, and rim props — to `board_theme.json` in this folder.
+
 A sheet is sliced left-to-right, top-to-bottom into frames you define by
 **pixel width**, **pixel height**, and **frame count**, and plays at a
 **framerate between 0 and 120** sprite frames per second (0 = a static

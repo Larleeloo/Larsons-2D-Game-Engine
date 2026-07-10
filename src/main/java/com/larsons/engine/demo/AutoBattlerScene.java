@@ -9,12 +9,16 @@ import com.larsons.engine.autobattler.AutoItems;
 import com.larsons.engine.autobattler.AutoSession;
 import com.larsons.engine.autobattler.AutoSprites;
 import com.larsons.engine.autobattler.BattleSim;
+import com.larsons.engine.autobattler.BoardTheme;
+import com.larsons.engine.autobattler.Element;
+import com.larsons.engine.autobattler.SynergyCategory;
 import com.larsons.engine.autobattler.Trait;
 import com.larsons.engine.autobattler.UnitDef;
 import com.larsons.engine.autobattler.UnitInstance;
 import com.larsons.engine.autobattler.AutoUnits;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.fx.Particles;
+import com.larsons.engine.graphics.AssetLoader;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.Skins;
@@ -109,6 +113,14 @@ public class AutoBattlerScene extends AbstractScene {
     private int hoverItem = -1;
     private UnitInstance hoverUnit;
     private Trait hoverTrait;
+    private SynergyCategory hoverCategory;
+
+    // Synergy panel category filter: null shows every synergy. The chip row
+    // is laid out while rendering and hit-tested a frame later, the same
+    // deferred pattern the standings rows use.
+    private SynergyCategory categoryFilter;
+    private final List<Rectangle> categoryChips = new ArrayList<>();
+    private final List<SynergyCategory> chipCategories = new ArrayList<>();
 
     // Drag-and-drop state. A press over a unit or item gem "grabs" it; once the
     // pointer moves past a small threshold the grab becomes a drag and drops on
@@ -404,7 +416,9 @@ public class AutoBattlerScene extends AbstractScene {
     private void handleHitEvent(AutoClient.CombatEvent e, boolean home, double wx, double wy) {
         boolean crit = e.kind().equals("crit");
         String text = e.amount() >= 1 ? "-" + (int) e.amount() : null;
-        Color color = crit ? new Color(255, 200, 80) : new Color(235, 235, 245);
+        // Elemental hits colour their damage numbers; crits stay gold.
+        Color color = crit ? new Color(255, 200, 80)
+                : e.element() != null ? e.element().color : new Color(235, 235, 245);
 
         double dx = e.sx() - e.x();
         double dy = e.sy() - e.y();
@@ -635,6 +649,7 @@ public class AutoBattlerScene extends AbstractScene {
         hoverItem = -1;
         hoverUnit = null;
         hoverTrait = null;
+        hoverCategory = null;
         if (viewingId >= 0) return; // the scout overlay owns the pointer
 
         for (int i = 0; i < 9; i++) {
@@ -651,6 +666,9 @@ public class AutoBattlerScene extends AbstractScene {
                 List<TraitCount> counts = synergyRows();
                 if (i < counts.size()) hoverTrait = counts.get(i).trait;
             }
+        }
+        for (int i = 0; i < categoryChips.size() && i < chipCategories.size(); i++) {
+            if (categoryChips.get(i).contains(mx, my)) hoverCategory = chipCategories.get(i);
         }
 
         // Board cell under the mouse (only when not over HUD chrome).
@@ -804,6 +822,15 @@ public class AutoBattlerScene extends AbstractScene {
                 return;
             }
         }
+        // Synergy category chips: filter the panel (click again to clear).
+        for (int i = 0; i < categoryChips.size() && i < chipCategories.size(); i++) {
+            if (categoryChips.get(i).contains(mx, my)) {
+                SynergyCategory picked = chipCategories.get(i);
+                categoryFilter = categoryFilter == picked ? null : picked;
+                ctx.sfx(AudioManager.Sfx.CLICK);
+                return;
+            }
+        }
         if (hoverShop >= 0) {
             client.sendBuy(hoverShop);
             ctx.sfx(AudioManager.Sfx.CLICK);
@@ -928,13 +955,16 @@ public class AutoBattlerScene extends AbstractScene {
     public void render(Graphics2D g, float alpha) {
         int w = viewportWidth, h = viewportHeight;
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g.setPaint(new GradientPaint(0, 0, new Color(14, 16, 28),
-                0, h, new Color(26, 24, 44)));
+        BoardTheme theme = BoardTheme.active();
+        BoardTheme.Scheme scheme = theme.scheme();
+        g.setPaint(new GradientPaint(0, 0, scheme.bgTop, 0, h, scheme.bgBottom));
         g.fillRect(0, 0, w, h);
+        drawBackgroundImage(g, theme, w, h);
         if (client == null) return;
 
         layoutHud();
         drawBoard(g);
+        drawProps(g, theme);
         if (fighting()) {
             drawCorpses(g);
             drawCombatUnits(g);
@@ -964,8 +994,38 @@ public class AutoBattlerScene extends AbstractScene {
         drawOverlays(g);
     }
 
+    /** The optional custom backdrop image, scaled to cover and dimmed to taste. */
+    private void drawBackgroundImage(Graphics2D g, BoardTheme theme, int w, int h) {
+        if (theme.background().isEmpty()) return;
+        BufferedImage bg = AssetLoader.loadImageOrNull(theme.background());
+        if (bg == null) return;
+        // Cover the viewport, preserving the image's aspect ratio.
+        double scale = Math.max(w / (double) bg.getWidth(), h / (double) bg.getHeight());
+        int bw = (int) (bg.getWidth() * scale);
+        int bh = (int) (bg.getHeight() * scale);
+        g.drawImage(bg, (w - bw) / 2, (h - bh) / 2, bw, bh, null);
+        // Dim it so the board and HUD stay readable over any picture.
+        g.setColor(new Color(8, 9, 16, 150));
+        g.fillRect(0, 0, w, h);
+    }
+
+    /** Decorative rim props (cosmetic only), depth-sorted with the board. */
+    private void drawProps(Graphics2D g, BoardTheme theme) {
+        int size = (int) (40 * camera.zoom);
+        int[] out = new int[2];
+        for (int i = 0; i < BoardTheme.PROP_SLOTS; i++) {
+            BoardTheme.Prop kind = theme.prop(i);
+            if (kind == BoardTheme.Prop.NONE) continue;
+            double[] cell = BoardTheme.PROP_CELLS[i];
+            camera.worldToScreen((cell[0] + 0.5) * TILE, (cell[1] + 0.5) * TILE, out);
+            BufferedImage img = AutoSprites.prop(kind, size);
+            g.drawImage(img, out[0] - size / 2, out[1] - size + size / 4, size, size, null);
+        }
+    }
+
     private void drawBoard(Graphics2D g) {
         boolean plan = planning();
+        BoardTheme.Scheme scheme = BoardTheme.active().scheme();
         BufferedImage tileA = Skins.frame("board/tile_a", animClock);
         BufferedImage tileB = Skins.frame("board/tile_b", animClock);
         for (int r = 0; r < BattleSim.ROWS; r++) {
@@ -985,11 +1045,9 @@ public class AutoBattlerScene extends AbstractScene {
                         g.fillPolygon(p);
                     }
                 } else {
-                    Color base = (c + r) % 2 == 0
-                            ? new Color(40, 46, 66) : new Color(46, 52, 74);
+                    Color base = (c + r) % 2 == 0 ? scheme.tileA : scheme.tileB;
                     if (plan && own) {
-                        base = (c + r) % 2 == 0
-                                ? new Color(48, 60, 86) : new Color(54, 66, 94);
+                        base = (c + r) % 2 == 0 ? scheme.ownA : scheme.ownB;
                     }
                     g.setColor(base);
                     g.fillPolygon(p);
@@ -1003,7 +1061,8 @@ public class AutoBattlerScene extends AbstractScene {
             }
         }
         // Board edge glow.
-        g.setColor(new Color(90, 110, 170, 90));
+        g.setColor(new Color(scheme.edge.getRed(), scheme.edge.getGreen(),
+                scheme.edge.getBlue(), 90));
         g.setStroke(new BasicStroke(2f));
         int[] sx = new int[4];
         int[] sy = new int[4];
@@ -1051,12 +1110,47 @@ public class AutoBattlerScene extends AbstractScene {
     /**
      * Draw one unit anchored at its cell's screen point with its animation
      * state's procedural motion: walking bobs, attacking pops forward,
-     * getting hit jitters, casting glows.
+     * getting hit jitters, casting glows — and idling plays an exaggerated,
+     * cartoony personality animation chosen per unit species (bouncing,
+     * breathing squash-and-stretch, swaying, or wiggling), phase-shifted per
+     * instance so a bench of the same unit doesn't move in lockstep.
      */
     private void drawUnitInWorld(Graphics2D g, UnitDef def, int size, boolean friendly,
-                                 AnimState state, double stateTime, int cx, int cy) {
+                                 AnimState state, double stateTime, int cx, int cy,
+                                 int seed) {
         int dx = 0, dy = 0;
+        double sx = 1, sy = 1; // squash & stretch factors
         switch (state) {
+            case IDLE -> {
+                // Personality by species, phase by instance.
+                int style = Math.floorMod(def.key.hashCode(), 4);
+                double phase = Math.floorMod(def.key.hashCode() >> 3, 97) * 0.31
+                        + seed * 0.73;
+                double t = animClock + phase;
+                switch (style) {
+                    case 0 -> { // bouncy hop: airtime up top, squash on landing
+                        double hop = Math.abs(Math.sin(t * 3.4));
+                        dy = -(int) (hop * size * 0.10);
+                        sy = 1 - (1 - hop) * 0.10;
+                        sx = 1 + (1 - hop) * 0.10;
+                    }
+                    case 1 -> { // deep cartoon breathing
+                        double breath = Math.sin(t * 2.6);
+                        sy = 1 + breath * 0.07;
+                        sx = 1 - breath * 0.06;
+                    }
+                    case 2 -> { // side-to-side sway with a little lean
+                        dx = (int) (Math.sin(t * 2.2) * size * 0.06);
+                        sy = 1 + Math.abs(Math.sin(t * 2.2)) * 0.03;
+                    }
+                    default -> { // excited double-bob wiggle
+                        double wig = Math.sin(t * 6.5);
+                        dy = -(int) (Math.abs(wig) * size * 0.05);
+                        dx = (int) (Math.sin(t * 3.25) * size * 0.03);
+                        sx = 1 + wig * 0.04;
+                    }
+                }
+            }
             case WALK -> dy = -(int) (Math.abs(Math.sin(animClock * 9)) * size * 0.06);
             case ATTACK -> dy = -(int) (size * 0.07);
             case HIT -> dx = (int) (Math.sin(animClock * 55) * size * 0.05);
@@ -1072,12 +1166,16 @@ public class AutoBattlerScene extends AbstractScene {
             g.setStroke(new BasicStroke(1f));
         }
         BufferedImage img = unitImage(def, size, friendly, state, stateTime);
-        g.drawImage(img, cx - size / 2 + dx, cy - size + size / 4 + dy, size, size, null);
+        // Squash & stretch scale about the feet so figures stay grounded.
+        int drawW = (int) (size * sx);
+        int drawH = (int) (size * sy);
+        int footY = cy + size / 4;
+        g.drawImage(img, cx - drawW / 2 + dx, footY - drawH + dy, drawW, drawH, null);
         if (state == AnimState.HIT) {
             // Hit flash: a brief red ring around the figure.
             g.setColor(new Color(235, 90, 80, 110));
             g.setStroke(new BasicStroke(2f));
-            g.drawOval(cx - size / 2 + dx, cy - size + size / 4 + dy, size, size);
+            g.drawOval(cx - drawW / 2 + dx, footY - drawH + dy, drawW, drawH);
             g.setStroke(new BasicStroke(1f));
         }
     }
@@ -1099,7 +1197,8 @@ public class AutoBattlerScene extends AbstractScene {
                 g.drawPolygon(tilePolygon(u.col, u.row));
                 g.setStroke(new BasicStroke(1f));
             }
-            drawUnitInWorld(g, def, size, true, AnimState.IDLE, animClock, out[0], out[1]);
+            drawUnitInWorld(g, def, size, true, AnimState.IDLE, animClock,
+                    out[0], out[1], u.id);
             AutoSprites.drawStars(g, u.star, out[0], out[1] - size + size / 8, 8);
             drawItemPips(g, u, out[0], out[1] + size / 6);
         }
@@ -1143,7 +1242,8 @@ public class AutoBattlerScene extends AbstractScene {
             UnitFx fx = unitFx.get(u.id());
             AnimState state = fx != null ? fx.state : u.state();
             double stateTime = fx != null ? fx.time : 0;
-            drawUnitInWorld(g, def, size, friendly, state, stateTime, out[0], out[1]);
+            drawUnitInWorld(g, def, size, friendly, state, stateTime,
+                    out[0], out[1], u.id());
             AutoSprites.drawStars(g, u.star(), out[0], out[1] - size + size / 12, 7);
 
             // Health + mana bars.
@@ -1308,6 +1408,10 @@ public class AutoBattlerScene extends AbstractScene {
         Map<Trait, Integer> counts = BattleSim.countTraits(you.board());
         List<TraitCount> rows = new ArrayList<>();
         for (Map.Entry<Trait, Integer> e : counts.entrySet()) {
+            if (categoryFilter != null
+                    && !e.getKey().categories.contains(categoryFilter)) {
+                continue;
+            }
             rows.add(new TraitCount(e.getKey(), e.getValue()));
         }
         rows.sort((a, b) -> {
@@ -1319,6 +1423,41 @@ public class AutoBattlerScene extends AbstractScene {
         return rows;
     }
 
+    /** Clickable category-icon chips ("All" first) atop the panel, wrapping. */
+    private int drawCategoryChips(Graphics2D g, Rectangle panel, int y) {
+        categoryChips.clear();
+        chipCategories.clear();
+        int chip = 16;
+        int x = panel.x + 4;
+
+        Rectangle all = new Rectangle(x, y, chip + 8, chip);
+        categoryChips.add(all);
+        chipCategories.add(null);
+        g.setColor(categoryFilter == null ? new Color(70, 82, 118) : new Color(34, 38, 56));
+        g.fillRoundRect(all.x, all.y, all.width, all.height, 6, 6);
+        g.setColor(categoryFilter == null ? new Color(230, 234, 246) : new Color(130, 136, 156));
+        g.setFont(new Font("SansSerif", Font.BOLD, 10));
+        g.drawString("All", all.x + 5, all.y + 12);
+        x += all.width + 2;
+
+        for (SynergyCategory cat : SynergyCategory.values()) {
+            if (x + chip > panel.x + panel.width) { // wrap; every category stays reachable
+                x = panel.x + 4;
+                y += chip + 3;
+            }
+            Rectangle r = new Rectangle(x, y, chip, chip);
+            categoryChips.add(r);
+            chipCategories.add(cat);
+            boolean active = categoryFilter == cat;
+            g.setColor(active ? new Color(70, 82, 118)
+                    : hoverCategory == cat ? new Color(52, 58, 84) : new Color(34, 38, 56));
+            g.fillRoundRect(r.x, r.y, r.width, r.height, 6, 6);
+            g.drawImage(AutoSprites.categoryIcon(cat, chip - 4), r.x + 2, r.y + 2, null);
+            x += chip + 2;
+        }
+        return y + chip + 8;
+    }
+
     private void drawSynergies(Graphics2D g) {
         traitRows.clear();
         List<TraitCount> rows = synergyRows();
@@ -1327,10 +1466,13 @@ public class AutoBattlerScene extends AbstractScene {
         g.setFont(new Font("SansSerif", Font.BOLD, 14));
         g.setColor(new Color(160, 168, 190));
         g.drawString("Synergies", x, y - 4);
+        y = drawCategoryChips(g, panel, y + 2);
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         if (rows.isEmpty()) {
             g.setColor(new Color(110, 115, 135));
-            g.drawString("Field units to activate traits", x, y + 16);
+            g.drawString(categoryFilter != null
+                    ? "No " + categoryFilter.label + " synergies fielded"
+                    : "Field units to activate traits", x, y + 16);
             return;
         }
         // Cap the list so it can never grow into the item bench below it.
@@ -1355,6 +1497,14 @@ public class AutoBattlerScene extends AbstractScene {
                 marks.append(threshold);
             }
             g.drawString(tc.trait.label + "  " + tc.count + "  (" + marks + ")", x + 20, y + 1);
+            // The trait's role icons, right-aligned in the row.
+            int icon = 11;
+            int ix = row.x + row.width - icon - 2;
+            List<SynergyCategory> cats = tc.trait.categories;
+            for (int ci = Math.min(2, cats.size() - 1); ci >= 0; ci--) {
+                g.drawImage(AutoSprites.categoryIcon(cats.get(ci), icon),
+                        ix - ci * (icon + 2), y - 9, null);
+            }
             y += 26;
         }
         if (shown < rows.size()) {
@@ -1370,6 +1520,8 @@ public class AutoBattlerScene extends AbstractScene {
      */
     private void drawDamagePanel(Graphics2D g) {
         traitRows.clear(); // no synergy hover targets during combat
+        categoryChips.clear();
+        chipCategories.clear();
         AutoClient.CombatFrame frame = client.combatLatest();
         if (frame == null) return;
         boolean home = isHomeSide();
@@ -1610,6 +1762,10 @@ public class AutoBattlerScene extends AbstractScene {
 
             BufferedImage img = unitImage(def, 54, true, AnimState.IDLE, animClock);
             g.drawImage(img, r.x + 6, r.y + r.height / 2 - 27, 54, 54, null);
+            if (!def.attackElements.isEmpty()) {
+                AutoSprites.drawElementPips(g, def.attackElements,
+                        r.x + 33, r.y + r.height - 20, 9);
+            }
             g.setFont(new Font("SansSerif", Font.BOLD, 14));
             g.setColor(new Color(232, 236, 248));
             g.drawString(trim(g, def.name, r.width - 72), r.x + 62, r.y + 22);
@@ -1942,19 +2098,38 @@ public class AutoBattlerScene extends AbstractScene {
         List<String> lines = new ArrayList<>();
         List<Color> colors = new ArrayList<>();
 
-        if (hoverTrait != null) {
+        if (hoverCategory != null) {
+            lines.add(hoverCategory.label);
+            colors.add(hoverCategory.color);
+            lines.add(hoverCategory.description);
+            colors.add(new Color(200, 205, 222));
+            lines.add("Click to show only " + hoverCategory.label + " synergies.");
+            colors.add(new Color(150, 156, 178));
+        } else if (hoverTrait != null) {
             lines.add(hoverTrait.label + "  ("
                     + (hoverTrait.kind == Trait.Kind.ORIGIN ? "Origin" : "Class") + ")");
             colors.add(hoverTrait.color);
             lines.add(hoverTrait.description);
             colors.add(new Color(200, 205, 222));
+            StringBuilder cats = new StringBuilder();
+            for (SynergyCategory cat : hoverTrait.categories) {
+                if (cats.length() > 0) cats.append(" · ");
+                cats.append(cat.label);
+            }
+            lines.add("Role: " + cats);
+            colors.add(new Color(170, 178, 205));
+            if (hoverTrait.isSupport()) {
+                lines.add("Support synergy — enhances the rest of your team.");
+                colors.add(SynergyCategory.SUPPORT.color);
+            }
         } else if (hoverShop >= 0 && hoverShop < you.shop().size()
                 && you.shop().get(hoverShop) != null) {
             tooltipForDef(AutoUnits.get(you.shop().get(hoverShop)), 1, List.of(), lines, colors);
         } else if (hoverItem >= 0 && hoverItem < you.items().size()) {
             AutoItem item = AutoItems.get(you.items().get(hoverItem));
             if (item != null) {
-                lines.add(item.name + (item.isComponent() ? "  (component)" : ""));
+                lines.add(item.name + (item.isComponent() ? "  (component)"
+                        : item.isRelic() ? "  (elemental relic)" : ""));
                 colors.add(item.color);
                 lines.add(item.statLine());
                 colors.add(new Color(200, 205, 222));
@@ -1962,6 +2137,9 @@ public class AutoBattlerScene extends AbstractScene {
                     lines.add("Click, then click a unit to equip.");
                     lines.add("Two components combine on a unit.");
                     colors.add(new Color(150, 156, 178));
+                    colors.add(new Color(150, 156, 178));
+                } else if (item.isRelic()) {
+                    lines.add("Rewires the holder's elemental affinity.");
                     colors.add(new Color(150, 156, 178));
                 }
             }
@@ -1990,6 +2168,16 @@ public class AutoBattlerScene extends AbstractScene {
         }
     }
 
+    /** "Fire", "Fire + Cryo" — element names joined for tooltip lines. */
+    private static String elementList(List<Element> elements) {
+        StringBuilder sb = new StringBuilder();
+        for (Element e : elements) {
+            if (sb.length() > 0) sb.append(" + ");
+            sb.append(e.label);
+        }
+        return sb.toString();
+    }
+
     private void tooltipForDef(UnitDef def, int star, List<String> items,
                                List<String> lines, List<Color> colors) {
         if (def == null) return;
@@ -2004,6 +2192,18 @@ public class AutoBattlerScene extends AbstractScene {
                 + " AD  ·  " + def.attackSpeed + "/s  ·  range " + (int) def.range
                 + "  ·  " + (int) def.armor + " armor");
         colors.add(new Color(200, 205, 222));
+        if (!def.attackElements.isEmpty()) {
+            lines.add("Attacks with " + elementList(def.attackElements));
+            colors.add(def.attackElements.get(0).color);
+        }
+        if (!def.resistances.isEmpty()) {
+            lines.add("Resists " + elementList(def.resistances));
+            colors.add(new Color(150, 200, 170));
+        }
+        if (!def.weaknesses.isEmpty()) {
+            lines.add("Weak to " + elementList(def.weaknesses));
+            colors.add(new Color(235, 150, 130));
+        }
         for (String key : items) {
             AutoItem item = AutoItems.get(key);
             if (item != null) {

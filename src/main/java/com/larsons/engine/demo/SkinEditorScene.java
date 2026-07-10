@@ -18,11 +18,18 @@ import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.MenuTheme;
 
+import javax.swing.JFileChooser;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.event.KeyEvent;
 import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -160,6 +167,7 @@ public class SkinEditorScene extends AbstractScene {
                 reload();
             });
         }
+        form.addAction("Import sheet image…  (opens a file browser)", this::importSheet);
         form.addText("Sheet image path", () -> sheetPath, v -> sheetPath = v, 96);
         form.addText("Frame width (px)", () -> frameW, v -> frameW = digits(v, 4), 4);
         form.addText("Frame height (px)", () -> frameH, v -> frameH = digits(v, 4), 4);
@@ -192,6 +200,53 @@ public class SkinEditorScene extends AbstractScene {
             frameH = "32";
             frameCount = "1";
             fps = "0";
+        }
+    }
+
+    /**
+     * The automatic import flow: browse for a PNG, and it's copied into the
+     * matching {@code resources/skins/} subfolder with the path (and, for a
+     * plain image, the frame size) filled in — click Apply and it's live.
+     */
+    private void importSheet() {
+        File picked = null;
+        try {
+            JFileChooser chooser = new JFileChooser();
+            chooser.setDialogTitle("Choose a sprite sheet image");
+            chooser.setFileFilter(new FileNameExtensionFilter(
+                    "Images (png, jpg, gif)", "png", "jpg", "jpeg", "gif"));
+            if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+                picked = chooser.getSelectedFile();
+            }
+        } catch (RuntimeException e) {
+            setStatus("File browser unavailable: " + e.getMessage(), true);
+        }
+        if (picked == null) return;
+        String subfolder = switch (category) {
+            case UNIT -> "units";
+            case ITEM -> "items";
+            case PROJECTILE -> "projectiles";
+            case BOARD -> "boards";
+        };
+        try {
+            Path dest = Path.of(store.directory().toString(), subfolder,
+                    BoardCustomizeScene.sanitizeFileName(picked.getName()));
+            Files.createDirectories(dest.getParent());
+            Files.copy(picked.toPath(), dest, StandardCopyOption.REPLACE_EXISTING);
+            AssetLoader.clearCache(); // the path may have been cached as missing
+            sheetPath = dest.toString().replace('\\', '/');
+            BufferedImage img = AssetLoader.loadImageOrNull(sheetPath);
+            if (img != null && "1".equals(frameCount)) {
+                // A single-frame skin defaults to the whole image.
+                frameW = Integer.toString(img.getWidth());
+                frameH = Integer.toString(img.getHeight());
+            }
+            buildForm();
+            setStatus("Imported " + picked.getName()
+                    + " — set frames if it's a sheet, then Apply + Save", false);
+            ctx.sfx(AudioManager.Sfx.PICKUP);
+        } catch (IOException e) {
+            setStatus("Could not import '" + picked.getName() + "': " + e.getMessage(), true);
         }
     }
 

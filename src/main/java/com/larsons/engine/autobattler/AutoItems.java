@@ -11,12 +11,19 @@ import java.util.Map;
  * combination table — every pair of components makes a named combined item
  * whose stats are roughly the sum of its parts doubled. Two components on the
  * same unit combine automatically, exactly like TFT.
+ *
+ * <p>On top of the stat items sit the <em>elemental relics</em>, the item side
+ * of the {@link Element} system: infusion charms add an attack element, the
+ * Radiation Core converts a unit's attacks to pure Radiation, and the Prism
+ * Ward grants resistance to everything. Relics also drop from creep rounds
+ * (a minority of drops) and never combine.
  */
 public final class AutoItems {
 
     private static final Map<String, AutoItem> ITEMS = new LinkedHashMap<>();
     /** "a+b" (sorted component keys) -> combined item key. */
     private static final Map<String, String> COMBOS = new LinkedHashMap<>();
+    private static final List<String> RELICS = new ArrayList<>();
 
     public static final String SWORD = "sword";
     public static final String BOW = "bow";
@@ -46,20 +53,39 @@ public final class AutoItems {
         combo("bulwark", "Bulwark", VEST, VEST, 0, 0, 0, 55, 0);
         combo("colossus_guard", "Colossus Guard", VEST, BELT, 0, 0, 0, 25, 250);
         combo("giants_heart", "Giant's Heart", BELT, BELT, 0, 0, 0, 0, 450);
+
+        // Elemental relics: infusions per element, one converter, one ward.
+        relic("ember_charm", "Ember Charm", Element.FIRE, AutoItem.ElementEffect.INFUSE);
+        relic("cryo_shard", "Cryo Shard", Element.CRYO, AutoItem.ElementEffect.INFUSE);
+        relic("volt_coil", "Volt Coil", Element.ELECTRIC, AutoItem.ElementEffect.INFUSE);
+        relic("acid_vial", "Acid Vial", Element.CORROSIVE, AutoItem.ElementEffect.INFUSE);
+        relic("blast_powder", "Blast Powder", Element.EXPLOSIVE, AutoItem.ElementEffect.INFUSE);
+        relic("rad_core", "Radiation Core", Element.RADIATION, AutoItem.ElementEffect.CONVERT);
+        relic("prism_ward", "Prism Ward", null, AutoItem.ElementEffect.WARD);
     }
 
     private AutoItems() {}
 
     private static void component(String key, String name, double ad, double as,
                                   double sp, double armor, double hp, Color color) {
-        ITEMS.put(key, new AutoItem(key, name, null, null, ad, as, sp, armor, hp, color));
+        ITEMS.put(key, new AutoItem(key, name, AutoItem.Kind.COMPONENT, null, null,
+                ad, as, sp, armor, hp, null, null, color));
     }
 
     private static void combo(String key, String name, String a, String b,
                               double ad, double as, double sp, double armor, double hp) {
         Color mix = blend(ITEMS.get(a).color, ITEMS.get(b).color);
-        ITEMS.put(key, new AutoItem(key, name, a, b, ad, as, sp, armor, hp, mix));
+        ITEMS.put(key, new AutoItem(key, name, AutoItem.Kind.COMBINED, a, b,
+                ad, as, sp, armor, hp, null, null, mix));
         COMBOS.put(comboKey(a, b), key);
+    }
+
+    private static void relic(String key, String name, Element element,
+                              AutoItem.ElementEffect effect) {
+        Color color = element != null ? element.color : new Color(225, 225, 235);
+        ITEMS.put(key, new AutoItem(key, name, AutoItem.Kind.RELIC, null, null,
+                0, 0, 0, 0, 0, element, effect, color));
+        RELICS.add(key);
     }
 
     private static Color blend(Color a, Color b) {
@@ -83,6 +109,11 @@ public final class AutoItems {
     /** The five components PvE rounds drop. */
     public static List<String> componentKeys() {
         return List.of(SWORD, BOW, ROD, VEST, BELT);
+    }
+
+    /** The elemental relics PvE rounds occasionally drop instead. */
+    public static List<String> relicKeys() {
+        return List.copyOf(RELICS);
     }
 
     /** The combined item two components make, or {@code null} if either isn't a component. */
