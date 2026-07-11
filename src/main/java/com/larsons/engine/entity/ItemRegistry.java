@@ -76,6 +76,28 @@ public final class ItemRegistry {
         r.register(ItemDef.material("leather", "Leather", ItemDef.Rarity.COMMON, new Color(150, 100, 60)));
         r.register(ItemDef.material("scroll", "Scroll", ItemDef.Rarity.RARE, new Color(230, 220, 190)));
         r.register(ItemDef.material("dragon_egg", "Dragon Egg", ItemDef.Rarity.MYTHIC, new Color(120, 40, 130)));
+        r.register(ItemDef.material("stick", "Stick", ItemDef.Rarity.COMMON, new Color(170, 135, 85)));
+        // Tools: matching blocks (Block.tool) mine toolPower× faster.
+        r.register(ItemDef.tool("wooden_pickaxe", "Wooden Pickaxe", ItemDef.Rarity.COMMON,
+                new Color(165, 125, 75), "pickaxe", 2, 3));
+        r.register(ItemDef.tool("stone_pickaxe", "Stone Pickaxe", ItemDef.Rarity.COMMON,
+                new Color(135, 135, 140), "pickaxe", 3, 4));
+        r.register(ItemDef.tool("iron_pickaxe", "Iron Pickaxe", ItemDef.Rarity.UNCOMMON,
+                new Color(200, 200, 210), "pickaxe", 4.5, 5));
+        r.register(ItemDef.tool("diamond_pickaxe", "Diamond Pickaxe", ItemDef.Rarity.EPIC,
+                new Color(120, 230, 235), "pickaxe", 7, 6));
+        r.register(ItemDef.tool("wooden_axe", "Wooden Axe", ItemDef.Rarity.COMMON,
+                new Color(160, 120, 70), "axe", 2, 5));
+        r.register(ItemDef.tool("iron_axe", "Iron Axe", ItemDef.Rarity.UNCOMMON,
+                new Color(195, 195, 205), "axe", 4.5, 8));
+        r.register(ItemDef.tool("diamond_axe", "Diamond Axe", ItemDef.Rarity.EPIC,
+                new Color(115, 225, 230), "axe", 7, 11));
+        r.register(ItemDef.tool("wooden_shovel", "Wooden Shovel", ItemDef.Rarity.COMMON,
+                new Color(170, 130, 80), "shovel", 2, 2));
+        r.register(ItemDef.tool("iron_shovel", "Iron Shovel", ItemDef.Rarity.UNCOMMON,
+                new Color(205, 205, 215), "shovel", 4.5, 4));
+        r.register(ItemDef.tool("diamond_shovel", "Diamond Shovel", ItemDef.Rarity.EPIC,
+                new Color(125, 230, 240), "shovel", 7, 5));
         // Weapons (melee ladder + a couple of legendaries).
         r.register(ItemDef.weapon("wooden_sword", "Wooden Sword", ItemDef.Rarity.COMMON, new Color(160, 120, 70), 4));
         r.register(ItemDef.weapon("iron_sword", "Iron Sword", ItemDef.Rarity.UNCOMMON, new Color(200, 200, 210), 8));
@@ -108,9 +130,13 @@ public final class ItemRegistry {
         r.register(ItemDef.food("cooked_meat", "Cooked Meat", new Color(160, 90, 60), 25));
         r.register(new ItemDef("golden_apple", "Golden Apple", ItemDef.Category.FOOD,
                 ItemDef.Rarity.LEGENDARY, new Color(240, 210, 80), 4, 0, 100, null, null, null));
-        // Potions & keys.
+        // Potions & keys. The mana potion's restore amount is resolved by key
+        // (see the scenes' consume handling); heal stays 0 so it never doubles
+        // as food.
         r.register(new ItemDef("health_potion", "Health Potion", ItemDef.Category.POTION,
                 ItemDef.Rarity.UNCOMMON, new Color(220, 70, 90), 8, 0, 40, null, null, null));
+        r.register(new ItemDef("mana_potion", "Mana Potion", ItemDef.Category.POTION,
+                ItemDef.Rarity.UNCOMMON, new Color(80, 110, 235), 8, 0, 0, null, null, null));
         r.register(new ItemDef("gold_key", "Gold Key", ItemDef.Category.KEY,
                 ItemDef.Rarity.RARE, new Color(230, 195, 70), 8, 0, 0, null, null, null));
         return r;

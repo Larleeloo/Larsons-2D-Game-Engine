@@ -52,6 +52,19 @@ public final class BlockRegistry {
         byKey.put(b.key(), b);
     }
 
+    /**
+     * Replace a registered block's durability (hardness seconds + preferred
+     * tool class) in place. Registrations stay readable and ids stable while
+     * the mining feel is tuned per family below.
+     */
+    public void tune(String key, double hardness, String tool) {
+        Block b = byKey.get(key);
+        if (b == null) return;
+        Block tuned = b.withDurability(hardness, tool);
+        byId.put(tuned.id(), tuned);
+        byKey.put(tuned.key(), tuned);
+    }
+
     /** The block with this id, or {@code null} (id 0 = empty). */
     public Block get(int id) {
         return byId.get(id);
@@ -207,7 +220,60 @@ public final class BlockRegistry {
         r.register(Block.passable(81, "cloud", "Cloud", new Color(240, 245, 250, 180)));
         r.register(Block.terrain(82, "snow_bricks", "Snow Bricks", new Color(225, 232, 240)));
         r.register(Block.terrain(83, "scaffold", "Scaffold", new Color(185, 150, 95)));
+        // Crafting stations (see com.larsons.engine.crafting): stand next to
+        // one and press E in play/test to open its combine UI.
+        r.register(Block.terrain(84, "crafting_table", "Crafting Table",
+                new Color(185, 140, 80)));
+        r.register(Block.solidLight(85, "alchemy_station", "Alchemy Station",
+                new Color(120, 90, 170), 3, new Color(190, 150, 255)));
+
+        tuneDurability(r);
         return r;
+    }
+
+    /**
+     * Block durability: how long each family takes to mine bare-handed, and
+     * which tool class ({@code pickaxe}/{@code axe}/{@code shovel}) speeds it
+     * up. Untuned solid blocks default to 1s/no tool; passables break
+     * instantly.
+     */
+    private static void tuneDurability(BlockRegistry r) {
+        // Soft earth: shovels.
+        for (String k : new String[]{"dirt", "grass", "sand", "gravel", "mud",
+                "clay", "snow", "snow_bricks"}) {
+            r.tune(k, 0.6, "shovel");
+        }
+        // Rock and masonry: pickaxes.
+        for (String k : new String[]{"stone", "cobblestone", "brick", "sandstone",
+                "limestone", "slate", "stone_bricks", "mossy_bricks", "dark_bricks",
+                "tile_floor", "pillar", "marble"}) {
+            r.tune(k, 1.6, "pickaxe");
+        }
+        for (String k : new String[]{"deepslate", "granite", "basalt", "metal_plate"}) {
+            r.tune(k, 2.6, "pickaxe");
+        }
+        r.tune("obsidian", 8.0, "pickaxe");
+        // Ores sit in rock and take a little longer than their host stone.
+        for (String k : new String[]{"coal_ore", "iron_ore", "gold_ore", "copper_ore",
+                "silver_ore", "diamond_ore", "ruby_ore", "emerald_ore", "amethyst_ore"}) {
+            r.tune(k, 3.0, "pickaxe");
+        }
+        // Woody things: axes.
+        for (String k : new String[]{"wood", "oak_log", "birch_log", "dark_log",
+                "planks", "birch_planks", "dark_planks", "bamboo", "thatch",
+                "bookshelf", "crate", "barrel", "scaffold", "platform",
+                "crafting_table"}) {
+            r.tune(k, 1.2, "axe");
+        }
+        // Fragile blocks crumble fast with anything.
+        r.tune("glass", 0.15, null);
+        r.tune("ice", 0.4, "pickaxe");
+        r.tune("packed_ice", 0.8, "pickaxe");
+        r.tune("glowstone", 0.5, "pickaxe");
+        r.tune("ember_stone", 1.8, "pickaxe");
+        r.tune("neon_block", 0.5, "pickaxe");
+        r.tune("cactus", 0.5, "axe");
+        r.tune("alchemy_station", 1.6, "pickaxe");
     }
 
     /** The flow twin for a liquid source (or {@code null} for non-liquids). */

@@ -12,6 +12,8 @@ import java.util.Map;
 public final class PlayerInput {
 
     public boolean left, right, up, down;
+    /** Sprint intent (Shift held): faster while the player has stamina. */
+    public boolean sprint;
     /** Client-assigned sequence number, echoed back in snapshots. */
     public int seq;
 
@@ -56,6 +58,7 @@ public final class PlayerInput {
         m.put("r", right);
         m.put("u", up);
         m.put("d", down);
+        if (sprint) m.put("sp", true); // absent on the wire when false
         if (selected != 0) m.put("h", selected);
         if (attack) {
             m.put("a", true);
@@ -72,6 +75,7 @@ public final class PlayerInput {
         in.right = Boolean.TRUE.equals(m.get("r"));
         in.up = Boolean.TRUE.equals(m.get("u"));
         in.down = Boolean.TRUE.equals(m.get("d"));
+        in.sprint = Boolean.TRUE.equals(m.get("sp"));
         in.selected = m.get("h") instanceof Number n ? n.intValue() : 0;
         in.attack = Boolean.TRUE.equals(m.get("a"));
         in.aimX = m.get("ax") instanceof Number n ? n.doubleValue() : 0;

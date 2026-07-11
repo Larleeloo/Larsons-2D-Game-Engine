@@ -24,6 +24,14 @@ public final class PlayerState {
     public static final double MAX_HEALTH = 100;
     public double health = MAX_HEALTH;
 
+    /** Stamina: sprinting and jumping spend it, standing still restores it. */
+    public static final double MAX_STAMINA = 100;
+    public double stamina = MAX_STAMINA;
+
+    /** Mana: magic weapons (staves) spend it; it regenerates slowly. */
+    public static final double MAX_MANA = 100;
+    public double mana = MAX_MANA;
+
     public PlayerState() {}
 
     public PlayerState(int id, String name, double x, double y) {
@@ -40,6 +48,8 @@ public final class PlayerState {
         s.moving = moving;
         s.lastSeq = lastSeq;
         s.health = health;
+        s.stamina = stamina;
+        s.mana = mana;
         return s;
     }
 
@@ -54,6 +64,8 @@ public final class PlayerState {
         m.put("m", moving);
         m.put("q", lastSeq);
         m.put("h", health);
+        m.put("st", stamina);
+        m.put("mn", mana);
         return m;
     }
 
@@ -68,6 +80,8 @@ public final class PlayerState {
         s.moving = Boolean.TRUE.equals(m.get("m"));
         s.lastSeq = num(m.get("q"), 0);
         s.health = m.get("h") instanceof Number n ? n.doubleValue() : MAX_HEALTH;
+        s.stamina = m.get("st") instanceof Number n ? n.doubleValue() : MAX_STAMINA;
+        s.mana = m.get("mn") instanceof Number n ? n.doubleValue() : MAX_MANA;
         return s;
     }
 

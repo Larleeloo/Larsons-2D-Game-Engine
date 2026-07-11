@@ -72,6 +72,61 @@ over in a generic, data-driven form and wired to the same toggles:
   `share/` folder with a runnable jar, double-click launch scripts, and
   online-play instructions (including your LAN address). See
   [Sharing the game](#sharing-the-game--how-joining-works).
+- **Giant levels (up to 65536×65536)** — levels past 1024×1024 switch to
+  sparse **chunked storage**
+  ([`ChunkedTiles`](src/main/java/com/larsons/engine/level/ChunkedTiles.java)):
+  only the chunks the camera/simulation actually touch are loaded, generated
+  worlds build their chunks **lazily and deterministically** on first sight
+  ([`ChunkGenerator`](src/main/java/com/larsons/engine/level/ChunkGenerator.java)),
+  pristine chunks evict under memory pressure and regenerate identically, and
+  saves keep only the edited chunks (RLE-compressed). The creative editor's
+  **"override map size"** button unlocks its size sliders up to the full
+  65536.
+- **Full AABB block collisions** — movement resolves axis-separated sweeps
+  against every block face: walls stop sideways movement, ceilings stop
+  jumps, floors stop falls — for players *and* mobs, via shared helpers in
+  [`PlayerPhysics`](src/main/java/com/larsons/engine/sim/PlayerPhysics.java).
+- **Advanced mob navigation** — mobs hop low walls and gaps while chasing,
+  swim (buoyancy + surfacing) in liquids, refuse to walk into lava/acid/
+  spikes, and **dodge incoming projectiles** aimed their way.
+- **Block durability & tools** — every block has a hardness (seconds of
+  hold-to-mine, with a growing crack overlay); pickaxes/axes/shovels in
+  wood/stone/iron/diamond tiers break their matching block families faster.
+- **Crafting & alchemy stations** — place a crafting table or alchemy
+  station, stand next to it and press **E**: a recipe panel
+  ([`CraftingPanel`](src/main/java/com/larsons/engine/ui/CraftingPanel.java))
+  combines 1-3 ingredient stacks into new items
+  ([`RecipeRegistry`](src/main/java/com/larsons/engine/crafting/RecipeRegistry.java)) —
+  logs → planks → sticks → tools/weapons, ore smelting, potion brewing —
+  so most of the catalog is reachable from resources found in the world.
+- **Stamina & mana** — sprinting (Shift) and jumping spend stamina, magic
+  staves cost mana, both regenerate and render as HUD bars.
+- **Programmable stat rules** — the engine tracks per-run stats (blocks
+  mined/placed, items picked up, distance traveled, jumps, kills, crafts…)
+  in [`PlayerStats`](src/main/java/com/larsons/engine/sim/PlayerStats.java);
+  map makers script triggers over them
+  ([`StatRule`](src/main/java/com/larsons/engine/level/StatRule.java), saved
+  with the level): *"mined 50 blocks → receive a potion"*, *"every 1000 px
+  travelled → receive bread"*, *"holding ≥ 10 stone → consume 10 stone,
+  receive an ingot"* — one-shot or repeating, optionally charted as live HUD
+  progress bars.
+- **Coloured rarity lighting** — uncommon+ items glow with a pulsing halo in
+  their rarity tier's colour, and after dark they carry a real point light of
+  that colour through the lighting pass.
+- **Custom content ("+" entries)** — every creative palette category leads
+  with a **+** icon that opens a fully-customizable property form
+  (Hytale-style) for new blocks, liquids, lights, mobs, items, and
+  decorations; creations persist per game type
+  ([`CustomContentStore`](src/main/java/com/larsons/engine/config/CustomContentStore.java))
+  and re-register on load so saved levels keep working.
+- **Brush shapes** — square/circle/diamond/line/spray brushes up to 12 tiles
+  across paint or erase many blocks per stroke
+  ([`Brush`](src/main/java/com/larsons/engine/level/Brush.java)).
+- **Surface decor** — per-face block details (tall grass tufts, hanging
+  moss, twigs, icicles, cobwebs…) attach to a block's up/down/left/right
+  face with toggles for *open/closed-face* visibility and
+  *background/foreground* layering
+  ([`SurfaceDecor`](src/main/java/com/larsons/engine/world/SurfaceDecor.java)).
 
 Everything above **works online**: the authoritative server simulates the
 world (mobs, items, drops, day/night), snapshots replicate entities, and
@@ -456,14 +511,21 @@ everything the registries know, in categories —
 
 | Category | Contents |
 |----------|----------|
-| Blocks   | every non-light, non-liquid block in `BlockRegistry` — 80+ of them: stone families, woods, bricks, ores, plants, hazards |
+| Blocks   | every non-light, non-liquid block in `BlockRegistry` — 80+ of them: stone families, woods, bricks, ores, plants, hazards, crafting stations |
 | Liquids  | water, lava, acid — real simulated liquids (see below) |
 | Lights   | light-emitting blocks (torch, campfire, lantern, glowstone, neon…) |
 | Mobs     | every species in `MobRegistry` |
 | Items    | every item in `ItemRegistry`, sorted by rarity |
 | Decor    | trees, rocks, bushes, crystals… painted into the background or foreground layer |
+| Surface  | per-face block details (grass tufts, hanging moss, twigs, icicles, cobwebs…) with face / open-closed / layer toggles |
 | Doors    | the game type's door list (external `doors.json`), each linking to another level |
-| Tools    | player spawn, multiplayer spawn points, eraser, the Generate button |
+| Tools    | player spawn, multiplayer spawn points, eraser, the Generate button, the Stat Rules editor |
+
+Every creatable category **leads with a "+" entry** — click it to define a
+brand-new block/liquid/light/mob/item/decoration with fully customizable
+properties (colours, solidity, light, damage, hardness/tool, AI stats,
+rarity…). Creations are registered live, persist to the game type's
+`custom.json`, and reload with it.
 
 **Editor controls:**
 
@@ -477,6 +539,7 @@ everything the registries know, in categories —
 | Mouse wheel | zoom (over the canvas) / scroll the palette (over the sidebar) |
 | Tab | next palette category |
 | B | toggle the decoration layer (background / foreground) |
+| [ / ] | shrink / grow the paint brush (shapes cycle in the sidebar's Brush row) |
 | G | toggle the grid |
 | P | play-test the level in place (terrain restored on exit) |
 | Ctrl+S / L / N | save / load / new level |
@@ -488,7 +551,18 @@ isometric view if your game type uses it.
 
 **Level size sliders.** The sidebar's bottom panel has live width/height
 sliders: drag to resize the level in place — existing tiles are preserved,
-the spawn is clamped back in, and out-of-bounds entities are dropped.
+the spawn is clamped back in, and out-of-bounds entities are dropped. The
+**Override map size** button beneath them unlocks the sliders past
+1024×1024 all the way to **65536×65536** (the scale turns exponential);
+crossing 1024² converts the level to chunked storage transparently, and the
+top bar starts reporting how many chunks are loaded/edited. The same
+override appears in the *New Level* and *Generate* dialogs — a giant
+generated world builds its terrain chunk-by-chunk as you pan over it.
+
+**Brushes.** The Brush row above the size sliders picks a stroke shape
+(square, circle, diamond, horizontal/vertical line, spray) and size (1-12
+tiles, also `[` / `]`): one drag paints — or right-click erases — the whole
+footprint, with a live preview under the cursor.
 
 **Liquids flow.**
 [`LiquidSim`](src/main/java/com/larsons/engine/world/LiquidSim.java) makes
@@ -526,12 +600,30 @@ rooms and corridors (union-find guarantees everything connects, platform
 ladders make vertical runs climbable), plus torches, decorations, treasure,
 mobs, and multiplayer spawns. Same seed + size ⇒ the identical level.
 
+**Surface details** (Surface palette) attach to the face of an existing
+block — click near the face you want (or pin one with the Face toggle).
+The three option rows control the **face** (auto/up/down/left/right), the
+**condition** (always · only while the face is *open*, i.e. not touching
+another block · only while it's *closed*), and the **layer** (background,
+behind the player, or foreground in front). Tall grass on soil, moss and
+icicles under overhangs, twigs and shelf mushrooms on trunks — details
+follow their host block and vanish when it's mined or covered.
+
+**Stat rules** (Tools → Stat Rules…) are the map-maker scripting layer:
+each rule watches a tracked stat (blocks mined/placed, items picked up,
+distance traveled, jumps, kills, crafts, deaths, damage taken, shots
+fired), and when it crosses the threshold it optionally **consumes** items
+from the player's inventory and **grants** a reward — one-shot or repeating
+every threshold step, with an optional live HUD progress bar. Rules save
+with the level and run in play and play-test.
+
 **Play-testing** (`P`) drops a player at the spawn marker and simulates the
 painted world with the real `PlayerPhysics`/mob/item code and the game
-type's lighting — with a full working inventory: mine blocks for drops,
-pick up painted items, place from the hotbar, eat, shoot, take lava damage,
-and walk through doors (your inventory carries across levels). The terrain
-is restored when you return to editing.
+type's lighting — with a full working inventory: hold to mine blocks
+against their durability (tools speed it up), pick up painted items, place
+from the hotbar, sprint on stamina, cast on mana, craft at stations with
+`E`, eat, shoot, take lava damage, and walk through doors (your inventory
+carries across levels). The terrain is restored when you return to editing.
 
 **Levels save into the game type** (the roadmap item):
 [`LevelStore`](src/main/java/com/larsons/engine/level/LevelStore.java) writes
@@ -1040,7 +1132,8 @@ engine.scenes().setScene("mine"); // or transitionTo for a fade
 [`NetProjectileInventoryTest`](src/test/java/com/larsons/engine/NetProjectileInventoryTest.java),
 [`AutoBattlerTest`](src/test/java/com/larsons/engine/autobattler/AutoBattlerTest.java),
 [`AutoBattlerNetTest`](src/test/java/com/larsons/engine/autobattler/AutoBattlerNetTest.java),
-[`AutoBattlerSceneTest`](src/test/java/com/larsons/engine/AutoBattlerSceneTest.java))
+[`AutoBattlerSceneTest`](src/test/java/com/larsons/engine/AutoBattlerSceneTest.java),
+[`EngineFeatureTest`](src/test/java/com/larsons/engine/EngineFeatureTest.java))
 covering JSON read/write, level loading (both tile modes + round-trips),
 sprite-sheet slicing, input edge detection, game-type save/load, the
 `ConfigForm` widget's keyboard/mouse interaction (including scrolling),
@@ -1051,6 +1144,12 @@ deterministic player physics, the mob AI state machine, world simulation
 (registry + item links, ammo consumption, gravity arcs vs straight magic,
 mob hits, explosions with area damage, recoverable drops, toggle gating),
 inventory primitives (move/merge/swap/removeAt), per-game-type level saving,
+the creative/engine feature set (giant chunked levels with lazy
+deterministic generation and edited-chunk-only saves, AABB wall/ceiling
+collisions, sprint stamina, block durability with tool speed-ups, crafting
+and smelting recipes, mana-costed magic, stat rules firing rewards and
+consumptions, brush footprints, mob wall-hopping, surface-decor and
+stat-rule serialization, and the creative scene rendering off-screen),
 and full loopback multiplayer (a real server + clients: handshake, movement,
 join/leave, version rejection, shutdown — plus block edits replicating to
 every client and late joiners, painted mobs appearing in snapshots and being

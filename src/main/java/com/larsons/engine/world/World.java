@@ -50,6 +50,8 @@ public final class World {
     private final List<DroppedItem> items = new ArrayList<>();
     private final List<Projectile> projectiles = new ArrayList<>();
     private final List<Impact> impacts = new ArrayList<>();
+    private int killsByPlayers; // mobs killed by player damage since last poll
+    private int playerDeaths;   // player respawns since last poll (stat tracking)
     private final LiquidSim liquids = new LiquidSim();
     private final List<LiquidSim.Change> blockChanges = new ArrayList<>();
     private int nextEntityId = 1;
@@ -96,6 +98,20 @@ public final class World {
 
     public List<Projectile> projectiles() {
         return projectiles;
+    }
+
+    /** Mobs killed by player damage since the last call (stat tracking). */
+    public int pollKills() {
+        int n = killsByPlayers;
+        killsByPlayers = 0;
+        return n;
+    }
+
+    /** Player deaths (respawns) since the last call (stat tracking). */
+    public int pollDeaths() {
+        int n = playerDeaths;
+        playerDeaths = 0;
+        return n;
     }
 
     /** Drain the impacts since the last call (feedback: particles, sfx, fx messages). */
@@ -200,7 +216,7 @@ public final class World {
             List<Mob> died = null;
             while (it.hasNext()) {
                 Mob m = it.next();
-                m.step(level, players, gravityOn, profile.combatEnabled, dt);
+                m.step(level, players, projectiles, gravityOn, profile.combatEnabled, dt);
                 Block hazard = hazardAt(m.x + m.def.size() / 2, m.y + m.def.size() / 2);
                 if (hazard != null) m.environmentDamage(hazard.damage() * dt);
                 if (m.dead()) {
@@ -243,10 +259,13 @@ public final class World {
             if (p.health > PlayerState.MAX_HEALTH) p.health = PlayerState.MAX_HEALTH;
             if (p.health <= 0) {
                 p.health = PlayerState.MAX_HEALTH;
+                p.stamina = PlayerState.MAX_STAMINA;
+                p.mana = PlayerState.MAX_MANA;
                 double[] spawn = level.spawnPointFor(p.id);
                 p.x = spawn[0];
                 p.y = spawn[1];
                 p.vy = 0;
+                playerDeaths++;
             }
         }
     }
@@ -284,6 +303,7 @@ public final class World {
         if (best != null && best.damage(damage, px)) {
             mobs.remove(best);
             dropMobLoot(best);
+            killsByPlayers++;
         }
         return best;
     }
@@ -306,6 +326,12 @@ public final class World {
         ProjectileDef def = projectileTypes.get(held.projectile());
         if (def == null) return null;
         if (held.ammo() != null && inv.remove(held.ammo(), 1) < 1) return null;
+        // Ammo-less ranged weapons are magic: casting costs mana instead.
+        if (held.ammo() == null && held.category() == ItemDef.Category.RANGED_WEAPON) {
+            double cost = manaCost(held);
+            if (shooter.mana < cost) return null;
+            shooter.mana -= cost;
+        }
 
         double dx = aimX - shooter.x, dy = aimY - shooter.y;
         double len = Math.hypot(dx, dy);
@@ -343,6 +369,7 @@ public final class World {
                     } else if (hit.damage(p.damage, p.x - p.vx)) {
                         mobs.remove(hit);
                         dropMobLoot(hit);
+                        killsByPlayers++;
                     }
                     it.remove();
                     continue;
@@ -383,6 +410,7 @@ public final class World {
             for (Mob m : died) {
                 mobs.remove(m);
                 dropMobLoot(m);
+                killsByPlayers++;
             }
         }
     }
@@ -400,6 +428,64 @@ public final class World {
             }
         }
         return best;
+    }
+
+    /** Mana cost of casting an ammo-less ranged weapon (staves). */
+    public static double manaCost(ItemDef held) {
+        return Math.max(8, held.damage() * 1.2);
+    }
+
+    // --- block durability (hold-to-mine) -----------------------------------------
+
+    private int mineCol = Integer.MIN_VALUE, mineRow = Integer.MIN_VALUE;
+    private double mineProgress;
+
+    /**
+     * Advance a hold-to-mine stroke on (col,row) by {@code dt}. Progress
+     * accumulates against the block's {@link Block#hardness()}; a held tool
+     * whose {@link ItemDef#toolClass()} matches the block's preferred
+     * {@link Block#tool()} multiplies speed by its {@link ItemDef#toolPower()}.
+     * Switching cells restarts progress. Returns the block just broken, or
+     * {@code null} while still chipping away.
+     */
+    public Block continueMining(int col, int row, ItemDef held, boolean withDrops, double dt) {
+        Block b = level.blockAt(col, row);
+        if (b == null) {
+            cancelMining();
+            return null;
+        }
+        if (col != mineCol || row != mineRow) {
+            mineCol = col;
+            mineRow = row;
+            mineProgress = 0;
+        }
+        double hardness = b.hardness();
+        if (hardness <= 0) {
+            cancelMining();
+            return mineBlock(col, row, withDrops);
+        }
+        double power = held != null && held.toolClass() != null
+                && held.toolClass().equals(b.tool()) ? held.toolPower() : 1.0;
+        mineProgress += dt * power / hardness;
+        if (mineProgress < 1) return null;
+        cancelMining();
+        return mineBlock(col, row, withDrops);
+    }
+
+    /** Stop the current mining stroke (mouse released / aim moved away). */
+    public void cancelMining() {
+        mineCol = mineRow = Integer.MIN_VALUE;
+        mineProgress = 0;
+    }
+
+    /** Mining progress [0,1) on the current cell, for the crack overlay. */
+    public double miningProgress() {
+        return mineProgress;
+    }
+
+    /** The cell being mined as {col,row}, or {@code null} when idle. */
+    public int[] miningCell() {
+        return mineCol == Integer.MIN_VALUE ? null : new int[]{mineCol, mineRow};
     }
 
     /**

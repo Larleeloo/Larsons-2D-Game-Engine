@@ -23,10 +23,23 @@ import java.awt.Color;
  *                   {@code null} for everything else
  * @param ammo       item key consumed per shot ({@code null} = free to fire;
  *                   throwables consume themselves)
+ * @param toolClass  for TOOL items: the block-tool class this speeds up
+ *                   ("pickaxe", "axe", "shovel"); {@code null} otherwise
+ * @param toolPower  mining speed multiplier against blocks whose
+ *                   {@code Block.tool()} matches {@link #toolClass} (≥ 1)
  */
 public record ItemDef(String key, String name, Category category, Rarity rarity,
                       Color color, int maxStack, double damage, double heal,
-                      String blockKey, String projectile, String ammo) {
+                      String blockKey, String projectile, String ammo,
+                      String toolClass, double toolPower) {
+
+    /** Pre-tool constructor shape, kept so existing registrations read the same. */
+    public ItemDef(String key, String name, Category category, Rarity rarity,
+                   Color color, int maxStack, double damage, double heal,
+                   String blockKey, String projectile, String ammo) {
+        this(key, name, category, rarity, color, maxStack, damage, heal,
+                blockKey, projectile, ammo, null, 0);
+    }
 
     /** Ported {@code ItemCategory}. */
     public enum Category {
@@ -80,5 +93,15 @@ public record ItemDef(String key, String name, Category category, Rarity rarity,
                                     double damage, String projectile) {
         return new ItemDef(key, name, Category.THROWABLE, rarity, color, 64,
                 damage, 0, null, projectile, key);
+    }
+
+    /**
+     * A mining tool: blocks whose {@code Block.tool()} matches {@code toolClass}
+     * break {@code power}&times; faster. Tools also swing as light weapons.
+     */
+    public static ItemDef tool(String key, String name, Rarity rarity, Color color,
+                               String toolClass, double power, double damage) {
+        return new ItemDef(key, name, Category.TOOL, rarity, color, 1,
+                damage, 0, null, null, null, toolClass, Math.max(1, power));
     }
 }
