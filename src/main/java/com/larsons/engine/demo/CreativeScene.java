@@ -94,13 +94,14 @@ import java.util.Map;
  *
  * <p><b>"+" custom content:</b> each creatable category's first palette
  * entry opens a property form for a brand-new block/liquid/light/mob/item/
- * decoration; creations register live and persist per game type via
- * {@link CustomContentStore}.
+ * decoration/block decor; creations register live and persist per game type
+ * via {@link CustomContentStore}.
  *
- * <p><b>Surface details:</b> the SURFACE category attaches per-face details
- * (grass tufts, moss, twigs…) to blocks, with toggle rows for the face
- * (auto/up/down/left/right), the open/closed-face condition, and the
- * background/foreground layer ({@link SurfaceDecor}).
+ * <p><b>Surface details (block decor):</b> the SURFACE category attaches
+ * per-face details (grass tufts, moss, twigs…) to blocks, with toggle rows
+ * for the face (auto/up/down/left/right), the open/closed-face condition, and
+ * the background/foreground layer ({@link SurfaceDecor}); its "+" entry
+ * creates custom block decor (colours, silhouette style, allowed faces).
  *
  * <p><b>Stat rules:</b> Tools → Stat Rules… edits the level's programmable
  * triggers over tracked stats ("mined 50 blocks → reward…"), which run
@@ -235,6 +236,10 @@ public class CreativeScene extends AbstractScene {
     private int cCategoryIndex, cRarityIndex, cMaxStack = 64, cHeal;
     private int cShapeIndex;
     private double cToolPower = 2;
+    // "+ New Block Decor" (custom surface details): style, faces, layer.
+    private int cSurfStyleIndex;
+    private boolean cFaceUp = true, cFaceDown, cFaceLeft, cFaceRight;
+    private boolean cSurfForeground;
 
     // Stat-rule editor state.
     private int ruleEditIndex; // 0 = new rule, 1.. = existing
@@ -427,9 +432,10 @@ public class CreativeScene extends AbstractScene {
         }
         palette.put(Category.DECOR, decor);
 
-        List<Entry> surface = new ArrayList<>();
+        List<Entry> surface = newList("+ New Block Decor");
         for (SurfaceDecor d : SurfaceDecorRegistry.standard().all()) {
-            surface.add(new Entry("surface", d.key(), d.name(), surfaceIcon(d)));
+            surface.add(new Entry("surface", d.key(), d.name(), surfaceIcon(d),
+                    customContent.isCustom("surface", d.key())));
         }
         palette.put(Category.SURFACE, surface);
 
@@ -1790,6 +1796,7 @@ public class CreativeScene extends AbstractScene {
             case MOBS -> "Mob";
             case ITEMS -> "Item";
             case DECOR -> "Decoration";
+            case SURFACE -> "Block Decor";
             default -> "Block";
         };
     }
@@ -2036,8 +2043,7 @@ public class CreativeScene extends AbstractScene {
 
     /** Delete the right-clicked user-created object (custom.json + registries). */
     private void deleteCustomEntry() {
-        String kind = "surface".equals(texEntry.kind) ? "block" : texEntry.kind;
-        if (customContent.remove(kind, texEntry.key)) {
+        if (customContent.remove(texEntry.kind, texEntry.key)) {
             buildPalette();
             selected.put(category, 0);
             closeDialog();
@@ -2118,6 +2124,7 @@ public class CreativeScene extends AbstractScene {
             case MOBS -> buildCustomMobFields();
             case ITEMS -> buildCustomItemFields();
             case DECOR -> buildCustomDecorFields();
+            case SURFACE -> buildCustomSurfaceFields();
             default -> buildCustomBlockFields();
         }
         dialogForm.addAction("Create", this::createCustomObject);
@@ -2215,6 +2222,26 @@ public class CreativeScene extends AbstractScene {
                 v -> cSizeTiles = v, 0.5, 8, 0.5);
     }
 
+    /** "+ New Block Decor": a custom face-attached surface detail. */
+    private void buildCustomSurfaceFields() {
+        addColorSliders("Primary", false);
+        addColorSliders("Secondary", true);
+        String[] styles = new String[SurfaceDecor.Style.values().length];
+        for (SurfaceDecor.Style s : SurfaceDecor.Style.values()) {
+            styles[s.ordinal()] = s.name();
+        }
+        dialogForm.addEnum("Style (silhouette)", styles,
+                () -> styles[cSurfStyleIndex],
+                v -> cSurfStyleIndex = Math.max(0, List.of(styles).indexOf(v)));
+        // Which block faces it may attach to (none picked = all faces).
+        dialogForm.addToggle("Attaches to TOP faces", () -> cFaceUp, v -> cFaceUp = v);
+        dialogForm.addToggle("Attaches to BOTTOM faces", () -> cFaceDown, v -> cFaceDown = v);
+        dialogForm.addToggle("Attaches to LEFT faces", () -> cFaceLeft, v -> cFaceLeft = v);
+        dialogForm.addToggle("Attaches to RIGHT faces", () -> cFaceRight, v -> cFaceRight = v);
+        dialogForm.addToggle("Foreground layer by default", () -> cSurfForeground,
+                v -> cSurfForeground = v);
+    }
+
     private void createCustomObject() {
         String name = cName.isBlank() ? "Custom " + customKindName() : cName.trim();
         try {
@@ -2247,6 +2274,20 @@ public class CreativeScene extends AbstractScene {
                     customContent.addDecor(new Decor(key, name,
                             Decor.Shape.values()[cShapeIndex],
                             new Color(cR, cG, cB), new Color(cR2, cG2, cB2), cSizeTiles));
+                }
+                case SURFACE -> {
+                    String key = CustomContentStore.keyFor(name,
+                            k -> SurfaceDecorRegistry.standard().get(k) != null);
+                    java.util.EnumSet<SurfaceDecor.Face> faces =
+                            java.util.EnumSet.noneOf(SurfaceDecor.Face.class);
+                    if (cFaceUp) faces.add(SurfaceDecor.Face.UP);
+                    if (cFaceDown) faces.add(SurfaceDecor.Face.DOWN);
+                    if (cFaceLeft) faces.add(SurfaceDecor.Face.LEFT);
+                    if (cFaceRight) faces.add(SurfaceDecor.Face.RIGHT);
+                    customContent.addSurfaceDecor(new SurfaceDecor(key, name,
+                            SurfaceDecor.Style.values()[cSurfStyleIndex],
+                            new Color(cR, cG, cB), new Color(cR2, cG2, cB2),
+                            faces, cSurfForeground));
                 }
                 default -> {
                     boolean liquid = customCategory == Category.LIQUIDS;

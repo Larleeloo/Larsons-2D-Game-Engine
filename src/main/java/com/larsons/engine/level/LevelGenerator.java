@@ -75,9 +75,10 @@ public final class LevelGenerator {
      * up to 65536&times;65536) lazily: nothing is filled up front — a
      * deterministic {@link ChunkGenerator} builds each chunk the first time
      * the camera or simulation looks at it, so generation cost tracks what's
-     * visible instead of the level bounds. Terrain, caves, ores, sea water and
-     * the lava floor come from the same noise recipes as eager generation;
-     * the room network and entity dressing (global passes) are skipped.
+     * visible instead of the level bounds. Terrain, caves, ores, sea water,
+     * the lava floor and block features (tall grass, flowers, cave mushrooms)
+     * come from the same noise/hash recipes as eager generation; the room
+     * network and entity dressing (global passes) are skipped.
      */
     public static Level generateChunked(String name, int width, int height,
                                         int tileSize, long seed) {
@@ -129,13 +130,15 @@ public final class LevelGenerator {
         // Resolved once; the standard registry is immutable by convention.
         private final int grass, dirt, stone, deepslate, granite, sand, sandstone,
                 water, lava, basalt;
+        private final int tallGrass, flowerRed, flowerYellow, flowerBlue,
+                glowMushroom, mushroom;
 
         TerrainChunkGenerator(long seed, int width, int height) {
             this.seed = seed;
             this.noise = new PerlinNoise(seed);
             this.w = width;
             this.h = height;
-            this.seaLevel = (int) (h * 0.36);
+            this.seaLevel = seaLevel(h);
             BlockRegistry blocks = BlockRegistry.standard();
             grass = idOf(blocks, "grass");
             dirt = idOf(blocks, "dirt");
@@ -147,6 +150,12 @@ public final class LevelGenerator {
             water = idOf(blocks, "water");
             lava = idOf(blocks, "lava");
             basalt = idOf(blocks, "basalt");
+            tallGrass = idOf(blocks, "tall_grass");
+            flowerRed = idOf(blocks, "flower_red");
+            flowerYellow = idOf(blocks, "flower_yellow");
+            flowerBlue = idOf(blocks, "flower_blue");
+            glowMushroom = idOf(blocks, "glow_mushroom");
+            mushroom = idOf(blocks, "mushroom");
         }
 
         private static int idOf(BlockRegistry blocks, String key) {
@@ -188,7 +197,23 @@ public final class LevelGenerator {
             if ((c == 0 || c == w - 1) && r >= Math.min(surface, seaLevel)) return basalt;
             if (r < surface) {
                 // Open sky, except valleys below sea level fill with water.
-                return r >= seaLevel ? water : 0;
+                if (r >= seaLevel) return water;
+                // Surface details on dry grass tops — tall grass and flowers,
+                // the eager pipeline's dressSurface rates as per-tile hash
+                // rolls so giant maps grow the same block features.
+                if (r == surface - 1 && surface < seaLevel - 2) {
+                    long hash = mix(c, r);
+                    double roll = (hash & 0xFFFF) / 65536.0;
+                    if (roll < 0.09) return tallGrass;
+                    if (roll < 0.17) {
+                        return switch ((int) ((hash >>> 16) % 3)) {
+                            case 0 -> flowerRed;
+                            case 1 -> flowerYellow;
+                            default -> flowerBlue;
+                        };
+                    }
+                }
+                return 0;
             }
 
             boolean submerged = surface > seaLevel;
@@ -208,17 +233,18 @@ public final class LevelGenerator {
             }
 
             // Caves: same worm + cavern noise as the eager pipeline.
-            boolean carved = false;
-            if (c > 0 && c < w - 1 && r >= surface + 3 && r < h - 2) {
-                double depthT = (r - surface) / (double) h;
-                double worm = noise.fbm(c * 0.035, r * 0.05, 2, 0.5, 2.0);
-                double cavern = noise.fbm(c * 0.05 + 200, r * 0.07 + 200, 3, 0.5, 2.0);
-                carved = Math.abs(worm) < 0.045 + depthT * 0.03
-                        || cavern > 0.42 - depthT * 0.06;
-            }
-            if (carved) {
+            if (carvedAt(c, r, surface)) {
                 // Carved caves flood with lava near the bottom.
-                return r >= h - 6 ? lava : 0;
+                if (r >= h - 6) return lava;
+                // Cave flora on solid floors (dressCaves' rates as hash rolls):
+                // glowing mushrooms light the tunnels, plain ones are pickable.
+                if (!carvedAt(c, r + 1, surface)) {
+                    long hash = mix(c, r);
+                    double roll = (hash & 0xFFFF) / 65536.0;
+                    if (roll < 0.02) return glowMushroom;
+                    if (roll < 0.035) return mushroom;
+                }
+                return 0;
             }
 
             // Ore veins as per-tile hash rolls in stone-family rock.
@@ -231,6 +257,16 @@ public final class LevelGenerator {
                 }
             }
             return block;
+        }
+
+        /** Whether the cave noise carves (c, r) open, given the column's surface. */
+        private boolean carvedAt(int c, int r, int surface) {
+            if (c <= 0 || c >= w - 1 || r < surface + 3 || r >= h - 2) return false;
+            double depthT = (r - surface) / (double) h;
+            double worm = noise.fbm(c * 0.035, r * 0.05, 2, 0.5, 2.0);
+            double cavern = noise.fbm(c * 0.05 + 200, r * 0.07 + 200, 3, 0.5, 2.0);
+            return Math.abs(worm) < 0.045 + depthT * 0.03
+                    || cavern > 0.42 - depthT * 0.06;
         }
 
         /** Depth-banded ore pick — the eager pipeline's table with an explicit roll. */
@@ -270,6 +306,19 @@ public final class LevelGenerator {
     /** Fine-detail roughness, similarly capped so big maps stay walkable. */
     static double roughAmplitude(int heightTiles) {
         return Math.min(heightTiles * 0.045, 2.5);
+    }
+
+    /**
+     * Sea level for a map height. The original {@code h * 0.36} sat 20% of the
+     * (then proportional) hill amplitude above the {@code h * 0.32} surface
+     * base; when the amplitude was capped in absolute tiles the sea stayed
+     * where it was, so on taller maps the terrain could no longer dip below it
+     * and generated levels lost their pooled water entirely. Deriving the sea
+     * from the capped amplitude keeps the same share of valleys flooding at
+     * every size.
+     */
+    static int seaLevel(int heightTiles) {
+        return (int) (heightTiles * 0.32 + hillAmplitude(heightTiles) * 0.2);
     }
 
     /**
@@ -465,7 +514,7 @@ public final class LevelGenerator {
             this.w = lvl.width;
             this.h = lvl.height;
             this.ts = lvl.tileSize;
-            this.seaLevel = (int) (h * 0.36);
+            this.seaLevel = seaLevel(h);
             this.surface = new int[w];
         }
 
