@@ -51,24 +51,54 @@ public final class LiquidSim {
      * still pools there (an active-region sim is future work).
      */
     public List<Change> step(Level level, double dt) {
+        return step(level, true, dt);
+    }
+
+    /**
+     * Advance with an explicit gravity flag: falling blocks (sand, gravel)
+     * only drop in side-scroll gravity worlds, while liquids always flow.
+     */
+    public List<Change> step(Level level, boolean gravityOn, double dt) {
         if (!level.registryTiles || level.tiles == null) return List.of();
         accumulator += dt;
         if (accumulator < TICK) return List.of();
         List<Change> changes = new ArrayList<>();
         while (accumulator >= TICK) {
             accumulator -= TICK;
-            tick(level, changes);
+            tick(level, gravityOn, changes);
         }
         return changes;
     }
 
-    private void tick(Level level, List<Change> changes) {
+    private void tick(Level level, boolean gravityOn, List<Change> changes) {
         BlockRegistry blocks = level.blocks;
+        if (gravityOn) fallBlocks(level, changes);
         quenchLava(level, changes);
         // One pass per distinct liquid family that has a flow twin.
         for (Block b : blocks.all()) {
             if (b.liquid() && !b.isFlow() && blocks.flowFor(b) != null) {
                 flowFamily(level, b, changes);
+            }
+        }
+    }
+
+    /**
+     * Gravity for {@link Block#falling()} blocks (sand, gravel, opted-in
+     * customs): unsupported ones drop a cell per tick, displacing liquids —
+     * the same bottom-up sweep sand towers collapse with in the original.
+     */
+    private void fallBlocks(Level level, List<Change> changes) {
+        BlockRegistry blocks = level.blocks;
+        int w = level.width, h = level.height;
+        for (int r = h - 2; r >= 0; r--) {
+            for (int c = 0; c < w; c++) {
+                Block b = blocks.get(level.tiles[r][c]);
+                if (b == null || !b.falling()) continue;
+                Block below = blocks.get(level.tiles[r + 1][c]);
+                if (level.tiles[r + 1][c] == 0 || (below != null && below.liquid())) {
+                    setCell(level, c, r + 1, b.id(), changes);
+                    setCell(level, c, r, 0, changes);
+                }
             }
         }
     }

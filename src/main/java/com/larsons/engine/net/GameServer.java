@@ -383,7 +383,9 @@ public final class GameServer {
         if (def == null || def.heal() <= 0) return;
         if (conn.state.health >= PlayerState.MAX_HEALTH) return;
         if (conn.inventory.removeAt(slot, 1) < 1) return;
-        conn.state.health = Math.min(PlayerState.MAX_HEALTH, conn.state.health + def.heal());
+        // Same food effects as offline play: heal, stamina, and (for rare
+        // delicacies) mana — see World.applyFood.
+        World.applyFood(conn.state, def);
         sendInventory(conn);
     }
 

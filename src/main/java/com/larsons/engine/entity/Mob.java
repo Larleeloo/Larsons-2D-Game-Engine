@@ -77,6 +77,7 @@ public final class Mob {
     private double stateTime;
     private double idleFor = 1.0;
     private double wanderTargetX;
+    private double wanderTargetY;   // planar (top-down / isometric) wandering
     private double attackTimer;
     private double hurtTimer;
     private double dodgeTimer;   // cooldown until the next projectile dodge
@@ -160,7 +161,10 @@ public final class Mob {
         if (dodgeTime > 0) dodgeTime -= dt;
 
         PlayerState nearest = nearestPlayer(players);
-        double dist = nearest == null ? Double.MAX_VALUE : distanceTo(nearest);
+        // Distances are edge-aware: measured centre-to-centre minus this mob's
+        // body radius, so big mobs whose bodies already touch the player count
+        // as in range instead of chasing a top-left point they can never reach.
+        double dist = nearest == null ? Double.MAX_VALUE : distanceTo(nearest, level);
 
         // --- transitions (ported state machine) ---
         boolean aggressive = def.temperament() == MobDef.Temperament.HOSTILE
@@ -195,17 +199,32 @@ public final class Mob {
         }
 
         // --- behaviour ---
-        double dx = 0;
+        // Perspective-specific AI: side-scroll mobs (gravityOn) are platform
+        // walkers that only steer horizontally; top-down / isometric mobs
+        // (planar) navigate the whole plane, so they wander to 2D targets and
+        // chase / flee along both axes.
+        boolean planar = !gravityOn && !def.flying();
+        double ts = level.tileSize;
+        double cx = x + def.size() / 2, cy = y + def.size() / 2;
+        double pcx = nearest == null ? cx : nearest.x + ts / 2;
+        double pcy = nearest == null ? cy : nearest.y + ts / 2;
+        double dx = 0, dyPlanar = 0;
         switch (state) {
             case WANDER -> {
                 dx = Math.signum(wanderTargetX - x) * def.speed() * 0.5;
-                if (Math.abs(wanderTargetX - x) < 4) {
+                if (planar) dyPlanar = Math.signum(wanderTargetY - y) * def.speed() * 0.5;
+                boolean arrived = Math.abs(wanderTargetX - x) < 4
+                        && (!planar || Math.abs(wanderTargetY - y) < 4);
+                if (arrived) {
                     changeState(AIState.IDLE);
                     idleFor = 0.5 + rng.nextDouble() * 2.5;
                 }
             }
             case CHASE -> {
-                if (nearest != null) dx = Math.signum(nearest.x - x) * def.speed();
+                if (nearest != null) {
+                    dx = steer(pcx - cx) * def.speed();
+                    if (planar) dyPlanar = steer(pcy - cy) * def.speed();
+                }
             }
             case ATTACK -> {
                 if (nearest != null && attackTimer <= 0 && dist <= def.attackRange() * 1.2) {
@@ -214,14 +233,16 @@ public final class Mob {
                 }
             }
             case FLEE -> {
-                if (nearest != null) dx = Math.signum(x - nearest.x) * def.speed();
+                if (nearest != null) {
+                    dx = steer(cx - pcx) * def.speed();
+                    if (planar) dyPlanar = steer(cy - pcy) * def.speed();
+                }
             }
             default -> { /* IDLE / DEAD: stand still */ }
         }
 
         // --- projectile awareness: sidestep incoming shots ---
         double size = def.size();
-        double ts = level.tileSize;
         if (dodgeTimer <= 0 && !projectiles.isEmpty()) {
             Projectile threat = incomingThreat(projectiles);
             if (threat != null) {
@@ -300,6 +321,15 @@ public final class Mob {
             double ny = PlayerPhysics.slideY(level, x, y, size, size, dy);
             if (ny != y + dy) vy = 0; // landed / hit a ceiling
             y = ny;
+        } else {
+            // Planar (top-down / isometric): walk the second axis too, with
+            // the same wall collision the first axis gets.
+            double ny = PlayerPhysics.slideY(level, x, y, size, size, dyPlanar * dt);
+            boolean blockedY = dyPlanar != 0 && ny == y;
+            y = ny;
+            if ((blockedSideways || blockedY) && state == AIState.WANDER) {
+                pickWanderTarget(level); // walled in: pick somewhere else
+            }
         }
 
         // Clamp to level bounds.
@@ -367,6 +397,13 @@ public final class Mob {
         double range = 5 * level.tileSize;
         wanderTargetX = Math.max(0, Math.min(level.width * (double) level.tileSize - def.size(),
                 x + (rng.nextDouble() * 2 - 1) * range));
+        wanderTargetY = Math.max(0, Math.min(level.height * (double) level.tileSize - def.size(),
+                y + (rng.nextDouble() * 2 - 1) * range));
+    }
+
+    /** Directional steering with a small deadzone so mobs don't jitter in place. */
+    private static double steer(double d) {
+        return Math.abs(d) < 2 ? 0 : Math.signum(d);
     }
 
     private PlayerState nearestPlayer(List<PlayerState> players) {
@@ -382,8 +419,16 @@ public final class Mob {
         return best;
     }
 
-    private double distanceTo(PlayerState p) {
-        return Math.hypot(p.x - x, p.y - y);
+    /**
+     * Edge-aware distance to a player: centre-to-centre, minus this mob's body
+     * radius — so a 96-px bear standing against the player registers ~0, not
+     * the 96 px its top-left corner is away.
+     */
+    private double distanceTo(PlayerState p, Level level) {
+        double half = level.tileSize / 2.0; // players are one tile square
+        double d = Math.hypot((p.x + half) - (x + def.size() / 2),
+                (p.y + half) - (y + def.size() / 2));
+        return Math.max(0, d - def.size() / 2);
     }
 
     // --- wire form (what snapshots carry) --------------------------------------

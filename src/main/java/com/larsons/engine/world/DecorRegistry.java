@@ -40,6 +40,11 @@ public final class DecorRegistry {
         return Collections.unmodifiableList(new ArrayList<>(byKey.values()));
     }
 
+    /** Remove a decoration (deleting user-created custom content). */
+    public void unregister(String key) {
+        byKey.remove(key);
+    }
+
     private static DecorRegistry createStandard() {
         DecorRegistry r = new DecorRegistry();
         // Trees.

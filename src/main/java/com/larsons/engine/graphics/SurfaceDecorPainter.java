@@ -67,6 +67,20 @@ public final class SurfaceDecorPainter {
         int px = corner[0], py = corner[1];
         double s = ts * camera.zoom; // one tile in screen px
         if (s < 3) return;           // sub-pixel at extreme zoom-out
+
+        // Sprite-sheet override (texture key surface/<key>): a creator's own
+        // grass/spikes/etc. art replaces the procedural painter, drawn one
+        // tile in size growing away from the decorated face.
+        java.awt.image.BufferedImage skin = Skins.frame("surface/" + def.key(), animClock);
+        if (skin != null) {
+            int size = Math.max(2, (int) Math.round(s));
+            int dx = px - size / 2 + p.face().dc * size / 2;
+            int dy = py - size / 2 - (p.face() == SurfaceDecor.Face.UP ? size / 2 : 0)
+                    + (p.face() == SurfaceDecor.Face.DOWN ? size / 2 : 0);
+            g.drawImage(skin, dx, dy, size, size, null);
+            return;
+        }
+
         double sway = Math.sin(animClock * 2.1 + p.col() * 1.7 + p.row() * 0.9);
 
         switch (def.style()) {

@@ -27,6 +27,9 @@ public final class DroppedItem {
     /** Seconds before it may be picked up (so mined drops don't teleport in). */
     public double pickupDelay = 0.4;
 
+    /** Seconds since the drop spawned; drives the perspective idle animation. */
+    public double age;
+
     public DroppedItem(int id, String key, int count, double x, double y) {
         this.id = id;
         this.key = key;
@@ -44,10 +47,12 @@ public final class DroppedItem {
 
     public void step(Level level, boolean gravityOn, double dt) {
         if (pickupDelay > 0) pickupDelay -= dt;
+        age += dt;
         double ts = level.tileSize;
         x += vx * dt;
         vx -= vx * Math.min(1, FRICTION * dt);
         if (gravityOn) {
+            // Side-scroll: drops arc under gravity and bounce to rest.
             vy += GRAVITY * dt;
             y += vy * dt;
             int col = (int) Math.floor((x + SIZE / 2) / ts);
@@ -56,6 +61,12 @@ public final class DroppedItem {
                 y = Math.floor((y + SIZE) / ts) * ts - SIZE;
                 vy = Math.abs(vy) > 60 ? -vy * BOUNCE : 0;
             }
+        } else {
+            // Top-down / isometric: the toss becomes a planar scatter — drops
+            // skid outward across the floor and slide to rest (renderers add
+            // the hovering bob + shadow for these perspectives).
+            y += vy * dt;
+            vy -= vy * Math.min(1, FRICTION * dt);
         }
         x = Math.max(0, Math.min(x, level.width * (double) level.tileSize - SIZE));
         y = Math.max(0, Math.min(y, level.height * (double) level.tileSize - SIZE));

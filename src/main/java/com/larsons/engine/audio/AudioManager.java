@@ -64,8 +64,11 @@ public final class AudioManager {
             clips.put(Sfx.PLACE, clip(sweep(200, 160, 0.06, 0.6)));
             clips.put(Sfx.BREAK, clip(noise(0.09, 0.55)));
             clips.put(Sfx.PICKUP, clip(concat(sweep(660, 660, 0.05, 0.4), sweep(990, 990, 0.07, 0.4))));
-            clips.put(Sfx.HIT, clip(mix(noise(0.08, 0.5), sweep(150, 90, 0.08, 0.6))));
-            clips.put(Sfx.HURT, clip(sweep(420, 140, 0.16, 0.55)));
+            // HIT and HURT are deliberately soft: sine thuds instead of the
+            // old loud square-wave shrieks, which read as alarming rather
+            // than informative when particles collide or the player is hurt.
+            clips.put(Sfx.HIT, clip(mix(noise(0.04, 0.22), tone(220, 140, 0.07, 0.4))));
+            clips.put(Sfx.HURT, clip(tone(310, 170, 0.11, 0.42)));
             clips.put(Sfx.EAT, clip(concat(noise(0.03, 0.3), sweep(320, 260, 0.06, 0.35))));
             clips.put(Sfx.SHOOT, clip(mix(noise(0.04, 0.25), sweep(880, 320, 0.09, 0.45))));
             clips.put(Sfx.BOOM, clip(mix(noise(0.28, 0.6), sweep(140, 45, 0.28, 0.65))));
@@ -101,6 +104,21 @@ public final class AudioManager {
             double env = Math.pow(1 - t, 1.8);
             double sample = (Math.sin(phase) >= 0 ? 1 : -1) * volume * env;
             writeSample(pcm, i, sample);
+        }
+        return pcm;
+    }
+
+    /** A pure sine sweep with a soft decay — gentler than {@link #sweep}'s square wave. */
+    private static byte[] tone(double fromHz, double toHz, double seconds, double volume) {
+        int n = (int) (SAMPLE_RATE * seconds);
+        byte[] pcm = new byte[n * 2];
+        double phase = 0;
+        for (int i = 0; i < n; i++) {
+            double t = i / (double) n;
+            double freq = fromHz + (toHz - fromHz) * t;
+            phase += 2 * Math.PI * freq / SAMPLE_RATE;
+            double env = Math.pow(1 - t, 1.5);
+            writeSample(pcm, i, Math.sin(phase) * volume * env);
         }
         return pcm;
     }

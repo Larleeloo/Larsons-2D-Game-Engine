@@ -41,6 +41,17 @@ public final class PlayerPhysics {
     public static final double SWIM_SINK = 350;          // passive sink accel
     public static final double SWIM_MAX_RISE = 200;      // px/sec
     public static final double SWIM_MAX_SINK = 140;      // px/sec
+    /**
+     * Upward velocity of the water-exit jump: stroking up with the head clear
+     * of the surface converts into a real jump. The capped swim rise speed is
+     * too slow to clear a pool's lip, which used to trap swimmers bobbing at
+     * the surface forever.
+     */
+    public static final double WATER_EXIT_JUMP = JUMP * 0.85;
+
+    // Mid-air jumps: a double jump is always available; special items carried
+    // in the inventory raise PlayerState.bonusAirJumps for triple/quad/infinite.
+    public static final double AIR_JUMP_FACTOR = 0.92;   // of a grounded jump
 
     /**
      * Tolerance for "flush against a tile boundary": bodies clamp exactly
@@ -80,10 +91,18 @@ public final class PlayerPhysics {
 
         boolean sideScroll = perspective == Perspective.SIDE_SCROLL && profile.gravityEnabled;
         if (sideScroll && inLiquid) {
-            // Swimming: buoyant sink by default, stroke upward while held —
-            // fast enough to climb out of a one-tile lip at the surface.
-            s.vy += (in.up ? -SWIM_UP : SWIM_SINK) * dt;
-            s.vy = Math.max(-SWIM_MAX_RISE, Math.min(SWIM_MAX_SINK, s.vy));
+            s.airJumpsUsed = 0; // water resets the double jump
+            boolean headClear = level.liquidAt(
+                    (int) Math.floor((s.x + size / 2.0) / ts),
+                    (int) Math.floor((s.y + size * 0.25) / ts)) == null;
+            if (in.up && headClear) {
+                // Water-exit jump: enough to climb the pool's lip and land.
+                s.vy = Math.min(s.vy, -WATER_EXIT_JUMP);
+            } else {
+                // Swimming: buoyant sink by default, stroke upward while held.
+                s.vy += (in.up ? -SWIM_UP : SWIM_SINK) * dt;
+                s.vy = Math.max(-SWIM_MAX_RISE, Math.min(SWIM_MAX_SINK, s.vy));
+            }
             double ny = slideY(level, s.x, s.y, size, size, s.vy * dt);
             if (ny != s.y + s.vy * dt) s.vy = 0; // hit floor or ceiling
             s.y = ny;
@@ -92,11 +111,19 @@ public final class PlayerPhysics {
             boolean grounded = onGround(level, s.x, s.y, size, size);
             if (grounded && s.vy >= 0) {
                 s.vy = 0;
+                s.airJumpsUsed = 0;
                 if (in.up) {
                     s.vy = -JUMP;
                     s.stamina = Math.max(0, s.stamina - JUMP_COST);
                 }
             } else {
+                // Mid-air jumps on a fresh press: the double jump is always
+                // active; carried items add more (see PlayerState.bonusAirJumps).
+                if (in.jump && s.airJumpsUsed < 1 + s.bonusAirJumps) {
+                    s.airJumpsUsed++;
+                    s.vy = -JUMP * AIR_JUMP_FACTOR;
+                    s.stamina = Math.max(0, s.stamina - JUMP_COST);
+                }
                 s.vy += GRAVITY * dt;
             }
             double dy = s.vy * dt;
@@ -197,6 +224,9 @@ public final class PlayerPhysics {
     public static boolean onGround(Level level, double x, double y, double w, double h) {
         double ts = level.tileSize;
         int row = (int) Math.floor((y + h + 1) / ts);
+        // The level's bottom edge is ground: bodies clamped there could never
+        // probe a solid tile below and were stuck unable to jump.
+        if (row >= level.height) return true;
         int c0 = (int) Math.floor(x / ts);
         int c1 = (int) Math.floor((x + w - COLLISION_EPS) / ts);
         for (int c = c0; c <= c1; c++) {

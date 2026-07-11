@@ -1,5 +1,6 @@
 package com.larsons.engine.level;
 
+import com.larsons.engine.entity.ItemStack;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.util.Json;
 import com.larsons.engine.world.Block;
@@ -62,6 +63,15 @@ public class Level {
     public final List<SurfaceDecor.Placement> surfaceDecor = new ArrayList<>();
     /** Map-maker stat triggers evaluated while the level is played. */
     public final List<StatRule> statRules = new ArrayList<>();
+    /**
+     * Storage-block inventories (chests, barrels), keyed by
+     * {@link #cellKey(int, int)} — a second inventory per container cell that
+     * saves and loads with the level data.
+     */
+    public final Map<Long, List<ItemStack>> containers = new LinkedHashMap<>();
+
+    /** Slots a single container offers. */
+    public static final int CONTAINER_SLOTS = 12;
 
     /** True when tile ids are {@link BlockRegistry} block ids. */
     public boolean registryTiles;
@@ -154,6 +164,28 @@ public class Level {
         return b != null && b.liquid() ? b : null;
     }
 
+    // --- storage-block containers ---------------------------------------------
+
+    /** The {@link #containers} key for a cell. */
+    public static long cellKey(int col, int row) {
+        return ((long) row << 32) | (col & 0xFFFFFFFFL);
+    }
+
+    /** The container contents at (col,row), or {@code null} when never opened. */
+    public List<ItemStack> containerAt(int col, int row) {
+        return containers.get(cellKey(col, row));
+    }
+
+    /** The container contents at (col,row), created empty on first open. */
+    public List<ItemStack> openContainer(int col, int row) {
+        return containers.computeIfAbsent(cellKey(col, row), k -> new ArrayList<>());
+    }
+
+    /** Detach and return the container contents at (col,row) (block mined). */
+    public List<ItemStack> removeContainer(int col, int row) {
+        return containers.remove(cellKey(col, row));
+    }
+
     /**
      * Resize the tile grid in place, preserving the overlapping region (the
      * creative editor's size sliders). Entities that fall outside the new
@@ -195,6 +227,8 @@ public class Level {
         spawnY = Math.max(0, Math.min(spawnY, maxY));
         entities.removeIf(e -> e.x > maxX || e.y > maxY);
         surfaceDecor.removeIf(sd -> sd.col() >= width || sd.row() >= height);
+        containers.keySet().removeIf(k ->
+                (k & 0xFFFFFFFFL) >= width || (k >>> 32) >= height);
     }
 
     /**
@@ -237,7 +271,7 @@ public class Level {
         if (id != 0 && registryTiles && blocks.get(id) == null) return false;
         if (chunked != null) {
             boolean changed = chunked.set(col, row, id);
-            if (changed && id == 0) removeSurfaceDecorAt(col, row);
+            if (changed && id == 0) clearCellAttachments(col, row);
             return changed;
         }
         if (tiles == null || row < 0 || row >= tiles.length
@@ -246,8 +280,14 @@ public class Level {
         }
         if (tiles[row][col] == id) return false;
         tiles[row][col] = id;
-        if (id == 0) removeSurfaceDecorAt(col, row);
+        if (id == 0) clearCellAttachments(col, row);
         return true;
+    }
+
+    /** Cell data that follows its block: clearing the cell drops it too. */
+    private void clearCellAttachments(int col, int row) {
+        removeSurfaceDecorAt(col, row);
+        if (!containers.isEmpty()) containers.remove(cellKey(col, row));
     }
 
     /** Surface decorations follow their host block: clearing the cell drops them. */
@@ -354,6 +394,27 @@ public class Level {
             List<Object> rules = new ArrayList<>(statRules.size());
             for (StatRule rule : statRules) rules.add(rule.toMap());
             m.put("rules", rules);
+        }
+        if (!containers.isEmpty()) {
+            // Storage-block inventories ride along with the level data.
+            List<Object> boxes = new ArrayList<>(containers.size());
+            for (Map.Entry<Long, List<ItemStack>> e : containers.entrySet()) {
+                if (e.getValue().isEmpty()) continue;
+                Map<String, Object> cm = new LinkedHashMap<>();
+                cm.put("c", (int) (e.getKey() & 0xFFFFFFFFL));
+                cm.put("r", (int) (e.getKey() >>> 32));
+                List<Object> items = new ArrayList<>(e.getValue().size());
+                for (ItemStack s : e.getValue()) {
+                    Map<String, Object> sm = new LinkedHashMap<>();
+                    sm.put("k", s.key);
+                    sm.put("n", s.count);
+                    if (s.wear > 0) sm.put("d", s.wear);
+                    items.add(sm);
+                }
+                cm.put("items", items);
+                boxes.add(cm);
+            }
+            if (!boxes.isEmpty()) m.put("containers", boxes);
         }
         if (!entities.isEmpty()) {
             List<Object> ents = new ArrayList<>(entities.size());

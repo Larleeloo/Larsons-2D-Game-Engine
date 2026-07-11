@@ -41,6 +41,11 @@ public final class MobRegistry {
         return Collections.unmodifiableList(new ArrayList<>(byKey.values()));
     }
 
+    /** Remove a species (deleting user-created custom content). */
+    public void unregister(String key) {
+        byKey.remove(key);
+    }
+
     private static MobRegistry createStandard() {
         MobRegistry r = new MobRegistry();
         // Humanoids (side-scroller: humanoid/)

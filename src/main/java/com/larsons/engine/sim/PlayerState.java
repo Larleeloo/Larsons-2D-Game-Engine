@@ -32,6 +32,13 @@ public final class PlayerState {
     public static final double MAX_MANA = 100;
     public double mana = MAX_MANA;
 
+    // Mid-air jump bookkeeping (simulation-side; not replicated in snapshots).
+    // A double jump (one air jump) is always available; carried special items
+    // raise bonusAirJumps for triple/quadruple/effectively-infinite jumping —
+    // scenes refresh it from the inventory each tick (Inventory.airJumpBonus).
+    public int airJumpsUsed;
+    public int bonusAirJumps;
+
     public PlayerState() {}
 
     public PlayerState(int id, String name, double x, double y) {

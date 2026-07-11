@@ -64,8 +64,10 @@ final class ProfileForms {
         form.addToggle("Particles", () -> p.particlesEnabled, v -> p.particlesEnabled = v);
         form.addToggle("Sound effects", () -> p.audioEnabled, v -> p.audioEnabled = v);
 
-        form.addInt("Tile size", () -> p.tileSize, v -> p.tileSize = v, 8, 256, 4);
-        form.addInt("Player size", () -> p.playerSize, v -> p.playerSize = v, 8, 256, 4);
+        // The player is always exactly one block (1x1 tiles) so it fits
+        // one-tile gaps; sizing the tiles sizes the player with them.
+        form.addInt("Tile size (player is 1x1 block)", () -> p.tileSize,
+                v -> { p.tileSize = v; p.playerSize = v; }, 8, 256, 4);
         form.addInt("Default entity size", () -> p.defaultEntitySize, v -> p.defaultEntitySize = v, 8, 256, 4);
 
         form.addToggle("Shaders (post-FX)", () -> p.shadersEnabled, v -> p.shadersEnabled = v);

@@ -141,6 +141,26 @@ public final class LevelLoader {
             }
         }
 
+        if (root.get("containers") instanceof List<?> boxes) {
+            // Storage-block inventories (chests, barrels) saved with the level.
+            for (Object o : boxes) {
+                if (!(o instanceof Map<?, ?> cm) || !(cm.get("items") instanceof List<?> items)) {
+                    continue;
+                }
+                java.util.List<com.larsons.engine.entity.ItemStack> stacks =
+                        lvl.openContainer(intOf(cm.get("c"), 0), intOf(cm.get("r"), 0));
+                for (Object io : items) {
+                    if (!(io instanceof Map<?, ?> sm)) continue;
+                    String key = sm.get("k") instanceof String s ? s : null;
+                    int count = intOf(sm.get("n"), 0);
+                    if (key == null || count <= 0) continue;
+                    var stack = new com.larsons.engine.entity.ItemStack(key, count);
+                    stack.wear = intOf(sm.get("d"), 0);
+                    stacks.add(stack);
+                }
+            }
+        }
+
         if (root.get("spawn") instanceof Map<?, ?> sp) {
             lvl.spawnX = doubleOf(sp.get("x"), 0);
             lvl.spawnY = doubleOf(sp.get("y"), 0);

@@ -65,6 +65,24 @@ public final class BlockRegistry {
         byKey.put(tuned.key(), tuned);
     }
 
+    /** Toggle a registered block's gravity behaviour in place (sand, gravel…). */
+    public void setFalling(String key, boolean falling) {
+        Block b = byKey.get(key);
+        if (b == null || b.falling() == falling) return;
+        Block next = b.withFalling(falling);
+        byId.put(next.id(), next);
+        byKey.put(next.key(), next);
+    }
+
+    /**
+     * Remove a block (deleting user-created custom content). Levels that still
+     * reference the id render it as the loud magenta placeholder.
+     */
+    public void unregister(String key) {
+        Block b = byKey.remove(key);
+        if (b != null) byId.remove(b.id());
+    }
+
     /** The block with this id, or {@code null} (id 0 = empty). */
     public Block get(int id) {
         return byId.get(id);
@@ -107,7 +125,9 @@ public final class BlockRegistry {
         r.register(Block.terrain(7, "wood", "Wood", new Color(150, 110, 60)));
         r.register(Block.passable(8, "leaves", "Leaves", new Color(60, 130, 55)));
         r.register(Block.terrain(9, "brick", "Brick", new Color(160, 70, 60)));
-        r.register(Block.passable(10, "glass", "Glass", new Color(190, 220, 235)));
+        // Glass is a solid pane with a translucent colour, so whatever is
+        // behind it shows through (translucent colours render translucent).
+        r.register(Block.terrain(10, "glass", "Glass", new Color(200, 228, 242, 80)));
         r.register(new Block(11, "coal_ore", "Coal Ore", new Color(80, 80, 85),
                 true, 0, null, "coal"));
         r.register(new Block(12, "iron_ore", "Iron Ore", new Color(170, 145, 125),
@@ -226,8 +246,23 @@ public final class BlockRegistry {
                 new Color(185, 140, 80)));
         r.register(Block.solidLight(85, "alchemy_station", "Alchemy Station",
                 new Color(120, 90, 170), 3, new Color(190, 150, 255)));
+        // Storage: like the barrel (52), the chest carries a second inventory
+        // saved with the level (Block.container / Level.containers).
+        r.register(Block.terrain(86, "chest", "Chest", new Color(170, 125, 65)));
+        // Pathways & walls, primarily for top-down / isometric levels (and the
+        // maze generator): paths are walkable floor markings, walls obstruct.
+        r.register(Block.passable(87, "stone_path", "Stone Path", new Color(165, 160, 150)));
+        r.register(Block.passable(88, "gravel_path", "Gravel Path", new Color(145, 138, 128)));
+        r.register(Block.passable(89, "wood_path", "Wood Path", new Color(180, 140, 90)));
+        r.register(Block.terrain(90, "stone_wall", "Stone Wall", new Color(105, 105, 115)));
+        r.register(Block.terrain(91, "brick_wall", "Brick Wall", new Color(150, 75, 65)));
+        r.register(Block.terrain(92, "hedge_wall", "Hedge Wall", new Color(70, 125, 60)));
 
         tuneDurability(r);
+        // Loose granular blocks obey gravity (creators opt custom blocks in
+        // with the "+ New Block" form's falling toggle).
+        r.setFalling("sand", true);
+        r.setFalling("gravel", true);
         return r;
     }
 
@@ -246,7 +281,7 @@ public final class BlockRegistry {
         // Rock and masonry: pickaxes.
         for (String k : new String[]{"stone", "cobblestone", "brick", "sandstone",
                 "limestone", "slate", "stone_bricks", "mossy_bricks", "dark_bricks",
-                "tile_floor", "pillar", "marble"}) {
+                "tile_floor", "pillar", "marble", "stone_wall", "brick_wall"}) {
             r.tune(k, 1.6, "pickaxe");
         }
         for (String k : new String[]{"deepslate", "granite", "basalt", "metal_plate"}) {
@@ -261,8 +296,8 @@ public final class BlockRegistry {
         // Woody things: axes.
         for (String k : new String[]{"wood", "oak_log", "birch_log", "dark_log",
                 "planks", "birch_planks", "dark_planks", "bamboo", "thatch",
-                "bookshelf", "crate", "barrel", "scaffold", "platform",
-                "crafting_table"}) {
+                "bookshelf", "crate", "barrel", "chest", "scaffold", "platform",
+                "crafting_table", "hedge_wall"}) {
             r.tune(k, 1.2, "axe");
         }
         // Fragile blocks crumble fast with anything.

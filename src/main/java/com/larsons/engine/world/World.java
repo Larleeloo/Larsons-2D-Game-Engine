@@ -5,6 +5,7 @@ import com.larsons.engine.entity.DroppedItem;
 import com.larsons.engine.entity.Inventory;
 import com.larsons.engine.entity.ItemDef;
 import com.larsons.engine.entity.ItemRegistry;
+import com.larsons.engine.entity.ItemStack;
 import com.larsons.engine.entity.Mob;
 import com.larsons.engine.entity.MobDef;
 import com.larsons.engine.entity.MobRegistry;
@@ -15,8 +16,10 @@ import com.larsons.engine.level.Level;
 import com.larsons.engine.sim.PlayerState;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 
 /**
  * The live world: a {@link Level} plus everything simulated inside it — mobs
@@ -209,7 +212,7 @@ public final class World {
         boolean gravityOn = profile.gravityEnabled
                 && level.perspective == com.larsons.engine.graphics.Perspective.SIDE_SCROLL;
 
-        blockChanges.addAll(liquids.step(level, dt));
+        blockChanges.addAll(liquids.step(level, gravityOn, dt));
 
         if (profile.mobsEnabled) {
             Iterator<Mob> it = mobs.iterator();
@@ -450,7 +453,9 @@ public final class World {
      */
     public Block continueMining(int col, int row, ItemDef held, boolean withDrops, double dt) {
         Block b = level.blockAt(col, row);
-        if (b == null) {
+        if (b == null || b.liquid()) {
+            // Liquids can't be mined away — displace them by placing a block
+            // over them instead (see placeBlock).
             cancelMining();
             return null;
         }
@@ -495,14 +500,25 @@ public final class World {
      */
     public Block mineBlock(int col, int row, boolean withDrops) {
         Block b = level.blockAt(col, row);
-        if (b == null) return null;
+        if (b == null || b.liquid()) return null; // liquids aren't minable
+        // Storage blocks spill their second inventory when broken.
+        List<ItemStack> stored = b.container() ? level.removeContainer(col, row) : null;
         if (!level.setTile(col, row, 0)) return null;
+        double ts = level.tileSize;
         if (withDrops && b.drops() != null && itemTypes.get(b.drops()) != null) {
-            double ts = level.tileSize;
             spawnItem(b.drops(), 1,
                     col * ts + ts / 2 - DroppedItem.SIZE / 2,
                     row * ts + ts / 2 - DroppedItem.SIZE / 2)
                     .toss(((col + row) % 2 == 0 ? 60 : -60), -260);
+        }
+        if (stored != null && withDrops) {
+            int i = 0;
+            for (ItemStack s : stored) {
+                DroppedItem drop = spawnItem(s.key, s.count,
+                        col * ts + ts / 2 - DroppedItem.SIZE / 2,
+                        row * ts + ts / 2 - DroppedItem.SIZE / 2);
+                if (drop != null) drop.toss((i++ % 3 - 1) * 90, -220);
+            }
         }
         return b;
     }
@@ -527,6 +543,83 @@ public final class World {
             spawnItem(loot, count, m.x + m.def.size() / 2, m.y + m.def.size() / 2)
                     .toss(0, -200);
         }
+    }
+
+    /**
+     * Apply a food item's effects: heal directly, restore stamina alongside
+     * (hearty meals get you moving again), and rare-or-better delicacies also
+     * restore mana.
+     */
+    public static void applyFood(PlayerState p, ItemDef def) {
+        p.health = Math.min(PlayerState.MAX_HEALTH, p.health + def.heal());
+        p.stamina = Math.min(PlayerState.MAX_STAMINA, p.stamina + def.heal() * 0.6);
+        if (def.rarity().ordinal() >= ItemDef.Rarity.RARE.ordinal()) {
+            p.mana = Math.min(PlayerState.MAX_MANA, p.mana + def.heal() * 0.5);
+        }
+    }
+
+    // --- destructible decorations (trees, rocks…) ---------------------------------
+
+    /** Chop progress per painted decoration, cleared when one breaks. */
+    private final Map<Level.EntitySpawn, Integer> decorHits = new HashMap<>();
+
+    public enum ChopResult { NONE, HIT, BROKEN }
+
+    /**
+     * Swing at the harvestable decoration under (aimX, aimY), if any: trees,
+     * rocks and the like carry an optional hitbox and break down into
+     * resources (logs + leaves for trees) after a few hits — an axe chops
+     * twice as fast. Purely-ornamental shapes are ignored.
+     */
+    public ChopResult chopDecor(double aimX, double aimY, boolean axe, boolean withDrops) {
+        DecorRegistry registry = DecorRegistry.standard();
+        Level.EntitySpawn best = null;
+        Decor bestDef = null;
+        double bestD = Double.MAX_VALUE;
+        for (Level.EntitySpawn e : level.entities) {
+            if (!"decor_bg".equals(e.kind) && !"decor_fg".equals(e.kind)) continue;
+            Decor def = registry.get(e.type);
+            if (def == null || harvestDrops(def.shape()) == null) continue;
+            double h = def.sizeTiles() * level.tileSize;
+            // Decor sprites anchor at their bottom-centre.
+            double d = Math.hypot(aimX - e.x, aimY - (e.y - h / 2));
+            if (d <= h / 2 + 10 && d < bestD) {
+                bestD = d;
+                best = e;
+                bestDef = def;
+            }
+        }
+        if (best == null) return ChopResult.NONE;
+        int needed = 2 + (int) bestDef.sizeTiles();
+        int hits = decorHits.merge(best, axe ? 2 : 1, Integer::sum);
+        if (hits < needed) return ChopResult.HIT;
+        decorHits.remove(best);
+        level.entities.remove(best);
+        if (withDrops) {
+            double h = bestDef.sizeTiles() * level.tileSize;
+            int i = 0;
+            for (String drop : harvestDrops(bestDef.shape())) {
+                if (itemTypes.get(drop) == null) continue;
+                DroppedItem item = spawnItem(drop, 1,
+                        best.x - DroppedItem.SIZE / 2, best.y - h * 0.5);
+                if (item != null) item.toss((i++ % 3 - 1) * 80, -220);
+            }
+        }
+        return ChopResult.BROKEN;
+    }
+
+    /** What a decoration shape breaks down into, or {@code null} = not harvestable. */
+    private static String[] harvestDrops(Decor.Shape shape) {
+        return switch (shape) {
+            case TREE, PINE -> new String[]{"oak_log", "oak_log", "leaves", "leaves"};
+            case DEAD_TREE -> new String[]{"oak_log", "stick"};
+            case LOG -> new String[]{"oak_log", "oak_log"};
+            case ROCK, STONES, STALAGMITE -> new String[]{"stone", "stone"};
+            case BUSH -> new String[]{"stick", "leaves"};
+            case MUSHROOM -> new String[]{"mushroom"};
+            case CACTUS -> new String[]{"cactus"};
+            case CRYSTAL -> new String[]{"crystal"};
+        };
     }
 
     private static PlayerState nearestWithin(List<PlayerState> players,

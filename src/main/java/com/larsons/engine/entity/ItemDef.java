@@ -27,11 +27,24 @@ import java.awt.Color;
  *                   ("pickaxe", "axe", "shovel"); {@code null} otherwise
  * @param toolPower  mining speed multiplier against blocks whose
  *                   {@code Block.tool()} matches {@link #toolClass} (≥ 1)
+ * @param maxDurability uses before the item breaks completely (tools wear one
+ *                   point per block broken); {@code 0} = never wears out.
+ *                   Per-stack wear lives in {@link ItemStack#wear}
  */
 public record ItemDef(String key, String name, Category category, Rarity rarity,
                       Color color, int maxStack, double damage, double heal,
                       String blockKey, String projectile, String ammo,
-                      String toolClass, double toolPower) {
+                      String toolClass, double toolPower, int maxDurability) {
+
+    /** Pre-durability constructor shape, kept so existing registrations read the same. */
+    public ItemDef(String key, String name, Category category, Rarity rarity,
+                   Color color, int maxStack, double damage, double heal,
+                   String blockKey, String projectile, String ammo,
+                   String toolClass, double toolPower) {
+        this(key, name, category, rarity, color, maxStack, damage, heal,
+                blockKey, projectile, ammo, toolClass, toolPower,
+                toolClass != null ? (int) Math.round(toolPower * 80) : 0);
+    }
 
     /** Pre-tool constructor shape, kept so existing registrations read the same. */
     public ItemDef(String key, String name, Category category, Rarity rarity,

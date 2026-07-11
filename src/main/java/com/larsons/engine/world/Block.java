@@ -43,11 +43,13 @@ import java.awt.Color;
  *                    tools ({@link #tool}) divide the time by their power
  * @param tool        the tool class that mines this block fast ("pickaxe",
  *                    "axe", "shovel"), or {@code null} when no tool helps
+ * @param falling     obeys gravity like sand/gravel: with nothing solid under
+ *                    it, the block drops a cell per simulation tick
  */
 public record Block(int id, String key, String displayName, Color color,
                     boolean solid, double lightRadius, Color lightColor,
                     String drops, boolean liquid, double damage,
-                    double hardness, String tool) {
+                    double hardness, String tool, boolean falling) {
 
     public Block {
         if (id <= 0) throw new IllegalArgumentException("Block ids must be > 0 (0 = empty)");
@@ -58,6 +60,15 @@ public record Block(int id, String key, String displayName, Color color,
         if (damage < 0) damage = 0;
         if (hardness < 0) hardness = 0;
         if (tool != null && tool.isBlank()) tool = null;
+    }
+
+    /** Pre-falling constructor shape, kept so existing registrations read the same. */
+    public Block(int id, String key, String displayName, Color color,
+                 boolean solid, double lightRadius, Color lightColor,
+                 String drops, boolean liquid, double damage,
+                 double hardness, String tool) {
+        this(id, key, displayName, color, solid, lightRadius, lightColor, drops,
+                liquid, damage, hardness, tool, false);
     }
 
     /** Pre-durability constructor shape: solid blocks default to 1s hardness. */
@@ -77,7 +88,13 @@ public record Block(int id, String key, String displayName, Color color,
     /** Copy with the given durability tuning ({@link BlockRegistry#tune}). */
     public Block withDurability(double hardness, String tool) {
         return new Block(id, key, displayName, color, solid, lightRadius, lightColor,
-                drops, liquid, damage, hardness, tool);
+                drops, liquid, damage, hardness, tool, falling);
+    }
+
+    /** Copy with gravity behaviour toggled ({@link BlockRegistry#setFalling}). */
+    public Block withFalling(boolean falling) {
+        return new Block(id, key, displayName, color, solid, lightRadius, lightColor,
+                drops, liquid, damage, hardness, tool, falling);
     }
 
     /** Convenience for plain terrain: solid, no light, drops itself. */
@@ -123,5 +140,14 @@ public record Block(int id, String key, String displayName, Color color,
     /** Flow twins are simulation artifacts, hidden from palettes/item catalogs. */
     public boolean isFlow() {
         return liquid && key.endsWith("_flow");
+    }
+
+    /**
+     * Storage blocks (chests, barrels) carry a second inventory that saves
+     * with the level ({@code Level.containers}); stand next to one and press E
+     * in play/play-test to open it.
+     */
+    public boolean container() {
+        return "chest".equals(key) || "barrel".equals(key);
     }
 }
