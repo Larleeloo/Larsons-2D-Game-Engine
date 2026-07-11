@@ -141,6 +141,12 @@ public final class LevelLoader {
             }
         }
 
+        if (root.get("cutscenes") instanceof List<?> scenes) {
+            for (Object o : scenes) {
+                if (o instanceof Map<?, ?> cm) lvl.cutscenes.add(Cutscene.fromMap(cm));
+            }
+        }
+
         if (root.get("containers") instanceof List<?> boxes) {
             // Storage-block inventories (chests, barrels) saved with the level.
             for (Object o : boxes) {
