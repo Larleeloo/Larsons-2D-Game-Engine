@@ -259,7 +259,7 @@ public class PlayScene extends AbstractScene {
             if (craftingPanel != null) {
                 craftingPanel = null;
             } else if (containerPanel != null) {
-                containerPanel = null;
+                containerPanel.beginClose();
             } else if (showInventory) {
                 showInventory = false;
             } else {
@@ -277,18 +277,29 @@ public class PlayScene extends AbstractScene {
 
         // Walk into a painted door and press E: load its target level; with no
         // door, E opens a nearby crafting/alchemy station instead
-        // (single-player only; online the server owns the level).
-        if (net == null && !showInventory && input.isKeyJustPressed(KeyEvent.VK_E)) {
+        // (single-player only; online the server owns the level). The
+        // container panel keeps the inventory open beside it, so E still
+        // closes it while the inventory shows.
+        if (net == null && (!showInventory || containerPanel != null)
+                && input.isKeyJustPressed(KeyEvent.VK_E)) {
             if (craftingPanel != null) {
                 craftingPanel = null;
             } else if (containerPanel != null) {
-                containerPanel = null;
+                containerPanel.beginClose();
             } else if (!tryDoorTravel(p)) {
                 tryOpenStation(p);
             }
         }
-        // A mined-away chest closes its panel.
-        if (containerPanel != null && !containerPanel.valid()) containerPanel = null;
+        // A mined-away chest closes its panel instantly; a finished closing
+        // animation removes it (and the inventory it brought along).
+        if (containerPanel != null) {
+            containerPanel.tick(dt);
+            if (!containerPanel.valid() || containerPanel.closed()) {
+                containerPanel = null;
+                showInventory = false;
+                cursorSlot = -1;
+            }
+        }
 
         if (p.perspectiveSwitchingEnabled && input.isKeyJustPressed(KeyEvent.VK_P)) {
             camera.setPerspective(camera.getPerspective().next());
@@ -301,8 +312,21 @@ public class PlayScene extends AbstractScene {
         if (craftingPanel != null) {
             updateCrafting(input);
         } else if (containerPanel != null) {
-            if (containerPanel.update(input, inventory, viewportWidth, viewportHeight)) {
+            if (containerPanel.update(input, inventory, cursorSlot,
+                    viewportWidth, viewportHeight)) {
                 ctx.sfx(Sfx.CLICK);
+                // A deposited cursor stack no longer exists in the grid.
+                if (cursorSlot >= 0 && inventory.slot(cursorSlot) == null) cursorSlot = -1;
+            } else if (containerPanel.interactive()) {
+                // The inventory shows beside the container: keep its mouse
+                // interactions and hotbar selection live so stacks can be
+                // arranged and [Q]-stashed without closing the chest.
+                for (int k = 0; k < Inventory.HOTBAR; k++) {
+                    if (input.isKeyJustPressed(KeyEvent.VK_1 + k)) inventory.select(k);
+                }
+                int wheel = input.getWheelRotation();
+                if (wheel != 0) inventory.scrollSelect(wheel > 0 ? 1 : -1);
+                handleInventoryMouse(input);
             }
         } else {
             updateInventoryControls(input, p);
@@ -437,9 +461,13 @@ public class PlayScene extends AbstractScene {
                 }
                 if (b.container() && p.itemsEnabled) {
                     // The chest/barrel's second inventory, stored in the level.
+                    // The player's inventory opens beside it (side by side)
+                    // so moving stacks between the two is one screen.
                     containerPanel = new ContainerPanel(level, pc + dc, pr + dr,
                             b.displayName(),
                             world != null ? world.itemTypes : ItemRegistry.standard());
+                    showInventory = true;
+                    cursorSlot = -1;
                     ctx.sfx(Sfx.CLICK);
                     return;
                 }
@@ -550,7 +578,11 @@ public class PlayScene extends AbstractScene {
                 cursorSlot = -1;
             }
         } else if (cursorSlot >= 0) {
-            if (!insideInventoryPanel(mouseX, mouseY)) {
+            // A click on the container panel beside the inventory is panel
+            // interaction, not a toss-into-the-world.
+            boolean overContainer = containerPanel != null
+                    && containerPanel.contains(mouseX, mouseY, viewportWidth, viewportHeight);
+            if (!insideInventoryPanel(mouseX, mouseY) && !overContainer) {
                 ItemStack held = inventory.slot(cursorSlot);
                 if (held != null) dropStack(cursorSlot, held.count);
             }
@@ -1222,6 +1254,11 @@ public class PlayScene extends AbstractScene {
                 camera.worldToScreen(wx, wy + ts, corner);
                 xs[3] = corner[0]; ys[3] = corner[1];
 
+                // The open chest/barrel gets an animated lid drawn over it.
+                boolean openLid = containerPanel != null && block != null
+                        && block.container()
+                        && c == containerPanel.col() && r == containerPanel.row();
+
                 // Sprite-sheet texture override, when one is assigned —
                 // isometric view warps the same texture into the tile diamond.
                 if (block != null) {
@@ -1229,6 +1266,10 @@ public class PlayScene extends AbstractScene {
                     if (skin != null) {
                         com.larsons.engine.graphics.TilePainter.drawTexture(
                                 g, skin, xs, ys, flat);
+                        if (openLid) {
+                            ContainerPanel.drawLid(g, xs, ys,
+                                    containerPanel.openness(), level.colorFor(id));
+                        }
                         continue;
                     }
                 }
@@ -1245,6 +1286,9 @@ public class PlayScene extends AbstractScene {
                 } else {
                     g.setColor(col.darker());
                     g.drawPolygon(xs, ys, 4);
+                }
+                if (openLid) {
+                    ContainerPanel.drawLid(g, xs, ys, containerPanel.openness(), col);
                 }
             }
         }
@@ -1608,11 +1652,18 @@ public class PlayScene extends AbstractScene {
     private static final int INV_SLOT = 46;
     private static final int INV_PAD = 6;
 
-    /** Top-left of the inventory grid: {x0, y0}. */
+    /**
+     * Top-left of the inventory grid: {x0, y0}. Centred alone; shifted left
+     * of centre while a container is open so the two panels sit side by side
+     * instead of overlapping.
+     */
     private int[] inventoryOrigin() {
         int gw = Inventory.COLS * (INV_SLOT + INV_PAD) - INV_PAD;
         int gh = Inventory.ROWS * (INV_SLOT + INV_PAD) - INV_PAD;
-        return new int[]{(viewportWidth - gw) / 2, (viewportHeight - gh) / 2};
+        int x = containerPanel != null
+                ? ContainerPanel.pairedInventoryLeft(viewportWidth) + 20
+                : (viewportWidth - gw) / 2;
+        return new int[]{x, (viewportHeight - gh) / 2};
     }
 
     /** The inventory slot index under a screen point, or -1. */
@@ -1648,7 +1699,9 @@ public class PlayScene extends AbstractScene {
         g.drawString("Inventory", x0, y0 - 24);
         g.setFont(SMALL_FONT);
         g.setColor(new Color(170, 170, 190));
-        g.drawString("Click to pick up / place stacks · click outside to drop"
+        g.drawString(containerPanel != null
+                ? "Click to pick up / place stacks · [Q] stash · [E]/[Esc] close"
+                : "Click to pick up / place stacks · click outside to drop"
                 + " · [Q] drop one · [F] eat · [I]/[Esc] close", x0, y0 - 8);
 
         for (int i = 0; i < Inventory.SIZE; i++) {
