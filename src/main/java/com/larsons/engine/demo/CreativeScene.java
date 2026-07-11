@@ -42,6 +42,7 @@ import com.larsons.engine.sim.PlayerState;
 import com.larsons.engine.sim.PlayerStats;
 import com.larsons.engine.sim.StatRuleEngine;
 import com.larsons.engine.ui.ConfigForm;
+import com.larsons.engine.ui.ContainerPanel;
 import com.larsons.engine.ui.CraftingPanel;
 import com.larsons.engine.ui.MenuTheme;
 import com.larsons.engine.world.Block;
@@ -164,9 +165,15 @@ public class CreativeScene extends AbstractScene {
     private enum Category { BLOCKS, LIQUIDS, LIGHTS, MOBS, ITEMS, DECOR, SURFACE, DOORS, TOOLS }
 
     private enum Dialog { NONE, NEW_LEVEL, SAVE, LOAD, CONFIRM_EXIT, GENERATE, DOORS, TEXTURE,
-        CUSTOM, RULES }
+        CUSTOM, RULES, BRUSH }
 
-    private record Entry(String kind, String key, String name, BufferedImage icon) {}
+    /** {@code custom} marks user-created objects (badged, deletable). */
+    private record Entry(String kind, String key, String name, BufferedImage icon,
+                         boolean custom) {
+        Entry(String kind, String key, String name, BufferedImage icon) {
+            this(kind, key, name, icon, false);
+        }
+    }
 
     private final GameContext ctx;
 
@@ -190,10 +197,14 @@ public class CreativeScene extends AbstractScene {
     private double statusTime;
     private double animClock; // drives skinned sprite animation
 
-    // Brush (block painting/erasing): shape + diameter in tiles.
+    // Brush (block painting/erasing): shape + diameter in tiles, plus the
+    // multi-block mix — extra block keys the stroke scatters alongside the
+    // selected one (configured in the Brush Settings window).
     private Brush.Shape brushShape = Brush.Shape.SQUARE;
     private int brushSize = 1;
     private final Rectangle brushShapeBox = new Rectangle();
+    private boolean brushMix;
+    private String brushKey2 = "", brushKey3 = "", brushKey4 = "";
 
     // Surface decor paint options (the SURFACE category's toggle rows).
     private int surfaceFaceMode;    // 0 = auto, 1..4 = UP/DOWN/LEFT/RIGHT
@@ -214,7 +225,7 @@ public class CreativeScene extends AbstractScene {
     private String cName = "";
     private int cR = 150, cG = 150, cB = 150;      // primary colour
     private int cR2 = 90, cG2 = 90, cB2 = 90;      // accent colour
-    private boolean cSolid = true, cFlying;
+    private boolean cSolid = true, cFlying, cFalling;
     private int cLightRadius, cLightR = 255, cLightG = 220, cLightB = 160;
     private int cDamage;
     private double cHardness = 1.0, cSizeTiles = 2.0;
@@ -240,7 +251,10 @@ public class CreativeScene extends AbstractScene {
     private boolean dialogRebuild;
     private String pendingName = "";
     private int pendingWidth = 60, pendingHeight = 24;
+    private Perspective pendingPerspective = Perspective.SIDE_SCROLL;
     private int genWidth = 240, genHeight = 140, genSeed = 1;
+    /** Generate dialog mode: Perlin terrain, or the top-down/iso maze. */
+    private boolean genMaze;
     private int doorEditIndex; // 0 = new door, 1.. = existing doors
     private String doorLabel = "";
     private int doorTargetIndex, doorColorIndex;
@@ -256,6 +270,8 @@ public class CreativeScene extends AbstractScene {
     private PlayerState testMe;
     private Level editLevel;    // the level being edited, kept across door travel
     private Object savedTiles;  // terrain snapshot restored when the test ends
+    private Map<Long, List<ItemStack>> savedContainers; // chest contents snapshot
+    private ContainerPanel containerPanel; // open chest/barrel during play-test
     private int inputSeq;
     private Inventory testInv;
     private boolean showInventory;
@@ -295,8 +311,13 @@ public class CreativeScene extends AbstractScene {
         }
         pendingLevelW = level.width;
         pendingLevelH = level.height;
+        pendingPerspective = profile().perspective;
 
-        camera = new Camera(profile().perspective, viewportWidth, viewportHeight);
+        // Each level carries its own perspective, so the editor becomes a
+        // side-scroll / top-down / isometric creative mode to match — the
+        // blocks paint the same, but obstruct the player per the perspective.
+        camera = new Camera(net != null ? profile().perspective : level.perspective,
+                viewportWidth, viewportHeight);
         camera.tileSize = level.tileSize;
         camera.zoom = 1.0;
         camera.centerOn(level.spawnX, level.spawnY);
@@ -319,20 +340,46 @@ public class CreativeScene extends AbstractScene {
 
     /** A fresh canvas with a ground floor, so play-testing has somewhere to stand. */
     private Level starterLevel(String name, int widthTiles, int heightTiles) {
+        return starterLevel(name, widthTiles, heightTiles, profile().perspective);
+    }
+
+    /**
+     * A fresh canvas in an explicit perspective. Side-scroll gets a ground
+     * floor to stand on; top-down / isometric canvases get a wall border
+     * instead (there is no gravity to fall by, and walls read as the level's
+     * edge in those creative modes).
+     */
+    private Level starterLevel(String name, int widthTiles, int heightTiles,
+                               Perspective perspective) {
         Level lvl = Level.empty(name, widthTiles, heightTiles, profile().tileSize);
-        lvl.perspective = profile().perspective;
-        int dirt = lvl.blocks.get("dirt").id();
-        int grass = lvl.blocks.get("grass").id();
-        // Giant canvases only floor the first 2048 columns eagerly; painting
-        // further out is up to the creator (a 65536-wide floor loop would
-        // materialize every chunk up front).
-        int floored = Math.min(lvl.width, 2048);
-        for (int c = 0; c < floored; c++) {
-            lvl.setTile(c, lvl.height - 1, dirt);
-            lvl.setTile(c, lvl.height - 2, grass);
+        lvl.perspective = perspective;
+        if (perspective == Perspective.SIDE_SCROLL) {
+            int dirt = lvl.blocks.get("dirt").id();
+            int grass = lvl.blocks.get("grass").id();
+            // Giant canvases only floor the first 2048 columns eagerly; painting
+            // further out is up to the creator (a 65536-wide floor loop would
+            // materialize every chunk up front).
+            int floored = Math.min(lvl.width, 2048);
+            for (int c = 0; c < floored; c++) {
+                lvl.setTile(c, lvl.height - 1, dirt);
+                lvl.setTile(c, lvl.height - 2, grass);
+            }
+            lvl.spawnX = lvl.tileSize * 3;
+            lvl.spawnY = (lvl.height - 4) * (double) lvl.tileSize;
+        } else {
+            int wall = lvl.blocks.get("stone_wall").id();
+            int bw = Math.min(lvl.width, 2048), bh = Math.min(lvl.height, 2048);
+            for (int c = 0; c < bw; c++) {
+                lvl.setTile(c, 0, wall);
+                lvl.setTile(c, bh - 1, wall);
+            }
+            for (int r = 0; r < bh; r++) {
+                lvl.setTile(0, r, wall);
+                lvl.setTile(bw - 1, r, wall);
+            }
+            lvl.spawnX = lvl.tileSize * 2;
+            lvl.spawnY = lvl.tileSize * 2;
         }
-        lvl.spawnX = lvl.tileSize * 3;
-        lvl.spawnY = (lvl.height - 4) * (double) lvl.tileSize;
         return lvl;
     }
 
@@ -345,7 +392,8 @@ public class CreativeScene extends AbstractScene {
         List<Entry> lights = newList("+ New Light");
         for (Block b : com.larsons.engine.world.BlockRegistry.standard().all()) {
             if (b.isFlow()) continue; // the sim's hidden flow twins
-            Entry e = new Entry("block", b.key(), b.displayName(), EntitySprites.block(b, 40));
+            Entry e = new Entry("block", b.key(), b.displayName(),
+                    EntitySprites.block(b, 40), customContent.isCustom("block", b.key()));
             if (b.liquid()) {
                 liquids.add(e);
             } else if (b.emitsLight()) {
@@ -360,19 +408,22 @@ public class CreativeScene extends AbstractScene {
 
         List<Entry> mobs = newList("+ New Mob");
         for (MobDef d : MobRegistry.standard().all()) {
-            mobs.add(new Entry("mob", d.key(), d.displayName(), EntitySprites.mob(d, 40)));
+            mobs.add(new Entry("mob", d.key(), d.displayName(), EntitySprites.mob(d, 40),
+                    customContent.isCustom("mob", d.key())));
         }
         palette.put(Category.MOBS, mobs);
 
         List<Entry> items = newList("+ New Item");
         for (ItemDef d : ItemRegistry.standard().allByRarity()) {
-            items.add(new Entry("item", d.key(), d.name(), EntitySprites.item(d, 40)));
+            items.add(new Entry("item", d.key(), d.name(), EntitySprites.item(d, 40),
+                    customContent.isCustom("item", d.key())));
         }
         palette.put(Category.ITEMS, items);
 
         List<Entry> decor = newList("+ New Decoration");
         for (Decor d : DecorRegistry.standard().all()) {
-            decor.add(new Entry("decor", d.key(), d.name(), EntitySprites.decor(d, 40)));
+            decor.add(new Entry("decor", d.key(), d.name(), EntitySprites.decor(d, 40),
+                    customContent.isCustom("decor", d.key())));
         }
         palette.put(Category.DECOR, decor);
 
@@ -393,6 +444,7 @@ public class CreativeScene extends AbstractScene {
         tools.add(new Entry("spawn", "spawn", "Player Spawn", spawnIcon()));
         tools.add(new Entry("mp_spawn", "mp_spawn", "Multiplayer Spawn", mpSpawnIcon()));
         tools.add(new Entry("eraser", "eraser", "Eraser", eraserIcon()));
+        tools.add(new Entry("brush", "brush", "Brush Settings…", brushIcon()));
         tools.add(new Entry("generate", "generate", "Generate Level…", generateIcon()));
         tools.add(new Entry("rules", "rules", "Stat Rules…", rulesIcon()));
         palette.put(Category.TOOLS, tools);
@@ -662,17 +714,22 @@ public class CreativeScene extends AbstractScene {
             case "block" -> {
                 Block b = level.blocks.get(entry.key);
                 if (b == null) return;
+                // With the brush mix on, each cell picks (stably, by cell
+                // hash) among the selected block and the extra mix slots.
+                List<Integer> mix = brushBlockIds(b);
                 boolean painted = false;
                 for (int[] cell : Brush.cells(brushShape, brushSize, col, row)) {
                     if (cell[0] < 0 || cell[1] < 0
-                            || cell[0] >= level.width || cell[1] >= level.height
-                            || level.tileAt(cell[0], cell[1]) == b.id()) {
+                            || cell[0] >= level.width || cell[1] >= level.height) {
                         continue;
                     }
+                    int paintId = mix.get(Math.floorMod(
+                            cell[0] * 31 + cell[1] * 47, mix.size()));
+                    if (level.tileAt(cell[0], cell[1]) == paintId) continue;
                     if (net != null) {
-                        net.client().sendBlockEdit(cell[0], cell[1], b.id(), "paint");
+                        net.client().sendBlockEdit(cell[0], cell[1], paintId, "paint");
                         painted = true;
-                    } else if (level.setTile(cell[0], cell[1], b.id())) {
+                    } else if (level.setTile(cell[0], cell[1], paintId)) {
                         painted = true;
                     }
                 }
@@ -752,6 +809,9 @@ public class CreativeScene extends AbstractScene {
                 setStatus("Player spawn moved");
             }
             case "eraser" -> eraseAt(wx, wy, col, row);
+            case "brush" -> {
+                if (firstClick) openDialog(Dialog.BRUSH);
+            }
             case "generate" -> {
                 if (firstClick) {
                     if (net != null) {
@@ -774,6 +834,21 @@ public class CreativeScene extends AbstractScene {
             if (kind.equals(e.kind)) n++;
         }
         return n;
+    }
+
+    /**
+     * The block ids a brush stroke scatters: the primary block, plus the
+     * Brush Settings window's mix slots (valid keys only) when mixing is on.
+     */
+    private List<Integer> brushBlockIds(Block primary) {
+        List<Integer> ids = new ArrayList<>(4);
+        ids.add(primary.id());
+        if (!brushMix) return ids;
+        for (String key : new String[]{brushKey2, brushKey3, brushKey4}) {
+            Block b = level.blocks.get(key == null ? "" : key.trim());
+            if (b != null && !b.isFlow()) ids.add(b.id());
+        }
+        return ids;
     }
 
     /**
@@ -1000,11 +1075,12 @@ public class CreativeScene extends AbstractScene {
                 }
                 case "managedoors" -> openDialog(Dialog.DOORS);
                 case "new" -> openCustomCreator();
+                case "brush" -> openDialog(Dialog.BRUSH);
                 case "rules" -> {
                     if (net == null) openDialog(Dialog.RULES);
                     else setStatus("Stat rules are edited offline");
                 }
-                default -> setStatus(e.name);
+                default -> setStatus(e.name + (e.custom ? "  (your custom object)" : ""));
             }
         }
     }
@@ -1058,7 +1134,7 @@ public class CreativeScene extends AbstractScene {
 
     private static boolean skinnable(String kind) {
         return switch (kind) {
-            case "block", "mob", "item", "decor" -> true;
+            case "block", "mob", "item", "decor", "surface" -> true;
             default -> false;
         };
     }
@@ -1104,9 +1180,12 @@ public class CreativeScene extends AbstractScene {
 
     private void enterTest() {
         // Snapshot terrain so test-mode mining/liquid flow doesn't eat the
-        // level (works for dense and giant chunked storage alike).
+        // level (works for dense and giant chunked storage alike). Container
+        // contents snapshot alongside so test-mode looting isn't destructive.
         editLevel = level;
         savedTiles = level.snapshotTiles();
+        savedContainers = snapshotContainers(level);
+        containerPanel = null;
         startTestWorld();
         testInv = new Inventory(testWorld.itemTypes);
         bindTestPickups();
@@ -1145,6 +1224,7 @@ public class CreativeScene extends AbstractScene {
         testStats = null;
         ruleEngine = null;
         craftingPanel = null;
+        containerPanel = null;
         showInventory = false;
         level = editLevel != null ? editLevel : level;
         editLevel = null;
@@ -1152,8 +1232,28 @@ public class CreativeScene extends AbstractScene {
             level.restoreTiles(savedTiles);
             savedTiles = null;
         }
+        if (savedContainers != null) {
+            level.containers.clear();
+            level.containers.putAll(savedContainers);
+            savedContainers = null;
+        }
         camera.tileSize = level.tileSize;
         setStatus("Back to editing");
+    }
+
+    /** Deep copy of the level's container contents (test-mode snapshot). */
+    private static Map<Long, List<ItemStack>> snapshotContainers(Level lvl) {
+        Map<Long, List<ItemStack>> copy = new java.util.LinkedHashMap<>();
+        for (Map.Entry<Long, List<ItemStack>> e : lvl.containers.entrySet()) {
+            List<ItemStack> stacks = new ArrayList<>(e.getValue().size());
+            for (ItemStack s : e.getValue()) {
+                ItemStack c = new ItemStack(s.key, s.count);
+                c.wear = s.wear;
+                stacks.add(c);
+            }
+            copy.put(e.getKey(), stacks);
+        }
+        return copy;
     }
 
     private void updateTest(double dt, InputManager input) {
@@ -1161,6 +1261,8 @@ public class CreativeScene extends AbstractScene {
         if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
             if (craftingPanel != null) {
                 craftingPanel = null;
+            } else if (containerPanel != null) {
+                containerPanel = null;
             } else if (showInventory) {
                 showInventory = false;
             } else {
@@ -1172,9 +1274,14 @@ public class CreativeScene extends AbstractScene {
             exitTest();
             return;
         }
+        if (containerPanel != null && !containerPanel.valid()) containerPanel = null;
 
         if (craftingPanel != null) {
             updateTestCrafting(input);
+        } else if (containerPanel != null) {
+            if (containerPanel.update(input, testInv, viewportWidth, viewportHeight)) {
+                ctx.sfx(Sfx.CLICK);
+            }
         } else {
             updateTestInventoryControls(input, p);
         }
@@ -1186,8 +1293,14 @@ public class CreativeScene extends AbstractScene {
                 input.isKeyDown(KeyEvent.VK_S) || input.isKeyDown(KeyEvent.VK_DOWN),
                 ++inputSeq);
         in.sprint = input.isKeyDown(KeyEvent.VK_SHIFT);
+        in.jump = input.isKeyJustPressed(KeyEvent.VK_W)
+                || input.isKeyJustPressed(KeyEvent.VK_UP)
+                || input.isKeyJustPressed(KeyEvent.VK_SPACE);
+        testMe.bonusAirJumps = p.itemsEnabled ? testInv.airJumpBonus() : 0;
         double preX = testMe.x, preY = testMe.y;
-        PlayerPhysics.step(testMe, in, level, p, p.perspective, dt);
+        // Play-test simulates in the level's own perspective, so a top-down
+        // maze tests as a top-down maze even inside a side-scroll game type.
+        PlayerPhysics.step(testMe, in, level, p, level.perspective, dt);
         // Stat tracking: distance in world px, jump take-offs.
         testStats.add("distance_traveled", Math.abs(testMe.x - preX) + Math.abs(testMe.y - preY));
         if (prevTestVy >= 0 && testMe.vy < 0) testStats.add("jumps", 1);
@@ -1218,12 +1331,14 @@ public class CreativeScene extends AbstractScene {
         if (input.isKeyJustPressed(KeyEvent.VK_E)) {
             if (craftingPanel != null) {
                 craftingPanel = null;
+            } else if (containerPanel != null) {
+                containerPanel = null;
             } else if (!tryDoorTravel()) {
                 tryOpenStation(p);
             }
         }
 
-        if (!showInventory && craftingPanel == null) {
+        if (!showInventory && craftingPanel == null && containerPanel == null) {
             updateTestMouseActions(input, p, dt);
         } else {
             testWorld.cancelMining();
@@ -1268,17 +1383,8 @@ public class CreativeScene extends AbstractScene {
         }
     }
 
-    /** Standing by a crafting table / alchemy station, E opens its panel. */
+    /** Standing by a crafting table / alchemy station / chest, E opens its panel. */
     private void tryOpenStation(GameProfile p) {
-        String station = nearbyStation(p);
-        if (station == null) return;
-        craftingPanel = new CraftingPanel(station, RecipeRegistry.standard(),
-                testWorld.itemTypes);
-        ctx.sfx(Sfx.CLICK);
-    }
-
-    /** The station kind within reach of the player, or {@code null}. */
-    private String nearbyStation(GameProfile p) {
         double ts = level.tileSize;
         int pc = (int) Math.floor((testMe.x + p.playerSize / 2.0) / ts);
         int pr = (int) Math.floor((testMe.y + p.playerSize / 2.0) / ts);
@@ -1286,11 +1392,25 @@ public class CreativeScene extends AbstractScene {
             for (int dc = -2; dc <= 2; dc++) {
                 Block b = level.blockAt(pc + dc, pr + dr);
                 if (b == null) continue;
-                if ("crafting_table".equals(b.key())) return Recipe.STATION_CRAFTING;
-                if ("alchemy_station".equals(b.key())) return Recipe.STATION_ALCHEMY;
+                String station = switch (b.key()) {
+                    case "crafting_table" -> Recipe.STATION_CRAFTING;
+                    case "alchemy_station" -> Recipe.STATION_ALCHEMY;
+                    default -> null;
+                };
+                if (station != null) {
+                    craftingPanel = new CraftingPanel(station, RecipeRegistry.standard(),
+                            testWorld.itemTypes);
+                    ctx.sfx(Sfx.CLICK);
+                    return;
+                }
+                if (b.container() && p.itemsEnabled) {
+                    containerPanel = new ContainerPanel(level, pc + dc, pr + dr,
+                            b.displayName(), testWorld.itemTypes);
+                    ctx.sfx(Sfx.CLICK);
+                    return;
+                }
             }
         }
-        return null;
     }
 
     /** The same hotbar/inventory controls the play scene has, minus netcode. */
@@ -1321,7 +1441,9 @@ public class CreativeScene extends AbstractScene {
                 ctx.sfx(Sfx.EAT);
             } else if (def != null && def.heal() > 0 && testMe.health < PlayerState.MAX_HEALTH
                     && testInv.consumeSelected()) {
-                testMe.health = Math.min(PlayerState.MAX_HEALTH, testMe.health + def.heal());
+                // Food heals directly and restores stamina (and mana for
+                // rare delicacies) — World.applyFood.
+                World.applyFood(testMe, def);
                 prevHealth = testMe.health;
                 ctx.sfx(Sfx.EAT);
             }
@@ -1396,6 +1518,11 @@ public class CreativeScene extends AbstractScene {
                 if (p.particlesEnabled) {
                     particles.burst((col + 0.5) * ts, (row + 0.5) * ts, mined.color(), 10);
                 }
+                if (p.itemsEnabled && held != null && held.toolClass() != null
+                        && testInv.damageSelected(1)) {
+                    ctx.sfx(Sfx.BREAK);
+                    setStatus(held.name() + " broke!");
+                }
             }
         } else {
             testWorld.cancelMining();
@@ -1411,6 +1538,20 @@ public class CreativeScene extends AbstractScene {
             return;
         }
         if (miningNow) return; // the held stroke handles it
+        // Destructible decorations (trees → logs + leaves…) before mob swings.
+        if (inReach) {
+            boolean axe = held != null && "axe".equals(held.toolClass());
+            World.ChopResult res = testWorld.chopDecor(aim[0], aim[1], axe, p.itemsEnabled);
+            if (res != World.ChopResult.NONE) {
+                swingTime = 0.2;
+                ctx.sfx(res == World.ChopResult.BROKEN ? Sfx.BREAK : Sfx.HIT);
+                if (p.particlesEnabled) {
+                    particles.burst(aim[0], aim[1], new Color(110, 85, 50),
+                            res == World.ChopResult.BROKEN ? 14 : 5);
+                }
+                return;
+            }
+        }
         if (p.combatEnabled) {
             swingTime = 0.2;
             double damage = World.FIST_DAMAGE + (held != null ? held.damage() : 0);
@@ -1439,7 +1580,10 @@ public class CreativeScene extends AbstractScene {
         if (p.itemsEnabled && (def == null || def.category() != ItemDef.Category.BLOCK)) return;
         String blockKey = def != null ? def.blockKey() : "dirt";
         Block b = level.blocks.get(blockKey);
-        if (b == null) return;
+        // Liquids accept placement — covering water is how it's removed.
+        if (b == null || (level.tileAt(col, row) != 0 && level.liquidAt(col, row) == null)) {
+            return;
+        }
         double size = p.playerSize;
         boolean overlapsMe = testMe.x + size > col * ts && testMe.x < (col + 1) * ts
                 && testMe.y + size > row * ts && testMe.y < (row + 1) * ts;
@@ -1495,6 +1639,7 @@ public class CreativeScene extends AbstractScene {
             case TEXTURE -> "Texture — " + (texEntry != null ? texEntry.name : "");
             case CUSTOM -> "New Custom " + customKindName();
             case RULES -> "Stat Rules — " + level.name;
+            case BRUSH -> "Brush Settings";
             default -> "";
         }).theme(MenuTheme.dark());
 
@@ -1504,9 +1649,14 @@ public class CreativeScene extends AbstractScene {
                     pendingName = "New Level";
                     pendingWidth = 60;
                     pendingHeight = 24;
+                    pendingPerspective = profile().perspective;
                 }
                 dialogRebuild = false;
                 dialogForm.addText("Name", () -> pendingName, v -> pendingName = v, 32);
+                // Each level keeps its own perspective — the creative mode
+                // (and how blocks obstruct the player) follows it.
+                dialogForm.addEnum("Perspective", Perspective.values(),
+                        () -> pendingPerspective, v -> pendingPerspective = v);
                 dialogForm.addToggle("Override map size (up to "
                                 + Level.MAX_GIANT_SIZE + ")",
                         () -> overrideMapSize, v -> {
@@ -1526,10 +1676,12 @@ public class CreativeScene extends AbstractScene {
                             v -> pendingHeight = v, 8, STANDARD_MAX_SIZE);
                 }
                 dialogForm.addAction("Create", () -> {
-                    level = starterLevel(pendingName, pendingWidth, pendingHeight);
+                    level = starterLevel(pendingName, pendingWidth, pendingHeight,
+                            pendingPerspective);
                     afterLevelSwap();
                     setStatus("Created \"" + level.name + "\" (" + level.width + "x"
-                            + level.height + (level.isChunked() ? ", chunked" : "") + ")");
+                            + level.height + ", " + level.perspective
+                            + (level.isChunked() ? ", chunked" : "") + ")");
                 });
                 dialogForm.addAction("Cancel", this::closeDialog);
             }
@@ -1581,8 +1733,54 @@ public class CreativeScene extends AbstractScene {
             case TEXTURE -> buildTextureForm();
             case CUSTOM -> buildCustomForm();
             case RULES -> buildRulesForm();
+            case BRUSH -> buildBrushForm();
             default -> { /* NONE */ }
         }
+    }
+
+    /**
+     * The Brush Settings window: stroke shape and size, plus the multi-block
+     * mix — up to three extra block keys painted alongside the selected block,
+     * scattered stably across the stroke so one drag lays down varied terrain.
+     */
+    private void buildBrushForm() {
+        String[] shapes = new String[Brush.Shape.values().length];
+        for (Brush.Shape s : Brush.Shape.values()) shapes[s.ordinal()] = Brush.label(s);
+        dialogForm.addEnum("Stroke shape", shapes,
+                () -> Brush.label(brushShape),
+                v -> {
+                    for (Brush.Shape s : Brush.Shape.values()) {
+                        if (Brush.label(s).equals(v)) brushShape = s;
+                    }
+                });
+        dialogForm.addSlider("Size (tiles)", () -> brushSize, v -> brushSize = v,
+                Brush.MIN_SIZE, Brush.MAX_SIZE);
+        dialogForm.addToggle("Paint with multiple blocks", () -> brushMix,
+                v -> brushMix = v);
+        Entry sel = selectedEntry();
+        String primary = sel != null && "block".equals(sel.kind) ? sel.name : "(palette pick)";
+        dialogForm.addAction("Block 1: " + primary + " (the palette selection)", () -> { });
+        dialogForm.addText("Block 2 key (blank = unused)", () -> brushKey2,
+                v -> brushKey2 = v, 24).enabledWhen(() -> brushMix);
+        dialogForm.addText("Block 3 key (blank = unused)", () -> brushKey3,
+                v -> brushKey3 = v, 24).enabledWhen(() -> brushMix);
+        dialogForm.addText("Block 4 key (blank = unused)", () -> brushKey4,
+                v -> brushKey4 = v, 24).enabledWhen(() -> brushMix);
+        dialogForm.addAction("Done", () -> {
+            StringBuilder bad = new StringBuilder();
+            for (String key : new String[]{brushKey2, brushKey3, brushKey4}) {
+                if (key != null && !key.isBlank()
+                        && level.blocks.get(key.trim()) == null) {
+                    if (bad.length() > 0) bad.append(", ");
+                    bad.append(key.trim());
+                }
+            }
+            closeDialog();
+            setStatus(bad.length() == 0
+                    ? "Brush: " + Brush.label(brushShape) + " " + brushSize
+                    + (brushMix ? " (multi-block mix on)" : "")
+                    : "Brush saved — unknown block key(s) ignored: " + bad);
+        });
     }
 
     private String customKindName() {
@@ -1599,6 +1797,7 @@ public class CreativeScene extends AbstractScene {
     /** Camera/slider bookkeeping after replacing the edited level. */
     private void afterLevelSwap() {
         camera.tileSize = level.tileSize;
+        if (net == null) camera.setPerspective(level.perspective);
         camera.centerOn(level.spawnX, level.spawnY);
         pendingLevelW = level.width;
         pendingLevelH = level.height;
@@ -1609,9 +1808,21 @@ public class CreativeScene extends AbstractScene {
         if (!dialogRebuild) {
             pendingName = "Generated " + (1 + (int) (Math.random() * 8999));
             genSeed = 1 + (int) (Math.random() * 99998);
+            pendingPerspective = profile().perspective;
+            // Maze mode fits top-down / isometric themes; terrain fits
+            // side-scrollers — default the mode to match the perspective.
+            genMaze = pendingPerspective != Perspective.SIDE_SCROLL;
         }
         dialogRebuild = false;
         dialogForm.addText("Name", () -> pendingName, v -> pendingName = v, 32);
+        dialogForm.addEnum("Perspective", Perspective.values(),
+                () -> pendingPerspective, v -> {
+                    pendingPerspective = v;
+                    genMaze = v != Perspective.SIDE_SCROLL;
+                });
+        dialogForm.addEnum("Mode", new String[]{"Perlin terrain", "Maze"},
+                () -> genMaze ? "Maze" : "Perlin terrain",
+                v -> genMaze = "Maze".equals(v));
         dialogForm.addToggle("Override map size (giant, chunk-loaded)",
                 () -> overrideMapSize, v -> {
                     overrideMapSize = v;
@@ -1632,10 +1843,19 @@ public class CreativeScene extends AbstractScene {
         dialogForm.addInt("Seed", () -> genSeed, v -> genSeed = v, 1, 99999, 1);
         dialogForm.addAction("Randomize Seed", () -> genSeed = 1 + (int) (Math.random() * 99998));
         dialogForm.addAction("Generate", () -> {
-            Level generated = LevelGenerator.generate(
-                    pendingName.isBlank() ? "Generated" : pendingName.trim(),
+            String name = pendingName.isBlank() ? "Generated" : pendingName.trim();
+            if (genMaze) {
+                level = LevelGenerator.generateMaze(name, genWidth, genHeight,
+                        profile().tileSize, genSeed, pendingPerspective);
+                afterLevelSwap();
+                setStatus("Generated maze \"" + level.name + "\" (" + level.width + "x"
+                        + level.height + ", seed " + genSeed
+                        + ") — chests, torches, mobs; the gold key waits at the far end");
+                return;
+            }
+            Level generated = LevelGenerator.generate(name,
                     genWidth, genHeight, profile().tileSize, genSeed);
-            generated.perspective = profile().perspective;
+            generated.perspective = pendingPerspective;
             level = generated;
             afterLevelSwap();
             setStatus(level.isChunked()
@@ -1736,6 +1956,7 @@ public class CreativeScene extends AbstractScene {
             case "mob" -> "mob/" + texEntry.key + "/" + state;
             case "item" -> "item/" + texEntry.key;
             case "decor" -> "decor/" + texEntry.key;
+            case "surface" -> "surface/" + texEntry.key;
             default -> "block/" + texEntry.key;
         };
     }
@@ -1771,6 +1992,12 @@ public class CreativeScene extends AbstractScene {
                         loadTextureFields();
                     });
         }
+        // The game type's texture pack folder: Browse… opens here, and bare
+        // sheet filenames resolve against it — one folder keeps a pack's
+        // sheets organized instead of scattering absolute paths around.
+        dialogForm.addText("Texture pack folder (blank = default)",
+                () -> profile().texturePackDir,
+                v -> profile().texturePackDir = v, 96);
         dialogForm.addText("Sheet (PNG path)", () -> texSheet, v -> texSheet = v, 96);
         dialogForm.addAction("Browse…", this::browseForSheet);
         dialogForm.addText("Frame width px", () -> texW, v -> texW = v, 4);
@@ -1782,7 +2009,8 @@ public class CreativeScene extends AbstractScene {
                 setStatus("Pick a sprite sheet first (path or Browse…)");
                 return;
             }
-            SkinDef def = new SkinDef(textureKey(), texSheet.trim(),
+            ctx.save(); // the texture pack folder persists with the game type
+            SkinDef def = new SkinDef(textureKey(), resolveSheetPath(texSheet.trim()),
                     parseInt(texW, 32), parseInt(texH, 32),
                     parseInt(texCount, 1), parseDouble(texFps));
             Skins.put(def);
@@ -1799,13 +2027,46 @@ public class CreativeScene extends AbstractScene {
                 setStatus(texEntry.name + " back to its procedural texture");
             });
         }
+        // User-created objects are deletable right from their entry's dialog.
+        if (texEntry != null && texEntry.custom) {
+            dialogForm.addAction("DELETE this custom object", this::deleteCustomEntry);
+        }
         dialogForm.addAction("Cancel", this::closeDialog);
+    }
+
+    /** Delete the right-clicked user-created object (custom.json + registries). */
+    private void deleteCustomEntry() {
+        String kind = "surface".equals(texEntry.kind) ? "block" : texEntry.kind;
+        if (customContent.remove(kind, texEntry.key)) {
+            buildPalette();
+            selected.put(category, 0);
+            closeDialog();
+            setStatus("Deleted custom " + texEntry.name
+                    + " — levels using it show placeholders");
+        } else {
+            setStatus("Couldn't delete " + texEntry.name);
+        }
+    }
+
+    /**
+     * Resolve a sheet path: as given when it exists (or is bundled), else
+     * relative to the game type's texture pack folder.
+     */
+    private String resolveSheetPath(String sheet) {
+        String dir = profile().texturePackDir;
+        if (dir == null || dir.isBlank() || Files.exists(Path.of(sheet))) return sheet;
+        Path inPack = Path.of(dir.trim()).resolve(sheet);
+        return Files.exists(inPack) ? inPack.toString() : sheet;
     }
 
     private void browseForSheet() {
         try {
+            String dir = profile().texturePackDir;
+            Path start = dir != null && !dir.isBlank() && Files.isDirectory(Path.of(dir.trim()))
+                    ? Path.of(dir.trim())
+                    : Path.of(SkinStore.DEFAULT_DIR);
             javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(
-                    Path.of(SkinStore.DEFAULT_DIR).toAbsolutePath().toFile());
+                    start.toAbsolutePath().toFile());
             chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
                     "Images", "png", "gif", "jpg", "jpeg"));
             if (chooser.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) {
@@ -1884,10 +2145,13 @@ public class CreativeScene extends AbstractScene {
             cDamage = 0;
             cHardness = 1.0;
             cToolIndex = 0;
+            cFalling = false;
         }
         addColorSliders("Colour", false);
         if (!liquid) {
             dialogForm.addToggle("Solid (collides)", () -> cSolid, v -> cSolid = v);
+            dialogForm.addToggle("Falls like sand/gravel", () -> cFalling,
+                    v -> cFalling = v);
         }
         dialogForm.addSlider("Light radius (tiles)", () -> cLightRadius,
                 v -> cLightRadius = v, 0, 12);
@@ -1993,7 +2257,8 @@ public class CreativeScene extends AbstractScene {
                             name, new Color(cR, cG, cB), solid,
                             cLightRadius, new Color(cLightR, cLightG, cLightB),
                             solid ? key : null, liquid, cDamage, cHardness,
-                            cToolIndex > 0 ? TOOL_CLASSES[cToolIndex] : null));
+                            cToolIndex > 0 ? TOOL_CLASSES[cToolIndex] : null,
+                            !liquid && cFalling));
                 }
             }
         } catch (RuntimeException e) {
@@ -2072,12 +2337,21 @@ public class CreativeScene extends AbstractScene {
                 v -> ruleStatIndex = Math.max(0, List.of(stats).indexOf(v)));
         dialogForm.addInt("Threshold", () -> ruleThreshold,
                 v -> ruleThreshold = v, 1, 1000000, 1);
+        // Item keys are typeable, but the "look up" cyclers below browse the
+        // whole catalog so creators don't have to memorize keys.
+        String[] itemKeys = ruleItemKeyChoices();
         dialogForm.addText("Reward item key (blank = none)",
                 () -> ruleReward, v -> ruleReward = v, 24);
+        dialogForm.addEnum("· look up reward key", itemKeys,
+                () -> keyChoiceShown(itemKeys, ruleReward),
+                v -> { if (!itemKeys[0].equals(v)) ruleReward = v; });
         dialogForm.addInt("Reward count", () -> ruleRewardCount,
                 v -> ruleRewardCount = v, 1, 99, 1);
         dialogForm.addText("Consume item key (blank = none)",
                 () -> ruleConsume, v -> ruleConsume = v, 24);
+        dialogForm.addEnum("· look up consume key", itemKeys,
+                () -> keyChoiceShown(itemKeys, ruleConsume),
+                v -> { if (!itemKeys[0].equals(v)) ruleConsume = v; });
         dialogForm.addInt("Consume count", () -> ruleConsumeCount,
                 v -> ruleConsumeCount = v, 1, 99, 1);
         dialogForm.addToggle("Repeat every threshold step", () -> ruleRepeat,
@@ -2115,6 +2389,24 @@ public class CreativeScene extends AbstractScene {
             });
         }
         dialogForm.addAction("Close", this::closeDialog);
+    }
+
+    /** The item catalog as sorted cycler choices, headed by a no-op entry. */
+    private static String[] ruleItemKeyChoices() {
+        List<String> keys = new ArrayList<>();
+        for (ItemDef d : ItemRegistry.standard().all()) keys.add(d.key());
+        java.util.Collections.sort(keys);
+        keys.add(0, "(browse…)");
+        return keys.toArray(new String[0]);
+    }
+
+    /** What the look-up cycler shows: the typed key when it's in the catalog. */
+    private static String keyChoiceShown(String[] choices, String typed) {
+        String t = typed == null ? "" : typed.trim();
+        for (String c : choices) {
+            if (c.equals(t)) return c;
+        }
+        return choices[0];
     }
 
     /** Trimmed item key when it exists in the catalog, else {@code null}. */
@@ -2174,6 +2466,9 @@ public class CreativeScene extends AbstractScene {
             if (showInventory) drawTestInventory(g);
             if (craftingPanel != null) {
                 craftingPanel.render(g, viewportWidth, viewportHeight, testInv, animClock);
+            }
+            if (containerPanel != null) {
+                containerPanel.render(g, viewportWidth, viewportHeight, animClock);
             }
         }
         drawStatus(g);
@@ -2291,13 +2586,12 @@ public class CreativeScene extends AbstractScene {
                 Block block = level.blockAt(c, r);
                 projectCell(c, r, ts);
 
-                if (flat && block != null) {
+                if (block != null) {
+                    // Isometric view warps the same texture into the diamond.
                     BufferedImage skin = tileSkinFor(id, block);
                     if (skin != null) {
-                        int x = Math.min(pxs[0], pxs[2]);
-                        int y = Math.min(pys[0], pys[2]);
-                        g.drawImage(skin, x, y, Math.abs(pxs[2] - pxs[0]) + 1,
-                                Math.abs(pys[2] - pys[0]) + 1, null);
+                        com.larsons.engine.graphics.TilePainter.drawTexture(
+                                g, skin, pxs, pys, flat);
                         continue;
                     }
                 }
@@ -2515,8 +2809,16 @@ public class CreativeScene extends AbstractScene {
         if (img == null) img = EntitySprites.item(def, 16);
         int w = Math.max(5, (int) Math.round(DroppedItem.SIZE * camera.zoom));
         camera.worldToScreen(x, y, pcorner);
-        drawRarityHalo(g, def, pcorner[0] + w / 2, pcorner[1] + w / 2, w);
-        g.drawImage(img, pcorner[0], pcorner[1], w, w, null);
+        int dy = 0;
+        if (camera.getPerspective() != Perspective.SIDE_SCROLL) {
+            // Top-down / isometric drops hover with a bob over a soft shadow.
+            dy = (int) Math.round(Math.sin(animClock * 3 + (x + y) * 0.05) * w * 0.18
+                    - w * 0.25);
+            g.setColor(new Color(0, 0, 0, 70));
+            g.fillOval(pcorner[0], pcorner[1] + w - w / 4, w, w / 2);
+        }
+        drawRarityHalo(g, def, pcorner[0] + w / 2, pcorner[1] + dy + w / 2, w);
+        g.drawImage(img, pcorner[0], pcorner[1] + dy, w, w, null);
     }
 
     /**
@@ -2772,6 +3074,16 @@ public class CreativeScene extends AbstractScene {
                     g.drawRoundRect(cx, cy, CELL, CELL, 8, 8);
                 }
                 g.drawImage(e.icon, cx + (CELL - 40) / 2, cy + (CELL - 40) / 2, null);
+                if (e.custom) {
+                    // User-created objects wear a green corner badge; their
+                    // texture dialog (right-click) offers deletion.
+                    g.setColor(new Color(110, 220, 140));
+                    g.fillPolygon(new int[]{cx + CELL - 15, cx + CELL, cx + CELL},
+                            new int[]{cy + 1, cy + 1, cy + 16}, 3);
+                    g.setColor(new Color(10, 40, 20));
+                    g.setFont(SMALL_FONT);
+                    g.drawString("+", cx + CELL - 9, cy + 10);
+                }
             }
         }
 
@@ -2783,7 +3095,8 @@ public class CreativeScene extends AbstractScene {
         g.fillRect(0, viewportHeight - 36, SIDEBAR_W, 36);
         g.setColor(new Color(255, 220, 120));
         g.setFont(HUD_FONT);
-        g.drawString(sel != null ? sel.name : "", 10, viewportHeight - 20);
+        g.drawString(sel != null ? sel.name + (sel.custom ? " · custom" : "") : "",
+                10, viewportHeight - 20);
         g.setColor(new Color(150, 150, 165));
         g.setFont(SMALL_FONT);
         g.drawString("right-click icon = texture · Tab category", 10, viewportHeight - 6);
@@ -2898,6 +3211,17 @@ public class CreativeScene extends AbstractScene {
             g.setColor(new Color(255, 255, 255, 130));
             g.setFont(SMALL_FONT);
             g.drawString(String.valueOf(i + 1), x + 4, y0 + 12);
+        }
+        // The selected item's name floats above the bar in its rarity colour.
+        ItemDef sel = testInv.selectedDef();
+        if (sel != null) {
+            g.setFont(HUD_FONT);
+            int tw = g.getFontMetrics().stringWidth(sel.name());
+            int nx = (viewportWidth - tw) / 2, ny = y0 - 10;
+            g.setColor(new Color(0, 0, 0, 160));
+            g.fillRoundRect(nx - 8, ny - 14, tw + 16, 20, 8, 8);
+            g.setColor(sel.rarity().color);
+            g.drawString(sel.name(), nx, ny);
         }
     }
 
@@ -3060,6 +3384,7 @@ public class CreativeScene extends AbstractScene {
         BufferedImage img = Skins.frame("item/" + def.key(), animClock);
         if (img == null) img = EntitySprites.item(def, 32);
         g.drawImage(img, x + 6, y + 6, slot - 12, slot - 12, null);
+        PlayScene.drawDurabilityBar(g, def, stack, x, y, slot);
         if (stack.count > 1) {
             g.setFont(SMALL_FONT);
             g.setColor(Color.BLACK);
@@ -3149,6 +3474,23 @@ public class CreativeScene extends AbstractScene {
         g.fillRoundRect(8, 14, 24, 14, 6, 6);
         g.setColor(new Color(240, 240, 245));
         g.fillRoundRect(8, 8, 24, 10, 6, 6);
+        g.dispose();
+        return img;
+    }
+
+    /** A paint brush for the Brush Settings window. */
+    private static BufferedImage brushIcon() {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setColor(new Color(200, 160, 90));
+        g.setStroke(new BasicStroke(4f));
+        g.drawLine(26, 6, 12, 24);
+        g.setColor(new Color(150, 200, 240));
+        g.fillOval(6, 22, 12, 12);
+        g.setColor(new Color(110, 220, 150));
+        g.fillOval(20, 28, 8, 8);
+        g.setColor(new Color(240, 200, 110));
+        g.fillOval(28, 20, 7, 7);
         g.dispose();
         return img;
     }

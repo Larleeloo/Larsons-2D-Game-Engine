@@ -139,6 +139,20 @@ public final class ItemRegistry {
                 ItemDef.Rarity.UNCOMMON, new Color(80, 110, 235), 8, 0, 0, null, null, null));
         r.register(new ItemDef("gold_key", "Gold Key", ItemDef.Category.KEY,
                 ItemDef.Rarity.RARE, new Color(230, 195, 70), 8, 0, 0, null, null, null));
+        // Movement accessories: the double jump is always active; carrying
+        // these unlocks triple / quadruple / infinite jumping
+        // (Inventory.airJumpBonus feeds PlayerState.bonusAirJumps).
+        r.register(new ItemDef("feather_charm", "Feather Charm", ItemDef.Category.ACCESSORY,
+                ItemDef.Rarity.RARE, new Color(230, 230, 250), 1, 0, 0, null, null, null));
+        r.register(new ItemDef("sky_totem", "Sky Totem", ItemDef.Category.ACCESSORY,
+                ItemDef.Rarity.EPIC, new Color(140, 190, 245), 1, 0, 0, null, null, null));
+        r.register(new ItemDef("wings_of_icarus", "Wings of Icarus", ItemDef.Category.ACCESSORY,
+                ItemDef.Rarity.MYTHIC, new Color(255, 240, 180), 1, 0, 0, null, null, null));
         return r;
+    }
+
+    /** Remove an item (deleting user-created custom content). */
+    public void unregister(String key) {
+        byKey.remove(key);
     }
 }

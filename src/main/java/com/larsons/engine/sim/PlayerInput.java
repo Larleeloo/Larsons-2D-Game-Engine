@@ -14,6 +14,13 @@ public final class PlayerInput {
     public boolean left, right, up, down;
     /** Sprint intent (Shift held): faster while the player has stamina. */
     public boolean sprint;
+    /**
+     * Jump key <em>freshly pressed</em> this tick (edge-triggered by the
+     * sender, unlike the level-triggered {@link #up}). Mid-air jumps key off
+     * this so holding the key doesn't burn every air jump at once. Absent on
+     * the wire when false, keeping old messages compatible.
+     */
+    public boolean jump;
     /** Client-assigned sequence number, echoed back in snapshots. */
     public int seq;
 
@@ -59,6 +66,7 @@ public final class PlayerInput {
         m.put("u", up);
         m.put("d", down);
         if (sprint) m.put("sp", true); // absent on the wire when false
+        if (jump) m.put("j", true);
         if (selected != 0) m.put("h", selected);
         if (attack) {
             m.put("a", true);
@@ -76,6 +84,7 @@ public final class PlayerInput {
         in.up = Boolean.TRUE.equals(m.get("u"));
         in.down = Boolean.TRUE.equals(m.get("d"));
         in.sprint = Boolean.TRUE.equals(m.get("sp"));
+        in.jump = Boolean.TRUE.equals(m.get("j"));
         in.selected = m.get("h") instanceof Number n ? n.intValue() : 0;
         in.attack = Boolean.TRUE.equals(m.get("a"));
         in.aimX = m.get("ax") instanceof Number n ? n.doubleValue() : 0;

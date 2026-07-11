@@ -53,6 +53,24 @@ public final class LevelGenerator {
     }
 
     /**
+     * "Maze mode": the automatic generator for top-down / isometric levels —
+     * a perfect maze (recursive backtracker) with solid walls, walkable path
+     * floors, torches at junctions, treasure chests in dead ends, mobs in the
+     * far reaches, and the exit chest (with the gold key) at the cell farthest
+     * from the spawn. Same seed, same maze.
+     */
+    public static Level generateMaze(String name, int width, int height, int tileSize,
+                                     long seed, com.larsons.engine.graphics.Perspective perspective) {
+        // Mazes carve every cell, so they stay dense (no giant chunked mazes).
+        width = Math.max(17, Math.min(511, width)) | 1;   // odd sizes keep walls 1 thick
+        height = Math.max(17, Math.min(511, height)) | 1;
+        Level lvl = Level.empty(name, width, height, tileSize);
+        lvl.perspective = perspective;
+        new MazeGeneration(lvl, seed).run();
+        return lvl;
+    }
+
+    /**
      * Generate a <em>giant</em> level (beyond {@link Level#DENSE_TILE_LIMIT},
      * up to 65536&times;65536) lazily: nothing is filled up front — a
      * deterministic {@link ChunkGenerator} builds each chunk the first time
@@ -145,7 +163,7 @@ public final class LevelGenerator {
         int surfaceAt(int c) {
             double hills = noise.fbm(c * 0.012, 0.7, 4, 0.5, 2.1);
             double rough = noise.fbm(c * 0.07, 13.4, 3, 0.5, 2.0);
-            int s = (int) (h * 0.32 + hills * h * 0.20 + rough * h * 0.045);
+            int s = (int) (h * 0.32 + hills * hillAmplitude(h) + rough * roughAmplitude(h));
             return Math.max(4, Math.min(h - 14, s));
         }
 
@@ -239,6 +257,195 @@ public final class LevelGenerator {
         }
     }
 
+    /**
+     * Hill amplitude in tiles. Proportional scaling made tall maps spike into
+     * unclimbable vertical mountains (the same noise slope stretched over
+     * hundreds of rows), so the amplitude is capped in absolute tiles: terrain
+     * stays smoothly rolling no matter the map size.
+     */
+    static double hillAmplitude(int heightTiles) {
+        return Math.min(heightTiles * 0.20, 22);
+    }
+
+    /** Fine-detail roughness, similarly capped so big maps stay walkable. */
+    static double roughAmplitude(int heightTiles) {
+        return Math.min(heightTiles * 0.045, 2.5);
+    }
+
+    /**
+     * The maze pipeline: a recursive-backtracker maze over a half-resolution
+     * cell grid (odd tile coordinates are rooms, even ones walls), then
+     * dressing — path floors, junction torches, dead-end loot, mobs by
+     * distance from the entrance.
+     */
+    private static final class MazeGeneration {
+        final Level lvl;
+        final Random rng;
+        final int w, h, ts;
+        final int cols, rows;          // maze cells (each = 1 room tile + wall)
+        final int[][] dist;            // BFS distance from the entrance cell
+        final List<int[]> deadEnds = new ArrayList<>(); // {cx, cy}
+
+        MazeGeneration(Level lvl, long seed) {
+            this.lvl = lvl;
+            this.rng = new Random(seed);
+            this.w = lvl.width;
+            this.h = lvl.height;
+            this.ts = lvl.tileSize;
+            this.cols = (w - 1) / 2;
+            this.rows = (h - 1) / 2;
+            this.dist = new int[cols][rows];
+        }
+
+        int id(String key) {
+            Block b = lvl.blocks.get(key);
+            return b != null ? b.id() : 0;
+        }
+
+        int tileX(int cx) { return cx * 2 + 1; }
+        int tileY(int cy) { return cy * 2 + 1; }
+
+        void run() {
+            int wall = id("stone_wall");
+            for (int r = 0; r < h; r++) {
+                for (int c = 0; c < w; c++) lvl.tiles[r][c] = wall;
+            }
+            carve();
+            measureDistances();
+            dress();
+            lvl.background = new Color(14 + rng.nextInt(10), 16 + rng.nextInt(10),
+                    24 + rng.nextInt(12));
+            lvl.spawnX = (tileX(0) + 0.5) * ts - ts / 2.0;
+            lvl.spawnY = (tileY(0) + 0.5) * ts - ts / 2.0;
+        }
+
+        /** Recursive backtracker: carve rooms + the wall between visited pairs. */
+        void carve() {
+            boolean[][] visited = new boolean[cols][rows];
+            java.util.ArrayDeque<int[]> stack = new java.util.ArrayDeque<>();
+            visited[0][0] = true;
+            lvl.tiles[tileY(0)][tileX(0)] = 0;
+            stack.push(new int[]{0, 0});
+            int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            while (!stack.isEmpty()) {
+                int[] cur = stack.peek();
+                List<int[]> open = new ArrayList<>(4);
+                for (int[] d : dirs) {
+                    int nx = cur[0] + d[0], ny = cur[1] + d[1];
+                    if (nx >= 0 && nx < cols && ny >= 0 && ny < rows && !visited[nx][ny]) {
+                        open.add(d);
+                    }
+                }
+                if (open.isEmpty()) {
+                    stack.pop();
+                    continue;
+                }
+                int[] d = open.get(rng.nextInt(open.size()));
+                int nx = cur[0] + d[0], ny = cur[1] + d[1];
+                visited[nx][ny] = true;
+                lvl.tiles[tileY(ny)][tileX(nx)] = 0;
+                lvl.tiles[tileY(cur[1]) + d[1]][tileX(cur[0]) + d[0]] = 0;
+                stack.push(new int[]{nx, ny});
+                // Occasional extra opening turns the perfect maze into loops.
+                if (rng.nextDouble() < 0.04) {
+                    int[] d2 = dirs[rng.nextInt(4)];
+                    int lx = cur[0] + d2[0], ly = cur[1] + d2[1];
+                    if (lx >= 0 && lx < cols && ly >= 0 && ly < rows && visited[lx][ly]) {
+                        lvl.tiles[tileY(cur[1]) + d2[1]][tileX(cur[0]) + d2[0]] = 0;
+                    }
+                }
+            }
+        }
+
+        /** BFS from the entrance; also collects the dead ends for loot. */
+        void measureDistances() {
+            for (int[] col : dist) java.util.Arrays.fill(col, -1);
+            java.util.ArrayDeque<int[]> queue = new java.util.ArrayDeque<>();
+            dist[0][0] = 0;
+            queue.add(new int[]{0, 0});
+            int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+            while (!queue.isEmpty()) {
+                int[] cur = queue.poll();
+                int exits = 0;
+                for (int[] d : dirs) {
+                    int nx = cur[0] + d[0], ny = cur[1] + d[1];
+                    if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
+                    // Connected when the wall tile between the cells is open.
+                    if (lvl.tiles[tileY(cur[1]) + d[1]][tileX(cur[0]) + d[0]] != 0) continue;
+                    exits++;
+                    if (dist[nx][ny] < 0) {
+                        dist[nx][ny] = dist[cur[0]][cur[1]] + 1;
+                        queue.add(new int[]{nx, ny});
+                    }
+                }
+                if (exits == 1 && (cur[0] != 0 || cur[1] != 0)) deadEnds.add(cur);
+            }
+        }
+
+        void dress() {
+            int path = id("stone_path"), torch = id("torch"), chest = id("chest");
+            // Path floors along the corridors (walkable markings, not walls).
+            for (int r = 1; r < h - 1; r++) {
+                for (int c = 1; c < w - 1; c++) {
+                    if (lvl.tiles[r][c] == 0 && rng.nextDouble() < 0.5) {
+                        lvl.tiles[r][c] = path;
+                    }
+                }
+            }
+            // Torches at junction cells so the maze is navigable when lit.
+            for (int cx = 0; cx < cols; cx++) {
+                for (int cy = 0; cy < rows; cy++) {
+                    if (dist[cx][cy] >= 0 && rng.nextDouble() < 0.10) {
+                        lvl.tiles[tileY(cy)][tileX(cx)] = torch;
+                    }
+                }
+            }
+            // The farthest dead end holds the exit chest with the gold key.
+            int[] far = {0, 0};
+            for (int[] de : deadEnds) {
+                if (dist[de[0]][de[1]] > dist[far[0]][far[1]]) far = de;
+            }
+            placeChest(far, new String[]{"gold_key", "golden_apple", "diamond"});
+            // Other dead ends: chests, mobs by depth, the odd trap.
+            String[] loot = {"bread", "apple", "arrow", "health_potion", "rope",
+                    "torch", "iron_sword", "feather_charm"};
+            String[] mobsNear = {"slime", "spider", "goblin"};
+            String[] mobsFar = {"zombie", "skeleton", "mage"};
+            int maxDist = Math.max(1, dist[far[0]][far[1]]);
+            for (int[] de : deadEnds) {
+                if (de == far) continue;
+                double t = dist[de[0]][de[1]] / (double) maxDist;
+                double roll = rng.nextDouble();
+                if (roll < 0.30) {
+                    placeChest(de, new String[]{loot[rng.nextInt(loot.length)],
+                            loot[rng.nextInt(loot.length)]});
+                } else if (roll < 0.55) {
+                    String[] pool = t < 0.5 ? mobsNear : mobsFar;
+                    lvl.entities.add(new Level.EntitySpawn("mob",
+                            pool[rng.nextInt(pool.length)],
+                            (tileX(de[0]) + 0.5) * ts, (tileY(de[1]) + 0.5) * ts));
+                }
+            }
+            // Multiplayer spawns near the three other corners.
+            int[][] corners = {{cols - 1, 0}, {0, rows - 1}, {cols - 1, rows - 1}};
+            for (int[] corner : corners) {
+                lvl.entities.add(new Level.EntitySpawn("mp_spawn", "mp_spawn",
+                        (tileX(corner[0]) + 0.5) * ts, (tileY(corner[1]) + 0.5) * ts));
+            }
+            if (chest == 0) return; // chest block missing: loot cells stay open
+        }
+
+        /** A chest block in the cell, its container pre-filled with the loot. */
+        void placeChest(int[] cell, String[] items) {
+            int tx = tileX(cell[0]), ty = tileY(cell[1]);
+            lvl.tiles[ty][tx] = id("chest");
+            List<com.larsons.engine.entity.ItemStack> box = lvl.openContainer(tx, ty);
+            for (String item : items) {
+                box.add(new com.larsons.engine.entity.ItemStack(item, 1));
+            }
+        }
+    }
+
     /** One generation run; fields keep the pipeline stages readable. */
     private static final class Generation {
         final Level lvl;
@@ -296,7 +503,7 @@ public final class LevelGenerator {
             for (int c = 0; c < w; c++) {
                 double hills = noise.fbm(c * 0.012, 0.7, 4, 0.5, 2.1);
                 double rough = noise.fbm(c * 0.07, 13.4, 3, 0.5, 2.0);
-                int s = (int) (h * 0.32 + hills * h * 0.20 + rough * h * 0.045);
+                int s = (int) (h * 0.32 + hills * hillAmplitude(h) + rough * roughAmplitude(h));
                 surface[c] = Math.max(4, Math.min(h - 14, s));
             }
         }
@@ -570,6 +777,16 @@ public final class LevelGenerator {
                 } else if (roll < 0.36) {
                     lvl.tiles[r - 1][c] = tallGrass;
                 }
+                // Face-attached surface details generate with the terrain:
+                // tufts and wildflowers on grass tops (they hide automatically
+                // if the player builds over them — OPEN_FACE visibility).
+                double detail = rng.nextDouble();
+                if (detail < 0.22) {
+                    lvl.surfaceDecor.add(new com.larsons.engine.world.SurfaceDecor.Placement(
+                            c, r, com.larsons.engine.world.SurfaceDecor.Face.UP,
+                            detail < 0.16 ? "grass_tuft" : "wildflowers", false,
+                            com.larsons.engine.world.SurfaceDecor.Visibility.OPEN_FACE));
+                }
             }
         }
 
@@ -588,6 +805,18 @@ public final class LevelGenerator {
                                 rng.nextBoolean() ? "stalagmite" : "glow_crystal",
                                 (c + 0.5) * ts, (r + 1) * (double) ts));
                     }
+                    // Cave-ceiling details on the block above an air pocket.
+                    if (r > 0 && lvl.solidAt(c, r - 1) && rng.nextDouble() < 0.06) {
+                        String key = switch (rng.nextInt(3)) {
+                            case 0 -> "hanging_moss";
+                            case 1 -> "dripstone";
+                            default -> "roots";
+                        };
+                        lvl.surfaceDecor.add(new com.larsons.engine.world.SurfaceDecor.Placement(
+                                c, r - 1, com.larsons.engine.world.SurfaceDecor.Face.DOWN,
+                                key, false,
+                                com.larsons.engine.world.SurfaceDecor.Visibility.OPEN_FACE));
+                    }
                 }
             }
         }
@@ -595,7 +824,8 @@ public final class LevelGenerator {
         void placeTreasure() {
             String[] shallow = {"bread", "apple", "rope", "arrow", "rock"};
             String[] mid = {"health_potion", "wooden_bow", "iron_sword", "cheese", "arrow"};
-            String[] deep = {"gold_key", "diamond", "steel_sword", "scroll", "golden_apple"};
+            String[] deep = {"gold_key", "diamond", "steel_sword", "scroll", "golden_apple",
+                    "feather_charm", "sky_totem"};
             for (int[] room : roomCenters) {
                 if (rng.nextDouble() > 0.35) continue;
                 double t = room[1] / (double) h;

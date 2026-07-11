@@ -63,7 +63,16 @@ public class GameProfile {
     // The level last saved/played in this game type ("" = bundled sample).
     public String lastLevelPath = "";
 
-    // Sizes of various entities (world pixels).
+    /**
+     * The creator's texture pack folder ("" = none): sprite-sheet browsing in
+     * the creative editor's texture dialog starts here, and bare sheet
+     * filenames resolve against it.
+     */
+    public String texturePackDir = "";
+
+    // Sizes of various entities (world pixels). The player is always exactly
+    // one block (1x1 tiles) so it fits one-tile gaps — normalize() keeps
+    // playerSize locked to tileSize.
     public int tileSize = 32;
     public int playerSize = 32;
     public int defaultEntitySize = 32;
@@ -116,6 +125,7 @@ public class GameProfile {
         m.put("particlesEnabled", particlesEnabled);
         m.put("audioEnabled", audioEnabled);
         m.put("lastLevelPath", lastLevelPath);
+        m.put("texturePackDir", texturePackDir);
         m.put("tileSize", tileSize);
         m.put("playerSize", playerSize);
         m.put("defaultEntitySize", defaultEntitySize);
@@ -169,6 +179,7 @@ public class GameProfile {
         p.particlesEnabled = bool(m, "particlesEnabled", p.particlesEnabled);
         p.audioEnabled = bool(m, "audioEnabled", p.audioEnabled);
         p.lastLevelPath = str(m, "lastLevelPath", p.lastLevelPath);
+        p.texturePackDir = str(m, "texturePackDir", p.texturePackDir);
         p.tileSize = intg(m, "tileSize", p.tileSize);
         p.playerSize = intg(m, "playerSize", p.playerSize);
         p.defaultEntitySize = intg(m, "defaultEntitySize", p.defaultEntitySize);
@@ -193,13 +204,14 @@ public class GameProfile {
         minFps = Math.max(1, minFps);
         maxFps = Math.max(1, maxFps);
         tileSize = Math.max(1, tileSize);
-        playerSize = Math.max(1, playerSize);
+        playerSize = tileSize; // the player is exactly one block, 1x1 tiles
         defaultEntitySize = Math.max(1, defaultEntitySize);
         shaderStrength = Math.max(0.0, Math.min(1.0, shaderStrength));
         shaderPixelSize = Math.max(1, Math.min(64, shaderPixelSize));
         nightDarkness = Math.max(0.0, Math.min(1.0, nightDarkness));
         ambientLight = Math.max(0.0, Math.min(1.0, ambientLight));
         if (lastLevelPath == null) lastLevelPath = "";
+        if (texturePackDir == null) texturePackDir = "";
     }
 
     private static String str(Map<String, Object> m, String k, String def) {

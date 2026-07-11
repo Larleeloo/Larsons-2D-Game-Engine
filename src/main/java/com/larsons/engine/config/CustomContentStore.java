@@ -146,6 +146,59 @@ public final class CustomContentStore {
         save();
     }
 
+    // --- identification & deletion of user-created content --------------------------
+
+    /**
+     * Whether the object with this key, in this palette kind ({@code "block"},
+     * {@code "mob"}, {@code "item"}, {@code "decor"}), was created by the user
+     * — the editor badges these and offers deletion.
+     */
+    public boolean isCustom(String kind, String key) {
+        List<Map<String, Object>> section = sectionFor(kind);
+        if (section == null || key == null) return false;
+        for (Map<String, Object> m : section) {
+            if (key.equals(m.get("key"))) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Delete a user-created object: removed from {@code custom.json} and
+     * unregistered live. Levels that still reference it degrade gracefully
+     * (blocks render the magenta placeholder, spawns are skipped).
+     */
+    public boolean remove(String kind, String key) {
+        List<Map<String, Object>> section = sectionFor(kind);
+        if (section == null || key == null) return false;
+        boolean removed = section.removeIf(m -> key.equals(m.get("key")));
+        if (!removed) return false;
+        switch (kind) {
+            case "mob" -> MobRegistry.standard().unregister(key);
+            case "item" -> ItemRegistry.standard().unregister(key);
+            case "decor" -> DecorRegistry.standard().unregister(key);
+            default -> {
+                Block b = BlockRegistry.standard().get(key);
+                BlockRegistry.standard().unregister(key);
+                if (b != null && b.liquid()) {
+                    BlockRegistry.standard().unregister(key + "_flow");
+                }
+                ItemRegistry.standard().unregister(key); // its placeable item
+            }
+        }
+        save();
+        return true;
+    }
+
+    private List<Map<String, Object>> sectionFor(String kind) {
+        return switch (kind) {
+            case "block" -> blocks;
+            case "mob" -> mobs;
+            case "item" -> items;
+            case "decor" -> decor;
+            default -> null;
+        };
+    }
+
     // --- registration into the shared registries ---------------------------------
 
     private static void registerBlock(Block b) {
@@ -219,6 +272,7 @@ public final class CustomContentStore {
         m.put("damage", b.damage());
         m.put("hardness", b.hardness());
         if (b.tool() != null) m.put("tool", b.tool());
+        if (b.falling()) m.put("falling", true);
         return m;
     }
 
@@ -231,7 +285,8 @@ public final class CustomContentStore {
                     dbl(m.get("lightRadius"), 0), color(m.get("lightColor"), Color.WHITE),
                     m.get("drops") instanceof String s ? s : null,
                     Boolean.TRUE.equals(m.get("liquid")), dbl(m.get("damage"), 0),
-                    dbl(m.get("hardness"), 1), m.get("tool") instanceof String t ? t : null);
+                    dbl(m.get("hardness"), 1), m.get("tool") instanceof String t ? t : null,
+                    Boolean.TRUE.equals(m.get("falling")));
         } catch (RuntimeException e) {
             System.err.println("CustomContentStore: bad block entry: " + e.getMessage());
             return null;
@@ -284,18 +339,22 @@ public final class CustomContentStore {
             m.put("toolClass", d.toolClass());
             m.put("toolPower", d.toolPower());
         }
+        if (d.maxDurability() > 0) m.put("maxDurability", d.maxDurability());
         return m;
     }
 
     private static ItemDef itemFrom(Map<String, Object> m) {
         try {
+            String toolClass = m.get("toolClass") instanceof String t ? t : null;
+            double toolPower = dbl(m.get("toolPower"), 0);
+            int durability = num(m.get("maxDurability"),
+                    toolClass != null ? (int) Math.round(toolPower * 80) : 0);
             return new ItemDef(str(m.get("key")), str(m.get("name")),
                     ItemDef.Category.valueOf(str(m.get("category"))),
                     ItemDef.Rarity.valueOf(str(m.get("rarity"))),
                     color(m.get("color"), Color.GRAY), num(m.get("maxStack"), 64),
                     dbl(m.get("damage"), 0), dbl(m.get("heal"), 0), null, null, null,
-                    m.get("toolClass") instanceof String t ? t : null,
-                    dbl(m.get("toolPower"), 0));
+                    toolClass, toolPower, durability);
         } catch (RuntimeException e) {
             System.err.println("CustomContentStore: bad item entry: " + e.getMessage());
             return null;

@@ -7,6 +7,11 @@ package com.larsons.engine.entity;
 public final class ItemStack {
     public final String key;
     public int count;
+    /**
+     * Wear accumulated on this stack (tools only): one point per block broken.
+     * At {@link ItemDef#maxDurability()} the item breaks completely.
+     */
+    public int wear;
 
     public ItemStack(String key, int count) {
         this.key = key;

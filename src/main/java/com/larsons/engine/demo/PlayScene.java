@@ -45,6 +45,7 @@ import com.larsons.engine.sim.PlayerState;
 import com.larsons.engine.sim.PlayerStats;
 import com.larsons.engine.sim.StatRuleEngine;
 import com.larsons.engine.ui.ConfigForm;
+import com.larsons.engine.ui.ContainerPanel;
 import com.larsons.engine.ui.CraftingPanel;
 import com.larsons.engine.ui.MenuTheme;
 import com.larsons.engine.world.Block;
@@ -140,6 +141,7 @@ public class PlayScene extends AbstractScene {
     private PlayerStats stats;
     private StatRuleEngine ruleEngine;
     private CraftingPanel craftingPanel; // non-null while a station UI is open
+    private ContainerPanel containerPanel; // non-null while a chest/barrel is open
     private String ruleStatus = "";
     private double ruleStatusTime;
     private double animClock;      // drives skinned (sprite-sheet) textures
@@ -178,6 +180,7 @@ public class PlayScene extends AbstractScene {
         new CustomContentStore(profile().name).loadAndRegister();
         stats = new PlayerStats();
         craftingPanel = null;
+        containerPanel = null;
         ruleStatus = "";
         ruleStatusTime = 0;
 
@@ -203,7 +206,10 @@ public class PlayScene extends AbstractScene {
         invSyncVersion = -1;
 
         GameProfile p = profile();
-        camera = new Camera(p.perspective, viewportWidth, viewportHeight);
+        // Offline, the camera opens in the level's own perspective (each
+        // level remembers whether it's a side-scroller, top-down, or
+        // isometric world); online the profile rules so everyone matches.
+        camera = new Camera(basePerspective(), viewportWidth, viewportHeight);
         camera.tileSize = level.tileSize;
         camera.zoom = p.defaultZoom;
 
@@ -252,6 +258,8 @@ public class PlayScene extends AbstractScene {
         if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
             if (craftingPanel != null) {
                 craftingPanel = null;
+            } else if (containerPanel != null) {
+                containerPanel = null;
             } else if (showInventory) {
                 showInventory = false;
             } else {
@@ -273,10 +281,14 @@ public class PlayScene extends AbstractScene {
         if (net == null && !showInventory && input.isKeyJustPressed(KeyEvent.VK_E)) {
             if (craftingPanel != null) {
                 craftingPanel = null;
+            } else if (containerPanel != null) {
+                containerPanel = null;
             } else if (!tryDoorTravel(p)) {
                 tryOpenStation(p);
             }
         }
+        // A mined-away chest closes its panel.
+        if (containerPanel != null && !containerPanel.valid()) containerPanel = null;
 
         if (p.perspectiveSwitchingEnabled && input.isKeyJustPressed(KeyEvent.VK_P)) {
             camera.setPerspective(camera.getPerspective().next());
@@ -288,6 +300,10 @@ public class PlayScene extends AbstractScene {
 
         if (craftingPanel != null) {
             updateCrafting(input);
+        } else if (containerPanel != null) {
+            if (containerPanel.update(input, inventory, viewportWidth, viewportHeight)) {
+                ctx.sfx(Sfx.CLICK);
+            }
         } else {
             updateInventoryControls(input, p);
         }
@@ -299,10 +315,15 @@ public class PlayScene extends AbstractScene {
                 input.isKeyDown(KeyEvent.VK_S) || input.isKeyDown(KeyEvent.VK_DOWN),
                 ++inputSeq);
         in.sprint = input.isKeyDown(KeyEvent.VK_SHIFT);
+        // Fresh presses drive mid-air jumps (double jump and beyond).
+        in.jump = input.isKeyJustPressed(KeyEvent.VK_W)
+                || input.isKeyJustPressed(KeyEvent.VK_UP)
+                || input.isKeyJustPressed(KeyEvent.VK_SPACE);
         // The server resolves attacks against what this player holds.
         in.selected = inventory.selectedIndex();
+        me.bonusAirJumps = p.itemsEnabled ? inventory.airJumpBonus() : 0;
 
-        if (!showInventory && craftingPanel == null) {
+        if (!showInventory && craftingPanel == null && containerPanel == null) {
             handleMouseActions(input, p, in, dt);
         } else if (world != null) {
             world.cancelMining();
@@ -394,7 +415,7 @@ public class PlayScene extends AbstractScene {
         return true;
     }
 
-    /** Standing near a crafting table / alchemy station, E opens its panel. */
+    /** Standing near a crafting table / alchemy station / chest, E opens its panel. */
     private void tryOpenStation(GameProfile p) {
         double ts = ts();
         int pc = (int) Math.floor((me.x + p.playerSize / 2.0) / ts);
@@ -410,6 +431,14 @@ public class PlayScene extends AbstractScene {
                 };
                 if (station != null) {
                     craftingPanel = new CraftingPanel(station, RecipeRegistry.standard(),
+                            world != null ? world.itemTypes : ItemRegistry.standard());
+                    ctx.sfx(Sfx.CLICK);
+                    return;
+                }
+                if (b.container() && p.itemsEnabled) {
+                    // The chest/barrel's second inventory, stored in the level.
+                    containerPanel = new ContainerPanel(level, pc + dc, pr + dr,
+                            b.displayName(),
                             world != null ? world.itemTypes : ItemRegistry.standard());
                     ctx.sfx(Sfx.CLICK);
                     return;
@@ -487,7 +516,9 @@ public class PlayScene extends AbstractScene {
                 me.mana = Math.min(PlayerState.MAX_MANA, me.mana + 50);
                 ctx.sfx(Sfx.EAT);
             } else if (edible && inventory.consumeSelected()) {
-                me.health = Math.min(PlayerState.MAX_HEALTH, me.health + def.heal());
+                // Food heals directly, restores stamina alongside, and rare
+                // delicacies also restore mana (World.applyFood).
+                World.applyFood(me, def);
                 prevHealth = me.health; // don't play the hurt sound on heals
                 ctx.sfx(Sfx.EAT);
             }
@@ -600,6 +631,7 @@ public class PlayScene extends AbstractScene {
                     if (p.particlesEnabled) {
                         particles.burst((col + 0.5) * ts, (row + 0.5) * ts, mined.color(), 10);
                     }
+                    wearHeldTool(held);
                 }
             }
         } else if (net == null && world != null) {
@@ -612,6 +644,9 @@ public class PlayScene extends AbstractScene {
             } else if (net != null && p.blockEditingEnabled && inReach
                     && level.tileAt(col, row) > 0) {
                 net.client().sendBlockEdit(col, row, 0, "play");
+            } else if (!miningNow && net == null && inReach
+                    && tryChopDecor(aim[0], aim[1], held, p)) {
+                // harvested (or chipped at) a destructible decoration
             } else if (!miningNow && p.combatEnabled) {
                 swingAt(aim[0], aim[1], in, p);
             }
@@ -621,6 +656,31 @@ public class PlayScene extends AbstractScene {
         }
     }
 
+    /** Wear the held tool one point on a finished block; report a break. */
+    private void wearHeldTool(ItemDef held) {
+        if (held == null || held.toolClass() == null || !profile().itemsEnabled) return;
+        if (inventory.damageSelected(1)) {
+            ctx.sfx(Sfx.BREAK);
+            ruleStatus = held.name() + " broke!";
+            ruleStatusTime = 2.5;
+        }
+    }
+
+    /** Swing at a destructible decoration (trees → logs + leaves…). */
+    private boolean tryChopDecor(double aimX, double aimY, ItemDef held, GameProfile p) {
+        if (world == null) return false;
+        boolean axe = held != null && "axe".equals(held.toolClass());
+        World.ChopResult res = world.chopDecor(aimX, aimY, axe, p.itemsEnabled);
+        if (res == World.ChopResult.NONE) return false;
+        swingTime = 0.2;
+        ctx.sfx(res == World.ChopResult.BROKEN ? Sfx.BREAK : Sfx.HIT);
+        if (p.particlesEnabled) {
+            particles.burst(aimX, aimY, new Color(110, 85, 50),
+                    res == World.ChopResult.BROKEN ? 14 : 5);
+        }
+        return true;
+    }
+
     private void placeAt(int col, int row, GameProfile p) {
         ItemDef def = p.itemsEnabled ? inventory.selectedDef() : null;
         if (p.itemsEnabled && (def == null || def.category() != ItemDef.Category.BLOCK)) {
@@ -628,7 +688,11 @@ public class PlayScene extends AbstractScene {
         }
         String blockKey = def != null ? def.blockKey() : "dirt";
         Block b = level.blocks.get(blockKey);
-        if (b == null || level.tileAt(col, row) != 0) return;
+        // Empty cells and liquid cells accept placement — covering water with
+        // a block is how pools are removed, since liquids can't be mined.
+        if (b == null || (level.tileAt(col, row) != 0 && level.liquidAt(col, row) == null)) {
+            return;
+        }
         // Don't wall yourself in.
         double ts = ts();
         double size = ps();
@@ -824,6 +888,9 @@ public class PlayScene extends AbstractScene {
         if (showInventory) drawInventory(g);
         if (craftingPanel != null) {
             craftingPanel.render(g, viewportWidth, viewportHeight, inventory, animClock);
+        }
+        if (containerPanel != null) {
+            containerPanel.render(g, viewportWidth, viewportHeight, animClock);
         }
 
         if (paused) drawPauseOverlay(g);
@@ -1080,8 +1147,17 @@ public class PlayScene extends AbstractScene {
 
     // --- profile-driven constraints ---
 
+    /**
+     * The perspective this session simulates and renders in by default:
+     * offline it's the loaded level's own perspective, online the profile's
+     * (physics must match the server's view of the world).
+     */
+    private Perspective basePerspective() {
+        return net == null ? level.perspective : profile().perspective;
+    }
+
     private void enforceProfileConstraints(GameProfile p) {
-        if (!p.perspectiveSwitchingEnabled) camera.setPerspective(p.perspective);
+        if (!p.perspectiveSwitchingEnabled) camera.setPerspective(basePerspective());
         camera.zoom = p.zoomEnabled ? clampZoom(camera.zoom, p) : clampZoom(p.defaultZoom, p);
         // Player sprite tracks the configured size.
         if (walkAnim == null || walkAnim.frameCount() == 0) rebuildSprite();
@@ -1090,7 +1166,7 @@ public class PlayScene extends AbstractScene {
     private void syncCameraFromProfile() {
         GameProfile p = profile();
         camera.tileSize = level.tileSize;
-        if (!p.perspectiveSwitchingEnabled) camera.setPerspective(p.perspective);
+        if (!p.perspectiveSwitchingEnabled) camera.setPerspective(basePerspective());
         camera.zoom = clampZoom(p.zoomEnabled ? camera.zoom : p.defaultZoom, p);
         rebuildSprite();
     }
@@ -1146,14 +1222,13 @@ public class PlayScene extends AbstractScene {
                 camera.worldToScreen(wx, wy + ts, corner);
                 xs[3] = corner[0]; ys[3] = corner[1];
 
-                // Sprite-sheet texture override, when one is assigned.
-                if (flat && block != null) {
+                // Sprite-sheet texture override, when one is assigned —
+                // isometric view warps the same texture into the tile diamond.
+                if (block != null) {
                     BufferedImage skin = tileSkinFor(id, block);
                     if (skin != null) {
-                        int x = Math.min(xs[0], xs[2]);
-                        int y = Math.min(ys[0], ys[2]);
-                        g.drawImage(skin, x, y, Math.abs(xs[2] - xs[0]) + 1,
-                                Math.abs(ys[2] - ys[0]) + 1, null);
+                        com.larsons.engine.graphics.TilePainter.drawTexture(
+                                g, skin, xs, ys, flat);
                         continue;
                     }
                 }
@@ -1350,12 +1425,21 @@ public class PlayScene extends AbstractScene {
         if (img == null) img = EntitySprites.item(def, 16);
         int w = Math.max(6, (int) Math.round(DroppedItem.SIZE * camera.zoom));
         camera.worldToScreen(x, y, corner);
-        drawRarityHalo(g, def, corner[0] + w / 2, corner[1] + w / 2, w);
-        g.drawImage(img, corner[0], corner[1], w, w, null);
+        int dy = 0;
+        if (camera.getPerspective() != Perspective.SIDE_SCROLL) {
+            // Top-down / isometric drops hover with a bob over a soft shadow
+            // (side-scroll drops bounce physically instead).
+            dy = (int) Math.round(Math.sin(animClock * 3 + (x + y) * 0.05) * w * 0.18
+                    - w * 0.25);
+            g.setColor(new Color(0, 0, 0, 70));
+            g.fillOval(corner[0], corner[1] + w - w / 4, w, w / 2);
+        }
+        drawRarityHalo(g, def, corner[0] + w / 2, corner[1] + dy + w / 2, w);
+        g.drawImage(img, corner[0], corner[1] + dy, w, w, null);
         if (count > 1) {
             g.setFont(SMALL_FONT);
             g.setColor(Color.WHITE);
-            g.drawString("x" + count, corner[0] + w, corner[1] + w);
+            g.drawString("x" + count, corner[0] + w, corner[1] + dy + w);
         }
     }
 
@@ -1505,6 +1589,19 @@ public class PlayScene extends AbstractScene {
             g.setFont(SMALL_FONT);
             g.drawString(String.valueOf(i + 1), x + 4, y0 + 12);
         }
+        drawSelectedItemName(g, inventory.selectedDef(), y0);
+    }
+
+    /** The selected hotbar item's name, floated above the bar in its rarity colour. */
+    private void drawSelectedItemName(Graphics2D g, ItemDef def, int hotbarTop) {
+        if (def == null) return;
+        g.setFont(HUD_FONT);
+        int tw = g.getFontMetrics().stringWidth(def.name());
+        int x = (viewportWidth - tw) / 2, y = hotbarTop - 10;
+        g.setColor(new Color(0, 0, 0, 160));
+        g.fillRoundRect(x - 8, y - 14, tw + 16, 20, 8, 8);
+        g.setColor(def.rarity().color);
+        g.drawString(def.name(), x, y);
     }
 
     // Inventory panel geometry, shared by rendering and mouse hit-testing.
@@ -1586,6 +1683,7 @@ public class PlayScene extends AbstractScene {
         BufferedImage img = Skins.frame("item/" + stack.key, animClock);
         if (img == null) img = EntitySprites.item(def, 32);
         g.drawImage(img, x + 6, y + 6, slot - 12, slot - 12, null);
+        drawDurabilityBar(g, def, stack, x, y, slot);
         if (stack.count > 1) {
             g.setFont(SMALL_FONT);
             g.setColor(Color.BLACK);
@@ -1595,6 +1693,17 @@ public class PlayScene extends AbstractScene {
             g.setColor(Color.WHITE);
             g.drawString(n, x + slot - tw - 4, y + slot - 4);
         }
+    }
+
+    /** Green-to-red wear bar under a worn tool's icon. */
+    static void drawDurabilityBar(Graphics2D g, ItemDef def, ItemStack stack,
+                                  int x, int y, int slot) {
+        if (def.maxDurability() <= 0 || stack.wear <= 0) return;
+        double t = 1.0 - stack.wear / (double) def.maxDurability();
+        g.setColor(new Color(0, 0, 0, 170));
+        g.fillRect(x + 6, y + slot - 8, slot - 12, 4);
+        g.setColor(new Color((int) (220 * (1 - t) + 60 * t), (int) (60 * (1 - t) + 210 * t), 50));
+        g.fillRect(x + 6, y + slot - 8, (int) ((slot - 12) * Math.max(0, t)), 4);
     }
 
     /** Server chat-style event feed ("X joined"), bottom-left. */

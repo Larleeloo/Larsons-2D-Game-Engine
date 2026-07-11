@@ -155,6 +155,39 @@ public final class Inventory {
         return n;
     }
 
+    /**
+     * Wear the selected item by {@code amount} (a tool finishing a block).
+     * Returns {@code true} when this breaks it completely — the stack is
+     * removed and the caller plays the feedback. Items without a
+     * {@link ItemDef#maxDurability()} never wear.
+     */
+    public boolean damageSelected(int amount) {
+        ItemStack s = slots[selected];
+        ItemDef def = s == null ? null : registry.get(s.key);
+        if (def == null || def.maxDurability() <= 0) return false;
+        s.wear += amount;
+        if (s.wear < def.maxDurability()) return false;
+        if (--s.count <= 0) {
+            slots[selected] = null;
+        } else {
+            s.wear = 0; // next one off the stack is fresh
+        }
+        return true;
+    }
+
+    /**
+     * Extra mid-air jumps granted by special items being carried: the double
+     * jump is always active, a Feather Charm adds a third, a Sky Totem two
+     * more, and Wings of Icarus jump forever.
+     */
+    public int airJumpBonus() {
+        if (totalOf("wings_of_icarus") > 0) return 1_000_000; // effectively infinite
+        int bonus = 0;
+        if (totalOf("feather_charm") > 0) bonus += 1;
+        if (totalOf("sky_totem") > 0) bonus += 2;
+        return bonus;
+    }
+
     public void clear() {
         for (int i = 0; i < SIZE; i++) slots[i] = null;
     }
@@ -170,6 +203,7 @@ public final class Inventory {
             m.put("i", i);
             m.put("k", s.key);
             m.put("n", s.count);
+            if (s.wear > 0) m.put("d", s.wear); // tool wear, absent when fresh
             list.add(m);
         }
         return list;
@@ -186,6 +220,7 @@ public final class Inventory {
             int count = m.get("n") instanceof Number n ? n.intValue() : 0;
             if (i >= 0 && i < SIZE && registry.get(key) != null && count > 0) {
                 slots[i] = new ItemStack(registry.get(key).key(), count);
+                if (m.get("d") instanceof Number d) slots[i].wear = d.intValue();
             }
         }
     }

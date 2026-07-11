@@ -519,7 +519,12 @@ everything the registries know, in categories —
 | Decor    | trees, rocks, bushes, crystals… painted into the background or foreground layer |
 | Surface  | per-face block details (grass tufts, hanging moss, twigs, icicles, cobwebs…) with face / open-closed / layer toggles |
 | Doors    | the game type's door list (external `doors.json`), each linking to another level |
-| Tools    | player spawn, multiplayer spawn points, eraser, the Generate button, the Stat Rules editor |
+| Tools    | player spawn, multiplayer spawn points, eraser, Brush Settings, the Generate button, the Stat Rules editor |
+
+Objects **you** created (via the "+" entries) wear a green corner badge in
+the palette and say "· custom" in the caption, so they're obvious at a
+glance — right-click one and the dialog offers **DELETE this custom
+object** alongside its texture settings.
 
 Every creatable category **leads with a "+" entry** — click it to define a
 brand-new block/liquid/light/mob/item/decoration with fully customizable
@@ -562,7 +567,11 @@ generated world builds its terrain chunk-by-chunk as you pan over it.
 **Brushes.** The Brush row above the size sliders picks a stroke shape
 (square, circle, diamond, horizontal/vertical line, spray) and size (1-12
 tiles, also `[` / `]`): one drag paints — or right-click erases — the whole
-footprint, with a live preview under the cursor.
+footprint, with a live preview under the cursor. **Brush Settings…** (Tools
+palette) opens the full brush window: shape, size, and a **multi-block
+mix** — name up to three extra block keys and every stroke scatters them
+stably alongside the selected block, so one drag lays down varied terrain
+(stone + granite + gravel, say) instead of a flat fill.
 
 **Liquids flow.**
 [`LiquidSim`](src/main/java/com/larsons/engine/world/LiquidSim.java) makes
@@ -599,6 +608,18 @@ lakes and a bottom lava ocean — fused with a Metroidvania network of carved
 rooms and corridors (union-find guarantees everything connects, platform
 ladders make vertical runs climbable), plus torches, decorations, treasure,
 mobs, and multiplayer spawns. Same seed + size ⇒ the identical level.
+Hill amplitude is capped in absolute tiles, so terrain rolls smoothly at
+**any** map size instead of spiking into unclimbable mountains on tall
+maps, and surface details (grass tufts, wildflowers, hanging moss,
+dripstone) generate with the terrain automatically.
+
+The Generate dialog also has a **Mode** switch: *Perlin terrain*, or
+**Maze** — the automatic generator for top-down / isometric levels (it
+defaults to Maze for those perspectives). A seeded recursive-backtracker
+maze is built from solid walls and walkable path floors, dressed with
+torches at junctions, loot chests and mobs in the dead ends, multiplayer
+spawns in the corners, and the gold key waiting in a chest at the cell
+farthest from the entrance.
 
 **Surface details** (Surface palette) attach to the face of an existing
 block — click near the face you want (or pin one with the Face toggle).
@@ -635,6 +656,61 @@ last saved level — *Play Level* and *Host Server* then run it.
 validates them against the host's feature toggles, and the authoritative
 results broadcast to every player in real time (other players are visible
 while you paint). Save/load/test stay offline-only features.
+
+---
+
+## Movement, worlds & storage updates
+
+A batch of gameplay and editor refinements layered onto the systems above:
+
+- **Double jump, always** — one mid-air jump is built into
+  [`PlayerPhysics`](src/main/java/com/larsons/engine/sim/PlayerPhysics.java);
+  carrying a *Feather Charm* unlocks the triple, a *Sky Totem* two more, and
+  the mythic *Wings of Icarus* jump forever (generated treasure rooms hide
+  them). Swimmers now get a **water-exit jump**: stroking up with your head
+  at the surface converts into a real jump that clears the pool's lip, and
+  resting on the level's bottom edge counts as ground (both were traps that
+  locked movement before).
+- **The player is exactly 1×1 blocks** — `playerSize` locks to `tileSize`,
+  so the player fits perfectly through one-tile gaps in every game type.
+- **Perspective-aware worlds** — every level remembers whether it's a
+  side-scroller, top-down, or isometric world; the creative editor, its
+  play-test, and Play all follow the level (the *New Level* dialog picks the
+  perspective). Blocks paint the same everywhere but obstruct per
+  perspective; top-down/iso get **path** and **wall** block families; mobs
+  run perspective-specific AI (platform walkers with jump smarts in
+  side-scroll, full-plane wander/chase/flee in top-down/iso); dropped items
+  arc-and-bounce under gravity or scatter-and-hover with a shadow on the
+  plane; and sprite-sheet block textures now warp correctly into the
+  isometric diamond instead of falling back to flat colours.
+- **Chests & barrels are real storage** — stand next to one and press `E`:
+  its second inventory opens ([`ContainerPanel`](src/main/java/com/larsons/engine/ui/ContainerPanel.java)),
+  and the contents **save inside the level data** (`containers` in the level
+  JSON). Mining the block spills what it held.
+- **Tool durability** — tools carry a wear budget (`ItemDef.maxDurability`)
+  and break completely when it runs out, with a green-to-red wear bar under
+  the icon; the hotbar also names the selected item, and hovering a recipe
+  at a crafting/alchemy station shows it in plain text
+  ("2× Planks + 1× Stick → 4× Platform").
+- **Food that feeds** — eating restores health directly, stamina alongside,
+  and rare-or-better delicacies restore mana too (same rule offline and on
+  the server).
+- **Sand & gravel fall** — unsupported granular blocks drop cell-by-cell
+  (custom blocks opt in with the "+ New Block" form's *falls* toggle), and
+  **water can't be mined** — cover it with a block to displace it. Glass is
+  now a solid, genuinely transparent pane.
+- **Destructible decorations** — trees, rocks, bushes and such carry an
+  optional hitbox: a few swings (an axe chops double) break them down into
+  resources — logs + leaves for trees, stone for rocks…
+- **Bigger mobs can actually reach you** — attack/detect ranges measure from
+  the mob's body edge, not its top-left corner.
+- **Softer feedback** — the hit/hurt effects are gentle sine thuds instead
+  of the old alarming square-wave shrieks.
+- **Texture pack folder** — set one per game type in the texture dialog:
+  *Browse…* starts there and bare sheet filenames resolve against it. Surface
+  details (grass, spikes…) are sprite-sheet skinnable like everything else
+  (`surface/<key>`), and the stat-rule editor's reward/consume fields grow
+  **look-up cyclers** over the whole item catalog so nobody memorizes keys.
 
 ---
 
@@ -1131,6 +1207,7 @@ engine.scenes().setScene("mine"); // or transitionTo for a fade
 [`NetWorldSyncTest`](src/test/java/com/larsons/engine/NetWorldSyncTest.java),
 [`NetProjectileInventoryTest`](src/test/java/com/larsons/engine/NetProjectileInventoryTest.java),
 [`AutoBattlerTest`](src/test/java/com/larsons/engine/autobattler/AutoBattlerTest.java),
+[`MechanicsFixesTest`](src/test/java/com/larsons/engine/MechanicsFixesTest.java),
 [`AutoBattlerNetTest`](src/test/java/com/larsons/engine/autobattler/AutoBattlerNetTest.java),
 [`AutoBattlerSceneTest`](src/test/java/com/larsons/engine/AutoBattlerSceneTest.java),
 [`EngineFeatureTest`](src/test/java/com/larsons/engine/EngineFeatureTest.java))

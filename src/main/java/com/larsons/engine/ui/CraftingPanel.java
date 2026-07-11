@@ -39,6 +39,9 @@ public final class CraftingPanel {
     private final List<Recipe> recipes;
     private final ItemRegistry items;
     private int scroll;
+    // Hovered recipe (for the plain-text tooltip), sampled in update().
+    private int hoverIdx = -1;
+    private int hoverX, hoverY;
 
     public CraftingPanel(String station, RecipeRegistry registry, ItemRegistry items) {
         this.station = station;
@@ -64,16 +67,39 @@ public final class CraftingPanel {
         if (wheel != 0) {
             scroll = Math.max(0, Math.min(maxScroll(vh), scroll + wheel));
         }
-        if (!input.isMouseJustPressed()) return null;
         int mx = input.getMouseX(), my = input.getMouseY();
         int x0 = (vw - PANEL_W) / 2;
         int listTop = listTop(vh);
-        if (mx < x0 || mx > x0 + PANEL_W) return null;
-        int idx = scroll + (my - listTop) / ROW_H;
-        if (my < listTop || idx < 0 || idx >= recipes.size()) return null;
-        Recipe recipe = recipes.get(idx);
+        // Track the hovered row every frame; render() shows its plain-text
+        // recipe tooltip.
+        hoverIdx = -1;
+        hoverX = mx;
+        hoverY = my;
+        if (mx >= x0 && mx <= x0 + PANEL_W && my >= listTop) {
+            int idx = scroll + (my - listTop) / ROW_H;
+            if (idx >= 0 && idx < recipes.size()
+                    && idx < scroll + visibleRows(vh)) {
+                hoverIdx = idx;
+            }
+        }
+        if (!input.isMouseJustPressed() || hoverIdx < 0) return null;
+        Recipe recipe = recipes.get(hoverIdx);
         int leftover = recipe.craft(inv);
         return leftover < 0 ? null : new Crafted(recipe, leftover);
+    }
+
+    /** "2× Planks + 1× Stick → 4× Platform" — the hovered recipe in plain text. */
+    private String recipeText(Recipe r) {
+        StringBuilder sb = new StringBuilder();
+        for (Recipe.Ingredient in : r.inputs()) {
+            if (sb.length() > 0) sb.append(" + ");
+            ItemDef def = items.get(in.key());
+            sb.append(in.count()).append("× ").append(def != null ? def.name() : in.key());
+        }
+        ItemDef out = items.get(r.output());
+        sb.append(" → ").append(r.outputCount()).append("× ")
+                .append(out != null ? out.name() : r.output());
+        return sb.toString();
     }
 
     private int panelTop(int vh) {
@@ -129,6 +155,28 @@ public final class CraftingPanel {
             g.drawString((scroll + 1) + "-" + Math.min(recipes.size(), scroll + rows)
                     + " / " + recipes.size(), x0 + PANEL_W - 60, y0 + 14);
         }
+        drawHoverTooltip(g, vw, inv);
+    }
+
+    /** The plain-text recipe of the hovered row, in a tooltip by the cursor. */
+    private void drawHoverTooltip(Graphics2D g, int vw, Inventory inv) {
+        if (hoverIdx < 0 || hoverIdx >= recipes.size()) return;
+        Recipe r = recipes.get(hoverIdx);
+        String text = recipeText(r);
+        String status = r.canCraft(inv) ? "Click to craft" : "Missing ingredients";
+        g.setFont(ROW_FONT);
+        int tw = Math.max(g.getFontMetrics().stringWidth(text),
+                g.getFontMetrics().stringWidth(status));
+        int tx = Math.max(8, Math.min(vw - tw - 24, hoverX + 16));
+        int ty = hoverY - 44;
+        g.setColor(new Color(6, 6, 12, 235));
+        g.fillRoundRect(tx - 8, ty - 16, tw + 16, 42, 8, 8);
+        g.setColor(new Color(255, 255, 255, 60));
+        g.drawRoundRect(tx - 8, ty - 16, tw + 16, 42, 8, 8);
+        g.setColor(Color.WHITE);
+        g.drawString(text, tx, ty);
+        g.setColor(r.canCraft(inv) ? new Color(150, 220, 150) : new Color(230, 130, 130));
+        g.drawString(status, tx, ty + 18);
     }
 
     private void drawRow(Graphics2D g, Recipe r, Inventory inv, int x, int y, double animClock) {
