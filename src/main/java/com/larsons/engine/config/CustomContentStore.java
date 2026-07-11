@@ -10,6 +10,8 @@ import com.larsons.engine.world.Block;
 import com.larsons.engine.world.BlockRegistry;
 import com.larsons.engine.world.Decor;
 import com.larsons.engine.world.DecorRegistry;
+import com.larsons.engine.world.SurfaceDecor;
+import com.larsons.engine.world.SurfaceDecorRegistry;
 
 import java.awt.Color;
 import java.io.IOException;
@@ -17,6 +19,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,9 +27,10 @@ import java.util.Map;
 /**
  * Persists the objects a creator adds through the creative editor's
  * "+&nbsp;New…" palette entries — custom blocks (including liquids and
- * lights), mobs, items, and decorations with fully customizable properties —
- * and re-registers them into the standard registries whenever the game type
- * loads, so saved levels that use them keep working across sessions.
+ * lights), mobs, items, decorations, and block decor (face-attached surface
+ * details) with fully customizable properties — and re-registers them into
+ * the standard registries whenever the game type loads, so saved levels that
+ * use them keep working across sessions.
  *
  * <p>Custom definitions live in {@code custom.json} beside the game type's
  * saved levels. Block ids are allocated from {@value #CUSTOM_BLOCK_ID_BASE}
@@ -46,9 +50,15 @@ public final class CustomContentStore {
     private final List<Map<String, Object>> mobs = new ArrayList<>();
     private final List<Map<String, Object>> items = new ArrayList<>();
     private final List<Map<String, Object>> decor = new ArrayList<>();
+    private final List<Map<String, Object>> surface = new ArrayList<>();
 
     public CustomContentStore(String gameTypeName) {
         this.file = new LevelStore(gameTypeName).directory().resolve("custom.json");
+    }
+
+    /** Root-dir override, mirroring {@link LevelStore}'s (used by tests). */
+    public CustomContentStore(String rootDir, String gameTypeName) {
+        this.file = new LevelStore(rootDir, gameTypeName).directory().resolve("custom.json");
     }
 
     public Path file() {
@@ -66,6 +76,7 @@ public final class CustomContentStore {
         mobs.clear();
         items.clear();
         decor.clear();
+        surface.clear();
         if (!Files.exists(file)) return;
         Map<String, Object> root;
         try {
@@ -78,10 +89,12 @@ public final class CustomContentStore {
         readSection(root, "mobs", mobs);
         readSection(root, "items", items);
         readSection(root, "decor", decor);
+        readSection(root, "surface", surface);
         for (Map<String, Object> m : blocks) registerBlock(blockFrom(m));
         for (Map<String, Object> m : mobs) registerMob(mobFrom(m));
         for (Map<String, Object> m : items) registerItem(itemFrom(m));
         for (Map<String, Object> m : decor) registerDecor(decorFrom(m));
+        for (Map<String, Object> m : surface) registerSurface(surfaceFrom(m));
     }
 
     @SuppressWarnings("unchecked")
@@ -146,12 +159,19 @@ public final class CustomContentStore {
         save();
     }
 
+    /** Register + persist custom block decor (a face-attached surface detail). */
+    public void addSurfaceDecor(SurfaceDecor d) {
+        registerSurface(d);
+        surface.add(surfaceToMap(d));
+        save();
+    }
+
     // --- identification & deletion of user-created content --------------------------
 
     /**
      * Whether the object with this key, in this palette kind ({@code "block"},
-     * {@code "mob"}, {@code "item"}, {@code "decor"}), was created by the user
-     * — the editor badges these and offers deletion.
+     * {@code "mob"}, {@code "item"}, {@code "decor"}, {@code "surface"}), was
+     * created by the user — the editor badges these and offers deletion.
      */
     public boolean isCustom(String kind, String key) {
         List<Map<String, Object>> section = sectionFor(kind);
@@ -176,6 +196,7 @@ public final class CustomContentStore {
             case "mob" -> MobRegistry.standard().unregister(key);
             case "item" -> ItemRegistry.standard().unregister(key);
             case "decor" -> DecorRegistry.standard().unregister(key);
+            case "surface" -> SurfaceDecorRegistry.standard().unregister(key);
             default -> {
                 Block b = BlockRegistry.standard().get(key);
                 BlockRegistry.standard().unregister(key);
@@ -195,6 +216,7 @@ public final class CustomContentStore {
             case "mob" -> mobs;
             case "item" -> items;
             case "decor" -> decor;
+            case "surface" -> surface;
             default -> null;
         };
     }
@@ -242,6 +264,12 @@ public final class CustomContentStore {
         }
     }
 
+    private static void registerSurface(SurfaceDecor d) {
+        if (d != null && SurfaceDecorRegistry.standard().get(d.key()) == null) {
+            SurfaceDecorRegistry.standard().register(d);
+        }
+    }
+
     // --- persistence ---------------------------------------------------------------
 
     private void save() {
@@ -250,6 +278,7 @@ public final class CustomContentStore {
         root.put("mobs", mobs);
         root.put("items", items);
         root.put("decor", decor);
+        root.put("surface", surface);
         try {
             Files.createDirectories(file.getParent());
             Files.writeString(file, Json.stringify(root));
@@ -380,6 +409,38 @@ public final class CustomContentStore {
                     dbl(m.get("sizeTiles"), 1.5));
         } catch (RuntimeException e) {
             System.err.println("CustomContentStore: bad decor entry: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private static Map<String, Object> surfaceToMap(SurfaceDecor d) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("key", d.key());
+        m.put("name", d.name());
+        m.put("style", d.style().name());
+        m.put("primary", hex(d.primary()));
+        m.put("secondary", hex(d.secondary()));
+        List<String> faces = new ArrayList<>();
+        for (SurfaceDecor.Face f : d.allowedFaces()) faces.add(f.name());
+        m.put("faces", faces);
+        m.put("foreground", d.defaultForeground());
+        return m;
+    }
+
+    private static SurfaceDecor surfaceFrom(Map<String, Object> m) {
+        try {
+            EnumSet<SurfaceDecor.Face> faces = EnumSet.noneOf(SurfaceDecor.Face.class);
+            if (m.get("faces") instanceof List<?> list) {
+                for (Object o : list) {
+                    if (o instanceof String s) faces.add(SurfaceDecor.Face.valueOf(s));
+                }
+            }
+            return new SurfaceDecor(str(m.get("key")), str(m.get("name")),
+                    SurfaceDecor.Style.valueOf(str(m.get("style"))),
+                    color(m.get("primary"), Color.GRAY), color(m.get("secondary"), null),
+                    faces, Boolean.TRUE.equals(m.get("foreground")));
+        } catch (RuntimeException e) {
+            System.err.println("CustomContentStore: bad surface entry: " + e.getMessage());
             return null;
         }
     }

@@ -34,6 +34,14 @@ public final class SurfaceDecorRegistry {
         byKey.put(d.key(), d);
     }
 
+    /**
+     * Remove a definition (deleting user-created custom block decor). Levels
+     * that still reference the key simply skip drawing those placements.
+     */
+    public void unregister(String key) {
+        if (key != null) byKey.remove(key.toLowerCase().trim());
+    }
+
     /** The definition with this key, or {@code null}. */
     public SurfaceDecor get(String key) {
         return key == null ? null : byKey.get(key.toLowerCase().trim());
