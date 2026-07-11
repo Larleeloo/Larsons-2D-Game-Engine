@@ -2,6 +2,7 @@ package com.larsons.engine.level;
 
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.util.Json;
+import com.larsons.engine.world.SurfaceDecor;
 
 import java.awt.Color;
 import java.io.IOException;
@@ -70,24 +71,75 @@ public final class LevelLoader {
             lvl.palette = colors;
         }
 
-        Object tilesObj = root.get("tiles");
-        if (!(tilesObj instanceof List)) {
-            throw new IllegalArgumentException("Level is missing a 'tiles' array");
-        }
-        List<Object> rows = Json.asArray(tilesObj);
-        int[][] tiles = new int[rows.size()][];
-        int maxWidth = 0;
-        for (int r = 0; r < rows.size(); r++) {
-            List<Object> row = Json.asArray(rows.get(r));
-            tiles[r] = new int[row.size()];
-            for (int c = 0; c < row.size(); c++) {
-                tiles[r][c] = intOf(row.get(c), 0);
+        if (Boolean.TRUE.equals(root.get("chunked"))) {
+            // Giant chunked level: bounds + edited chunks + optional generator.
+            lvl.width = intOf(root.get("width"), 1024);
+            lvl.height = intOf(root.get("height"), 1024);
+            lvl.chunked = new ChunkedTiles(lvl.width, lvl.height);
+            if (root.get("generatorSeed") instanceof Number seed) {
+                lvl.chunked.setGenerator(LevelGenerator.chunkGenerator(
+                        seed.longValue(), lvl.width, lvl.height));
             }
-            maxWidth = Math.max(maxWidth, row.size());
+            if (root.get("chunks") instanceof Map<?, ?> chunks) {
+                for (Map.Entry<?, ?> e : chunks.entrySet()) {
+                    String[] cc = String.valueOf(e.getKey()).split(",");
+                    if (cc.length != 2 || !(e.getValue() instanceof List<?> runs)) continue;
+                    try {
+                        lvl.chunked.putSavedChunk(Integer.parseInt(cc[0].trim()),
+                                Integer.parseInt(cc[1].trim()), Json.asArray(runs));
+                    } catch (NumberFormatException ignored) {
+                        // skip malformed chunk keys
+                    }
+                }
+            }
+        } else {
+            Object tilesObj = root.get("tiles");
+            if (!(tilesObj instanceof List)) {
+                throw new IllegalArgumentException("Level is missing a 'tiles' array");
+            }
+            List<Object> rows = Json.asArray(tilesObj);
+            int[][] tiles = new int[rows.size()][];
+            int maxWidth = 0;
+            for (int r = 0; r < rows.size(); r++) {
+                List<Object> row = Json.asArray(rows.get(r));
+                tiles[r] = new int[row.size()];
+                for (int c = 0; c < row.size(); c++) {
+                    tiles[r][c] = intOf(row.get(c), 0);
+                }
+                maxWidth = Math.max(maxWidth, row.size());
+            }
+            lvl.tiles = tiles;
+            lvl.height = root.containsKey("height") ? intOf(root.get("height"), rows.size()) : rows.size();
+            lvl.width = root.containsKey("width") ? intOf(root.get("width"), maxWidth) : maxWidth;
         }
-        lvl.tiles = tiles;
-        lvl.height = root.containsKey("height") ? intOf(root.get("height"), rows.size()) : rows.size();
-        lvl.width = root.containsKey("width") ? intOf(root.get("width"), maxWidth) : maxWidth;
+
+        if (root.get("surface") instanceof List<?> sds) {
+            for (Object o : sds) {
+                if (!(o instanceof Map<?, ?> sm)) continue;
+                try {
+                    lvl.surfaceDecor.add(new SurfaceDecor.Placement(
+                            intOf(sm.get("c"), 0), intOf(sm.get("r"), 0),
+                            SurfaceDecor.Face.valueOf(String.valueOf(sm.get("f"))),
+                            String.valueOf(sm.get("k")),
+                            Boolean.TRUE.equals(sm.get("fg")),
+                            SurfaceDecor.Visibility.valueOf(String.valueOf(sm.get("v")))));
+                } catch (IllegalArgumentException ignored) {
+                    // unknown face/visibility: skip the entry
+                }
+            }
+        }
+
+        if (root.get("rules") instanceof List<?> rules) {
+            for (Object o : rules) {
+                if (o instanceof Map<?, ?> rm) {
+                    try {
+                        lvl.statRules.add(StatRule.fromMap(rm));
+                    } catch (IllegalArgumentException ignored) {
+                        // malformed rule: skip
+                    }
+                }
+            }
+        }
 
         if (root.get("spawn") instanceof Map<?, ?> sp) {
             lvl.spawnX = doubleOf(sp.get("x"), 0);

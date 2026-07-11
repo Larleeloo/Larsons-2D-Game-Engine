@@ -38,10 +38,16 @@ import java.awt.Color;
  * @param drops       item key dropped when mined, or {@code null} for none
  * @param liquid      simulated by {@link LiquidSim}: flows, swimmable
  * @param damage      health per second drained from players/mobs touching it
+ * @param hardness    seconds of bare-handed mining to break it (durability);
+ *                    {@code 0} breaks instantly, higher is tougher — matching
+ *                    tools ({@link #tool}) divide the time by their power
+ * @param tool        the tool class that mines this block fast ("pickaxe",
+ *                    "axe", "shovel"), or {@code null} when no tool helps
  */
 public record Block(int id, String key, String displayName, Color color,
                     boolean solid, double lightRadius, Color lightColor,
-                    String drops, boolean liquid, double damage) {
+                    String drops, boolean liquid, double damage,
+                    double hardness, String tool) {
 
     public Block {
         if (id <= 0) throw new IllegalArgumentException("Block ids must be > 0 (0 = empty)");
@@ -50,12 +56,28 @@ public record Block(int id, String key, String displayName, Color color,
         if (lightColor == null) lightColor = Color.WHITE;
         if (lightRadius < 0) lightRadius = 0;
         if (damage < 0) damage = 0;
+        if (hardness < 0) hardness = 0;
+        if (tool != null && tool.isBlank()) tool = null;
+    }
+
+    /** Pre-durability constructor shape: solid blocks default to 1s hardness. */
+    public Block(int id, String key, String displayName, Color color,
+                 boolean solid, double lightRadius, Color lightColor,
+                 String drops, boolean liquid, double damage) {
+        this(id, key, displayName, color, solid, lightRadius, lightColor, drops,
+                liquid, damage, solid ? 1.0 : 0, null);
     }
 
     /** Pre-liquid constructor shape, kept so existing registrations read the same. */
     public Block(int id, String key, String displayName, Color color,
                  boolean solid, double lightRadius, Color lightColor, String drops) {
         this(id, key, displayName, color, solid, lightRadius, lightColor, drops, false, 0);
+    }
+
+    /** Copy with the given durability tuning ({@link BlockRegistry#tune}). */
+    public Block withDurability(double hardness, String tool) {
+        return new Block(id, key, displayName, color, solid, lightRadius, lightColor,
+                drops, liquid, damage, hardness, tool);
     }
 
     /** Convenience for plain terrain: solid, no light, drops itself. */

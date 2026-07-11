@@ -45,6 +45,10 @@ public final class LiquidSim {
     /**
      * Advance the simulation by {@code dt} seconds; mutates the level's tiles
      * and returns every cell that changed (empty list on non-tick frames).
+     *
+     * <p>Giant chunked levels are skipped: a whole-grid cellular pass over up
+     * to 65536&sup2; cells is unbounded work, so painted liquids stay as
+     * still pools there (an active-region sim is future work).
      */
     public List<Change> step(Level level, double dt) {
         if (!level.registryTiles || level.tiles == null) return List.of();

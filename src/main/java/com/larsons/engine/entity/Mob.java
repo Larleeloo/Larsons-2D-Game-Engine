@@ -1,7 +1,9 @@
 package com.larsons.engine.entity;
 
 import com.larsons.engine.level.Level;
+import com.larsons.engine.sim.PlayerPhysics;
 import com.larsons.engine.sim.PlayerState;
+import com.larsons.engine.world.Block;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,11 +25,27 @@ import java.util.Random;
  *   any → DEAD               health reached zero
  * </pre>
  *
- * <p>Like {@link com.larsons.engine.sim.PlayerPhysics}, {@link #step} is a
- * deterministic function of (state, level, players, dt) — randomness comes
- * from a per-mob seeded RNG — so the same code runs in single-player, the
- * creative editor's play-test, and the authoritative multiplayer server
- * (clients just render what snapshots say).
+ * <p><b>Navigation intelligence</b> layered onto the ported state machine:
+ * <ul>
+ *   <li><b>Jumping</b> — a grounded walker blocked by a low wall (or facing a
+ *       gap while chasing) hops it, so terrain no longer strands pursuit.</li>
+ *   <li><b>Liquids</b> — submerged mobs swim: buoyancy replaces gravity and
+ *       they stroke toward the surface (or their target's height); mobs
+ *       refuse to walk into liquids or blocks that would burn them (lava,
+ *       acid, spikes) unless already fleeing for their lives.</li>
+ *   <li><b>Projectiles</b> — an incoming shot aimed their way triggers an
+ *       evasive hop/dash (with a cooldown, so volleys still land).</li>
+ * </ul>
+ *
+ * <p>Movement resolves through the same AABB helpers players use
+ * ({@link PlayerPhysics#slideX}/{@code slideY}), so mobs collide with walls,
+ * ceilings and floors under identical rules.
+ *
+ * <p>Like {@link PlayerPhysics}, {@link #step} is a deterministic function of
+ * (state, level, players, projectiles, dt) — randomness comes from a per-mob
+ * seeded RNG — so the same code runs in single-player, the creative editor's
+ * play-test, and the authoritative multiplayer server (clients just render
+ * what snapshots say).
  */
 public final class Mob {
 
@@ -38,6 +56,13 @@ public final class Mob {
     private static final double LOSE_FACTOR = 1.5;
     private static final double ATTACK_COOLDOWN = 1.0;   // seconds between hits
     private static final double HURT_FLASH = 0.25;       // seconds of hurt tint
+
+    // Navigation tuning.
+    private static final double JUMP_VELOCITY = 430;     // clears ~1.5 tiles
+    private static final double DODGE_RANGE = 130;       // px: projectile awareness
+    private static final double DODGE_COOLDOWN = 0.8;    // seconds between dodges
+    private static final double SWIM_RISE = 260;         // px/sec^2 upward stroke
+    private static final double SWIM_SINK = 180;         // px/sec^2 passive sink
 
     public final int id;
     public final MobDef def;
@@ -54,6 +79,9 @@ public final class Mob {
     private double wanderTargetX;
     private double attackTimer;
     private double hurtTimer;
+    private double dodgeTimer;   // cooldown until the next projectile dodge
+    private double dodgeDx;      // evasive burst applied while > 0 (sign = dir)
+    private double dodgeTime;    // seconds left on the evasive burst
 
     public Mob(int id, MobDef def, double x, double y) {
         this.id = id;
@@ -109,18 +137,27 @@ public final class Mob {
         }
     }
 
+    /** Pre-projectile-awareness signature, for callers without a live world. */
+    public void step(Level level, List<PlayerState> players, boolean gravityOn,
+                     boolean combatOn, double dt) {
+        step(level, players, List.of(), gravityOn, combatOn, dt);
+    }
+
     /**
      * Advance one tick. {@code gravityOn} mirrors the profile's gravity toggle
      * (top-down game types walk mobs on a plane instead); with {@code combatOn}
      * false, hostiles behave like ambient wildlife — no chasing, no damage.
      * Attacks that land subtract from the hit player's health directly.
+     * {@code projectiles} feeds the dodge reflex — pass the world's live list.
      */
-    public void step(Level level, List<PlayerState> players, boolean gravityOn,
-                     boolean combatOn, double dt) {
+    public void step(Level level, List<PlayerState> players, List<Projectile> projectiles,
+                     boolean gravityOn, boolean combatOn, double dt) {
         if (dead()) return;
         stateTime += dt;
         if (hurtTimer > 0) hurtTimer -= dt;
         if (attackTimer > 0) attackTimer -= dt;
+        if (dodgeTimer > 0) dodgeTimer -= dt;
+        if (dodgeTime > 0) dodgeTime -= dt;
 
         PlayerState nearest = nearestPlayer(players);
         double dist = nearest == null ? Double.MAX_VALUE : distanceTo(nearest);
@@ -182,37 +219,87 @@ public final class Mob {
             default -> { /* IDLE / DEAD: stand still */ }
         }
 
-        if (dx != 0) facingLeft = dx < 0;
-
-        // --- movement & collision (same tile rules as PlayerPhysics) ---
+        // --- projectile awareness: sidestep incoming shots ---
         double size = def.size();
         double ts = level.tileSize;
-        double nx = x + dx * dt;
-        double probeY = y + size * 0.5;
-        int aheadCol = (int) Math.floor((nx + (dx > 0 ? size : 0)) / ts);
-        if (!level.solidAt(aheadCol, (int) Math.floor(probeY / ts))) {
-            x = nx;
-        } else if (state == AIState.WANDER) {
-            pickWanderTarget(level); // walked into a wall: pick a new direction
+        if (dodgeTimer <= 0 && !projectiles.isEmpty()) {
+            Projectile threat = incomingThreat(projectiles);
+            if (threat != null) {
+                dodgeTimer = DODGE_COOLDOWN;
+                dodgeTime = 0.22;
+                // Dash away from the shot's line of travel; hop if standing.
+                dodgeDx = threat.vy == 0 && threat.vx == 0 ? 1
+                        : Math.signum(threat.vx == 0 ? x - threat.x : -threat.vy * Math.signum(threat.vx));
+                if (dodgeDx == 0) dodgeDx = rng.nextBoolean() ? 1 : -1;
+                if (!def.flying() && gravityOn
+                        && PlayerPhysics.onGround(level, x, y, size, size)) {
+                    vy = -JUMP_VELOCITY * 0.8;
+                }
+            }
+        }
+        if (dodgeTime > 0) dx = dodgeDx * def.speed() * 1.4;
+
+        // --- hazard sense: don't walk into lava/acid/spikes (unless fleeing) ---
+        if (dx != 0 && state != AIState.FLEE && dodgeTime <= 0
+                && hazardous(level, x + size / 2 + Math.signum(dx) * (size / 2 + ts * 0.6),
+                y + size * 0.5)) {
+            if (state == AIState.WANDER) pickWanderTarget(level);
+            dx = 0;
         }
 
+        if (dx != 0) facingLeft = dx < 0;
+
+        // --- movement & collision (the same AABB rules as PlayerPhysics) ---
+        boolean inLiquid = level.liquidAt((int) Math.floor((x + size / 2) / ts),
+                (int) Math.floor((y + size / 2) / ts)) != null;
+
+        double nx = PlayerPhysics.slideX(level, x, y, size, size, dx * dt);
+        boolean blockedSideways = dx != 0 && nx == x;
+        boolean movedShort = dx != 0 && Math.abs(nx - x) < Math.abs(dx * dt) - 0.0001;
+        x = nx;
+
         if (def.flying()) {
-            // Fliers bob toward their target's height (or hover).
+            // Fliers bob toward their target's height (or hover), still
+            // respecting ceilings/floors.
             double targetY = nearest != null && (state == AIState.CHASE || state == AIState.ATTACK)
                     ? nearest.y : y + Math.sin(stateTime * 2.5) * 12 * dt;
-            y += Math.signum(targetY - y) * Math.min(Math.abs(targetY - y), def.speed() * 0.7 * dt);
+            double dy = Math.signum(targetY - y)
+                    * Math.min(Math.abs(targetY - y), def.speed() * 0.7 * dt);
+            y = PlayerPhysics.slideY(level, x, y, size, size, dy);
+        } else if (inLiquid && gravityOn) {
+            // Swimming: buoyancy instead of gravity. Stroke upward toward the
+            // surface (or the target when it's above), sink gently otherwise.
+            boolean wantsUp = nearest != null
+                    && (state == AIState.CHASE || state == AIState.FLEE)
+                    ? nearest.y < y : true;
+            vy += (wantsUp ? -SWIM_RISE : SWIM_SINK) * dt;
+            vy = Math.max(-160, Math.min(120, vy));
+            double ny = PlayerPhysics.slideY(level, x, y, size, size, vy * dt);
+            if (ny != y + vy * dt) vy = 0;
+            y = ny;
         } else if (gravityOn) {
-            boolean grounded = solid(level, x + size / 2, y + size + 1, ts);
-            if (grounded && vy >= 0) {
-                vy = 0;
-            } else {
-                vy += GRAVITY * dt;
+            boolean grounded = PlayerPhysics.onGround(level, x, y, size, size);
+            if (grounded && vy >= 0) vy = 0;
+
+            // Jump intelligence: hop low walls, and leap gaps while chasing.
+            if (grounded && dx != 0) {
+                boolean gapAhead = state == AIState.CHASE && nearest != null
+                        && nearest.y <= y + ts
+                        && !groundAhead(level, dx, size, ts);
+                if ((blockedSideways || movedShort) && canJumpClear(level, dx, size, ts)) {
+                    vy = -JUMP_VELOCITY;
+                } else if (gapAhead) {
+                    vy = -JUMP_VELOCITY * 0.85;
+                } else if ((blockedSideways || movedShort) && state == AIState.WANDER) {
+                    pickWanderTarget(level); // unjumpable wall: turn around
+                }
             }
-            y += vy * dt;
-            if (vy > 0 && solid(level, x + size / 2, y + size, ts)) {
-                y = Math.floor((y + size) / ts) * ts - size;
-                vy = 0;
-            }
+
+            if (!grounded || vy < 0) vy += GRAVITY * dt;
+            double dy = vy * dt;
+            double ny = PlayerPhysics.slideY(level, x, y, size, size, dy);
+            if (ny != y + dy) vy = 0; // landed / hit a ceiling
+            y = ny;
         }
 
         // Clamp to level bounds.
@@ -220,8 +307,55 @@ public final class Mob {
         y = Math.max(0, Math.min(y, level.height * (double) level.tileSize - size));
     }
 
-    private static boolean solid(Level level, double wx, double wy, double ts) {
-        return level.solidAt((int) Math.floor(wx / ts), (int) Math.floor(wy / ts));
+    /** The nearest projectile flying toward this mob within awareness range. */
+    private Projectile incomingThreat(List<Projectile> projectiles) {
+        double cx = x + def.size() / 2, cy = y + def.size() / 2;
+        for (Projectile p : projectiles) {
+            if (p.dead()) continue;
+            double dxp = cx - p.x, dyp = cy - p.y;
+            double dist = Math.hypot(dxp, dyp);
+            if (dist > DODGE_RANGE || dist < 0.001) continue;
+            double speed = Math.hypot(p.vx, p.vy);
+            if (speed < 1) continue;
+            // Heading roughly at us? (velocity within ~30° of the line to the mob)
+            double dot = (p.vx * dxp + p.vy * dyp) / (speed * dist);
+            if (dot > 0.85) return p;
+        }
+        return null;
+    }
+
+    /** Whether the tile at a world point would hurt to touch (liquid or hazard). */
+    private static boolean hazardous(Level level, double wx, double wy) {
+        Block b = level.blockAt((int) Math.floor(wx / level.tileSize),
+                (int) Math.floor(wy / level.tileSize));
+        return b != null && b.damage() > 0;
+    }
+
+    /** Is there floor within a two-tile drop just ahead in direction {@code dx}? */
+    private boolean groundAhead(Level level, double dx, double size, double ts) {
+        double aheadX = x + size / 2 + Math.signum(dx) * (size / 2 + ts * 0.5);
+        int col = (int) Math.floor(aheadX / ts);
+        int row = (int) Math.floor((y + size) / ts);
+        for (int r = row; r <= row + 2; r++) {
+            if (level.solidAt(col, r)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Whether the wall ahead is low enough to jump: solid at body height but
+     * clear one and two tiles above it.
+     */
+    private boolean canJumpClear(Level level, double dx, double size, double ts) {
+        double aheadX = x + size / 2 + Math.signum(dx) * (size / 2 + ts * 0.5);
+        int col = (int) Math.floor(aheadX / ts);
+        int footRow = (int) Math.floor((y + size - 1) / ts);
+        int headRow = (int) Math.floor(y / ts);
+        // Clearance above both the obstacle and this mob's head.
+        return !level.solidAt(col, footRow - 1)
+                && !level.solidAt(col, footRow - 2)
+                && !level.solidAt((int) Math.floor((x + size / 2) / ts), headRow - 1)
+                && !level.solidAt((int) Math.floor((x + size / 2) / ts), headRow - 2);
     }
 
     private void changeState(AIState next) {

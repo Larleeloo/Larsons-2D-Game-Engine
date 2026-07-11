@@ -1,0 +1,127 @@
+package com.larsons.engine.crafting;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+import com.larsons.engine.crafting.Recipe.Ingredient;
+
+/**
+ * The catalog of {@link Recipe}s a game knows about — same data-driven pattern
+ * as the block/item registries: games extend the set with {@link #register}.
+ *
+ * <p>{@link #standard()} ships a progression built almost entirely from
+ * resources found in generated worlds: chop logs → planks and sticks → build
+ * the crafting table itself → wooden tools/weapons → mine ores → smelt ingots
+ * at the alchemy station → metal and gem gear, potions, and lights. The goal
+ * is that most of the item catalog is reachable from the environment.
+ */
+public final class RecipeRegistry {
+
+    private final List<Recipe> recipes = new ArrayList<>();
+
+    private static final RecipeRegistry STANDARD = createStandard();
+
+    public static RecipeRegistry standard() {
+        return STANDARD;
+    }
+
+    public void register(Recipe r) {
+        recipes.add(r);
+    }
+
+    /** Every recipe, registration order. */
+    public List<Recipe> all() {
+        return Collections.unmodifiableList(recipes);
+    }
+
+    /** Recipes craftable at the given station kind. */
+    public List<Recipe> forStation(String station) {
+        List<Recipe> out = new ArrayList<>();
+        for (Recipe r : recipes) {
+            if (r.station().equals(station)) out.add(r);
+        }
+        return out;
+    }
+
+    private static Recipe craft(String output, int n, Ingredient... inputs) {
+        return new Recipe(Recipe.STATION_CRAFTING, List.of(inputs), output, n);
+    }
+
+    private static Recipe brew(String output, int n, Ingredient... inputs) {
+        return new Recipe(Recipe.STATION_ALCHEMY, List.of(inputs), output, n);
+    }
+
+    private static Ingredient of(String key, int count) {
+        return new Ingredient(key, count);
+    }
+
+    private static RecipeRegistry createStandard() {
+        RecipeRegistry r = new RecipeRegistry();
+
+        // --- crafting table: wood, tools, weapons, building ---
+        r.register(craft("planks", 4, of("oak_log", 1)));
+        r.register(craft("planks", 4, of("wood", 1)));
+        r.register(craft("birch_planks", 4, of("birch_log", 1)));
+        r.register(craft("dark_planks", 4, of("dark_log", 1)));
+        r.register(craft("stick", 4, of("planks", 2)));
+        r.register(craft("crafting_table", 1, of("planks", 4)));
+        r.register(craft("alchemy_station", 1, of("stone", 4), of("amethyst", 2)));
+        r.register(craft("torch", 4, of("coal", 1), of("stick", 1)));
+        r.register(craft("lantern", 1, of("torch", 1), of("iron_ingot", 1)));
+        r.register(craft("campfire", 1, of("oak_log", 3), of("coal", 1)));
+        r.register(craft("rope", 2, of("vines", 2)));
+        r.register(craft("platform", 4, of("planks", 2), of("stick", 1)));
+        r.register(craft("scaffold", 4, of("bamboo", 3), of("rope", 1)));
+        r.register(craft("bookshelf", 1, of("planks", 4), of("scroll", 1)));
+        r.register(craft("stone_bricks", 4, of("stone", 4)));
+        r.register(craft("glass", 2, of("sand", 3)));
+        // Tools: material + sticks.
+        r.register(craft("wooden_pickaxe", 1, of("planks", 3), of("stick", 2)));
+        r.register(craft("stone_pickaxe", 1, of("stone", 3), of("stick", 2)));
+        r.register(craft("iron_pickaxe", 1, of("iron_ingot", 3), of("stick", 2)));
+        r.register(craft("diamond_pickaxe", 1, of("diamond", 3), of("stick", 2)));
+        r.register(craft("wooden_axe", 1, of("planks", 3), of("stick", 2)));
+        r.register(craft("iron_axe", 1, of("iron_ingot", 3), of("stick", 2)));
+        r.register(craft("diamond_axe", 1, of("diamond", 3), of("stick", 2)));
+        r.register(craft("wooden_shovel", 1, of("planks", 1), of("stick", 2)));
+        r.register(craft("iron_shovel", 1, of("iron_ingot", 1), of("stick", 2)));
+        r.register(craft("diamond_shovel", 1, of("diamond", 1), of("stick", 2)));
+        // Weapons.
+        r.register(craft("wooden_sword", 1, of("planks", 2), of("stick", 1)));
+        r.register(craft("iron_sword", 1, of("iron_ingot", 2), of("stick", 1)));
+        r.register(craft("steel_sword", 1, of("iron_ingot", 2), of("coal", 2), of("stick", 1)));
+        r.register(craft("crystal_sword", 1, of("crystal", 2), of("diamond", 1), of("stick", 1)));
+        r.register(craft("battle_axe", 1, of("iron_ingot", 3), of("stick", 2)));
+        r.register(craft("legendary_sword", 1, of("gold_ingot", 2), of("diamond", 2), of("ruby", 1)));
+        r.register(craft("wooden_bow", 1, of("stick", 3), of("rope", 1)));
+        r.register(craft("longbow", 1, of("wooden_bow", 1), of("rope", 1), of("iron_ingot", 1)));
+        r.register(craft("arrow", 4, of("stick", 1), of("stone", 1)));
+        r.register(craft("throwing_knife", 2, of("iron_ingot", 1), of("stick", 1)));
+        // Food.
+        r.register(craft("bread", 1, of("tall_grass", 3)));
+
+        // --- alchemy station: smelting, brewing, transmutation ---
+        r.register(brew("iron_ingot", 1, of("iron_ore", 1), of("coal", 1)));
+        r.register(brew("gold_ingot", 1, of("gold_ore", 1), of("coal", 1)));
+        r.register(brew("silver_ingot", 1, of("silver_ore", 1), of("coal", 1)));
+        r.register(brew("copper", 1, of("copper_ore", 1), of("coal", 1)));
+        r.register(brew("diamond", 1, of("diamond_ore", 1), of("coal", 2)));
+        r.register(brew("ruby", 1, of("ruby_ore", 1), of("coal", 2)));
+        r.register(brew("emerald", 1, of("emerald_ore", 1), of("coal", 2)));
+        r.register(brew("amethyst", 1, of("amethyst_ore", 1), of("coal", 2)));
+        r.register(brew("health_potion", 1, of("mushroom", 1), of("flower_red", 2)));
+        r.register(brew("mana_potion", 1, of("glow_mushroom", 1), of("flower_blue", 2)));
+        r.register(brew("golden_apple", 1, of("apple", 1), of("gold_ingot", 2)));
+        r.register(brew("arcane_staff", 1, of("stick", 2), of("amethyst", 2), of("scroll", 1)));
+        r.register(brew("fire_staff", 1, of("stick", 2), of("ruby", 2), of("coal", 4)));
+        r.register(brew("glowstone", 2, of("glow_mushroom", 2), of("stone", 1)));
+        r.register(brew("magic_light", 1, of("amethyst", 1), of("torch", 1)));
+        r.register(brew("crystal", 2, of("diamond", 1), of("stone", 2)));
+        r.register(brew("neon_block", 2, of("crystal", 1), of("glowstone", 1)));
+        r.register(brew("scroll", 1, of("leather", 2)));
+        r.register(brew("cheese", 2, of("cooked_meat", 1), of("mushroom", 1)));
+        r.register(brew("obsidian", 1, of("basalt", 2), of("lava", 1)));
+        return r;
+    }
+}

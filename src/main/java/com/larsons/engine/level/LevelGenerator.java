@@ -44,9 +44,199 @@ public final class LevelGenerator {
     public static Level generate(String name, int width, int height, int tileSize, long seed) {
         width = Math.max(48, width);
         height = Math.max(36, height);
+        if ((long) width * height > Level.DENSE_TILE_LIMIT) {
+            return generateChunked(name, width, height, tileSize, seed);
+        }
         Level lvl = Level.empty(name, width, height, tileSize);
         new Generation(lvl, seed).run();
         return lvl;
+    }
+
+    /**
+     * Generate a <em>giant</em> level (beyond {@link Level#DENSE_TILE_LIMIT},
+     * up to 65536&times;65536) lazily: nothing is filled up front — a
+     * deterministic {@link ChunkGenerator} builds each chunk the first time
+     * the camera or simulation looks at it, so generation cost tracks what's
+     * visible instead of the level bounds. Terrain, caves, ores, sea water and
+     * the lava floor come from the same noise recipes as eager generation;
+     * the room network and entity dressing (global passes) are skipped.
+     */
+    public static Level generateChunked(String name, int width, int height,
+                                        int tileSize, long seed) {
+        TerrainChunkGenerator gen = new TerrainChunkGenerator(seed, width, height);
+        Level lvl = Level.emptyChunked(name, width, height, tileSize, gen);
+        // Spawn on the dry surface near the left edge, like eager generation.
+        int spawnCol = 4;
+        for (int c = 4; c < Math.min(width - 4, 4 + 400); c++) {
+            if (gen.surfaceAt(c) <= gen.seaLevel) {
+                spawnCol = c;
+                break;
+            }
+        }
+        lvl.spawnX = spawnCol * (double) tileSize;
+        lvl.spawnY = (gen.surfaceAt(spawnCol) - 3) * (double) tileSize;
+        // A few multiplayer spawns and ambient mobs near the spawn area.
+        String[] passive = {"sheep", "rabbit", "deer", "fox", "pig"};
+        java.util.Random rng = new java.util.Random(seed);
+        for (int i = 1; i <= 4; i++) {
+            int c = Math.min(width - 4, spawnCol + i * 24 + rng.nextInt(12));
+            if (gen.surfaceAt(c) > gen.seaLevel) continue;
+            lvl.entities.add(new Level.EntitySpawn("mp_spawn", "mp_spawn",
+                    c * (double) tileSize, (gen.surfaceAt(c) - 2) * (double) tileSize));
+            lvl.entities.add(new Level.EntitySpawn("mob",
+                    passive[rng.nextInt(passive.length)],
+                    (c + 4) * (double) tileSize, (gen.surfaceAt(c + 4) - 2) * (double) tileSize));
+        }
+        return lvl;
+    }
+
+    /** The deterministic chunk generator giant saves rebuild from their seed. */
+    public static ChunkGenerator chunkGenerator(long seed, int width, int height) {
+        return new TerrainChunkGenerator(seed, width, height);
+    }
+
+    /**
+     * Per-chunk terrain generation: every tile is a pure function of
+     * (seed, col, row), so any chunk can be built — or rebuilt after eviction —
+     * in isolation. Reuses the eager pipeline's noise recipes for the surface,
+     * strata, caves and sea; ore veins become per-tile hash rolls of matching
+     * density (random-walk veins don't decompose into independent chunks).
+     */
+    static final class TerrainChunkGenerator implements ChunkGenerator {
+        private final long seed;
+        private final PerlinNoise noise;
+        private final int w, h;
+        final int seaLevel;
+
+        // Resolved once; the standard registry is immutable by convention.
+        private final int grass, dirt, stone, deepslate, granite, sand, sandstone,
+                water, lava, basalt;
+
+        TerrainChunkGenerator(long seed, int width, int height) {
+            this.seed = seed;
+            this.noise = new PerlinNoise(seed);
+            this.w = width;
+            this.h = height;
+            this.seaLevel = (int) (h * 0.36);
+            BlockRegistry blocks = BlockRegistry.standard();
+            grass = idOf(blocks, "grass");
+            dirt = idOf(blocks, "dirt");
+            stone = idOf(blocks, "stone");
+            deepslate = idOf(blocks, "deepslate");
+            granite = idOf(blocks, "granite");
+            sand = idOf(blocks, "sand");
+            sandstone = idOf(blocks, "sandstone");
+            water = idOf(blocks, "water");
+            lava = idOf(blocks, "lava");
+            basalt = idOf(blocks, "basalt");
+        }
+
+        private static int idOf(BlockRegistry blocks, String key) {
+            Block b = blocks.get(key);
+            return b != null ? b.id() : 0;
+        }
+
+        @Override
+        public long seed() {
+            return seed;
+        }
+
+        /** Surface row for a column — the eager pipeline's heightmap formula. */
+        int surfaceAt(int c) {
+            double hills = noise.fbm(c * 0.012, 0.7, 4, 0.5, 2.1);
+            double rough = noise.fbm(c * 0.07, 13.4, 3, 0.5, 2.0);
+            int s = (int) (h * 0.32 + hills * h * 0.20 + rough * h * 0.045);
+            return Math.max(4, Math.min(h - 14, s));
+        }
+
+        @Override
+        public void generate(int cx, int cy, int[] out) {
+            int c0 = cx * ChunkedTiles.CHUNK, r0 = cy * ChunkedTiles.CHUNK;
+            for (int lc = 0; lc < ChunkedTiles.CHUNK; lc++) {
+                int c = c0 + lc;
+                if (c >= w) break;
+                int surface = surfaceAt(c);
+                for (int lr = 0; lr < ChunkedTiles.CHUNK; lr++) {
+                    int r = r0 + lr;
+                    if (r >= h) break;
+                    out[lr * ChunkedTiles.CHUNK + lc] = tileFor(c, r, surface);
+                }
+            }
+        }
+
+        private int tileFor(int c, int r, int surface) {
+            // Side borders and floor: a basalt frame contains liquids.
+            if (r == h - 1) return basalt;
+            if ((c == 0 || c == w - 1) && r >= Math.min(surface, seaLevel)) return basalt;
+            if (r < surface) {
+                // Open sky, except valleys below sea level fill with water.
+                return r >= seaLevel ? water : 0;
+            }
+
+            boolean submerged = surface > seaLevel;
+            boolean beach = !submerged && surface >= seaLevel - 2;
+            int depth = r - surface;
+            int block;
+            if (depth == 0) {
+                block = submerged || beach ? sand : grass;
+            } else if (depth <= 3 + (int) (noise.noise(c * 0.15, 4.2) * 2)) {
+                block = submerged || beach ? sandstone : dirt;
+            } else if (r > h * 0.72) {
+                block = noise.fbm(c * 0.05, r * 0.05, 2, 0.5, 2.0) > 0.25
+                        ? granite : deepslate;
+            } else {
+                block = noise.fbm(c * 0.05, r * 0.05, 2, 0.5, 2.0) > 0.38
+                        ? granite : stone;
+            }
+
+            // Caves: same worm + cavern noise as the eager pipeline.
+            boolean carved = false;
+            if (c > 0 && c < w - 1 && r >= surface + 3 && r < h - 2) {
+                double depthT = (r - surface) / (double) h;
+                double worm = noise.fbm(c * 0.035, r * 0.05, 2, 0.5, 2.0);
+                double cavern = noise.fbm(c * 0.05 + 200, r * 0.07 + 200, 3, 0.5, 2.0);
+                carved = Math.abs(worm) < 0.045 + depthT * 0.03
+                        || cavern > 0.42 - depthT * 0.06;
+            }
+            if (carved) {
+                // Carved caves flood with lava near the bottom.
+                return r >= h - 6 ? lava : 0;
+            }
+
+            // Ore veins as per-tile hash rolls in stone-family rock.
+            if (block == stone || block == deepslate || block == granite) {
+                long hash = mix(c, r);
+                if ((hash & 0xFFFF) < (int) (0.022 * 0x10000)) {
+                    double depthT = (r - surface) / Math.max(1.0, h - (double) surface);
+                    block = idOf(BlockRegistry.standard(),
+                            oreForDepth(depthT, ((hash >>> 16) & 0xFFFF) / 65536.0));
+                }
+            }
+            return block;
+        }
+
+        /** Depth-banded ore pick — the eager pipeline's table with an explicit roll. */
+        private static String oreForDepth(double t, double roll) {
+            if (t < 0.3) return roll < 0.55 ? "coal_ore" : "copper_ore";
+            if (t < 0.55) {
+                if (roll < 0.35) return "iron_ore";
+                if (roll < 0.6) return "coal_ore";
+                if (roll < 0.8) return "silver_ore";
+                return "emerald_ore";
+            }
+            if (roll < 0.3) return "gold_ore";
+            if (roll < 0.55) return "amethyst_ore";
+            if (roll < 0.75) return "ruby_ore";
+            return "diamond_ore";
+        }
+
+        /** SplitMix64-style position hash, folded with the seed. */
+        private long mix(int c, int r) {
+            long z = seed ^ (c * 0x9E3779B97F4A7C15L) ^ ((long) r << 32 | (r & 0xFFFFFFFFL));
+            z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+            z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+            return z ^ (z >>> 31);
+        }
     }
 
     /** One generation run; fields keep the pipeline stages readable. */

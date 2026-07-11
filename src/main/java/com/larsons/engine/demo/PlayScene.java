@@ -1,8 +1,11 @@
 package com.larsons.engine.demo;
 
+import com.larsons.engine.config.CustomContentStore;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.audio.AudioManager.Sfx;
+import com.larsons.engine.crafting.Recipe;
+import com.larsons.engine.crafting.RecipeRegistry;
 import com.larsons.engine.entity.DroppedItem;
 import com.larsons.engine.entity.EntityView;
 import com.larsons.engine.entity.Inventory;
@@ -23,6 +26,7 @@ import com.larsons.engine.graphics.ParallaxBackground;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.SpriteSheet;
+import com.larsons.engine.graphics.SurfaceDecorPainter;
 import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.level.DoorDirectory;
@@ -30,6 +34,7 @@ import com.larsons.engine.level.DoorLink;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
 import com.larsons.engine.level.LevelStore;
+import com.larsons.engine.level.StatRule;
 import com.larsons.engine.net.GameClient;
 import com.larsons.engine.net.NetSession;
 import com.larsons.engine.net.Snapshot;
@@ -37,7 +42,10 @@ import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerPhysics;
 import com.larsons.engine.sim.PlayerState;
+import com.larsons.engine.sim.PlayerStats;
+import com.larsons.engine.sim.StatRuleEngine;
 import com.larsons.engine.ui.ConfigForm;
+import com.larsons.engine.ui.CraftingPanel;
 import com.larsons.engine.ui.MenuTheme;
 import com.larsons.engine.world.Block;
 import com.larsons.engine.world.Decor;
@@ -50,6 +58,7 @@ import java.awt.Color;
 import java.awt.Composite;
 import java.awt.Font;
 import java.awt.Graphics2D;
+import java.awt.RadialGradientPaint;
 import java.awt.RenderingHints;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
@@ -126,6 +135,13 @@ public class PlayScene extends AbstractScene {
     private double swingTime;      // seconds left on the melee swing visual
     private double prevVy;
     private double prevHealth = PlayerState.MAX_HEALTH;
+    // Stat tracking + the level's programmable rules + station crafting
+    // (offline: the local world owns all three).
+    private PlayerStats stats;
+    private StatRuleEngine ruleEngine;
+    private CraftingPanel craftingPanel; // non-null while a station UI is open
+    private String ruleStatus = "";
+    private double ruleStatusTime;
     private double animClock;      // drives skinned (sprite-sheet) textures
     private DoorDirectory doors;   // this game type's external door list
     // Per-frame cache: block id -> skin frame (null = procedural colour).
@@ -157,6 +173,13 @@ public class PlayScene extends AbstractScene {
         cursorSlot = -1;
         swingTime = 0;
         doors = new DoorDirectory(profile().name);
+        // Objects created with the creative editor's "+" entries must be
+        // registered before a level referencing them loads.
+        new CustomContentStore(profile().name).loadAndRegister();
+        stats = new PlayerStats();
+        craftingPanel = null;
+        ruleStatus = "";
+        ruleStatusTime = 0;
 
         // Online, the world is whatever the server runs (one shared Level
         // instance that block broadcasts keep current); offline, prefer the
@@ -171,9 +194,11 @@ public class PlayScene extends AbstractScene {
             world.populateFromLevel(profile());
             world.setPickupListener((player, key, count) -> {
                 inventory.add(key, count);
+                stats.add("items_picked_up", count);
                 ctx.sfx(Sfx.PICKUP);
             });
         }
+        ruleEngine = new StatRuleEngine(List.copyOf(level.statRules));
         inventory = new Inventory(world != null ? world.itemTypes : ItemRegistry.standard());
         invSyncVersion = -1;
 
@@ -225,7 +250,9 @@ public class PlayScene extends AbstractScene {
             return;
         }
         if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
-            if (showInventory) {
+            if (craftingPanel != null) {
+                craftingPanel = null;
+            } else if (showInventory) {
                 showInventory = false;
             } else {
                 openPause();
@@ -238,11 +265,17 @@ public class PlayScene extends AbstractScene {
         animClock += dt;
         mouseX = input.getMouseX();
         mouseY = input.getMouseY();
+        if (ruleStatusTime > 0) ruleStatusTime -= dt;
 
-        // Walk into a painted door and press E: load its target level
+        // Walk into a painted door and press E: load its target level; with no
+        // door, E opens a nearby crafting/alchemy station instead
         // (single-player only; online the server owns the level).
         if (net == null && !showInventory && input.isKeyJustPressed(KeyEvent.VK_E)) {
-            tryDoorTravel(p);
+            if (craftingPanel != null) {
+                craftingPanel = null;
+            } else if (!tryDoorTravel(p)) {
+                tryOpenStation(p);
+            }
         }
 
         if (p.perspectiveSwitchingEnabled && input.isKeyJustPressed(KeyEvent.VK_P)) {
@@ -253,7 +286,11 @@ public class PlayScene extends AbstractScene {
             if (input.isKeyDown(KeyEvent.VK_MINUS)) camera.zoom = clampZoom(camera.zoom - dt * 2, p);
         }
 
-        updateInventoryControls(input, p);
+        if (craftingPanel != null) {
+            updateCrafting(input);
+        } else {
+            updateInventoryControls(input, p);
+        }
 
         PlayerInput in = new PlayerInput(
                 input.isKeyDown(KeyEvent.VK_A) || input.isKeyDown(KeyEvent.VK_LEFT),
@@ -261,17 +298,27 @@ public class PlayScene extends AbstractScene {
                 input.isKeyDown(KeyEvent.VK_W) || input.isKeyDown(KeyEvent.VK_UP),
                 input.isKeyDown(KeyEvent.VK_S) || input.isKeyDown(KeyEvent.VK_DOWN),
                 ++inputSeq);
+        in.sprint = input.isKeyDown(KeyEvent.VK_SHIFT);
         // The server resolves attacks against what this player holds.
         in.selected = inventory.selectedIndex();
 
-        if (!showInventory) handleMouseActions(input, p, in);
+        if (!showInventory && craftingPanel == null) {
+            handleMouseActions(input, p, in, dt);
+        } else if (world != null) {
+            world.cancelMining();
+        }
 
         // Online, physics must not depend on the local camera view — the server
         // simulates with the profile's perspective, so prediction does too.
         Perspective simPerspective = net != null ? p.perspective : camera.getPerspective();
         prevVy = me.vy;
+        double preX = me.x, preY = me.y;
         PlayerPhysics.step(me, in, level, p, simPerspective, dt);
-        if (me.vy < -1 && prevVy >= 0) ctx.sfx(Sfx.JUMP);
+        if (me.vy < -1 && prevVy >= 0) {
+            stats.add("jumps", 1);
+            ctx.sfx(Sfx.JUMP);
+        }
+        stats.add("distance_traveled", Math.abs(me.x - preX) + Math.abs(me.y - preY));
 
         if (net != null) {
             net.client().sendInput(in);
@@ -286,13 +333,24 @@ public class PlayScene extends AbstractScene {
             }
         } else {
             world.step(dt, List.of(me), p);
+            stats.add("mobs_killed", world.pollKills());
+            stats.add("deaths", world.pollDeaths());
             for (World.Impact im : world.pollImpacts()) impactFeedback(im, p);
             if (p.particlesEnabled) {
                 for (Projectile pr : world.projectiles()) emitTrail(pr.def.key(), pr.x, pr.y);
             }
+            // The level's programmable stat rules run against this run's stats.
+            for (StatRuleEngine.Fired fired : ruleEngine.update(stats, inventory)) {
+                ctx.sfx(Sfx.PICKUP);
+                ruleStatus = ruleFiredMessage(fired.rule());
+                ruleStatusTime = 3.5;
+            }
         }
 
-        if (me.health < prevHealth - 0.01) ctx.sfx(Sfx.HURT);
+        if (me.health < prevHealth - 0.01) {
+            stats.add("damage_taken", prevHealth - me.health);
+            ctx.sfx(Sfx.HURT);
+        }
         prevHealth = me.health;
 
         if (swingTime > 0) swingTime -= dt;
@@ -309,21 +367,23 @@ public class PlayScene extends AbstractScene {
      * in place — inventory and health carry through, so a set of levels wired
      * with doors plays like one continuous world.
      */
-    private void tryDoorTravel(GameProfile p) {
+    private boolean tryDoorTravel(GameProfile p) {
         double half = p.playerSize / 2.0;
         Level.EntitySpawn door = level.doorNear(me.x + half, me.y + half, ts() * 1.3);
-        if (door == null) return;
+        if (door == null) return false;
         DoorLink link = doors.get(door.type);
-        if (link == null || link.targetLevel().isEmpty()) return;
+        if (link == null || link.targetLevel().isEmpty()) return true;
         LevelStore store = new LevelStore(p.name);
-        if (!store.exists(link.targetLevel())) return;
+        if (!store.exists(link.targetLevel())) return true;
         level = store.load(link.targetLevel());
         world = new World(level);
         world.populateFromLevel(p);
         world.setPickupListener((player, key, count) -> {
             inventory.add(key, count);
+            stats.add("items_picked_up", count);
             ctx.sfx(Sfx.PICKUP);
         });
+        ruleEngine = new StatRuleEngine(List.copyOf(level.statRules));
         me.x = level.spawnX;
         me.y = level.spawnY;
         me.vy = 0;
@@ -331,6 +391,63 @@ public class PlayScene extends AbstractScene {
         parallax = null;
         particles.clear();
         ctx.sfx(Sfx.CLICK);
+        return true;
+    }
+
+    /** Standing near a crafting table / alchemy station, E opens its panel. */
+    private void tryOpenStation(GameProfile p) {
+        double ts = ts();
+        int pc = (int) Math.floor((me.x + p.playerSize / 2.0) / ts);
+        int pr = (int) Math.floor((me.y + p.playerSize / 2.0) / ts);
+        for (int dr = -1; dr <= 1; dr++) {
+            for (int dc = -2; dc <= 2; dc++) {
+                Block b = level.blockAt(pc + dc, pr + dr);
+                if (b == null) continue;
+                String station = switch (b.key()) {
+                    case "crafting_table" -> Recipe.STATION_CRAFTING;
+                    case "alchemy_station" -> Recipe.STATION_ALCHEMY;
+                    default -> null;
+                };
+                if (station != null) {
+                    craftingPanel = new CraftingPanel(station, RecipeRegistry.standard(),
+                            world != null ? world.itemTypes : ItemRegistry.standard());
+                    ctx.sfx(Sfx.CLICK);
+                    return;
+                }
+            }
+        }
+    }
+
+    /** Crafting overlay input: wheel scrolls it, clicking a lit recipe crafts. */
+    private void updateCrafting(InputManager input) {
+        CraftingPanel.Crafted crafted =
+                craftingPanel.update(input, inventory, viewportWidth, viewportHeight);
+        if (crafted == null) return;
+        stats.add("crafts", 1);
+        ctx.sfx(Sfx.PICKUP);
+        if (crafted.leftover() > 0 && world != null) {
+            DroppedItem drop = world.spawnItem(crafted.recipe().output(),
+                    crafted.leftover(), me.x, me.y);
+            if (drop != null) drop.pickupDelay = 1.0;
+        }
+        ItemDef out = (world != null ? world.itemTypes : ItemRegistry.standard())
+                .get(crafted.recipe().output());
+        ruleStatus = "Crafted " + (out != null ? out.name() : crafted.recipe().output());
+        ruleStatusTime = 2.5;
+    }
+
+    private static String ruleFiredMessage(StatRule rule) {
+        StringBuilder sb = new StringBuilder(PlayerStats.label(rule.stat()))
+                .append(" reached ").append((long) rule.threshold());
+        if (rule.consumeItem() != null) {
+            sb.append(" — consumed ").append(rule.consumeCount())
+                    .append("× ").append(rule.consumeItem());
+        }
+        if (rule.rewardItem() != null) {
+            sb.append(" → +").append(rule.rewardCount())
+                    .append("× ").append(rule.rewardItem());
+        }
+        return sb.toString();
     }
 
     // --- items & block interaction ------------------------------------------------
@@ -361,9 +478,14 @@ public class PlayScene extends AbstractScene {
         if (input.isKeyJustPressed(KeyEvent.VK_F)) {
             ItemDef def = inventory.selectedDef();
             boolean edible = def != null && def.heal() > 0 && me.health < PlayerState.MAX_HEALTH;
+            boolean manaDrink = def != null && "mana_potion".equals(def.key())
+                    && me.mana < PlayerState.MAX_MANA;
             if (net != null) {
                 net.client().sendUseItem(inventory.selectedIndex());
                 if (edible) ctx.sfx(Sfx.EAT);
+            } else if (manaDrink && inventory.consumeSelected()) {
+                me.mana = Math.min(PlayerState.MAX_MANA, me.mana + 50);
+                ctx.sfx(Sfx.EAT);
             } else if (edible && inventory.consumeSelected()) {
                 me.health = Math.min(PlayerState.MAX_HEALTH, me.health + def.heal());
                 prevHealth = me.health; // don't play the hurt sound on heals
@@ -436,14 +558,15 @@ public class PlayScene extends AbstractScene {
 
     /**
      * Left click: fire the held ranged weapon / throwable (if projectiles are
-     * on), else mine the aimed block (if block editing is on and it's in
-     * reach), else swing at mobs (if combat is on). Right click: place the
-     * selected hotbar block. Online these become server requests.
+     * on), else swing at mobs (if combat is on). <em>Holding</em> left over a
+     * block in reach mines it over time — block durability, sped up by a
+     * matching tool (offline; online mining stays a per-click server
+     * request). Right click: place the selected hotbar block.
      */
-    private void handleMouseActions(InputManager input, GameProfile p, PlayerInput in) {
+    private void handleMouseActions(InputManager input, GameProfile p, PlayerInput in,
+                                    double dt) {
         boolean leftClick = input.isMouseJustPressed();
         boolean rightClick = input.isRightMouseJustPressed();
-        if (!leftClick && !rightClick) return;
 
         double[] aim = camera.screenToWorld(input.getMouseX(), input.getMouseY());
         double ts = ts();
@@ -452,36 +575,49 @@ public class PlayScene extends AbstractScene {
         boolean inReach = Math.hypot(aim[0] - (me.x + ps() / 2), aim[1] - (me.y + ps() / 2))
                 <= REACH_TILES * ts;
 
+        ItemDef held = p.itemsEnabled ? inventory.selectedDef() : null;
+        boolean shoots = p.projectilesEnabled && held != null && held.projectile() != null;
+
+        // Hold-to-mine against block durability (offline world only).
+        boolean miningNow = net == null && input.isMouseDown() && !shoots
+                && p.blockEditingEnabled && inReach && level.tileAt(col, row) > 0;
+        if (miningNow) {
+            swingTime = Math.max(swingTime, 0.1);
+            if (level.blockAt(col, row) == null) {
+                // Legacy palette tile with no block definition: instant break.
+                if (leftClick && level.setTile(col, row, 0)) {
+                    stats.add("blocks_mined", 1);
+                    ctx.sfx(Sfx.BREAK);
+                    if (p.particlesEnabled) {
+                        particles.burst((col + 0.5) * ts, (row + 0.5) * ts, Color.GRAY, 10);
+                    }
+                }
+            } else {
+                Block mined = world.continueMining(col, row, held, p.itemsEnabled, dt);
+                if (mined != null) {
+                    stats.add("blocks_mined", 1);
+                    ctx.sfx(Sfx.BREAK);
+                    if (p.particlesEnabled) {
+                        particles.burst((col + 0.5) * ts, (row + 0.5) * ts, mined.color(), 10);
+                    }
+                }
+            }
+        } else if (net == null && world != null) {
+            world.cancelMining();
+        }
+
         if (leftClick) {
-            ItemDef held = p.itemsEnabled ? inventory.selectedDef() : null;
-            boolean shoots = p.projectilesEnabled && held != null && held.projectile() != null;
             if (shoots) {
                 shootAt(aim[0], aim[1], in);
-            } else if (p.blockEditingEnabled && inReach && level.tileAt(col, row) > 0) {
-                mineAt(col, row, p);
-            } else if (p.combatEnabled) {
+            } else if (net != null && p.blockEditingEnabled && inReach
+                    && level.tileAt(col, row) > 0) {
+                net.client().sendBlockEdit(col, row, 0, "play");
+            } else if (!miningNow && p.combatEnabled) {
                 swingAt(aim[0], aim[1], in, p);
             }
         }
         if (rightClick && p.blockEditingEnabled && inReach) {
             placeAt(col, row, p);
-        }
-    }
-
-    private void mineAt(int col, int row, GameProfile p) {
-        if (net != null) {
-            net.client().sendBlockEdit(col, row, 0, "play");
-            return; // feedback arrives with the authoritative broadcast
-        }
-        Block mined = world.mineBlock(col, row, p.itemsEnabled);
-        boolean changed = mined != null;
-        if (!changed) changed = level.setTile(col, row, 0); // legacy palette tile
-        if (changed) {
-            ctx.sfx(Sfx.BREAK);
-            if (p.particlesEnabled) {
-                Color c = mined != null ? mined.color() : Color.GRAY;
-                particles.burst((col + 0.5) * ts(), (row + 0.5) * ts(), c, 10);
-            }
         }
     }
 
@@ -506,6 +642,7 @@ public class PlayScene extends AbstractScene {
         }
         if (world.placeBlock(col, row, b.id())) {
             if (p.itemsEnabled) inventory.consumeSelected();
+            stats.add("blocks_placed", 1);
             ctx.sfx(Sfx.PLACE);
         }
     }
@@ -544,6 +681,7 @@ public class PlayScene extends AbstractScene {
             return;
         }
         if (world.playerShoot(me, inventory, aimX, aimY) != null) {
+            stats.add("shots_fired", 1);
             ctx.sfx(Sfx.SHOOT);
         }
     }
@@ -663,7 +801,9 @@ public class PlayScene extends AbstractScene {
         }
 
         drawDecorLayer(g, false); // background scenery behind the terrain
+        SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), false, animClock);
         drawTiles(g);
+        if (net == null) drawMiningCracks(g);
         if (p.gridVisible && camera.getPerspective() != Perspective.ISOMETRIC) drawGrid(g);
         drawDoors(g);
         drawWorldEntities(g, p);
@@ -671,16 +811,105 @@ public class PlayScene extends AbstractScene {
         drawPlayer(g, me.x, me.y, me.facingLeft, walkAnim.current(), null);
         if (swingTime > 0) drawSwing(g);
         drawDecorLayer(g, true); // foreground scenery covers players
+        SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), true, animClock);
         if (p.particlesEnabled) particles.render(g, camera);
         if (net == null) drawDoorHint(g, p);
         if (p.hudVisible) drawHud(g);
         if (p.itemsEnabled) drawHotbar(g);
         if (p.combatEnabled || p.mobsEnabled) drawHealthBar(g);
+        drawResourceBars(g);
+        if (net == null) drawStatRuleBars(g);
+        drawRuleStatus(g);
         if (net != null) drawEvents(g);
         if (showInventory) drawInventory(g);
+        if (craftingPanel != null) {
+            craftingPanel.render(g, viewportWidth, viewportHeight, inventory, animClock);
+        }
 
         if (paused) drawPauseOverlay(g);
         if (net != null && !net.client().isConnected()) drawDisconnectOverlay(g);
+    }
+
+    /** Crack overlay on the block being held-mined, scaled by progress. */
+    private void drawMiningCracks(Graphics2D g) {
+        if (world == null) return;
+        int[] cell = world.miningCell();
+        double progress = world.miningProgress();
+        if (cell == null || progress <= 0.01) return;
+        double ts = ts();
+        camera.worldToScreen(cell[0] * ts, cell[1] * ts, corner);
+        int x = corner[0], y = corner[1];
+        camera.worldToScreen((cell[0] + 1) * ts, (cell[1] + 1) * ts, corner);
+        int w = Math.abs(corner[0] - x), h = Math.abs(corner[1] - y);
+        int cx = x + w / 2, cy = y + h / 2;
+        g.setColor(new Color(20, 16, 12, 200));
+        g.setStroke(new BasicStroke(Math.max(1f, w / 22f)));
+        int cracks = 2 + (int) (progress * 6);
+        for (int i = 0; i < cracks; i++) {
+            double a = i * (Math.PI * 2 / 8) + (cell[0] * 3 + cell[1] * 7) % 7 * 0.4;
+            double len = (0.2 + progress * 0.42) * w;
+            int mx = cx + (int) (Math.cos(a) * len * 0.55);
+            int my = cy + (int) (Math.sin(a) * len * 0.55);
+            g.drawLine(cx, cy, mx, my);
+            g.drawLine(mx, my, mx + (int) (Math.cos(a + 0.6) * len * 0.45),
+                    my + (int) (Math.sin(a + 0.6) * len * 0.45));
+        }
+    }
+
+    /** Stamina (green) and mana (blue) bars stacked above the health bar. */
+    private void drawResourceBars(Graphics2D g) {
+        int w = 180, h = 8;
+        int x = 12;
+        drawResourceBar(g, x, viewportHeight - 40, w, h,
+                me.stamina / PlayerState.MAX_STAMINA,
+                new Color(40, 90, 40), new Color(110, 220, 110));
+        drawResourceBar(g, x, viewportHeight - 52, w, h,
+                me.mana / PlayerState.MAX_MANA,
+                new Color(35, 45, 100), new Color(100, 140, 245));
+    }
+
+    private void drawResourceBar(Graphics2D g, int x, int y, int w, int h,
+                                 double t, Color back, Color front) {
+        g.setColor(new Color(0, 0, 0, 150));
+        g.fillRoundRect(x - 2, y - 2, w + 4, h + 4, 5, 5);
+        g.setColor(back);
+        g.fillRect(x, y, w, h);
+        g.setColor(front);
+        g.fillRect(x, y, (int) (w * Math.max(0, Math.min(1, t))), h);
+    }
+
+    /** The level's programmable stat bars (rules marked "show bar"), top-right. */
+    private void drawStatRuleBars(Graphics2D g) {
+        if (ruleEngine == null || stats == null || level.statRules.isEmpty()) return;
+        int w = 170, h = 10;
+        int x = viewportWidth - w - 14, y = 56;
+        g.setFont(SMALL_FONT);
+        for (StatRule rule : level.statRules) {
+            if (!rule.showBar()) continue;
+            double t = ruleEngine.progress(rule, stats);
+            g.setColor(new Color(0, 0, 0, 150));
+            g.fillRoundRect(x - 4, y - 13, w + 8, h + 18, 6, 6);
+            g.setColor(new Color(210, 210, 225));
+            g.drawString(PlayerStats.label(rule.stat()) + "  "
+                    + (long) stats.get(rule.stat()) + " / " + (long) rule.threshold(), x, y - 3);
+            g.setColor(new Color(70, 60, 30));
+            g.fillRect(x, y, w, h);
+            g.setColor(t >= 1 ? new Color(150, 230, 150) : new Color(240, 200, 90));
+            g.fillRect(x, y, (int) (w * Math.max(0, Math.min(1, t))), h);
+            y += h + 22;
+        }
+    }
+
+    /** Transient "rule fired / crafted" toast above the hotbar. */
+    private void drawRuleStatus(Graphics2D g) {
+        if (ruleStatusTime <= 0 || ruleStatus.isEmpty()) return;
+        g.setFont(HUD_FONT);
+        int tw = g.getFontMetrics().stringWidth(ruleStatus);
+        int x = (viewportWidth - tw) / 2, y = viewportHeight - 110;
+        g.setColor(new Color(0, 0, 0, 170));
+        g.fillRoundRect(x - 10, y - 16, tw + 20, 24, 8, 8);
+        g.setColor(new Color(200, 240, 200));
+        g.drawString(ruleStatus, x, y);
     }
 
     /**
@@ -719,6 +948,19 @@ public class PlayScene extends AbstractScene {
                 camera.worldToScreen((c + 0.5) * ts, (r + 0.5) * ts, corner);
                 lighting.addLight(corner[0], corner[1],
                         block.lightRadius() * ts * camera.zoom, block.lightColor());
+            }
+        }
+        // Coloured rarity lighting: uncommon+ drops shine with their tier's
+        // colour after dark (matching their daylight halo sprite).
+        if (net == null) {
+            for (DroppedItem item : world.items()) {
+                ItemDef def = world.itemTypes.get(item.key);
+                if (def == null || def.rarity() == ItemDef.Rarity.COMMON) continue;
+                camera.worldToScreen(item.x + DroppedItem.SIZE / 2,
+                        item.y + DroppedItem.SIZE / 2, corner);
+                lighting.addLight(corner[0], corner[1],
+                        (1.0 + def.rarity().ordinal() * 0.6) * ts * camera.zoom,
+                        def.rarity().color);
             }
         }
         // Glowing projectiles (fireballs, magic bolts) carry their own light —
@@ -1108,12 +1350,39 @@ public class PlayScene extends AbstractScene {
         if (img == null) img = EntitySprites.item(def, 16);
         int w = Math.max(6, (int) Math.round(DroppedItem.SIZE * camera.zoom));
         camera.worldToScreen(x, y, corner);
+        drawRarityHalo(g, def, corner[0] + w / 2, corner[1] + w / 2, w);
         g.drawImage(img, corner[0], corner[1], w, w, null);
         if (count > 1) {
             g.setFont(SMALL_FONT);
             g.setColor(Color.WHITE);
             g.drawString("x" + count, corner[0] + w, corner[1] + w);
         }
+    }
+
+    /**
+     * The coloured halo behind an uncommon+ dropped item: a soft radial
+     * gradient in the rarity tier's colour, gently pulsing — visible in
+     * daylight, and matched by a real point light after dark (see
+     * {@link #feedLighting}).
+     */
+    private void drawRarityHalo(Graphics2D g, ItemDef def, int cx, int cy, int itemPx) {
+        if (def.rarity() == ItemDef.Rarity.COMMON) return;
+        float pulse = 0.82f + 0.18f * (float) Math.sin(animClock * 3
+                + def.key().hashCode() % 7);
+        float radius = Math.max(4f, itemPx * (1.1f + 0.35f * def.rarity().ordinal()) * pulse);
+        Color c = def.rarity().color;
+        RadialGradientPaint paint = new RadialGradientPaint(
+                new java.awt.geom.Point2D.Float(cx, cy), radius,
+                new float[]{0f, 0.55f, 1f},
+                new Color[]{
+                        new Color(c.getRed(), c.getGreen(), c.getBlue(), 110),
+                        new Color(c.getRed(), c.getGreen(), c.getBlue(), 46),
+                        new Color(c.getRed(), c.getGreen(), c.getBlue(), 0)});
+        var old = g.getPaint();
+        g.setPaint(paint);
+        g.fillOval((int) (cx - radius), (int) (cy - radius),
+                (int) (radius * 2), (int) (radius * 2));
+        g.setPaint(old);
     }
 
     /** A short arc in front of the player while a melee swing plays. */
