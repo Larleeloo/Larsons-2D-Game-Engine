@@ -110,6 +110,15 @@ over in a generic, data-driven form and wired to the same toggles:
   travelled → receive bread"*, *"holding ≥ 10 stone → consume 10 stone,
   receive an ingot"* — one-shot or repeating, optionally charted as live HUD
   progress bars.
+- **Triggerable cutscenes** — map makers script cinematic sequences in the
+  creative editor ([`Cutscene`](src/main/java/com/larsons/engine/level/Cutscene.java)):
+  a trigger (walk into a zone, press **E** at a marker, or level start), a
+  cast of sprite-sheet **actors with named animation states** (per-state
+  sheet, frame size/count, 0-120 fps, loop or one-shot), and an ordered step
+  script — show / say / move / switch animation state / wait / camera pan /
+  hide. Cutscenes save with the level and play in play-test and play with
+  letterbox bars, dialogue captions, and Enter/Esc skipping. See
+  [Cutscenes](#cutscenes-triggerable-scripted-scenes).
 - **Coloured rarity lighting** — uncommon+ items glow with a pulsing halo in
   their rarity tier's colour, and after dark they carry a real point light of
   that colour through the lighting pass.
@@ -235,6 +244,7 @@ com.larsons.engine
 │   ├── SpriteSheet.java   Slice a sheet into frames
 │   ├── Animation.java     Delta-timed frame animation
 │   ├── AssetLoader.java   Cached image loading + placeholders
+│   ├── CutscenePainter.java Cutscene actors (sheet frames + fallbacks) + letterbox/captions
 │   ├── SkinDef.java       One texture override: sheet + frame w/h/count + 0-120 fps
 │   ├── SkinStore.java     Persist skins.json under resources/skins/ (game files)
 │   ├── Skins.java         Runtime resolver: skin frame for a key at a time, or null
@@ -283,7 +293,10 @@ com.larsons.engine
 ├── level
 │   ├── Level.java         Tile grid (palette or block-registry mode) + spawns
 │   ├── LevelLoader.java   Load a Level from JSON (or raw text, for the server)
-│   └── LevelStore.java    Per-game-type level saving (creative mode's home)
+│   ├── LevelStore.java    Per-game-type level saving (creative mode's home)
+│   ├── Cutscene.java      Cutscene data: trigger + actors (animation states) + steps
+│   ├── CutscenePlayer.java Runs one cutscene's step script (headless)
+│   └── CutsceneDirector.java Watches triggers per run, owns the active playback
 ├── audio
 │   └── AudioManager.java  Synthesized sound effects (JDK only, headless-safe)
 ├── autobattler
@@ -519,6 +532,7 @@ everything the registries know, in categories —
 | Decor    | trees, rocks, bushes, crystals… painted into the background or foreground layer |
 | Surface  | per-face block details (grass tufts, hanging moss, twigs, icicles, cobwebs…) with face / open-closed / layer toggles |
 | Doors    | the game type's door list (external `doors.json`), each linking to another level |
+| Cutscenes | the level's scripted cutscenes — paint one to place its trigger marker; *Manage Cutscenes…* (or right-clicking an entry) opens the editor |
 | Tools    | player spawn, multiplayer spawn points, eraser, Brush Settings, the Generate button, the Stat Rules editor |
 
 Objects **you** created (via the "+" entries) wear a green corner badge in
@@ -637,6 +651,42 @@ fired), and when it crosses the threshold it optionally **consumes** items
 from the player's inventory and **grants** a reward — one-shot or repeating
 every threshold step, with an optional live HUD progress bar. Rules save
 with the level and run in play and play-test.
+
+### Cutscenes (triggerable scripted scenes)
+
+The CUTSCENES palette scripts **triggerable cutscenes** into the level. Each
+cutscene has three parts, edited through *Manage Cutscenes…* (or the "+"
+entry, or right-clicking a cutscene's palette icon):
+
+- **A trigger** — *walk into it* (a zone the player enters), *press E at it*
+  (an interaction marker), or *when the level starts*. Zone/interact
+  cutscenes have a marker painted into the world (click the canvas with the
+  cutscene's palette entry selected — repainting moves it, exactly like the
+  spawn marker) and a trigger radius in tiles, drawn as a ring in the
+  editor. *Play once per run* makes it a one-shot; re-triggerable zone
+  cutscenes re-arm only after the player leaves the zone.
+- **Actors** — the scene's cast. Each actor is a set of named **animation
+  states for sprite sheets**: `idle`, `walk`, `talk`, or anything you like,
+  each state its own sheet (path or *Browse…*), frame pixel width/height,
+  frame count, a 0-120 fps playback rate, and a **loop** flag (off = a
+  one-shot that holds its last frame — a wave, a collapse). The runtime
+  plays `walk` automatically while an actor moves and `talk` while it
+  speaks, falls back to `idle` for states an actor doesn't define, and an
+  actor with no working sheet at all draws as a procedural stand-in figure,
+  so a missing PNG never breaks the scene.
+- **Steps** — the script, run in order: **SHOW** an actor at a tile
+  (optionally in a named state) · **SAY** dialogue (a caption box with the
+  speaker's name) · **MOVE** an actor to a tile over some seconds ·
+  **ANIM** switch an actor's animation state (optionally holding) ·
+  **WAIT** · **CAMERA** pan to a tile · **HIDE** an actor. A *Set X,Y to
+  the camera center* button grabs coordinates from wherever you're looking.
+
+During play-test (`P`) and play, [`CutsceneDirector`](src/main/java/com/larsons/engine/level/CutsceneDirector.java)
+watches the triggers and [`CutscenePlayer`](src/main/java/com/larsons/engine/level/CutscenePlayer.java)
+runs the script: the world holds still, letterbox bars ease in, the camera
+follows the script, and **Enter/Esc skips** (every remaining effect still
+applies, so skipping never strands actors mid-scene). Cutscenes serialize
+with the level JSON, so they travel with saved levels like stat rules do.
 
 **Play-testing** (`P`) drops a player at the spawn marker and simulates the
 painted world with the real `PlayerPhysics`/mob/item code and the game
@@ -1227,6 +1277,12 @@ collisions, sprint stamina, block durability with tool speed-ups, crafting
 and smelting recipes, mana-costed magic, stat rules firing rewards and
 consumptions, brush footprints, mob wall-hopping, surface-decor and
 stat-rule serialization, and the creative scene rendering off-screen),
+cutscenes ([`CutsceneTest`](src/test/java/com/larsons/engine/CutsceneTest.java):
+sheet-anim frame timing with loop/one-shot clamping, the step player's
+sequencing — captions, moves with walk-state restore and facing, camera
+pans, skipping applying every remaining effect — the trigger director's
+zone/interact/level-start semantics with once-per-run and re-arming, and
+level-JSON round-trips),
 and full loopback multiplayer (a real server + clients: handshake, movement,
 join/leave, version rejection, shutdown — plus block edits replicating to
 every client and late joiners, painted mobs appearing in snapshots and being

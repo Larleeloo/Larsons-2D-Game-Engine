@@ -18,6 +18,7 @@ import com.larsons.engine.entity.MobRegistry;
 import com.larsons.engine.entity.Projectile;
 import com.larsons.engine.fx.Particles;
 import com.larsons.engine.graphics.Camera;
+import com.larsons.engine.graphics.CutscenePainter;
 import com.larsons.engine.graphics.EntitySprites;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.SkinDef;
@@ -26,6 +27,9 @@ import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.SurfaceDecorPainter;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.level.Brush;
+import com.larsons.engine.level.Cutscene;
+import com.larsons.engine.level.CutsceneDirector;
+import com.larsons.engine.level.CutscenePlayer;
 import com.larsons.engine.level.DoorDirectory;
 import com.larsons.engine.level.DoorLink;
 import com.larsons.engine.level.Level;
@@ -107,6 +111,15 @@ import java.util.Map;
  * triggers over tracked stats ("mined 50 blocks → reward…"), which run
  * during play-test/play ({@link StatRule}, {@link StatRuleEngine}).
  *
+ * <p><b>Cutscenes:</b> the CUTSCENES palette scripts triggerable cutscenes —
+ * each has a trigger (walk into a zone, press E at a marker, or level start),
+ * a cast of sprite-sheet <em>actors</em> with named animation states (idle /
+ * walk / talk / anything; per-state sheet, frame size, count, fps, loop), and
+ * an ordered step script (show / say / move / anim / wait / camera / hide).
+ * Painting a cutscene entry places its trigger marker; play-test and play run
+ * them with letterbox bars and skippable captions ({@link Cutscene},
+ * {@link CutsceneDirector}, {@link CutscenePlayer}).
+ *
  * <p><b>Doors:</b> the Doors palette is built from the game type's external
  * {@link DoorDirectory} ({@code doors.json} beside its saved levels); each
  * entry names another level of the same game type, and painted doors load it
@@ -163,10 +176,11 @@ public class CreativeScene extends AbstractScene {
     private static final int STANDARD_MAX_SIZE = 1024;
 
     /** What the palette can paint. */
-    private enum Category { BLOCKS, LIQUIDS, LIGHTS, MOBS, ITEMS, DECOR, SURFACE, DOORS, TOOLS }
+    private enum Category { BLOCKS, LIQUIDS, LIGHTS, MOBS, ITEMS, DECOR, SURFACE, DOORS,
+        CUTSCENES, TOOLS }
 
     private enum Dialog { NONE, NEW_LEVEL, SAVE, LOAD, CONFIRM_EXIT, GENERATE, DOORS, TEXTURE,
-        CUSTOM, RULES, BRUSH }
+        CUSTOM, RULES, BRUSH, CUTSCENES, CUTSCENE_ACTORS, CUTSCENE_STEPS }
 
     /** {@code custom} marks user-created objects (badged, deletable). */
     private record Entry(String kind, String key, String name, BufferedImage icon,
@@ -241,6 +255,26 @@ public class CreativeScene extends AbstractScene {
     private boolean cFaceUp = true, cFaceDown, cFaceLeft, cFaceRight;
     private boolean cSurfForeground;
 
+    // Cutscene editor state (the CUTSCENES palette's dialog suite).
+    private int csEditIndex;      // 0 = new cutscene, 1.. = existing
+    private String csName = "";
+    private int csTriggerIndex;
+    private int csRadius = 2;
+    private boolean csOnce = true;
+    private int csActorEditIndex; // 0 = new actor, 1.. = existing
+    private String csActorName = "";
+    private int csActorSize = 48;
+    private int csStateEditIndex; // 0 = new state, 1.. = existing
+    private String csStateName = "";
+    private String csSheet = "", csFrameW = "32", csFrameH = "32", csFrames = "1", csFps = "8";
+    private boolean csLoop = true;
+    private int csStepEditIndex;  // 0 = append a new step, 1.. = existing
+    private int csOpIndex;
+    private int csStepActorIndex;
+    private String csText = "";
+    private int csStepX, csStepY; // tile coordinates in the editor fields
+    private String csSeconds = "1.0";
+
     // Stat-rule editor state.
     private int ruleEditIndex; // 0 = new rule, 1.. = existing
     private int ruleStatIndex;
@@ -287,6 +321,7 @@ public class CreativeScene extends AbstractScene {
     // Play-test stat tracking + programmable rules + crafting.
     private PlayerStats testStats;
     private StatRuleEngine ruleEngine;
+    private CutsceneDirector cutsceneDirector; // runs the level's cutscenes
     private CraftingPanel craftingPanel; // non-null while a station UI is open
     private double prevTestVy;
 
@@ -306,7 +341,6 @@ public class CreativeScene extends AbstractScene {
         // registered before any level referencing them loads.
         customContent = new CustomContentStore(profile().name);
         customContent.loadAndRegister();
-        buildPalette();
 
         if (net != null && net.client().level() != null) {
             level = net.client().level(); // paint straight into the shared world
@@ -314,6 +348,8 @@ public class CreativeScene extends AbstractScene {
             net = null;
             level = loadInitialLevel();
         }
+        // After the level: the CUTSCENES palette lists the level's cutscenes.
+        buildPalette();
         pendingLevelW = level.width;
         pendingLevelH = level.height;
         pendingPerspective = profile().perspective;
@@ -445,6 +481,17 @@ public class CreativeScene extends AbstractScene {
         }
         doorEntries.add(new Entry("managedoors", "managedoors", "Manage Doors…", manageDoorsIcon()));
         palette.put(Category.DOORS, doorEntries);
+
+        // Cutscenes live in the level: paint one to place its trigger marker.
+        List<Entry> cutsceneEntries = newList("+ New Cutscene");
+        if (level != null) {
+            for (Cutscene cs : level.cutscenes) {
+                cutsceneEntries.add(new Entry("cutscene", cs.key, cs.name, cutsceneIcon()));
+            }
+        }
+        cutsceneEntries.add(new Entry("managecutscenes", "managecutscenes",
+                "Manage Cutscenes…", manageDoorsIcon()));
+        palette.put(Category.CUTSCENES, cutsceneEntries);
 
         List<Entry> tools = new ArrayList<>();
         tools.add(new Entry("spawn", "spawn", "Player Spawn", spawnIcon()));
@@ -809,6 +856,32 @@ public class CreativeScene extends AbstractScene {
                 ctx.sfx(Sfx.CLICK);
                 setStatus("Multiplayer spawn point #" + countKind("mp_spawn") + " placed");
             }
+            case "cutscene" -> {
+                if (!firstClick) return;
+                if (net != null) {
+                    setStatus("Cutscenes are edited offline");
+                    return;
+                }
+                Cutscene cs = cutsceneByKey(entry.key);
+                if (cs == null) return;
+                if (cs.trigger == Cutscene.Trigger.LEVEL_START) {
+                    setStatus("\"" + cs.name + "\" plays at level start — no marker to place");
+                    return;
+                }
+                // One marker per cutscene: painting moves it, like the spawn.
+                cs.x = wx;
+                cs.y = wy;
+                ctx.sfx(Sfx.CLICK);
+                setStatus("\"" + cs.name + "\" trigger placed ("
+                        + (cs.trigger == Cutscene.Trigger.ZONE ? "walk within" : "press E within")
+                        + " " + (int) cs.radiusTiles + " tiles)");
+            }
+            case "managecutscenes" -> {
+                if (firstClick) {
+                    if (net == null) openDialog(Dialog.CUTSCENES);
+                    else setStatus("Cutscenes are edited offline");
+                }
+            }
             case "spawn" -> {
                 level.spawnX = wx;
                 level.spawnY = wy;
@@ -1080,12 +1153,18 @@ public class CreativeScene extends AbstractScene {
                     else setStatus("Generation is a local-world feature");
                 }
                 case "managedoors" -> openDialog(Dialog.DOORS);
+                case "managecutscenes" -> {
+                    if (net == null) openDialog(Dialog.CUTSCENES);
+                    else setStatus("Cutscenes are edited offline");
+                }
                 case "new" -> openCustomCreator();
                 case "brush" -> openDialog(Dialog.BRUSH);
                 case "rules" -> {
                     if (net == null) openDialog(Dialog.RULES);
                     else setStatus("Stat rules are edited offline");
                 }
+                case "cutscene" -> setStatus(e.name
+                        + " — click the canvas to place its trigger marker");
                 default -> setStatus(e.name + (e.custom ? "  (your custom object)" : ""));
             }
         }
@@ -1115,6 +1194,11 @@ public class CreativeScene extends AbstractScene {
             openDialog(Dialog.DOORS);
             return;
         }
+        if (category == Category.CUTSCENES) {
+            csEditIndex = 0;
+            openDialog(Dialog.CUTSCENES);
+            return;
+        }
         customCategory = category;
         cName = "";
         openDialog(Dialog.CUSTOM);
@@ -1126,6 +1210,18 @@ public class CreativeScene extends AbstractScene {
         List<Entry> entries = palette.get(category);
         if (idx < 0 || idx >= entries.size()) return;
         Entry e = entries.get(idx);
+        if ("cutscene".equals(e.kind)) {
+            // Straight into the editor for this cutscene.
+            if (net != null) {
+                setStatus("Cutscenes are edited offline");
+                return;
+            }
+            for (int i = 0; i < level.cutscenes.size(); i++) {
+                if (level.cutscenes.get(i).key.equals(e.key)) csEditIndex = i + 1;
+            }
+            openDialog(Dialog.CUTSCENES);
+            return;
+        }
         if (!skinnable(e.kind)) {
             setStatus("No texture override for " + e.name);
             return;
@@ -1197,6 +1293,7 @@ public class CreativeScene extends AbstractScene {
         bindTestPickups();
         testStats = new PlayerStats();
         ruleEngine = new StatRuleEngine(List.copyOf(level.statRules));
+        cutsceneDirector = new CutsceneDirector(level.cutscenes);
         craftingPanel = null;
         testing = true;
         showInventory = false;
@@ -1229,6 +1326,7 @@ public class CreativeScene extends AbstractScene {
         testInv = null;
         testStats = null;
         ruleEngine = null;
+        cutsceneDirector = null;
         craftingPanel = null;
         containerPanel = null;
         showInventory = false;
@@ -1264,6 +1362,24 @@ public class CreativeScene extends AbstractScene {
 
     private void updateTest(double dt, InputManager input) {
         GameProfile p = profile();
+        // A running cutscene owns the frame: the world holds still, the
+        // director drives the camera, Enter/Esc skips to the end.
+        if (cutsceneDirector != null && cutsceneDirector.active() != null) {
+            if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)
+                    || input.isKeyJustPressed(KeyEvent.VK_ENTER)) {
+                cutsceneDirector.skip();
+            } else {
+                cutsceneDirector.advance(dt);
+            }
+            CutscenePlayer cut = cutsceneDirector.active();
+            if (cut != null) {
+                camera.centerOn(cut.cameraX(), cut.cameraY());
+                particles.update(dt);
+                return;
+            }
+            camera.centerOn(testMe.x + p.playerSize / 2.0, testMe.y + p.playerSize / 2.0);
+            return; // resume normal play next tick
+        }
         if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
             if (craftingPanel != null) {
                 craftingPanel = null;
@@ -1375,6 +1491,20 @@ public class CreativeScene extends AbstractScene {
         if (swingTime > 0) swingTime -= dt;
         particles.update(dt);
         camera.centerOn(testMe.x + p.playerSize / 2.0, testMe.y + p.playerSize / 2.0);
+
+        // Cutscene triggers watch the player: zones fire on entry, INTERACT
+        // ones on E (doors and stations already had their chance above).
+        if (cutsceneDirector != null) {
+            boolean interact = input.isKeyJustPressed(KeyEvent.VK_E)
+                    && craftingPanel == null && containerPanel == null;
+            Cutscene started = cutsceneDirector.checkTriggers(
+                    testMe.x + p.playerSize / 2.0, testMe.y + p.playerSize / 2.0,
+                    interact, level.tileSize, camera.x, camera.y);
+            if (started != null) {
+                testWorld.cancelMining();
+                ctx.sfx(Sfx.CLICK);
+            }
+        }
     }
 
     private static String ruleFiredMessage(StatRule rule) {
@@ -1657,6 +1787,7 @@ public class CreativeScene extends AbstractScene {
         startTestWorld();
         bindTestPickups(); // inventory carries through the door
         ruleEngine = new StatRuleEngine(List.copyOf(level.statRules));
+        cutsceneDirector = new CutsceneDirector(level.cutscenes);
         ctx.sfx(Sfx.CLICK);
         setStatus("Entered \"" + link.label() + "\" → " + level.name);
         return true;
@@ -1677,6 +1808,9 @@ public class CreativeScene extends AbstractScene {
             case CUSTOM -> "New Custom " + customKindName();
             case RULES -> "Stat Rules — " + level.name;
             case BRUSH -> "Brush Settings";
+            case CUTSCENES -> "Cutscenes — " + level.name;
+            case CUTSCENE_ACTORS -> "Actors — " + editingCutsceneName();
+            case CUTSCENE_STEPS -> "Steps — " + editingCutsceneName();
             default -> "";
         }).theme(MenuTheme.dark());
 
@@ -1771,6 +1905,9 @@ public class CreativeScene extends AbstractScene {
             case CUSTOM -> buildCustomForm();
             case RULES -> buildRulesForm();
             case BRUSH -> buildBrushForm();
+            case CUTSCENES -> buildCutscenesForm();
+            case CUTSCENE_ACTORS -> buildCutsceneActorsForm();
+            case CUTSCENE_STEPS -> buildCutsceneStepsForm();
             default -> { /* NONE */ }
         }
     }
@@ -1839,6 +1976,8 @@ public class CreativeScene extends AbstractScene {
         camera.centerOn(level.spawnX, level.spawnY);
         pendingLevelW = level.width;
         pendingLevelH = level.height;
+        buildPalette(); // the CUTSCENES palette lists this level's cutscenes
+        csEditIndex = 0;
         closeDialog();
     }
 
@@ -2097,6 +2236,12 @@ public class CreativeScene extends AbstractScene {
     }
 
     private void browseForSheet() {
+        String picked = chooseSheetFile();
+        if (picked != null) texSheet = picked;
+    }
+
+    /** Swing image chooser (texture pack folder first), or {@code null}. */
+    private String chooseSheetFile() {
         try {
             String dir = profile().texturePackDir;
             Path start = dir != null && !dir.isBlank() && Files.isDirectory(Path.of(dir.trim()))
@@ -2107,11 +2252,12 @@ public class CreativeScene extends AbstractScene {
             chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
                     "Images", "png", "gif", "jpg", "jpeg"));
             if (chooser.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) {
-                texSheet = chooser.getSelectedFile().getAbsolutePath();
+                return chooser.getSelectedFile().getAbsolutePath();
             }
         } catch (RuntimeException | Error e) {
             setStatus("File chooser unavailable — type the sheet path instead");
         }
+        return null;
     }
 
     private void persistSkins() {
@@ -2355,6 +2501,435 @@ public class CreativeScene extends AbstractScene {
         }
     }
 
+    // --- cutscenes (triggers + sprite-sheet actors + step scripts) --------------------
+
+    private static final String[] CS_TRIGGER_NAMES =
+            {"Walk into it (zone)", "Press E at it", "When the level starts"};
+    private static final String[] CS_OP_NAMES = {
+            "SHOW actor at X,Y", "SAY text (actor speaks)", "MOVE actor to X,Y",
+            "ANIM: set actor's state", "WAIT", "CAMERA pan to X,Y", "HIDE actor"};
+
+    /** The cutscene the dialog suite is editing, or {@code null} for "(new)". */
+    private Cutscene editingCutscene() {
+        return csEditIndex > 0 && csEditIndex <= level.cutscenes.size()
+                ? level.cutscenes.get(csEditIndex - 1) : null;
+    }
+
+    private String editingCutsceneName() {
+        Cutscene cs = editingCutscene();
+        return cs != null ? cs.name : "Cutscene";
+    }
+
+    private Cutscene cutsceneByKey(String key) {
+        for (Cutscene cs : level.cutscenes) {
+            if (cs.key.equals(key)) return cs;
+        }
+        return null;
+    }
+
+    /** A key no cutscene in this level uses yet. */
+    private String freshCutsceneKey() {
+        int n = level.cutscenes.size() + 1;
+        while (cutsceneByKey("cs" + n) != null) n++;
+        return "cs" + n;
+    }
+
+    /**
+     * The cutscene manager: pick one (or "new"), set its name, trigger kind,
+     * radius, and once/repeat, then dive into its actors (sprite-sheet
+     * animation states) and steps (the script). Cutscenes save with the
+     * level, and painting a cutscene's palette entry places its trigger
+     * marker in the world.
+     */
+    private void buildCutscenesForm() {
+        List<Cutscene> list = level.cutscenes;
+        csEditIndex = Math.min(csEditIndex, list.size());
+        List<String> options = new ArrayList<>();
+        options.add("(new cutscene)");
+        for (Cutscene cs : list) options.add(cs.name);
+        Cutscene editing = editingCutscene();
+        if (!dialogRebuild) {
+            csName = editing != null ? editing.name : "Cutscene " + (list.size() + 1);
+            csTriggerIndex = editing != null ? editing.trigger.ordinal() : 0;
+            csRadius = editing != null ? (int) Math.round(editing.radiusTiles) : 2;
+            csOnce = editing == null || editing.once;
+        }
+        dialogRebuild = false;
+
+        dialogForm.addEnum("Cutscene", options.toArray(new String[0]),
+                () -> options.get(Math.min(csEditIndex, options.size() - 1)),
+                v -> {
+                    csEditIndex = Math.max(0, options.indexOf(v));
+                    openDialog(Dialog.CUTSCENES); // reload the fields below
+                });
+        dialogForm.addText("Name", () -> csName, v -> csName = v, 28);
+        dialogForm.addEnum("Trigger", CS_TRIGGER_NAMES,
+                () -> CS_TRIGGER_NAMES[csTriggerIndex],
+                v -> csTriggerIndex = Math.max(0, List.of(CS_TRIGGER_NAMES).indexOf(v)));
+        dialogForm.addInt("Trigger radius (tiles)", () -> csRadius,
+                        v -> csRadius = v, 1, 64, 1)
+                .enabledWhen(() -> csTriggerIndex != Cutscene.Trigger.LEVEL_START.ordinal());
+        dialogForm.addToggle("Play once per run", () -> csOnce, v -> csOnce = v);
+        if (editing != null) {
+            dialogForm.addAction("Edit Actors… (" + editing.actors.size() + ")", () -> {
+                csActorEditIndex = 0;
+                csStateEditIndex = 0;
+                openDialog(Dialog.CUTSCENE_ACTORS);
+            });
+            dialogForm.addAction("Edit Steps… (" + editing.steps.size() + ")", () -> {
+                csStepEditIndex = 0;
+                openDialog(Dialog.CUTSCENE_STEPS);
+            });
+        }
+        dialogForm.addAction(editing == null ? "Add Cutscene" : "Save Cutscene", () -> {
+            if (editing == null) {
+                Cutscene cs = new Cutscene(freshCutsceneKey(), csName);
+                applyCutsceneFields(cs);
+                // The fresh marker lands mid-view; paint its palette entry to move it.
+                cs.x = camera.x;
+                cs.y = camera.y;
+                level.cutscenes.add(cs);
+                csEditIndex = level.cutscenes.size();
+                buildPalette();
+                openDialog(Dialog.CUTSCENES); // reopen on it: actors/steps unlock
+                setStatus("Cutscene \"" + cs.name + "\" added — give it actors and steps,"
+                        + " then paint its marker from the palette");
+            } else {
+                applyCutsceneFields(editing);
+                buildPalette();
+                closeDialog();
+                setStatus("Cutscene \"" + editing.name
+                        + "\" saved — it runs in play-test and play (Ctrl+S keeps it)");
+            }
+        });
+        if (editing != null) {
+            dialogForm.addAction("Delete Cutscene", () -> {
+                level.cutscenes.remove(editing);
+                csEditIndex = 0;
+                buildPalette();
+                closeDialog();
+                setStatus("Cutscene \"" + editing.name + "\" deleted");
+            });
+        }
+        dialogForm.addAction("Close", this::closeDialog);
+    }
+
+    private void applyCutsceneFields(Cutscene cs) {
+        cs.name = csName.isBlank() ? cs.key : csName.trim();
+        cs.trigger = Cutscene.Trigger.values()[
+                Math.min(csTriggerIndex, Cutscene.Trigger.values().length - 1)];
+        cs.radiusTiles = Math.max(1, csRadius);
+        cs.once = csOnce;
+    }
+
+    /**
+     * The actor editor for the selected cutscene: pick an actor (or "new"),
+     * name and size it, and define its <b>animation states</b> — each state
+     * is a sprite sheet with frame width/height, frame count, fps, and a
+     * loop flag. Steps refer to states by name (idle/walk/talk play
+     * automatically during MOVE and SAY steps).
+     */
+    private void buildCutsceneActorsForm() {
+        Cutscene cs = editingCutscene();
+        if (cs == null) {
+            openDialog(Dialog.CUTSCENES);
+            return;
+        }
+        csActorEditIndex = Math.min(csActorEditIndex, cs.actors.size());
+        List<String> options = new ArrayList<>();
+        options.add("(new actor)");
+        for (Cutscene.Actor a : cs.actors) options.add(a.name);
+        Cutscene.Actor editing = csActorEditIndex > 0
+                ? cs.actors.get(csActorEditIndex - 1) : null;
+        List<String> stateNames = editing != null
+                ? new ArrayList<>(editing.states.keySet()) : new ArrayList<>();
+        csStateEditIndex = Math.min(csStateEditIndex, stateNames.size());
+        if (!dialogRebuild) {
+            csActorName = editing != null ? editing.name : "Actor " + (cs.actors.size() + 1);
+            csActorSize = editing != null ? editing.sizePx
+                    : Math.max(16, level.tileSize * 3 / 2);
+            loadActorStateFields(editing, stateNames);
+        }
+        dialogRebuild = false;
+
+        dialogForm.addEnum("Actor", options.toArray(new String[0]),
+                () -> options.get(Math.min(csActorEditIndex, options.size() - 1)),
+                v -> {
+                    csActorEditIndex = Math.max(0, options.indexOf(v));
+                    csStateEditIndex = 0;
+                    openDialog(Dialog.CUTSCENE_ACTORS);
+                });
+        dialogForm.addText("Name", () -> csActorName, v -> csActorName = v, 24);
+        dialogForm.addInt("Size (world px)", () -> csActorSize,
+                v -> csActorSize = v, 8, 256, 4);
+        dialogForm.addAction(editing == null ? "Add Actor" : "Save Actor", () -> {
+            if (editing == null) {
+                Cutscene.Actor a = new Cutscene.Actor(
+                        freshActorKey(cs), csActorName, csActorSize);
+                cs.actors.add(a);
+                csActorEditIndex = cs.actors.size();
+                openDialog(Dialog.CUTSCENE_ACTORS); // states unlock below
+                setStatus("Actor \"" + a.name + "\" added — now give it animation states");
+            } else {
+                editing.name = csActorName.isBlank() ? editing.key : csActorName.trim();
+                editing.sizePx = csActorSize;
+                openDialog(Dialog.CUTSCENE_ACTORS);
+                setStatus("Actor \"" + editing.name + "\" saved");
+            }
+        });
+
+        if (editing != null) {
+            List<String> stateOptions = new ArrayList<>();
+            stateOptions.add("(new state)");
+            stateOptions.addAll(stateNames);
+            dialogForm.addEnum("Animation state", stateOptions.toArray(new String[0]),
+                    () -> stateOptions.get(Math.min(csStateEditIndex, stateOptions.size() - 1)),
+                    v -> {
+                        csStateEditIndex = Math.max(0, stateOptions.indexOf(v));
+                        openDialog(Dialog.CUTSCENE_ACTORS);
+                    });
+            dialogForm.addText("State name (idle/walk/talk/…)",
+                    () -> csStateName, v -> csStateName = v, 20);
+            dialogForm.addText("Sheet (PNG path)", () -> csSheet, v -> csSheet = v, 96);
+            dialogForm.addAction("Browse…", () -> {
+                String picked = chooseSheetFile();
+                if (picked != null) csSheet = picked;
+            });
+            dialogForm.addText("Frame width px", () -> csFrameW, v -> csFrameW = v, 4);
+            dialogForm.addText("Frame height px", () -> csFrameH, v -> csFrameH = v, 4);
+            dialogForm.addText("Frame count", () -> csFrames, v -> csFrames = v, 3);
+            dialogForm.addText("FPS (0 = static)", () -> csFps, v -> csFps = v, 5);
+            dialogForm.addToggle("Loop (off = hold the last frame)",
+                    () -> csLoop, v -> csLoop = v);
+            String editingState = csStateEditIndex > 0
+                    ? stateNames.get(csStateEditIndex - 1) : null;
+            dialogForm.addAction("Apply State", () -> {
+                String name = csStateName.trim().toLowerCase();
+                if (name.isEmpty()) {
+                    setStatus("Give the animation state a name (idle, walk, talk…)");
+                    return;
+                }
+                if (csSheet.isBlank()) {
+                    setStatus("Pick a sprite sheet for the state (path or Browse…)");
+                    return;
+                }
+                Cutscene.SheetAnim anim = new Cutscene.SheetAnim(
+                        resolveSheetPath(csSheet.trim()),
+                        parseInt(csFrameW, 32), parseInt(csFrameH, 32),
+                        parseInt(csFrames, 1), parseDouble(csFps), csLoop);
+                if (editingState != null && !editingState.equals(name)) {
+                    editing.states.remove(editingState); // renamed in place
+                }
+                editing.states.put(name, anim);
+                CutscenePainter.clearCache();
+                csStateEditIndex = new ArrayList<>(editing.states.keySet()).indexOf(name) + 1;
+                openDialog(Dialog.CUTSCENE_ACTORS);
+                setStatus("State \"" + name + "\": " + anim.frameCount()
+                        + " frames @ " + anim.fps() + " fps"
+                        + (anim.loop() ? " (looping)" : " (one-shot)"));
+            });
+            if (editingState != null) {
+                dialogForm.addAction("Remove State", () -> {
+                    editing.states.remove(editingState);
+                    csStateEditIndex = 0;
+                    openDialog(Dialog.CUTSCENE_ACTORS);
+                    setStatus("State \"" + editingState + "\" removed");
+                });
+            }
+            dialogForm.addAction("Delete Actor", () -> {
+                cs.actors.remove(editing);
+                csActorEditIndex = 0;
+                csStateEditIndex = 0;
+                openDialog(Dialog.CUTSCENE_ACTORS);
+                setStatus("Actor \"" + editing.name + "\" deleted");
+            });
+        }
+        dialogForm.addAction("Back to Cutscene…", () -> openDialog(Dialog.CUTSCENES));
+        dialogForm.addAction("Close", this::closeDialog);
+    }
+
+    /** Load the state-editor fields for the picked state (or fresh defaults). */
+    private void loadActorStateFields(Cutscene.Actor actor, List<String> stateNames) {
+        if (actor != null && csStateEditIndex > 0 && csStateEditIndex <= stateNames.size()) {
+            String name = stateNames.get(csStateEditIndex - 1);
+            Cutscene.SheetAnim anim = actor.states.get(name);
+            csStateName = name;
+            csSheet = anim.sheet();
+            csFrameW = String.valueOf(anim.frameWidth());
+            csFrameH = String.valueOf(anim.frameHeight());
+            csFrames = String.valueOf(anim.frameCount());
+            csFps = String.valueOf(anim.fps());
+            csLoop = anim.loop();
+        } else {
+            // Suggest the conventional states the runtime plays automatically.
+            csStateName = actor == null || !actor.states.containsKey("idle") ? "idle"
+                    : !actor.states.containsKey("walk") ? "walk"
+                    : !actor.states.containsKey("talk") ? "talk" : "";
+            csSheet = "";
+            csFrameW = csFrameH = "32";
+            csFrames = "1";
+            csFps = "8";
+            csLoop = true;
+        }
+    }
+
+    private static String freshActorKey(Cutscene cs) {
+        int n = cs.actors.size() + 1;
+        while (cs.actor("actor" + n) != null) n++;
+        return "actor" + n;
+    }
+
+    /**
+     * The step editor for the selected cutscene: the script as an ordered
+     * list — pick a step (or "add"), choose its action, actor, text /
+     * animation-state name, target tile, and duration. Steps run in order
+     * when the cutscene triggers.
+     */
+    private void buildCutsceneStepsForm() {
+        Cutscene cs = editingCutscene();
+        if (cs == null) {
+            openDialog(Dialog.CUTSCENES);
+            return;
+        }
+        csStepEditIndex = Math.min(csStepEditIndex, cs.steps.size());
+        List<String> options = new ArrayList<>();
+        options.add("(add a step)");
+        for (int i = 0; i < cs.steps.size(); i++) {
+            options.add(stepSummary(i + 1, cs.steps.get(i)));
+        }
+        List<String> actorKeys = new ArrayList<>();
+        List<String> actorOptions = new ArrayList<>();
+        actorKeys.add("");
+        actorOptions.add("(none)");
+        for (Cutscene.Actor a : cs.actors) {
+            actorKeys.add(a.key);
+            actorOptions.add(a.name);
+        }
+        Cutscene.Step editing = csStepEditIndex > 0
+                ? cs.steps.get(csStepEditIndex - 1) : null;
+        double ts = level.tileSize;
+        if (!dialogRebuild) {
+            if (editing != null) {
+                csOpIndex = editing.op().ordinal();
+                csStepActorIndex = Math.max(0, actorKeys.indexOf(editing.actor()));
+                csText = editing.text();
+                csStepX = (int) Math.floor(editing.x() / ts);
+                csStepY = (int) Math.floor(editing.y() / ts);
+                csSeconds = String.valueOf(editing.seconds());
+            } else {
+                csOpIndex = cs.steps.isEmpty() ? Cutscene.Op.SHOW.ordinal()
+                        : Cutscene.Op.SAY.ordinal();
+                csStepActorIndex = Math.min(1, actorKeys.size() - 1);
+                csText = "";
+                csStepX = clampTile((int) Math.floor(camera.x / ts), level.width);
+                csStepY = clampTile((int) Math.floor(camera.y / ts), level.height);
+                csSeconds = "1.0";
+            }
+        }
+        dialogRebuild = false;
+
+        dialogForm.addEnum("Step", options.toArray(new String[0]),
+                () -> options.get(Math.min(csStepEditIndex, options.size() - 1)),
+                v -> {
+                    csStepEditIndex = Math.max(0, options.indexOf(v));
+                    openDialog(Dialog.CUTSCENE_STEPS);
+                });
+        dialogForm.addEnum("Action", CS_OP_NAMES, () -> CS_OP_NAMES[csOpIndex],
+                v -> csOpIndex = Math.max(0, List.of(CS_OP_NAMES).indexOf(v)));
+        dialogForm.addEnum("Actor", actorOptions.toArray(new String[0]),
+                        () -> actorOptions.get(Math.min(csStepActorIndex, actorOptions.size() - 1)),
+                        v -> csStepActorIndex = Math.max(0, actorOptions.indexOf(v)))
+                .enabledWhen(() -> opAt(csOpIndex) != Cutscene.Op.WAIT
+                        && opAt(csOpIndex) != Cutscene.Op.CAMERA);
+        dialogForm.addText("Text (dialogue / state name)", () -> csText, v -> csText = v, 120)
+                .enabledWhen(() -> opAt(csOpIndex) == Cutscene.Op.SAY
+                        || opAt(csOpIndex) == Cutscene.Op.ANIM
+                        || opAt(csOpIndex) == Cutscene.Op.SHOW);
+        dialogForm.addInt("X (tile)", () -> csStepX,
+                        v -> csStepX = v, 0, Math.max(0, level.width - 1), 1)
+                .enabledWhen(this::stepUsesPoint);
+        dialogForm.addInt("Y (tile)", () -> csStepY,
+                        v -> csStepY = v, 0, Math.max(0, level.height - 1), 1)
+                .enabledWhen(this::stepUsesPoint);
+        dialogForm.addAction("Set X,Y to the camera center", () -> {
+            csStepX = clampTile((int) Math.floor(camera.x / ts), level.width);
+            csStepY = clampTile((int) Math.floor(camera.y / ts), level.height);
+        }).enabledWhen(this::stepUsesPoint);
+        dialogForm.addText("Seconds (0 = default/instant)", () -> csSeconds,
+                v -> csSeconds = v, 6);
+        dialogForm.addAction(editing == null ? "Add Step" : "Save Step", () -> {
+            Cutscene.Op op = opAt(csOpIndex);
+            String actor = actorKeys.get(Math.min(csStepActorIndex, actorKeys.size() - 1));
+            if (actor.isEmpty() && op != Cutscene.Op.WAIT && op != Cutscene.Op.CAMERA) {
+                setStatus("This action needs an actor — add one in Edit Actors… first");
+                return;
+            }
+            Cutscene.Step step = new Cutscene.Step(op, actor, csText,
+                    (csStepX + 0.5) * ts, (csStepY + 0.5) * ts, parseSeconds(csSeconds));
+            if (editing == null) {
+                cs.steps.add(step);
+                csStepEditIndex = cs.steps.size();
+                openDialog(Dialog.CUTSCENE_STEPS);
+                setStatus("Step " + cs.steps.size() + " added: " + CS_OP_NAMES[csOpIndex]);
+            } else {
+                cs.steps.set(csStepEditIndex - 1, step);
+                openDialog(Dialog.CUTSCENE_STEPS);
+                setStatus("Step " + csStepEditIndex + " saved");
+            }
+        });
+        if (editing != null) {
+            if (csStepEditIndex > 1) {
+                dialogForm.addAction("Move Step Up", () -> {
+                    java.util.Collections.swap(cs.steps, csStepEditIndex - 1, csStepEditIndex - 2);
+                    csStepEditIndex--;
+                    openDialog(Dialog.CUTSCENE_STEPS);
+                });
+            }
+            dialogForm.addAction("Delete Step", () -> {
+                cs.steps.remove(csStepEditIndex - 1);
+                csStepEditIndex = 0;
+                openDialog(Dialog.CUTSCENE_STEPS);
+                setStatus("Step deleted");
+            });
+        }
+        dialogForm.addAction("Back to Cutscene…", () -> openDialog(Dialog.CUTSCENES));
+        dialogForm.addAction("Close", this::closeDialog);
+    }
+
+    private static Cutscene.Op opAt(int index) {
+        return Cutscene.Op.values()[Math.min(index, Cutscene.Op.values().length - 1)];
+    }
+
+    private boolean stepUsesPoint() {
+        Cutscene.Op op = opAt(csOpIndex);
+        return op == Cutscene.Op.SHOW || op == Cutscene.Op.MOVE || op == Cutscene.Op.CAMERA;
+    }
+
+    private static int clampTile(int tile, int bound) {
+        return Math.max(0, Math.min(Math.max(0, bound - 1), tile));
+    }
+
+    private static double parseSeconds(String s) {
+        try {
+            return Math.max(0, Double.parseDouble(s.trim()));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    /** One line summarizing a step for the step cycler. */
+    private static String stepSummary(int number, Cutscene.Step step) {
+        StringBuilder sb = new StringBuilder().append(number).append(". ")
+                .append(step.op().name());
+        if (!step.actor().isEmpty()) sb.append(' ').append(step.actor());
+        if (!step.text().isEmpty()) {
+            String t = step.text().length() > 14
+                    ? step.text().substring(0, 14) + "…" : step.text();
+            sb.append(" \"").append(t).append('"');
+        }
+        return sb.toString();
+    }
+
     // --- stat rules ("if stat ≥ X → consume / reward") -------------------------------
 
     /**
@@ -2519,7 +3094,11 @@ public class CreativeScene extends AbstractScene {
         drawWorldBounds(g);
         drawEntities(g);
         drawSpawnMarker(g);
+        if (!testing) drawCutsceneMarkers(g);
         if (testing && testMe != null) drawTestPlayer(g);
+        if (testing && cutsceneDirector != null && cutsceneDirector.active() != null) {
+            CutscenePainter.drawActors(g, camera, cutsceneDirector.active());
+        }
         drawDecorLayer(g, true); // foreground scenery covers players
         SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), true, animClock);
         if (p.particlesEnabled) particles.render(g, camera);
@@ -2541,6 +3120,10 @@ public class CreativeScene extends AbstractScene {
             }
             if (containerPanel != null) {
                 containerPanel.render(g, viewportWidth, viewportHeight, animClock);
+            }
+            if (cutsceneDirector != null && cutsceneDirector.active() != null) {
+                CutscenePainter.drawOverlay(g, viewportWidth, viewportHeight,
+                        cutsceneDirector.active());
             }
         }
         drawStatus(g);
@@ -2972,6 +3555,40 @@ public class CreativeScene extends AbstractScene {
         g.drawString("spawn", pcorner[0] + 4, pcorner[1] + s / 2);
     }
 
+    /**
+     * Editor-only cutscene trigger markers: a clapper diamond, the trigger
+     * radius ring for zone/interact cutscenes, and the cutscene's name.
+     */
+    private void drawCutsceneMarkers(Graphics2D g) {
+        for (Cutscene cs : level.cutscenes) {
+            if (cs.trigger == Cutscene.Trigger.LEVEL_START) continue;
+            camera.worldToScreen(cs.x, cs.y, pcorner);
+            int s = Math.max(6, (int) (12 * camera.zoom));
+            Color tint = cs.trigger == Cutscene.Trigger.ZONE
+                    ? new Color(240, 170, 90) : new Color(190, 140, 240);
+            // The trigger radius, in world scale.
+            int r = (int) Math.round(cs.radiusTiles * level.tileSize * camera.zoom);
+            g.setColor(new Color(tint.getRed(), tint.getGreen(), tint.getBlue(), 40));
+            g.fillOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2);
+            g.setColor(new Color(tint.getRed(), tint.getGreen(), tint.getBlue(), 130));
+            g.setStroke(new BasicStroke(1.5f));
+            g.drawOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2);
+            g.setColor(tint);
+            g.setStroke(new BasicStroke(2f));
+            g.fillPolygon(new int[]{pcorner[0], pcorner[0] + s, pcorner[0], pcorner[0] - s},
+                    new int[]{pcorner[1] - s, pcorner[1], pcorner[1] + s, pcorner[1]}, 4);
+            g.setColor(new Color(20, 20, 30));
+            g.fillPolygon(new int[]{pcorner[0] - s / 3, pcorner[0] + s / 2, pcorner[0] - s / 3},
+                    new int[]{pcorner[1] - s / 3, pcorner[1], pcorner[1] + s / 3}, 3);
+            if (camera.zoom > 0.5) {
+                g.setFont(SMALL_FONT);
+                g.setColor(new Color(235, 235, 245));
+                g.drawString(cs.name + (cs.trigger == Cutscene.Trigger.INTERACT ? " [E]" : ""),
+                        pcorner[0] + s + 4, pcorner[1] + 4);
+            }
+        }
+    }
+
     private void drawTestPlayer(Graphics2D g) {
         int size = profile().playerSize;
         camera.worldToScreen(testMe.x + size / 2.0, testMe.y + size, pcorner);
@@ -3075,6 +3692,16 @@ public class CreativeScene extends AbstractScene {
                 camera.worldToScreen(aim[0], aim[1], pcorner);
                 g.setColor(new Color(120, 170, 240));
                 g.drawOval(pcorner[0] - 8, pcorner[1] - 8, 16, 16);
+            }
+            case "cutscene" -> {
+                Cutscene cs = cutsceneByKey(entry.key);
+                if (cs != null && cs.trigger != Cutscene.Trigger.LEVEL_START) {
+                    int r = (int) Math.round(cs.radiusTiles * ts * camera.zoom);
+                    camera.worldToScreen(aim[0], aim[1], pcorner);
+                    g.setColor(new Color(240, 170, 90));
+                    g.setStroke(new BasicStroke(2f));
+                    g.drawOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2);
+                }
             }
             default -> { /* generate/managedoors are buttons; nothing to preview */ }
         }
@@ -3529,6 +4156,7 @@ public class CreativeScene extends AbstractScene {
             case DECOR -> "Decor";
             case SURFACE -> "Surface";
             case DOORS -> "Doors";
+            case CUTSCENES -> "Cutscenes";
             case TOOLS -> "Tools";
         };
     }
@@ -3556,6 +4184,26 @@ public class CreativeScene extends AbstractScene {
         g.setColor(new Color(170, 200, 250));
         g.drawLine(24, 14, 24, 36);
         g.fillPolygon(new int[]{24, 38, 24}, new int[]{14, 19, 24}, 3);
+        g.dispose();
+        return img;
+    }
+
+    /** A film clapperboard for cutscene palette entries. */
+    private static BufferedImage cutsceneIcon() {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setColor(new Color(40, 42, 56));
+        g.fillRoundRect(5, 14, 30, 20, 6, 6);
+        // The striped clap bar, tilted open.
+        g.rotate(-0.18, 8, 14);
+        g.setColor(new Color(230, 230, 240));
+        g.fillRect(5, 6, 30, 8);
+        g.setColor(new Color(40, 42, 56));
+        for (int i = 0; i < 4; i++) g.fillRect(7 + i * 8, 6, 4, 8);
+        g.rotate(0.18, 8, 14);
+        // A play triangle on the board.
+        g.setColor(new Color(255, 220, 120));
+        g.fillPolygon(new int[]{16, 27, 16}, new int[]{18, 24, 30}, 3);
         g.dispose();
         return img;
     }

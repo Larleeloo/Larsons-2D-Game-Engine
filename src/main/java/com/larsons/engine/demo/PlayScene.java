@@ -21,6 +21,7 @@ import com.larsons.engine.entity.ProjectileRegistry;
 import com.larsons.engine.fx.Particles;
 import com.larsons.engine.graphics.Animation;
 import com.larsons.engine.graphics.Camera;
+import com.larsons.engine.graphics.CutscenePainter;
 import com.larsons.engine.graphics.EntitySprites;
 import com.larsons.engine.graphics.ParallaxBackground;
 import com.larsons.engine.graphics.Perspective;
@@ -29,6 +30,8 @@ import com.larsons.engine.graphics.SpriteSheet;
 import com.larsons.engine.graphics.SurfaceDecorPainter;
 import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.level.CutsceneDirector;
+import com.larsons.engine.level.CutscenePlayer;
 import com.larsons.engine.level.DoorDirectory;
 import com.larsons.engine.level.DoorLink;
 import com.larsons.engine.level.Level;
@@ -140,6 +143,7 @@ public class PlayScene extends AbstractScene {
     // (offline: the local world owns all three).
     private PlayerStats stats;
     private StatRuleEngine ruleEngine;
+    private CutsceneDirector cutscenes; // runs the level's cutscenes (offline)
     private CraftingPanel craftingPanel; // non-null while a station UI is open
     private ContainerPanel containerPanel; // non-null while a chest/barrel is open
     private String ruleStatus = "";
@@ -202,6 +206,8 @@ public class PlayScene extends AbstractScene {
             });
         }
         ruleEngine = new StatRuleEngine(List.copyOf(level.statRules));
+        // Cutscenes are an offline feature, like stat-rule bars and doors.
+        cutscenes = net == null ? new CutsceneDirector(level.cutscenes) : null;
         inventory = new Inventory(world != null ? world.itemTypes : ItemRegistry.standard());
         invSyncVersion = -1;
 
@@ -253,6 +259,20 @@ public class PlayScene extends AbstractScene {
         }
         if (paused) {
             updatePaused(dt, input);
+            return;
+        }
+        // A running cutscene owns the frame: the world holds still, the
+        // director drives the camera, Enter/Esc skips to the end.
+        if (cutscenes != null && cutscenes.active() != null) {
+            animClock += dt;
+            if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)
+                    || input.isKeyJustPressed(KeyEvent.VK_ENTER)) {
+                cutscenes.skip();
+            } else {
+                cutscenes.advance(dt);
+            }
+            CutscenePlayer cut = cutscenes.active();
+            if (cut != null) camera.centerOn(cut.cameraX(), cut.cameraY());
             return;
         }
         if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
@@ -404,6 +424,18 @@ public class PlayScene extends AbstractScene {
         double size = ps();
         camera.centerOn(me.x + size / 2.0, me.y + size / 2.0);
         walkAnim.update(me.moving ? dt : 0);
+
+        // Cutscene triggers watch the player: zones fire on entry, INTERACT
+        // ones on E (doors and stations already had their chance above).
+        if (cutscenes != null) {
+            boolean interact = input.isKeyJustPressed(KeyEvent.VK_E)
+                    && craftingPanel == null && containerPanel == null && !showInventory;
+            if (cutscenes.checkTriggers(me.x + size / 2.0, me.y + size / 2.0,
+                    interact, ts(), camera.x, camera.y) != null) {
+                if (world != null) world.cancelMining();
+                ctx.sfx(Sfx.CLICK);
+            }
+        }
     }
 
     /**
@@ -429,6 +461,7 @@ public class PlayScene extends AbstractScene {
             ctx.sfx(Sfx.PICKUP);
         });
         ruleEngine = new StatRuleEngine(List.copyOf(level.statRules));
+        cutscenes = new CutsceneDirector(level.cutscenes);
         me.x = level.spawnX;
         me.y = level.spawnY;
         me.vy = 0;
@@ -906,6 +939,9 @@ public class PlayScene extends AbstractScene {
         if (net != null) drawRemotePlayers(g);
         drawPlayer(g, me.x, me.y, me.facingLeft, walkAnim.current(), null);
         if (swingTime > 0) drawSwing(g);
+        if (cutscenes != null && cutscenes.active() != null) {
+            CutscenePainter.drawActors(g, camera, cutscenes.active());
+        }
         drawDecorLayer(g, true); // foreground scenery covers players
         SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), true, animClock);
         if (p.particlesEnabled) particles.render(g, camera);
@@ -923,6 +959,9 @@ public class PlayScene extends AbstractScene {
         }
         if (containerPanel != null) {
             containerPanel.render(g, viewportWidth, viewportHeight, animClock);
+        }
+        if (cutscenes != null && cutscenes.active() != null) {
+            CutscenePainter.drawOverlay(g, viewportWidth, viewportHeight, cutscenes.active());
         }
 
         if (paused) drawPauseOverlay(g);

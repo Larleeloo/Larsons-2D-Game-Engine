@@ -63,6 +63,8 @@ public class Level {
     public final List<SurfaceDecor.Placement> surfaceDecor = new ArrayList<>();
     /** Map-maker stat triggers evaluated while the level is played. */
     public final List<StatRule> statRules = new ArrayList<>();
+    /** Map-maker cutscenes (triggers + sprite-sheet actors + step scripts). */
+    public final List<Cutscene> cutscenes = new ArrayList<>();
     /**
      * Storage-block inventories (chests, barrels), keyed by
      * {@link #cellKey(int, int)} — a second inventory per container cell that
@@ -394,6 +396,11 @@ public class Level {
             List<Object> rules = new ArrayList<>(statRules.size());
             for (StatRule rule : statRules) rules.add(rule.toMap());
             m.put("rules", rules);
+        }
+        if (!cutscenes.isEmpty()) {
+            List<Object> scenes = new ArrayList<>(cutscenes.size());
+            for (Cutscene cs : cutscenes) scenes.add(cs.toMap());
+            m.put("cutscenes", scenes);
         }
         if (!containers.isEmpty()) {
             // Storage-block inventories ride along with the level data.
