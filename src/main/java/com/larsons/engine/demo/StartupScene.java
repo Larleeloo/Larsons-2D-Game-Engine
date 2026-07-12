@@ -43,6 +43,8 @@ public class StartupScene extends AbstractScene {
             scenes.transitionTo("editor");
         });
         menu.add("Auto Battler (2-10 Online)", () -> scenes.transitionTo("autolobby"));
+        menu.add("Council of Six (Deckbuilder, 2-6 Online)",
+                () -> scenes.transitionTo("decklobby"));
         menu.add("Quit", () -> System.exit(0));
     }
 

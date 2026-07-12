@@ -7,6 +7,8 @@ import com.larsons.engine.demo.AutoBattlerLobbyScene;
 import com.larsons.engine.demo.AutoBattlerScene;
 import com.larsons.engine.demo.BoardCustomizeScene;
 import com.larsons.engine.demo.CreativeScene;
+import com.larsons.engine.demo.DeckGameScene;
+import com.larsons.engine.demo.DeckLobbyScene;
 import com.larsons.engine.demo.GameTypeEditorScene;
 import com.larsons.engine.demo.MainMenuScene;
 import com.larsons.engine.demo.MultiplayerScene;
@@ -62,6 +64,8 @@ public class Main {
         engine.scenes().register("autolobby", new AutoBattlerLobbyScene(context));
         engine.scenes().register("autobattler", new AutoBattlerScene(context));
         engine.scenes().register("autoguide", new AutoBattlerGuideScene(context));
+        engine.scenes().register("decklobby", new DeckLobbyScene(context));
+        engine.scenes().register("deckgame", new DeckGameScene(context));
         engine.scenes().register("skins", new SkinEditorScene(context));
         engine.scenes().register("boardtheme", new BoardCustomizeScene(context));
 
