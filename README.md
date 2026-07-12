@@ -63,6 +63,15 @@ over in a generic, data-driven form and wired to the same toggles:
   units, items, projectiles, and the board), and **personal board
   customization** (color schemes, background images, decorative props). See
   [Auto Battler](#auto-battler-online-2-10-players).
+- **Council of Six** — a second complete standalone game mode, its own option
+  on the launch menu: an online **deckbuilding board game for 2-6 players**
+  in the spirit of Dune Imperium and Inis, themed around the crew itself —
+  play cards to place agents on board locations, buy from a shared market
+  row, deploy troops for territory majorities, and win round-end conflicts,
+  with six leader passives (Larson, Matt, Dustin, Kris, Bella, Eric), bots
+  to fill seats, turn timers, and **shader-lit particle effects** (every
+  table event bursts through the mode's bloom pass). Deliberately simpler
+  than Magic. See [Council of Six](#council-of-six-deckbuilding-board-game-2-6-online).
 - **Skins (texture overrides)** — drop PNG sprite sheets in
   `resources/skins/` and assign them in the lobby's **Customize Skins** menu:
   frame pixel width/height + frame count + a 0-120 fps playback rate, per
@@ -315,6 +324,18 @@ com.larsons.engine
 │   ├── AutoClient.java    Client: typed replicated state + action senders
 │   ├── AutoSession.java   Active client + optional integrated server
 │   └── AutoSprites.java   Procedural unit figures / item gems (asset-free)
+├── deckbuilder
+│   ├── Leader.java        The six friends' leaders + their one-line passives
+│   ├── LocationIcon.java / Territory.java   Icon families + the contested map
+│   ├── CardDef.java / Cards.java            The card catalog (starters + market)
+│   ├── LocationDef.java / Locations.java    The eight agent locations
+│   ├── DeckPlayer.java    One player's piles, resources, troops, turn flags
+│   ├── DeckGame.java      Rounds, turns, market, conflict, majorities — the rules
+│   ├── DeckBot.java       Server-side bot opponents (fill seats, solo play)
+│   ├── DeckProto.java     Council of Six's wire messages (own version + port)
+│   ├── DeckServer.java    Authoritative server: lobby + 2-6 players + bots
+│   ├── DeckClient.java    Client: typed replicated state + action senders
+│   └── DeckSession.java   Active client + optional integrated server
 ├── fx
 │   └── Particles.java     Pooled particles (block breaks, hits)
 ├── ui
@@ -333,6 +354,8 @@ com.larsons.engine
     ├── CreativeScene.java       Creative mode: paint blocks/lights/mobs/items
     ├── AutoBattlerLobbyScene.java  Host/join an auto-battler + the pre-game lobby
     ├── AutoBattlerScene.java    The isometric auto-battler client (shop/board/combat)
+    ├── DeckLobbyScene.java      Host/join Council of Six + the leader-pick lobby
+    ├── DeckGameScene.java       The deckbuilder table (board/market/hand/particles)
     ├── AutoBattlerGuideScene.java  Illustrated field guide (rules/synergies/items/odds/units)
     ├── AutoHud.java             The auto-battler HUD's screen geometry (overlap-checked)
     ├── SkinEditorScene.java     The lobby's skin customization menu (sheet imports)
@@ -905,6 +928,82 @@ Customization hooks are deliberately data-driven for what comes next: units,
 traits, items, creep waves, pool sizes, and shop odds are all rows in
 `AutoUnits` / `AutoItems` / `Trait`, and pacing/economy live in
 `AutoGame.Config`.
+
+---
+
+## Council of Six (deckbuilding board game, 2-6 online)
+
+A second complete standalone game on the launch menu:
+**Council of Six (Deckbuilder, 2-6 Online)** — a deckbuilding board game in
+the spirit of **Dune Imperium** (play a card → send an agent to a board
+location, buy from a shared market row, commit might to a round-end
+conflict) crossed with **Inis** (persistent troops on territories, strict
+majorities score) — with the rulebook kept to one screen on purpose: no
+stack, no instants, no priority. Fully online, same model as everything
+else in the engine: one player hosts, friends join by `ip:port` (default
+port **7799**), bots fill empty seats.
+
+**The leaders are the crew.** Every player claims one of six leaders in the
+lobby — **Larson** the Architect, **Matt** the Tactician, **Dustin** the
+Spellslinger, **Kris** the Quartermaster, **Bella** the Envoy, and **Eric**
+the Warlord — each with exactly one always-on passive (Larson starts every
+round +1 gold; Matt's first troop deployment each round adds a bonus troop;
+Dustin draws 6-card hands; Kris earns interest; Bella may place an agent on
+an occupied location once per round; Eric commits +1 might to every
+conflict). Picks are exclusive, first come first served; anyone still
+unpicked at start (bots included) gets a random free leader.
+
+**The loop.** First to **10 VP** at the end of a round wins (8 rounds max).
+Each round everyone draws 5 cards and gets 2 agents; the first-player token
+rotates every round. On your turn:
+
+- **Play** a card: send an agent to a free location matching one of the
+  card's icons (Economy / Knowledge / Military / Council); the location's
+  and the card's effects both resolve, and your turn ends. Eight locations,
+  two per icon — The Mines, Grand Bazaar, Library of Whispers, Alchemist's
+  Tower, War Camp, Mercenary Hall, High Council (2 lore → 1 VP), The
+  Crossroads — and an occupied spot blocks everyone else (worker-placement
+  squeeze; Bella disagrees).
+- **Reveal** your remaining hand instead: its reveal values become gold to
+  spend and might committed to the conflict; you keep the turn to shop,
+  then end it.
+- **Buy** market cards with gold any time on your turn — a shared 5-card
+  row that refills from a finite market deck; purchases land in your
+  discard pile and shuffle back around, so your deck grows stronger every
+  round (starter decks are 10 cards; the catalog runs from Spice Merchants
+  and Druids to Sandworm Riders and the Dragon of the Peaks).
+
+**Round end**: the most committed **might** wins the round's conflict prize
+(the rewards grow round over round; second place takes a consolation; a
+tied top splits it), and every territory where someone holds a **strict
+troop majority** scores them a VP. Troops persist — presence built early
+pays every round, exactly the Inis half of the recipe.
+
+**Netcode**: the same authoritative model as the auto-battler — a
+fixed-tick [`DeckServer`](src/main/java/com/larsons/engine/deckbuilder/DeckServer.java)
+owns every rule in a headlessly-testable
+[`DeckGame`](src/main/java/com/larsons/engine/deckbuilder/DeckGame.java),
+clients ([`DeckClient`](src/main/java/com/larsons/engine/deckbuilder/DeckClient.java))
+send action requests and render replicated state, turn timers keep the
+table moving, leavers' seats auto-pass, and disconnected games play on.
+Cards, locations, leaders, and territories are all data rows
+([`Cards`](src/main/java/com/larsons/engine/deckbuilder/Cards.java) /
+[`Locations`](src/main/java/com/larsons/engine/deckbuilder/Locations.java) /
+[`Leader`](src/main/java/com/larsons/engine/deckbuilder/Leader.java)) —
+adding a card is one `register(...)` line.
+
+**Shaders + particles**: the mode always runs with its own post-FX look
+(bloom + vignette through the engine's GLSL-first `ShaderChain`), and every
+table event is presented as a styled [`Particles`](src/main/java/com/larsons/engine/fx/Particles.java)
+burst tuned to read through that bloom pass — agent placements flare in
+their location's icon colour, buys shower gold sparks, deployments blast
+rings in the territory's colour, scored VP rings gold with lingering motes,
+and a conflict victory fills the table with rising embers.
+
+**Controls**: click a hand card, then a highlighted location (troop plays
+ask which territory); click market cards to buy; **R** reveals, **E** ends
+the turn, right-click cancels, **H** opens the one-screen rulebook, **Esc**
+pauses (the table keeps playing online).
 
 ---
 
