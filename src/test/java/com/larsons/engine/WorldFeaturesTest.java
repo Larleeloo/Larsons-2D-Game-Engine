@@ -430,6 +430,30 @@ class WorldFeaturesTest {
     }
 
     @Test
+    void levelSelectSceneRendersItsViewsHeadlessly(@TempDir Path dir) {
+        GameContext ctx = new GameContext(null, new GameTypeStore(dir.toString()));
+        ctx.setProfile(profile()); // "World Test" — an empty (no-levels) game type
+
+        SceneManager scenes = new SceneManager();
+        scenes.setViewport(640, 360);
+        scenes.register("levelselect", new com.larsons.engine.demo.LevelSelectScene(ctx));
+        scenes.register("menu", new com.larsons.engine.demo.MainMenuScene(ctx));
+        scenes.setScene("levelselect");
+
+        InputManager input = new InputManager();
+        BufferedImage frame = new BufferedImage(640, 360, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = frame.createGraphics();
+        for (int i = 0; i < 10; i++) {
+            input.newFrame();
+            scenes.update(1.0 / 120.0, input);
+            scenes.render(g, 0f);
+        }
+        g.dispose();
+        assertEquals("LevelSelectScene", scenes.current().name(),
+                "the Load Level screen builds and renders without a levels folder");
+    }
+
+    @Test
     void creativeSceneEditsAndRendersHeadlessly(@TempDir Path dir) {
         GameContext ctx = new GameContext(null, new GameTypeStore(dir.toString()));
         ctx.setProfile(profile());

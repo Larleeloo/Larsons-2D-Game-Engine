@@ -3,47 +3,69 @@ package com.larsons.engine.demo;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelStore;
 import com.larsons.engine.scene.AbstractScene;
+import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.Menu;
 import com.larsons.engine.ui.MenuTheme;
 
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics2D;
+import java.awt.event.KeyEvent;
 import java.util.List;
 
 /**
  * "Load Level" screen: lists the individual levels saved inside the active
- * game type and loads the one you pick. Game types are a folder grouping of
- * levels ({@link LevelStore}), and each level carries its own feature settings,
- * so choosing a level here decides both which world <em>and</em> which toggles
- * play — the level's saved settings apply when {@code PlayScene} loads it.
+ * game type and, once you pick one, offers to <b>Play</b> it or <b>Edit
+ * Settings</b> for it. Game types are a folder grouping of levels
+ * ({@link LevelStore}), and each level carries its own feature toggles — so
+ * this is the one place those per-level settings are edited: the toggles live
+ * on the level, not the game type or the in-game pause menu.
+ *
+ * <p>Three views:
+ * <ul>
+ *   <li><b>List</b> — the game type's levels; click one.</li>
+ *   <li><b>Actions</b> — <i>Play</i> or <i>Edit Settings</i> for that level.</li>
+ *   <li><b>Edit</b> — a feature form bound to the level's own settings, saved
+ *       back into the level file.</li>
+ * </ul>
  */
 public class LevelSelectScene extends AbstractScene {
+
+    private enum View { LIST, ACTIONS, EDIT }
+
     private final GameContext ctx;
+    private View view = View.LIST;
     private Menu menu;
+    private ConfigForm form;
+    private String selectedLevel;  // level name chosen in the list
+    private Level editLevel;       // the level loaded for settings editing
+    private String status = "";
 
     public LevelSelectScene(GameContext ctx) { this.ctx = ctx; }
 
     @Override
     public void onEnter() {
-        // Rebuild every time so levels saved since last visit appear.
-        GameProfile p = ctx.profile();
-        LevelStore store = new LevelStore(p.name);
-        menu = new Menu("Load Level")
-                .subtitle(p.name + " · pick a level to play")
-                .theme(MenuTheme.dark());
+        view = View.LIST;
+        selectedLevel = null;
+        editLevel = null;
+        status = "";
+        buildListMenu();
+    }
 
-        List<String> names = store.list();
+    private LevelStore store() { return new LevelStore(ctx.profile().name); }
+
+    /** The list of levels in the active game type. */
+    private void buildListMenu() {
+        GameProfile p = ctx.profile();
+        menu = new Menu("Load Level")
+                .subtitle(p.name + " · pick a level")
+                .theme(MenuTheme.dark());
+        List<String> names = store().list();
         for (String name : names) {
-            menu.add(name, () -> {
-                // Remember which level to load; PlayScene reads lastLevelPath
-                // and applies that level's own settings on entry.
-                p.lastLevelPath = store.fileFor(name).toString();
-                ctx.save();
-                scenes.transitionTo("play");
-            });
+            menu.add(name, () -> openActions(name));
         }
         if (names.isEmpty()) {
             menu.add("(no saved levels yet — make one in Creative Mode)",
@@ -52,17 +74,90 @@ public class LevelSelectScene extends AbstractScene {
         menu.add("Back", () -> scenes.transitionTo("menu"));
     }
 
+    /** Play / Edit Settings for the chosen level. */
+    private void openActions(String name) {
+        selectedLevel = name;
+        view = View.ACTIONS;
+        menu = new Menu(name)
+                .subtitle(ctx.profile().name + " · play or edit this level")
+                .theme(MenuTheme.dark())
+                .add("Play Level", this::playSelected)
+                .add("Edit Settings", this::openEditor)
+                .add("Back", () -> { view = View.LIST; buildListMenu(); });
+    }
+
+    private void playSelected() {
+        GameProfile p = ctx.profile();
+        // PlayScene loads lastLevelPath and applies that level's own settings.
+        p.lastLevelPath = store().fileFor(selectedLevel).toString();
+        ctx.save();
+        scenes.transitionTo("play");
+    }
+
+    /** Open the per-level feature form, bound to this level's own settings. */
+    private void openEditor() {
+        try {
+            editLevel = store().load(selectedLevel);
+        } catch (RuntimeException e) {
+            status = "Could not load \"" + selectedLevel + "\": " + e.getMessage();
+            return;
+        }
+        // Legacy levels (no settings of their own) start from the game type's
+        // template, so the form always has something concrete to edit.
+        if (editLevel.settings == null) editLevel.settings = ctx.profile().copy();
+        view = View.EDIT;
+        status = "";
+        form = new ConfigForm("Settings — " + editLevel.name).theme(MenuTheme.dark());
+        ProfileForms.addFeatureOptions(form, editLevel.settings);
+        form.addAction("Save Settings", () -> {
+            editLevel.settings.normalize();
+            store().save(editLevel);
+            status = "Saved settings — \"" + editLevel.name + "\" plays with these toggles";
+        });
+        form.addAction("Back", () -> openActions(selectedLevel));
+    }
+
     @Override
     public void update(double dt, InputManager input) {
-        menu.update(dt, input);
+        // Esc steps back one view (edit → actions → list → main menu).
+        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+            switch (view) {
+                case EDIT -> openActions(selectedLevel);
+                case ACTIONS -> { view = View.LIST; buildListMenu(); }
+                case LIST -> scenes.transitionTo("menu");
+            }
+            return;
+        }
+        if (view == View.EDIT) {
+            form.update(dt, input);
+        } else {
+            menu.update(dt, input);
+        }
     }
 
     @Override
     public void render(Graphics2D g, float alpha) {
-        menu.render(g, viewportWidth, viewportHeight);
-        g.setColor(new Color(120, 120, 140));
+        g.setColor(new Color(18, 18, 28));
+        g.fillRect(0, 0, viewportWidth, viewportHeight);
+        if (view == View.EDIT) {
+            form.render(g, viewportWidth, viewportHeight);
+        } else {
+            menu.render(g, viewportWidth, viewportHeight);
+        }
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-        g.drawString("Each level loads with its own toggles · levels live under resources/levels/<game type>/",
-                24, viewportHeight - 24);
+        if (!status.isEmpty()) {
+            g.setColor(new Color(140, 200, 140));
+            g.drawString(status, 24, viewportHeight - 44);
+        }
+        g.setColor(new Color(120, 120, 140));
+        g.drawString(hint(), 24, viewportHeight - 24);
+    }
+
+    private String hint() {
+        return switch (view) {
+            case LIST -> "Each level loads with its own toggles · Esc to go back";
+            case ACTIONS -> "Play the level, or edit the settings it plays with · Esc to go back";
+            case EDIT -> "Left/Right adjust · Enter/click activate · Save Settings to keep them · Esc to go back";
+        };
     }
 }
