@@ -340,7 +340,7 @@ com.larsons.engine
 ├── fx
 │   └── Particles.java     Pooled particles (block breaks, hits)
 ├── ui
-│   ├── Menu.java          Keyboard/mouse menu
+│   ├── Menu.java          Keyboard/mouse menu (scroll bar when it overflows)
 │   ├── MenuItem.java      Label (dynamic) + action
 │   ├── MenuTheme.java     Colours, fonts, spacing
 │   └── ConfigForm.java    Clickable toggles / steppers / cyclers / text / buttons; draggable scroll bar
@@ -1335,7 +1335,11 @@ Menu menu = new Menu("My Game")
 ```
 
 `MenuTheme` exposes every colour, font, and spacing value; `MenuItem` labels can
-be dynamic (e.g. a "Perspective: ISOMETRIC" toggle that updates live).
+be dynamic (e.g. a "Perspective: ISOMETRIC" toggle that updates live). Menus
+with more entries than fit on screen **scroll**: the mouse wheel and a draggable
+scroll bar down the right edge move the view, keyboard navigation keeps the
+selection visible, and a menu that fits shows no bar — so every menu screen
+handles any number of entries.
 
 ### A new scene
 

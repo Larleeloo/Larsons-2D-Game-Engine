@@ -2,8 +2,11 @@ package com.larsons.engine.ui;
 
 import com.larsons.engine.input.InputManager;
 
+import java.awt.Color;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
+import java.awt.Rectangle;
+import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -15,6 +18,11 @@ import java.util.List;
  * (hover to select, click to activate). Appearance comes entirely from a
  * {@link MenuTheme}, and items are added fluently, so building a custom menu is
  * a few chained calls.
+ *
+ * <p>Menus with more entries than fit on screen <b>scroll</b>: the mouse wheel
+ * and a draggable scroll bar down the right edge move the view, keyboard
+ * navigation pulls the selection back into view, and off-screen rows are not
+ * clickable. A menu that fits shows no bar and is centred as before.
  */
 public class Menu {
     private String title;
@@ -22,6 +30,19 @@ public class Menu {
     private final List<MenuItem> items = new ArrayList<>();
     private MenuTheme theme = MenuTheme.defaultTheme();
     private int selected = 0;
+
+    // Scrolling state for menus taller than the viewport, mirroring
+    // ConfigForm: the layout is captured during render() and hit-tested a frame
+    // later in update(). The wheel and scroll-bar drag move the view directly;
+    // keyboard navigation pulls the selected row into view (followSelection).
+    private int scroll;              // index of the first visible item
+    private int visibleCount = 1;    // items that fit; recomputed each render
+    private int maxScroll;           // items.size() - visibleCount, clamped >= 0
+    private final Rectangle scrollTrack = new Rectangle();
+    private final Rectangle scrollThumb = new Rectangle();
+    private boolean draggingThumb;
+    private int dragGrabOffset;      // cursor offset inside the thumb at grab time
+    private boolean followSelection; // bring the selection into view next render
 
     public Menu(String title) { this.title = title; }
 
@@ -49,31 +70,50 @@ public class Menu {
 
     public int getSelectedIndex() { return selected; }
 
+    /** Index of the first visible item (top of the scrolled window). */
+    public int getScroll() { return scroll; }
+
+    /** Scroll-bar track hit box (computed during render; 0-size when it fits). */
+    public Rectangle scrollTrackBounds() { return scrollTrack; }
+
+    /** Scroll-bar thumb hit box (computed during render; 0-size when it fits). */
+    public Rectangle scrollThumbBounds() { return scrollThumb; }
+
     public void update(double dt, InputManager input) {
         if (items.isEmpty()) return;
 
-        if (input.isKeyJustPressed(java.awt.event.KeyEvent.VK_DOWN)
-                || input.isKeyJustPressed(java.awt.event.KeyEvent.VK_S)) {
+        if (input.isKeyJustPressed(KeyEvent.VK_DOWN)
+                || input.isKeyJustPressed(KeyEvent.VK_S)) {
             move(1);
         }
-        if (input.isKeyJustPressed(java.awt.event.KeyEvent.VK_UP)
-                || input.isKeyJustPressed(java.awt.event.KeyEvent.VK_W)) {
+        if (input.isKeyJustPressed(KeyEvent.VK_UP)
+                || input.isKeyJustPressed(KeyEvent.VK_W)) {
             move(-1);
         }
-        if (input.isKeyJustPressed(java.awt.event.KeyEvent.VK_ENTER)
-                || input.isKeyJustPressed(java.awt.event.KeyEvent.VK_SPACE)) {
+        if (input.isKeyJustPressed(KeyEvent.VK_ENTER)
+                || input.isKeyJustPressed(KeyEvent.VK_SPACE)) {
             items.get(selected).activate();
             return;
         }
 
-        // Mouse: hover selects, click activates.
+        // Mouse wheel scrolls the view directly, leaving the selection put.
+        int wheel = input.getWheelRotation();
+        if (wheel != 0) scroll = clampScroll(scroll + wheel);
+
         int mx = input.getMouseX();
         int my = input.getMouseY();
+        boolean click = input.isMouseJustPressed();
+
+        // The scroll bar takes precedence over item interaction while in use.
+        if (handleScrollBar(input, mx, my, click)) return;
+
+        // Mouse: hover selects, click activates. Off-screen items have 0-size
+        // hit boxes (see render), so only visible rows respond.
         for (int k = 0; k < items.size(); k++) {
             MenuItem it = items.get(k);
             if (it.enabled && it.contains(mx, my)) {
                 selected = k;
-                if (input.isMouseJustPressed()) {
+                if (click) {
                     it.activate();
                     return;
                 }
@@ -85,8 +125,50 @@ public class Menu {
         int n = items.size();
         for (int step = 0; step < n; step++) {
             selected = (selected + dir + n) % n;
-            if (items.get(selected).enabled) break;
+            if (items.get(selected).enabled) {
+                followSelection = true;
+                return;
+            }
         }
+    }
+
+    private int clampScroll(int s) {
+        return Math.max(0, Math.min(maxScroll, s));
+    }
+
+    /**
+     * Start/continue/finish a scroll-bar thumb drag, or jump the view when the
+     * track is clicked. Returns true while the pointer is working the bar, so
+     * the caller skips item hit-testing this frame. Geometry comes from the
+     * previous render (see {@link #drawScrollBar}).
+     */
+    private boolean handleScrollBar(InputManager input, int mx, int my, boolean click) {
+        if (draggingThumb) {
+            if (!input.isMouseDown()) {
+                draggingThumb = false;
+                return true;
+            }
+            int travel = scrollTrack.height - scrollThumb.height;
+            if (travel > 0) {
+                int rel = Math.max(0, Math.min(travel, my - dragGrabOffset - scrollTrack.y));
+                scroll = Math.round((float) rel / travel * maxScroll);
+            }
+            return true;
+        }
+        if (!click || maxScroll <= 0 || scrollTrack.width <= 0) return false;
+        if (scrollThumb.contains(mx, my)) {
+            draggingThumb = true;
+            dragGrabOffset = my - scrollThumb.y;
+            return true;
+        }
+        if (scrollTrack.contains(mx, my)) {
+            // Click on the track jumps so the thumb centres on the pointer.
+            int travel = scrollTrack.height - scrollThumb.height;
+            int rel = Math.max(0, Math.min(travel, my - scrollTrack.y - scrollThumb.height / 2));
+            scroll = travel > 0 ? Math.round((float) rel / travel * maxScroll) : 0;
+            return true;
+        }
+        return false;
     }
 
     public void render(Graphics2D g, int viewportW, int viewportH) {
@@ -105,16 +187,39 @@ public class Menu {
             drawCentered(g, subtitle, viewportW / 2, viewportH / 4 + 42);
         }
 
-        // Items.
+        // Items — scrolled when they overflow the region below the subtitle.
         g.setFont(theme.itemFont);
         FontMetrics fm = g.getFontMetrics();
-        int startY = viewportH / 2;
+        int spacing = Math.max(fm.getHeight() + 8, theme.itemSpacing);
+        int regionTop = viewportH / 4 + 84;               // below the subtitle
+        int regionBottom = Math.max(regionTop + spacing, viewportH - 56); // above scene hints
+        int regionH = regionBottom - regionTop;
+
+        visibleCount = Math.max(1, regionH / spacing);
+        maxScroll = Math.max(0, items.size() - visibleCount);
+        if (followSelection) {
+            if (selected < scroll) scroll = selected;
+            if (selected >= scroll + visibleCount) scroll = selected - visibleCount + 1;
+            followSelection = false;
+        }
+        scroll = clampScroll(scroll);
+
+        // Centre the block vertically when it all fits; top-align when scrolling.
+        int rowsShown = Math.min(items.size(), visibleCount);
+        int firstY = regionTop + fm.getAscent()
+                + (maxScroll == 0 ? Math.max(0, (regionH - rowsShown * spacing) / 2) : 0);
+
         for (int k = 0; k < items.size(); k++) {
             MenuItem it = items.get(k);
+            // Reset the hit box; only visible rows get a real one so off-screen
+            // items can't be hovered or clicked.
+            it.x = it.y = it.width = it.height = 0;
+            if (k < scroll || k >= scroll + visibleCount) continue;
+
             String label = it.text();
             int tw = fm.stringWidth(label);
             int x = viewportW / 2 - tw / 2;
-            int y = startY + k * theme.itemSpacing;
+            int y = firstY + (k - scroll) * spacing;
 
             it.x = x - 16;
             it.y = y - fm.getAscent() - 6;
@@ -131,6 +236,36 @@ public class Menu {
             }
             g.drawString(label, x, y);
         }
+
+        drawScrollBar(g, viewportW, regionTop, regionBottom);
+    }
+
+    /**
+     * Draw a scroll bar down the right margin when the menu overflows, sizing
+     * the thumb to the visible fraction and positioning it by {@link #scroll}.
+     * Records the track/thumb boxes for {@link #handleScrollBar} next frame.
+     */
+    private void drawScrollBar(Graphics2D g, int viewportW, int regionTop, int regionBottom) {
+        scrollTrack.setBounds(0, 0, 0, 0);
+        scrollThumb.setBounds(0, 0, 0, 0);
+        if (maxScroll <= 0) return; // everything fits; no bar needed
+
+        int barW = 8;
+        int barX = viewportW - 22;
+        int barTop = regionTop;
+        int barH = regionBottom - regionTop;
+        scrollTrack.setBounds(barX, barTop, barW, barH);
+
+        int rows = items.size();
+        int thumbH = Math.min(barH, Math.max(28, Math.round((float) visibleCount / rows * barH)));
+        int travel = barH - thumbH;
+        int thumbY = barTop + Math.round((float) scroll / maxScroll * travel);
+        scrollThumb.setBounds(barX, thumbY, barW, thumbH);
+
+        g.setColor(new Color(255, 255, 255, 28));
+        g.fillRoundRect(barX, barTop, barW, barH, barW, barW);
+        g.setColor(draggingThumb ? theme.accent : theme.item);
+        g.fillRoundRect(barX, thumbY, barW, thumbH, barW, barW);
     }
 
     private void drawCentered(Graphics2D g, String s, int cx, int cy) {
