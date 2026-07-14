@@ -64,6 +64,16 @@ public class GameProfile {
     public String lastLevelPath = "";
 
     /**
+     * A "finalized" (published) game type: its levels are play-only. This is set
+     * when a game type is exported as a {@code .larsonsengine} package with the
+     * finalize toggle on — the recipient can play the levels but not open them in
+     * creative mode or edit their settings. It is a game-type identity property
+     * (like {@link #name}), so it survives loading a level's own settings and is
+     * never copied by {@link #applyFeaturesFrom}.
+     */
+    public boolean finalized = false;
+
+    /**
      * The creator's texture pack folder ("" = none): sprite-sheet browsing in
      * the creative editor's texture dialog starts here, and bare sheet
      * filenames resolve against it.
@@ -125,6 +135,7 @@ public class GameProfile {
         m.put("particlesEnabled", particlesEnabled);
         m.put("audioEnabled", audioEnabled);
         m.put("lastLevelPath", lastLevelPath);
+        m.put("finalized", finalized);
         m.put("texturePackDir", texturePackDir);
         m.put("tileSize", tileSize);
         m.put("playerSize", playerSize);
@@ -159,9 +170,10 @@ public class GameProfile {
     /**
      * Copy the feature toggles/values from {@code src} into this profile while
      * keeping this profile's game-type identity — its {@link #name}, its shared
-     * {@link #texturePackDir}, and the {@link #lastLevelPath} pointer. This is
-     * how a level's own saved settings become the active configuration without
-     * losing which game type (folder of levels) is in play.
+     * {@link #texturePackDir}, the {@link #lastLevelPath} pointer, and its
+     * {@link #finalized} (published) status. This is how a level's own saved
+     * settings become the active configuration without losing which game type
+     * (folder of levels) is in play, or whether it is play-only.
      */
     public void applyFeaturesFrom(GameProfile src) {
         if (src == null) return;
@@ -246,6 +258,7 @@ public class GameProfile {
         p.particlesEnabled = bool(m, "particlesEnabled", p.particlesEnabled);
         p.audioEnabled = bool(m, "audioEnabled", p.audioEnabled);
         p.lastLevelPath = str(m, "lastLevelPath", p.lastLevelPath);
+        p.finalized = bool(m, "finalized", p.finalized);
         p.texturePackDir = str(m, "texturePackDir", p.texturePackDir);
         p.tileSize = intg(m, "tileSize", p.tileSize);
         p.playerSize = intg(m, "playerSize", p.playerSize);

@@ -1250,6 +1250,56 @@ GameProfile reloaded = store.load("My Platformer");
 > run from the project root (e.g. `./gradlew run`). Bundled example types ship
 > on the classpath and also load from a packaged jar.
 
+### Exporting & sharing a game type (`.larsonsengine`)
+
+A finished game type can be handed to someone else as a single file. From the
+main menu, **Export Game Type (.larsonsengine)** bundles the game type's profile
+**and every level in it** — plus the `doors.json` / `custom.json` that wire those
+levels together and define their custom blocks/mobs/items — into one
+`<name>.larsonsengine` file
+([`GamePackage`](src/main/java/com/larsons/engine/config/GamePackage.java)). A
+level is never exported on its own: it only means something inside the game type
+whose features, doors, and custom content it was built against.
+
+The file is written next to the runnable jar (in the `share/` folder when you're
+running from the IDE/Gradle). **At launch the engine scans that folder for
+`.larsonsengine` files and installs any it hasn't seen** — so a recipient just
+drops the file beside their jar and starts the game; the game type appears on
+the startup chooser with all its levels. An already-installed game type is left
+alone, so re-scanning never clobbers a player's local edits.
+
+**Finalize toggle.** The export dialog has a **Finalize** toggle. When it's on,
+the packaged copy is marked *play-only*: after import, its levels can be
+**played but not edited** — Creative Mode, per-level *Edit Settings*, feature
+edits, and renames are all hidden, and the menu labels the type
+`finalized (play-only)`. Finalizing only affects the exported package; your own
+local copy stays fully editable. (It's just a `finalized` flag on the
+[`GameProfile`](src/main/java/com/larsons/engine/config/GameProfile.java), so the
+lock travels inside the file.)
+
+```java
+// Programmatic export/import (roots default to resources/gametypes + resources/levels):
+GameProfile profile = new GameTypeStore().load("My Platformer");
+Path file = GamePackage.export(profile, new LevelStore("My Platformer"),
+                               GamePackage.dropInDir(), /* finalized = */ true);
+// on a recipient's machine, at launch:
+GamePackage.importDropIns();   // installs any .larsonsengine dropped beside the jar
+```
+
+The package is a plain JSON document (the engine's own dependency-free parser
+reads it), so it stays inspectable:
+
+```json
+{
+  "larsonsengine": 1,
+  "name": "My Platformer",
+  "gameType": { "name": "My Platformer", "finalized": true, ... },
+  "levels":  { "level_one": { ...level... }, "level_two": { ... } },
+  "doors":   { "doors": [ ... ] },
+  "custom":  { "blocks": [ ... ], "mobs": [ ... ] }
+}
+```
+
 ### Building a feature form
 
 `ConfigForm` is the reusable clickable widget behind the editor and pause menu.

@@ -1,6 +1,7 @@
 package com.larsons.engine.core;
 
 import com.larsons.engine.config.GameContext;
+import com.larsons.engine.config.GamePackage;
 import com.larsons.engine.config.GameTypeStore;
 import com.larsons.engine.demo.AutoBattlerGuideScene;
 import com.larsons.engine.demo.AutoBattlerLobbyScene;
@@ -43,6 +44,11 @@ public class Main {
         // background), so launching from the IDE is all it takes to have
         // something to hand to friends.
         ShareJar.writeAsync();
+
+        // Install any game-type packages (.larsonsengine) dropped next to the
+        // jar. Runs before the startup scene lists game types, so an imported
+        // type shows up on the chooser this launch.
+        GamePackage.importDropIns();
 
         // The player's saved texture overrides apply from the first frame.
         Skins.install(new SkinStore().load());
