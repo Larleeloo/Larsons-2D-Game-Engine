@@ -146,6 +146,73 @@ public class GameProfile {
         return Json.stringify(toMap());
     }
 
+    /**
+     * A deep, independent copy. Used to snapshot the active feature settings
+     * into a level (each level carries its own toggles) and to derive the
+     * runtime profile from a level's saved settings. The map round-trip keeps
+     * this automatically in sync with the field list.
+     */
+    public GameProfile copy() {
+        return fromMap(toMap());
+    }
+
+    /**
+     * Copy the feature toggles/values from {@code src} into this profile while
+     * keeping this profile's game-type identity — its {@link #name}, its shared
+     * {@link #texturePackDir}, and the {@link #lastLevelPath} pointer. This is
+     * how a level's own saved settings become the active configuration without
+     * losing which game type (folder of levels) is in play.
+     */
+    public void applyFeaturesFrom(GameProfile src) {
+        if (src == null) return;
+        String keepName = name;
+        String keepTexture = texturePackDir;
+        String keepLast = lastLevelPath;
+        GameProfile s = src.copy();
+        perspective = s.perspective;
+        perspectiveSwitchingEnabled = s.perspectiveSwitchingEnabled;
+        zoomEnabled = s.zoomEnabled;
+        minZoom = s.minZoom;
+        maxZoom = s.maxZoom;
+        defaultZoom = s.defaultZoom;
+        minFps = s.minFps;
+        maxFps = s.maxFps;
+        gravityEnabled = s.gravityEnabled;
+        hudVisible = s.hudVisible;
+        gridVisible = s.gridVisible;
+        mobsEnabled = s.mobsEnabled;
+        itemsEnabled = s.itemsEnabled;
+        combatEnabled = s.combatEnabled;
+        projectilesEnabled = s.projectilesEnabled;
+        blockEditingEnabled = s.blockEditingEnabled;
+        creativeEnabled = s.creativeEnabled;
+        lightingEnabled = s.lightingEnabled;
+        dayNightCycle = s.dayNightCycle;
+        nightMode = s.nightMode;
+        nightDarkness = s.nightDarkness;
+        ambientLight = s.ambientLight;
+        parallaxEnabled = s.parallaxEnabled;
+        particlesEnabled = s.particlesEnabled;
+        audioEnabled = s.audioEnabled;
+        tileSize = s.tileSize;
+        playerSize = s.playerSize;
+        defaultEntitySize = s.defaultEntitySize;
+        shadersEnabled = s.shadersEnabled;
+        shaderStrength = s.shaderStrength;
+        shaderPixelate = s.shaderPixelate;
+        shaderPixelSize = s.shaderPixelSize;
+        shaderWave = s.shaderWave;
+        shaderChromatic = s.shaderChromatic;
+        shaderBloom = s.shaderBloom;
+        shaderGrayscale = s.shaderGrayscale;
+        shaderScanlines = s.shaderScanlines;
+        shaderVignette = s.shaderVignette;
+        name = keepName;
+        texturePackDir = keepTexture;
+        lastLevelPath = keepLast;
+        normalize();
+    }
+
     public static GameProfile fromJson(String json) {
         return fromMap(Json.asObject(Json.parse(json)));
     }

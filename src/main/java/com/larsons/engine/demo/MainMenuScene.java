@@ -13,8 +13,11 @@ import java.awt.Graphics2D;
 
 /**
  * Main menu for the active game type. Shows the game type's name and lets the
- * creator play/create a level, edit the type's features, or switch to a
- * different game type.
+ * creator play the last level, load one of the game type's individual levels,
+ * create a level, edit the type's default features, or switch to a different
+ * game type. Game types are a folder grouping of levels, and each level carries
+ * its own feature toggles, so "Load Level" is where a specific level (and its
+ * settings) is chosen.
  */
 public class MainMenuScene extends AbstractScene {
     private final GameContext ctx;
@@ -28,7 +31,8 @@ public class MainMenuScene extends AbstractScene {
         menu = new Menu(p.name)
                 .subtitle("game type · " + p.perspective)
                 .theme(MenuTheme.dark())
-                .add("Play Level", () -> scenes.transitionTo("play"));
+                .add("Play Level", () -> scenes.transitionTo("play"))
+                .add("Load Level", () -> scenes.transitionTo("levelselect"));
         if (p.creativeEnabled) {
             menu.add("Creative Mode (paint a level)", () -> scenes.transitionTo("creative"));
         }

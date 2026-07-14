@@ -57,6 +57,14 @@ public final class LevelLoader {
         if (root.containsKey("tileSize")) lvl.tileSize = intOf(root.get("tileSize"), 32);
         if (root.get("background") instanceof String bg) lvl.background = parseColor(bg, lvl.background);
 
+        // A level's own feature settings (the per-level toggles). Absent in
+        // legacy levels, in which case the active game type's profile is used.
+        if (root.get("settings") instanceof Map<?, ?> settings) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> sm = (Map<String, Object>) settings;
+            lvl.settings = com.larsons.engine.config.GameProfile.fromMap(sm);
+        }
+
         // "tileset": "registry" marks tile ids as BlockRegistry block ids
         // (creative-editor levels); anything else is a legacy palette level.
         if (root.get("tileset") instanceof String ts) {

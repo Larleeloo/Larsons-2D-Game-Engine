@@ -28,6 +28,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -336,6 +337,96 @@ class WorldFeaturesTest {
         assertTrue(back.registryTiles);
         assertEquals(1, back.entities.size());
         assertEquals("slime", back.entities.get(0).type);
+    }
+
+    @Test
+    void levelCarriesItsOwnFeatureSettings() {
+        // A level stores its own toggles so a game type can hold a diverse mix.
+        Level lvl = flatLevel();
+        lvl.settings = new GameProfile("ignored-name");
+        lvl.settings.gravityEnabled = false;
+        lvl.settings.lightingEnabled = true;
+        lvl.settings.shadersEnabled = true;
+        lvl.settings.maxFps = 90;
+
+        Level back = LevelLoader.parse(lvl.toJson());
+        assertNotNull(back.settings, "settings survive the JSON round-trip");
+        assertFalse(back.settings.gravityEnabled);
+        assertTrue(back.settings.lightingEnabled);
+        assertTrue(back.settings.shadersEnabled);
+        assertEquals(90, back.settings.maxFps);
+
+        // Legacy levels (no settings) round-trip with none, so they keep using
+        // the active game type's profile.
+        assertNull(LevelLoader.parse(flatLevel().toJson()).settings);
+    }
+
+    @Test
+    void loadingALevelAppliesItsSettingsButKeepsTheGameType() {
+        GameContext ctx = new GameContext(null, new GameTypeStore());
+        GameProfile gameType = new GameProfile("My Game Type");
+        gameType.texturePackDir = "packs/forest";
+        gameType.gravityEnabled = true;
+        gameType.lightingEnabled = false;
+        ctx.setProfile(gameType);
+
+        Level lvl = flatLevel();
+        lvl.settings = new GameProfile("whatever");
+        lvl.settings.gravityEnabled = false;   // a no-gravity level
+        lvl.settings.lightingEnabled = true;
+
+        ctx.applyLevelSettings(lvl.settings);
+
+        // Toggles now come from the level...
+        assertFalse(ctx.profile().gravityEnabled);
+        assertTrue(ctx.profile().lightingEnabled);
+        // ...but the game-type identity (folder + shared texture pack) stays.
+        assertEquals("My Game Type", ctx.profile().name);
+        assertEquals("packs/forest", ctx.profile().texturePackDir);
+
+        // A legacy level (null settings) leaves the active profile untouched.
+        ctx.applyLevelSettings(null);
+        assertFalse(ctx.profile().gravityEnabled);
+        assertEquals("My Game Type", ctx.profile().name);
+    }
+
+    @Test
+    void playSceneAppliesTheLoadedLevelsOwnSettings(@TempDir Path dir) throws Exception {
+        // The game type defaults to gravity ON; the level we load has it OFF.
+        GameContext ctx = new GameContext(null, new GameTypeStore(dir.toString()));
+        GameProfile gameType = profile(); // name "World Test", gravity on
+        gameType.gravityEnabled = true;
+        ctx.setProfile(gameType);
+
+        Level lvl = flatLevel();
+        lvl.name = "No Gravity Room";
+        lvl.settings = gameType.copy();
+        lvl.settings.gravityEnabled = false; // this level's own toggle
+        Path levelFile = dir.resolve("no_gravity.json");
+        Files.writeString(levelFile, lvl.toJson());
+        gameType.lastLevelPath = levelFile.toString(); // what "Load Level" sets
+
+        SceneManager scenes = new SceneManager();
+        scenes.setViewport(640, 360);
+        scenes.register("play", new com.larsons.engine.demo.PlayScene(ctx, levelFile.toString()));
+        scenes.register("menu", new com.larsons.engine.demo.MainMenuScene(ctx));
+        scenes.setScene("play");
+
+        InputManager input = new InputManager();
+        BufferedImage frame = new BufferedImage(640, 360, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = frame.createGraphics();
+        for (int i = 0; i < 10; i++) {
+            input.newFrame();
+            scenes.update(1.0 / 120.0, input);
+            scenes.render(g, 0f);
+        }
+        g.dispose();
+
+        // Playing the level switched gravity off, while the game type (folder)
+        // identity stayed put.
+        assertFalse(ctx.profile().gravityEnabled, "the level's own toggle wins over the game type default");
+        assertEquals("World Test", ctx.profile().name, "the game type stays selected");
+        assertEquals("PlayScene", scenes.current().name());
     }
 
     @Test
