@@ -349,8 +349,8 @@ com.larsons.engine
 └── demo
     ├── StartupScene.java        Choose or create a game type
     ├── GameTypeEditorScene.java Name + configure a game type's default features
-    ├── MainMenuScene.java       Per-game-type main menu (Play / Load Level / Creative / …)
-    ├── LevelSelectScene.java    "Load Level": pick a level → Play or Edit Settings
+    ├── MainMenuScene.java       Per-game-type main menu (Play / Load Level / Rename Game Type / …)
+    ├── LevelSelectScene.java    "Load Level": pick a level → Play or Edit Settings (rename + toggles)
     ├── MultiplayerScene.java    Host a server / join by host[:port]
     ├── PlayScene.java           Play with every enabled feature; doubles as MP client
     ├── CreativeScene.java       Creative mode: paint blocks/lights/mobs/items
@@ -1188,8 +1188,10 @@ from (and remembers which level to open by default).
    lists the game type's individual levels
    ([`LevelSelectScene`](src/main/java/com/larsons/engine/demo/LevelSelectScene.java)).
    Click a level and you get two buttons: **Play Level** (load and play it) and
-   **Edit Settings** (a form editing *that level's* own toggles, saved back into
-   the level). This is the one place per-level settings are edited.
+   **Edit Settings** (a form to **rename the level** and edit *that level's* own
+   toggles, saved back into the level). This is the one place per-level settings
+   are edited. The main menu also has **Rename Game Type**, which renames the
+   folder — its levels, doors, and custom content move with it.
 5. **Play** — the level loads with only its own enabled features active. Press
    **Esc** for a deliberately simple **pause menu**: *Resume*, *Save Level*
    (persist this world + its settings), *Edit in Creative*, and *Quit to Menu*.

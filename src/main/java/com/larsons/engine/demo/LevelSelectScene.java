@@ -14,6 +14,7 @@ import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.event.KeyEvent;
+import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -94,7 +95,7 @@ public class LevelSelectScene extends AbstractScene {
         scenes.transitionTo("play");
     }
 
-    /** Open the per-level feature form, bound to this level's own settings. */
+    /** Open the per-level editor: rename the level and edit its own settings. */
     private void openEditor() {
         try {
             editLevel = store().load(selectedLevel);
@@ -107,14 +108,38 @@ public class LevelSelectScene extends AbstractScene {
         if (editLevel.settings == null) editLevel.settings = ctx.profile().copy();
         view = View.EDIT;
         status = "";
+        buildEditForm();
+    }
+
+    private void buildEditForm() {
         form = new ConfigForm("Settings — " + editLevel.name).theme(MenuTheme.dark());
+        form.addText("Level name", () -> editLevel.name, v -> editLevel.name = v, 32);
         ProfileForms.addFeatureOptions(form, editLevel.settings);
-        form.addAction("Save Settings", () -> {
-            editLevel.settings.normalize();
-            store().save(editLevel);
-            status = "Saved settings — \"" + editLevel.name + "\" plays with these toggles";
-        });
+        form.addAction("Save", this::saveEdited);
         form.addAction("Back", () -> openActions(selectedLevel));
+    }
+
+    /** Persist the level's new name + settings, renaming its file if needed. */
+    private void saveEdited() {
+        LevelStore store = store();
+        Path oldFile = store.fileFor(selectedLevel);
+        editLevel.name = editLevel.name == null || editLevel.name.isBlank()
+                ? "Untitled" : editLevel.name.trim();
+        editLevel.settings.normalize();
+        Path newFile = store.save(editLevel);
+        if (!newFile.equals(oldFile)) {
+            // Renamed: drop the old file and follow the rename everywhere it's
+            // referenced (the game type's "last played" pointer).
+            store.delete(selectedLevel);
+            GameProfile p = ctx.profile();
+            if (oldFile.toString().equals(p.lastLevelPath)) {
+                p.lastLevelPath = newFile.toString();
+                ctx.save();
+            }
+            selectedLevel = editLevel.name;
+        }
+        buildEditForm(); // refresh the title after a possible rename
+        status = "Saved \"" + editLevel.name + "\"";
     }
 
     @Override
@@ -157,7 +182,7 @@ public class LevelSelectScene extends AbstractScene {
         return switch (view) {
             case LIST -> "Each level loads with its own toggles · Esc to go back";
             case ACTIONS -> "Play the level, or edit the settings it plays with · Esc to go back";
-            case EDIT -> "Left/Right adjust · Enter/click activate · Save Settings to keep them · Esc to go back";
+            case EDIT -> "Rename the level or change its toggles · type to edit the name · Save to keep · Esc to go back";
         };
     }
 }
