@@ -347,6 +347,8 @@ public class CreativeScene extends AbstractScene {
         } else {
             net = null;
             level = loadInitialLevel();
+            // Edit (and play-test) with the level's own saved feature toggles.
+            ctx.applyLevelSettings(level.settings);
         }
         // After the level: the CUTSCENES palette lists the level's cutscenes.
         buildPalette();
@@ -1861,12 +1863,13 @@ public class CreativeScene extends AbstractScene {
                 dialogForm.addText("Name", () -> pendingName, v -> pendingName = v, 32);
                 dialogForm.addAction("Save", () -> {
                     level.name = pendingName.isBlank() ? "Untitled" : pendingName.trim();
+                    captureLevelSettings();
                     LevelStore store = new LevelStore(profile().name);
                     Path file = store.save(level);
                     profile().lastLevelPath = file.toString();
                     ctx.save();
                     closeDialog();
-                    setStatus("Saved to " + file + " — Play now loads this level");
+                    setStatus("Saved to " + file + " — Play/Load now loads this level with its settings");
                 });
                 dialogForm.addAction("Cancel", this::closeDialog);
             }
@@ -1890,6 +1893,7 @@ public class CreativeScene extends AbstractScene {
             }
             case CONFIRM_EXIT -> {
                 dialogForm.addAction("Save, then exit", () -> {
+                    captureLevelSettings();
                     LevelStore store = new LevelStore(profile().name);
                     Path file = store.save(level);
                     profile().lastLevelPath = file.toString();
@@ -1969,8 +1973,21 @@ public class CreativeScene extends AbstractScene {
         };
     }
 
+    /**
+     * Snapshot the active feature toggles into the level so they save with it
+     * — the level is what carries settings now, not the game type. Skipped
+     * online, where the server (not a saved file) owns the world.
+     */
+    private void captureLevelSettings() {
+        if (net == null) level.settings = profile().copy();
+    }
+
     /** Camera/slider bookkeeping after replacing the edited level. */
     private void afterLevelSwap() {
+        // A loaded level brings its own feature toggles; a freshly created or
+        // generated one has none yet (settings == null) and keeps the current
+        // ones, which it then inherits when first saved.
+        if (net == null) ctx.applyLevelSettings(level.settings);
         camera.tileSize = level.tileSize;
         if (net == null) camera.setPerspective(level.perspective);
         camera.centerOn(level.spawnX, level.spawnY);

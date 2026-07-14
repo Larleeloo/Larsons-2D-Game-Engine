@@ -197,6 +197,11 @@ public class PlayScene extends AbstractScene {
             world = null;
         } else {
             level = loadOfflineLevel();
+            // Each level carries its own feature toggles: apply them so the
+            // game type acts as a folder of diverse levels, not one fixed
+            // feature set. Legacy levels (settings == null) keep the game
+            // type's profile as-is.
+            ctx.applyLevelSettings(level.settings);
             world = new World(level);
             world.populateFromLevel(profile());
             world.setPickupListener((player, key, count) -> {
@@ -1156,7 +1161,10 @@ public class PlayScene extends AbstractScene {
             pauseForm.addAction("Creative Editor (paint this world)",
                             () -> scenes.transitionTo("creative"))
                     .enabledWhen(() -> p.creativeEnabled);
-            pauseForm.addAction("Save Game Type", () -> { p.normalize(); ctx.save(); });
+            // Toggles are per level: bake the live settings into this level so
+            // they load with it next time. Saves to the game type's folder.
+            pauseForm.addAction("Save Level (keep these settings)", this::saveLevelSettings);
+            pauseForm.addAction("Save Game Type Defaults", () -> { p.normalize(); ctx.save(); });
             pauseForm.addAction("Quit to Menu", () -> scenes.transitionTo("menu"));
         } else {
             // Online the server owns the rules: no live feature editing, or the
@@ -1171,6 +1179,34 @@ public class PlayScene extends AbstractScene {
                 scenes.transitionTo("menu");
             });
         }
+    }
+
+    /**
+     * Stamp the live feature toggles onto the level and save it, so this level
+     * reloads with these settings. The saved terrain is preserved (not this
+     * play session's block edits): the on-disk level is reloaded, its
+     * {@link Level#settings} updated, and written back. With no saved copy yet
+     * (e.g. the bundled sample), the in-memory level is saved under the game
+     * type instead.
+     */
+    private void saveLevelSettings() {
+        GameProfile p = profile();
+        p.normalize();
+        LevelStore store = new LevelStore(p.name);
+        Level target = level;
+        if (store.exists(level.name)) {
+            try {
+                target = store.load(level.name);
+            } catch (RuntimeException e) {
+                target = level; // unreadable on disk: fall back to the live level
+            }
+        }
+        target.settings = p.copy();
+        Path file = store.save(target);
+        p.lastLevelPath = file.toString();
+        ctx.save();
+        ruleStatus = "Saved level settings — \"" + target.name + "\" loads with these toggles";
+        ruleStatusTime = 3.0;
     }
 
     private void drawPauseOverlay(Graphics2D g) {

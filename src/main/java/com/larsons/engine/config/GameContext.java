@@ -63,6 +63,20 @@ public class GameContext {
         applyLiveSettings();
     }
 
+    /**
+     * Make a level's own saved settings the active configuration. The feature
+     * toggles come from the level; the game-type identity (name, texture pack,
+     * last-level pointer) stays put, so the same game type — the folder the
+     * level lives in — remains selected. A {@code null} argument (a legacy
+     * level with no settings of its own) leaves the active profile untouched,
+     * so it plays with the game type's profile as before.
+     */
+    public void applyLevelSettings(GameProfile levelSettings) {
+        if (levelSettings == null) return;
+        profile().applyFeaturesFrom(levelSettings);
+        applyLiveSettings();
+    }
+
     /** The active multiplayer session, or {@code null} when playing offline. */
     public NetSession session() { return session; }
 

@@ -1,5 +1,6 @@
 package com.larsons.engine.level;
 
+import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.entity.ItemStack;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.util.Json;
@@ -49,6 +50,15 @@ public class Level {
 
     public String name = "Untitled";
     public Perspective perspective = Perspective.SIDE_SCROLL;
+    /**
+     * This level's own feature settings (the toggles that used to live on the
+     * game type). Game types are just a folder grouping now, so each level
+     * carries the configuration it plays with — perspective switching, gravity,
+     * mobs/items/combat, lighting, shaders, and so on. {@code null} means the
+     * level has no saved settings of its own (legacy levels and the bundled
+     * sample), in which case the active game type's profile is used as-is.
+     */
+    public GameProfile settings;
     public int tileSize = 32;
     public int width;          // in tiles
     public int height;         // in tiles
@@ -345,6 +355,11 @@ public class Level {
         m.put("width", width);
         m.put("height", height);
         m.put("background", hex(background));
+        // Each level stores its own feature toggles so game types can hold a
+        // diverse mix of levels; loading a level loads its settings.
+        if (settings != null) {
+            m.put("settings", settings.toMap());
+        }
         if (registryTiles) {
             m.put("tileset", "registry");
         } else if (palette != null) {

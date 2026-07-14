@@ -12,9 +12,11 @@ import java.awt.Font;
 import java.awt.Graphics2D;
 
 /**
- * Launch-time game-type editor: name the game type and enable/disable the
- * features it should use. Edits the active {@link GameProfile} in place and
- * saves it (as JSON) into {@code resources/gametypes/}.
+ * Launch-time game-type editor: name the game type and set the <em>default</em>
+ * features its levels start from. Toggles are stored per level, so these are the
+ * template a newly created level inherits (and can then diverge from); each
+ * level saves its own settings. Edits the active {@link GameProfile} in place
+ * and saves it (as JSON) into {@code resources/gametypes/}.
  */
 public class GameTypeEditorScene extends AbstractScene {
     private final GameContext ctx;
