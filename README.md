@@ -169,7 +169,7 @@ This engine was built against six explicit requirements:
 | 4 | **Out of the box on any Java machine** | The engine uses **only the JDK** (Java2D / AWT / Swing / sockets). No third-party runtime dependencies — JSON parsing, networking, and shader execution are all in-engine. |
 | 5 | **Shader support** | ✅ Implemented — see [Shaders](#shaders). Every [`ShaderPass`](src/main/java/com/larsons/engine/graphics/shader/ShaderPass.java) is defined **GLSL-first** (real GPU fragment-shader source, exportable as `.frag` files) with a semantically identical multithreaded CPU fallback, so effects run everywhere today and on a GPU backend without porting. |
 | 6 | **Editing outline of game essentials** | Working, minimal implementations of sprite sheets, level loading, and menu customization, wired together by the demo scenes. |
-| ★ | **Feature toggles + game types** | Clickable toggles on launch and in the pause menu enable/disable features. Toggles are stored **per level** ([`Level.settings`](src/main/java/com/larsons/engine/level/Level.java)) so one game type can group diverse levels; the game type ([`GameProfile`](src/main/java/com/larsons/engine/config/GameProfile.java) under `resources/gametypes/`) is the folder + the template new levels inherit. **Load Level** picks an individual level and loads its settings. |
+| ★ | **Feature toggles + game types** | Clickable toggles enable/disable features. Toggles are stored **per level** ([`Level.settings`](src/main/java/com/larsons/engine/level/Level.java)) so one game type can group diverse levels; the game type ([`GameProfile`](src/main/java/com/larsons/engine/config/GameProfile.java) under `resources/gametypes/`) is the folder + the template new levels inherit. **Load Level** picks an individual level and either plays it or edits its settings. |
 
 ---
 
@@ -350,7 +350,7 @@ com.larsons.engine
     ├── StartupScene.java        Choose or create a game type
     ├── GameTypeEditorScene.java Name + configure a game type's default features
     ├── MainMenuScene.java       Per-game-type main menu (Play / Load Level / Creative / …)
-    ├── LevelSelectScene.java    "Load Level": pick one of the game type's levels
+    ├── LevelSelectScene.java    "Load Level": pick a level → Play or Edit Settings
     ├── MultiplayerScene.java    Host a server / join by host[:port]
     ├── PlayScene.java           Play with every enabled feature; doubles as MP client
     ├── CreativeScene.java       Creative mode: paint blocks/lights/mobs/items
@@ -361,7 +361,7 @@ com.larsons.engine
     ├── AutoBattlerGuideScene.java  Illustrated field guide (rules/synergies/items/odds/units)
     ├── AutoHud.java             The auto-battler HUD's screen geometry (overlap-checked)
     ├── SkinEditorScene.java     The lobby's skin customization menu (sheet imports)
-    └── ProfileForms.java        Shared feature options (editor + pause menu)
+    └── ProfileForms.java        Shared feature options (game-type editor + Load Level's Edit Settings)
 ```
 
 ### The game loop
@@ -493,9 +493,10 @@ falloff, pixelate/chromatic sample maps), and zero per-pixel allocation — so
 typical chains fit a 120 FPS budget on a desktop CPU. When no passes are
 enabled the pipeline is skipped entirely and costs nothing.
 
-**In the demo:** every game type has shader toggles (master switch, global
-strength, one toggle per effect) in the editor and the pause menu, applied
-live and saved with the profile. The *Export shaders as GLSL* action writes
+**In the demo:** every level has shader toggles (master switch, global
+strength, one toggle per effect) in the game-type editor (defaults) and in
+Load Level → Edit Settings (per level), saved with the level. The *Export
+shaders as GLSL* action writes
 ready-to-compile `fullscreen.vert` + `<effect>.frag` files to `shaders/` —
 drop them into any GLSL tool, engine, or your own OpenGL backend.
 
@@ -1155,9 +1156,9 @@ designed for: *input commands in, state snapshots out*.
   disconnected), and one tick thread that owns all state. Silent connections
   time out after 15 s.
 
-In multiplayer the pause menu doesn't edit features (the server owns the
-rules — editing them locally would desync the prediction); the simulation
-keeps running server-side while the menu is open, again like Minecraft.
+The pause menu never edits features (per-level toggles are edited in Load Level
+→ Edit Settings); in multiplayer the simulation keeps running server-side while
+the menu is open, again like Minecraft.
 
 ---
 
@@ -1185,12 +1186,13 @@ from (and remembers which level to open by default).
 3. **Save** — the template is written to `resources/gametypes/<name>.json`.
 4. **Main menu** — **Play Level** opens the last level you played; **Load Level**
    lists the game type's individual levels
-   ([`LevelSelectScene`](src/main/java/com/larsons/engine/demo/LevelSelectScene.java))
-   so you can pick one — it loads with *its* toggles.
-5. **Play** — levels load with only that level's enabled features active. Press
-   **Esc** for a **pause menu** exposing the *same* toggles; tune them
-   mid-session, then **Save Level** to bake them into the level (or **Save Game
-   Type Defaults** to update the template for future levels).
+   ([`LevelSelectScene`](src/main/java/com/larsons/engine/demo/LevelSelectScene.java)).
+   Click a level and you get two buttons: **Play Level** (load and play it) and
+   **Edit Settings** (a form editing *that level's* own toggles, saved back into
+   the level). This is the one place per-level settings are edited.
+5. **Play** — the level loads with only its own enabled features active. Press
+   **Esc** for a deliberately simple **pause menu**: *Resume*, *Save Level*
+   (persist this world + its settings), *Edit in Creative*, and *Quit to Menu*.
 
 Levels are authored and saved in **Creative Mode**, which snapshots the active
 toggles into the level on every save, and are stored under

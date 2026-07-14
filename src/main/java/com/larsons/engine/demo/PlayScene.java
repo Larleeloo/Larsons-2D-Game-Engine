@@ -1156,21 +1156,18 @@ public class PlayScene extends AbstractScene {
         GameProfile p = profile();
         pauseForm = new ConfigForm("Paused — " + p.name).theme(MenuTheme.dark());
         if (net == null) {
-            ProfileForms.addFeatureOptions(pauseForm, p);
+            // A level's feature toggles are edited in Load Level → Edit
+            // Settings, not here — the pause menu stays simple.
             pauseForm.addAction("Resume", this::resume);
-            pauseForm.addAction("Creative Editor (paint this world)",
+            pauseForm.addAction("Save Level", this::saveLevel);
+            pauseForm.addAction("Edit in Creative",
                             () -> scenes.transitionTo("creative"))
                     .enabledWhen(() -> p.creativeEnabled);
-            // Toggles are per level: bake the live settings into this level so
-            // they load with it next time. Saves to the game type's folder.
-            pauseForm.addAction("Save Level (keep these settings)", this::saveLevelSettings);
-            pauseForm.addAction("Save Game Type Defaults", () -> { p.normalize(); ctx.save(); });
             pauseForm.addAction("Quit to Menu", () -> scenes.transitionTo("menu"));
         } else {
-            // Online the server owns the rules: no live feature editing, or the
-            // local simulation would no longer match the authoritative one.
+            // Online the server owns the world.
             pauseForm.addAction("Resume", this::resume);
-            pauseForm.addAction("Creative Editor (paint this world)",
+            pauseForm.addAction("Edit in Creative",
                             () -> scenes.transitionTo("creative"))
                     .enabledWhen(() -> p.creativeEnabled);
             pauseForm.addAction(net.isHost() ? "Stop Server & Quit" : "Disconnect & Quit", () -> {
@@ -1182,30 +1179,20 @@ public class PlayScene extends AbstractScene {
     }
 
     /**
-     * Stamp the live feature toggles onto the level and save it, so this level
-     * reloads with these settings. The saved terrain is preserved (not this
-     * play session's block edits): the on-disk level is reloaded, its
-     * {@link Level#settings} updated, and written back. With no saved copy yet
-     * (e.g. the bundled sample), the in-memory level is saved under the game
-     * type instead.
+     * Save the current level — its terrain, entities, and the settings it's
+     * playing with — into the game type's folder, so this play state reloads
+     * next time. Its feature toggles are edited elsewhere (Load Level → Edit
+     * Settings); here we just persist them alongside the world as-is.
      */
-    private void saveLevelSettings() {
+    private void saveLevel() {
         GameProfile p = profile();
         p.normalize();
+        level.settings = p.copy();
         LevelStore store = new LevelStore(p.name);
-        Level target = level;
-        if (store.exists(level.name)) {
-            try {
-                target = store.load(level.name);
-            } catch (RuntimeException e) {
-                target = level; // unreadable on disk: fall back to the live level
-            }
-        }
-        target.settings = p.copy();
-        Path file = store.save(target);
+        Path file = store.save(level);
         p.lastLevelPath = file.toString();
         ctx.save();
-        ruleStatus = "Saved level settings — \"" + target.name + "\" loads with these toggles";
+        ruleStatus = "Saved level \"" + level.name + "\"";
         ruleStatusTime = 3.0;
     }
 
@@ -1220,7 +1207,7 @@ public class PlayScene extends AbstractScene {
         g.setColor(new Color(120, 120, 140));
         g.setFont(HUD_FONT);
         g.drawString(net == null
-                        ? "Esc to resume · changes apply live and can be saved to the game type"
+                        ? "Esc to resume · Save Level keeps this world; edit toggles in Load Level → Edit Settings"
                         : "Esc to resume · game keeps running on the server while paused",
                 24, viewportHeight - 24);
     }
