@@ -340,6 +340,39 @@ class WorldFeaturesTest {
     }
 
     @Test
+    void renamingALevelReplacesItsFile(@TempDir Path dir) {
+        // The level-editor's rename = save under the new name + delete the old.
+        LevelStore store = new LevelStore(dir.toString(), "My Game");
+        Level lvl = flatLevel();
+        lvl.name = "Old Name";
+        store.save(lvl);
+        assertEquals(List.of("old_name"), store.list());
+
+        lvl.name = "New Name";
+        store.save(lvl);
+        assertTrue(store.delete("Old Name"), "the old file is removed on rename");
+        assertEquals(List.of("new_name"), store.list());
+        assertFalse(store.delete("Old Name"), "deleting a gone level reports nothing removed");
+    }
+
+    @Test
+    void renamingAGameTypeMovesItsLevelsFolder(@TempDir Path dir) {
+        // A game-type rename moves the whole folder so its levels come along.
+        LevelStore oldStore = new LevelStore(dir.toString(), "Old Type");
+        Level lvl = flatLevel();
+        lvl.name = "Arena";
+        oldStore.save(lvl);
+
+        assertTrue(oldStore.moveGameTypeFolderTo("New Type"));
+
+        LevelStore newStore = new LevelStore(dir.toString(), "New Type");
+        assertEquals(List.of("arena"), newStore.list(), "levels follow the game-type rename");
+        assertTrue(oldStore.list().isEmpty(), "the old game-type folder is gone");
+        assertFalse(oldStore.moveGameTypeFolderTo("New Type"),
+                "moving an absent folder is a no-op");
+    }
+
+    @Test
     void levelCarriesItsOwnFeatureSettings() {
         // A level stores its own toggles so a game type can hold a diverse mix.
         Level lvl = flatLevel();

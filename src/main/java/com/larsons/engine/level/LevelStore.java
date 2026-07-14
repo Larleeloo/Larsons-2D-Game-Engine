@@ -83,4 +83,34 @@ public final class LevelStore {
         String file = GameTypeStore.fileName(levelName); // sanitizes + ".json"
         return directory().resolve(file);
     }
+
+    /** Delete a saved level's file; returns whether one existed. */
+    public boolean delete(String levelName) {
+        try {
+            return Files.deleteIfExists(fileFor(levelName));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /**
+     * Move this game type's whole levels folder — its levels plus the
+     * {@code doors.json} / {@code custom.json} that live beside them — to the
+     * folder for {@code newGameTypeName} under the same root, so a game-type
+     * rename keeps its levels. Returns whether a move happened (false when the
+     * folder is absent or already at the target name). Throws if the target
+     * folder already exists (the caller guards against clobbering another type).
+     */
+    public boolean moveGameTypeFolderTo(String newGameTypeName) {
+        Path from = directory();
+        Path to = new LevelStore(root.toString(), newGameTypeName).directory();
+        if (from.equals(to) || !Files.isDirectory(from)) return false;
+        try {
+            Files.createDirectories(to.getParent());
+            Files.move(from, to);
+            return true;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
 }

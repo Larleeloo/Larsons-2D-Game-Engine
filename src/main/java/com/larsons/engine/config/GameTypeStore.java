@@ -112,6 +112,15 @@ public class GameTypeStore {
         return dir.resolve(fileName(name));
     }
 
+    /** Delete a game type's profile file; returns whether one existed. */
+    public boolean delete(String name) {
+        try {
+            return Files.deleteIfExists(fileFor(name));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
     /** Turn a display name into a safe filename. */
     public static String fileName(String name) {
         String base = name == null ? "" : name.trim();
