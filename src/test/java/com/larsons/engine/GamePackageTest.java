@@ -189,4 +189,94 @@ class GamePackageTest {
         assertEquals("my_platformer" + GamePackage.EXTENSION,
                 GamePackage.packageFileName("My Platformer!"));
     }
+
+    // --- forward compatibility -----------------------------------------------------
+    // These lock in the behaviour that keeps a package exported today loadable in
+    // future builds: versioned files, readers that default what's missing and
+    // ignore what's unknown, and best-effort handling of newer schema versions.
+
+    private Path writePackage(Path dir, String json) throws Exception {
+        Files.createDirectories(dir);
+        Path p = dir.resolve("pkg" + GamePackage.EXTENSION);
+        Files.writeString(p, json);
+        return p;
+    }
+
+    @Test
+    void minimalOlderShapedPackageImportsWithDefaults(@TempDir Path tmp) throws Exception {
+        // A package carrying only the keys a much older/leaner exporter might
+        // have written — everything else must fall back to sane defaults.
+        Path pkg = writePackage(tmp.resolve("in"), """
+                {
+                  "larsonsengine": 1,
+                  "name": "Legacy",
+                  "gameType": { "name": "Legacy" },
+                  "levels": { "intro": { "tileset": "registry", "tiles": [[0,1],[0,0]] } }
+                }
+                """);
+        String name = GamePackage.importFile(pkg, tmp.resolve("gt"), tmp.resolve("lv"), false);
+        assertEquals("Legacy", name);
+
+        GameProfile p = new GameTypeStore(tmp.resolve("gt").toString()).load("Legacy");
+        assertEquals(120, p.maxFps, "missing fields take GameProfile defaults");
+        assertTrue(p.mobsEnabled);
+        assertFalse(p.finalized);
+        Level intro = new LevelStore(tmp.resolve("lv").toString(), "Legacy").load("intro");
+        assertEquals(1, intro.tileAt(1, 0), "the level still loads");
+    }
+
+    @Test
+    void unknownFutureFieldsAreIgnoredNotFatal(@TempDir Path tmp) throws Exception {
+        // Fields a future version might add — at the top level, inside the game
+        // type, and inside a level — must be ignored, not crash the import.
+        Path pkg = writePackage(tmp.resolve("in"), """
+                {
+                  "larsonsengine": 1,
+                  "name": "Future",
+                  "somethingAddedLater": { "x": 1 },
+                  "gameType": { "name": "Future", "maxFps": 90, "warpDriveEnabled": true },
+                  "levels": { "room": { "tileset": "registry", "tiles": [[2]], "quantumFoam": 42 } }
+                }
+                """);
+        String name = GamePackage.importFile(pkg, tmp.resolve("gt"), tmp.resolve("lv"), false);
+        assertEquals("Future", name);
+
+        GameProfile p = new GameTypeStore(tmp.resolve("gt").toString()).load("Future");
+        assertEquals(90, p.maxFps, "known fields still read");
+        Level room = new LevelStore(tmp.resolve("lv").toString(), "Future").load("room");
+        assertEquals(2, room.tileAt(0, 0), "the level with unknown extras still loads");
+    }
+
+    @Test
+    void newerSchemaVersionImportsBestEffort(@TempDir Path tmp) throws Exception {
+        // A package from a build newer than this one: we can't know its shape,
+        // but tolerant readers let it import rather than being refused outright.
+        Path pkg = writePackage(tmp.resolve("in"), """
+                {
+                  "larsonsengine": 999,
+                  "name": "FromTheFuture",
+                  "gameType": { "name": "FromTheFuture", "finalized": true, "hyperMode": true },
+                  "levels": { "a": { "tileset": "registry", "tiles": [[0]] } }
+                }
+                """);
+        String name = GamePackage.importFile(pkg, tmp.resolve("gt"), tmp.resolve("lv"), false);
+        assertEquals("FromTheFuture", name, "a newer-versioned package still imports");
+        GameProfile p = new GameTypeStore(tmp.resolve("gt").toString()).load("FromTheFuture");
+        assertTrue(p.finalized, "the fields it shares with us are still honoured");
+    }
+
+    @Test
+    void currentExportsRecordTheFormatVersionForFutureMigration(@TempDir Path tmp) throws Exception {
+        // The exported file must carry a version, so a future build knows which
+        // migrations to run — the linchpin of the forward-compatibility promise.
+        Path gt = tmp.resolve("gt"), lv = tmp.resolve("lv"), out = tmp.resolve("out");
+        seedGameType(gt, lv, "Versioned");
+        Path pkg = GamePackage.export(new GameTypeStore(gt.toString()).load("Versioned"),
+                new LevelStore(lv.toString(), "Versioned"), out, false);
+        Map<String, Object> root = Json.asObject(Json.parse(Files.readString(pkg)));
+        assertTrue(root.get(GamePackage.FORMAT_KEY) instanceof Number,
+                "every export is stamped with its schema version");
+        assertEquals(GamePackage.FORMAT_VERSION,
+                ((Number) root.get(GamePackage.FORMAT_KEY)).intValue());
+    }
 }

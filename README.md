@@ -1291,7 +1291,7 @@ reads it), so it stays inspectable:
 
 ```json
 {
-  "larsonsengine": 1,
+  "larsonsengine": 1,               // schema version (drives migration)
   "name": "My Platformer",
   "gameType": { "name": "My Platformer", "finalized": true, ... },
   "levels":  { "level_one": { ...level... }, "level_two": { ... } },
@@ -1299,6 +1299,26 @@ reads it), so it stays inspectable:
   "custom":  { "blocks": [ ... ], "mobs": [ ... ] }
 }
 ```
+
+**Forward compatibility.** A `.larsonsengine` file exported today is designed to
+keep loading in every future build, guaranteed three ways:
+
+1. **It's versioned** — the `larsonsengine` schema version travels in the file,
+   so a future build always knows what it's looking at.
+2. **Readers are tolerant** — `GameProfile.fromMap` and the level loader default
+   anything missing and ignore anything unknown, so a newer build never chokes
+   on an old file (and an older build won't choke on a newer one — it imports
+   *best-effort* rather than refusing).
+3. **There's a migration hook** — on import, `GamePackage.migrate` upgrades an
+   older schema to the current one. It's a no-op at v1; when the format ever
+   changes, that's where a `v1 → v2` step goes.
+
+The contract future changes must keep is intentionally small: **only add keys
+(with safe defaults); never repurpose or remove one**, and when a shape must
+truly change, add a migration step keyed to the version it changed at. The
+`GamePackageTest` suite pins this behaviour (minimal old-shaped packages,
+unknown fields, and newer-versioned packages all import), so a change that would
+break an old export fails CI.
 
 ### Building a feature form
 
