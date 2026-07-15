@@ -54,6 +54,17 @@ import java.util.stream.Stream;
  * whose game type isn't already present — so dropping a package beside the jar
  * and launching is all it takes to install it. An already-installed game type
  * is left alone, so a player's local edits are never clobbered by a re-scan.
+ *
+ * <p><b>Forward compatibility.</b> A package exported today is meant to keep
+ * loading in every future build. Three things guarantee that: the file is
+ * <em>versioned</em> ({@link #FORMAT_KEY}); the readers ({@link GameProfile#fromMap}
+ * and the level loader) <em>default anything missing and ignore anything
+ * unknown</em>, so a build never chokes on a field it doesn't recognize; and
+ * import runs {@link #migrate} to upgrade an older schema to the current one
+ * before reading it. Newer-than-current packages import best-effort rather than
+ * being refused. The one rule future changes must follow is spelled out on
+ * {@link #migrate}: only add keys (with safe defaults), never repurpose or drop
+ * one — and when a shape must truly change, add a migration step.
  */
 public final class GamePackage {
 
@@ -205,13 +216,25 @@ public final class GamePackage {
             System.err.println("[package] Unreadable package " + packageFile + ": " + e.getMessage());
             return null;
         }
-        if (!(root.get(FORMAT_KEY) instanceof Number)
-                || !(root.get("gameType") instanceof Map<?, ?> gtMap)) {
+        if (!(root.get(FORMAT_KEY) instanceof Number versionNum)
+                || !(root.get("gameType") instanceof Map<?, ?>)) {
             System.err.println("[package] Not a valid .larsonsengine file: " + packageFile);
             return null;
         }
+        int version = versionNum.intValue();
+        if (version > FORMAT_VERSION) {
+            // A package from a newer build. We can't know its future shape, but
+            // the readers default missing keys and ignore unknown ones, so a
+            // best-effort import still yields a playable game type.
+            System.err.println("[package] " + packageFile.getFileName()
+                    + " was exported by a newer version (format v" + version
+                    + "; this build reads v" + FORMAT_VERSION + "). Importing best-effort.");
+        }
+        // Upgrade an older schema to the current one before reading it. This is
+        // what keeps game types exported by past versions loadable here.
+        migrate(root);
 
-        GameProfile profile = GameProfile.fromMap(Json.asObject(gtMap));
+        GameProfile profile = GameProfile.fromMap(Json.asObject(root.get("gameType")));
         profile.normalize();
 
         Path profileFile = gametypesDir.resolve(GameTypeStore.fileName(profile.name));
@@ -245,6 +268,42 @@ public final class GamePackage {
             throw new UncheckedIOException(e);
         }
         return profile.name;
+    }
+
+    // --- forward compatibility ----------------------------------------------------
+
+    /**
+     * Upgrade a package's map from the schema version it was written with to the
+     * current {@link #FORMAT_VERSION}, applying one migration per increment. This
+     * is the hook that keeps game types exported by <em>older</em> versions
+     * loadable in <em>newer</em> ones: the file's stored {@link #FORMAT_KEY}
+     * version routes it through the right upgrade steps.
+     *
+     * <p>v1 is the original schema, so there is nothing to migrate yet. When a
+     * future change alters the shape of the package, bump {@link #FORMAT_VERSION}
+     * and add a {@code case} here that rewrites the previous shape into the new
+     * one — e.g. {@code case 1 -> upgrade1to2(root);}. The compatibility contract
+     * this preserves is deliberately narrow, so it stays easy to honour:
+     * <ul>
+     *   <li>never remove or repurpose the meaning of an existing key — only add
+     *       new ones, with safe defaults (both {@link GameProfile#fromMap} and
+     *       the level loader already default anything missing);</li>
+     *   <li>when a key's shape must genuinely change, add a migration step here
+     *       keyed off the version it changed at.</li>
+     * </ul>
+     * Follow that and every {@code .larsonsengine} file ever exported keeps
+     * importing into every future build.
+     */
+    private static void migrate(Map<String, Object> root) {
+        int version = root.get(FORMAT_KEY) instanceof Number n ? n.intValue() : FORMAT_VERSION;
+        while (version < FORMAT_VERSION) {
+            switch (version) {
+                // case 1 -> upgrade1to2(root);   // added when FORMAT_VERSION hits 2
+                default -> { /* no migration defined; tolerant readers cover it */ }
+            }
+            version++;
+        }
+        root.put(FORMAT_KEY, FORMAT_VERSION);
     }
 
     // --- locations ----------------------------------------------------------------
