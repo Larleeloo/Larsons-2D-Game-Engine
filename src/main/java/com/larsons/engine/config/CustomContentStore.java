@@ -45,6 +45,9 @@ public final class CustomContentStore {
     /** First id handed to custom blocks; built-ins stay far below. */
     public static final int CUSTOM_BLOCK_ID_BASE = 1000;
 
+    /** Filename holding a game type's custom content, beside its levels. */
+    public static final String FILE_NAME = "custom.json";
+
     private final Path file;
     private final List<Map<String, Object>> blocks = new ArrayList<>();
     private final List<Map<String, Object>> mobs = new ArrayList<>();
@@ -53,12 +56,12 @@ public final class CustomContentStore {
     private final List<Map<String, Object>> surface = new ArrayList<>();
 
     public CustomContentStore(String gameTypeName) {
-        this.file = new LevelStore(gameTypeName).directory().resolve("custom.json");
+        this.file = new LevelStore(gameTypeName).directory().resolve(FILE_NAME);
     }
 
     /** Root-dir override, mirroring {@link LevelStore}'s (used by tests). */
     public CustomContentStore(String rootDir, String gameTypeName) {
-        this.file = new LevelStore(rootDir, gameTypeName).directory().resolve("custom.json");
+        this.file = new LevelStore(rootDir, gameTypeName).directory().resolve(FILE_NAME);
     }
 
     public Path file() {

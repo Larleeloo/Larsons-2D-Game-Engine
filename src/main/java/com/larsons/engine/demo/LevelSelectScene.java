@@ -69,22 +69,29 @@ public class LevelSelectScene extends AbstractScene {
             menu.add(name, () -> openActions(name));
         }
         if (names.isEmpty()) {
-            menu.add("(no saved levels yet — make one in Creative Mode)",
-                    () -> { if (p.creativeEnabled) scenes.transitionTo("creative"); });
+            String empty = p.finalized || !p.creativeEnabled
+                    ? "(no levels in this game type)"
+                    : "(no saved levels yet — make one in Creative Mode)";
+            menu.add(empty,
+                    () -> { if (p.creativeEnabled && !p.finalized) scenes.transitionTo("creative"); });
         }
         menu.add("Back", () -> scenes.transitionTo("menu"));
     }
 
-    /** Play / Edit Settings for the chosen level. */
+    /** Play (and, for editable game types, Edit Settings) for the chosen level. */
     private void openActions(String name) {
+        GameProfile p = ctx.profile();
         selectedLevel = name;
         view = View.ACTIONS;
+        // A finalized (published) game type is play-only — no settings editing.
         menu = new Menu(name)
-                .subtitle(ctx.profile().name + " · play or edit this level")
+                .subtitle(p.name + (p.finalized ? " · play this level" : " · play or edit this level"))
                 .theme(MenuTheme.dark())
-                .add("Play Level", this::playSelected)
-                .add("Edit Settings", this::openEditor)
-                .add("Back", () -> { view = View.LIST; buildListMenu(); });
+                .add("Play Level", this::playSelected);
+        if (!p.finalized) {
+            menu.add("Edit Settings", this::openEditor);
+        }
+        menu.add("Back", () -> { view = View.LIST; buildListMenu(); });
     }
 
     private void playSelected() {
