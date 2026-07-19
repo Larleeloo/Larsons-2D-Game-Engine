@@ -4,6 +4,7 @@ import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.entity.EntityView;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
+import com.larsons.engine.minigame.MiniGameView;
 import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerState;
 import com.larsons.engine.util.Json;
@@ -75,6 +76,9 @@ public final class GameClient implements Closeable {
     /** Server-owned inventory contents, bumped whenever an "inv" message lands. */
     private volatile List<Object> inventoryData;
     private volatile int inventoryVersion;
+
+    /** Latest replicated mini-game state, or {@code null} (no mini game). */
+    private volatile MiniGameView minigame;
 
     /**
      * Connect and complete the join handshake, or throw with a reason
@@ -183,6 +187,9 @@ public final class GameClient implements Closeable {
         return out;
     }
 
+    /** The running mini game's replicated state, or {@code null}. */
+    public MiniGameView minigame() { return minigame; }
+
     /** Server-owned inventory contents (see {@code Inventory.fromList}), or null. */
     public List<Object> inventoryData() { return inventoryData; }
 
@@ -283,6 +290,7 @@ public final class GameClient implements Closeable {
                                 Boolean.TRUE.equals(msg.get("e"))));
                         while (fxEvents.size() > MAX_FX_EVENTS) fxEvents.pollFirst();
                     }
+                    case "mg" -> minigame = MiniGameView.fromMap(msg);
                     case "pong" -> {
                         long sent = msg.get("p") instanceof Number n ? n.longValue() : 0;
                         pingMillis = (int) Math.max(0, nowMillis() - sent);

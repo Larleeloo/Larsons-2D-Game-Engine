@@ -38,6 +38,9 @@ import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
 import com.larsons.engine.level.LevelStore;
 import com.larsons.engine.level.StatRule;
+import com.larsons.engine.minigame.MiniGame;
+import com.larsons.engine.minigame.MiniGameView;
+import com.larsons.engine.minigame.Team;
 import com.larsons.engine.net.GameClient;
 import com.larsons.engine.net.NetSession;
 import com.larsons.engine.net.Snapshot;
@@ -127,6 +130,11 @@ public class PlayScene extends AbstractScene {
 
     // Offline world simulation (mobs, items, drops). Online the server owns it.
     private World world;
+    // The level's mini game: offline this scene referees it locally; online
+    // the server does and this is null. mgView is what the HUD renders from
+    // in both cases (the wire shape).
+    private MiniGame localMinigame;
+    private MiniGameView mgView;
     private Inventory inventory;
     private int invSyncVersion = -1;
     private boolean showInventory;
@@ -227,10 +235,41 @@ public class PlayScene extends AbstractScene {
         me = new PlayerState(net != null ? net.client().localId() : 0, "",
                 level.spawnX, level.spawnY);
         prevHealth = me.health;
+        setupLocalMinigame();
 
         parallax = null; // rebuilt lazily against the level's background
         rebuildSprite();
         syncCameraFromProfile();
+    }
+
+    /**
+     * Offline, this scene referees the level's mini game itself (the same
+     * {@link MiniGame} the server runs online), so creators can test their
+     * CTF/Stockpile/Battle/Escort maps solo before hosting them.
+     */
+    private void setupLocalMinigame() {
+        localMinigame = null;
+        mgView = null;
+        if (net != null || world == null) return;
+        localMinigame = MiniGame.createIfConfigured(level);
+        if (localMinigame == null) return;
+        localMinigame.assignTeam(me.id);
+        localMinigame.setInventories(id -> inventory);
+        world.setPvpRule(localMinigame);
+        world.setDeathListener(localMinigame::onPlayerDeath);
+        world.setRespawnProvider(localMinigame::respawnPoint);
+        localMinigame.grantLoadout(me.id); // Battle's magic loadout (no-op otherwise)
+        localMinigame.pollInventoryChanges(); // local inventory is already live
+        me.name = "You";
+        double[] spawn = localMinigame.respawnPoint(me.id);
+        me.x = spawn[0];
+        me.y = spawn[1];
+        String missing = localMinigame.validate();
+        ruleStatus = missing != null ? missing
+                : localMinigame.config().mode.displayName + " — you are on the "
+                + Team.name(localMinigame.teamOf(me.id)) + " team";
+        ruleStatusTime = 6;
+        mgView = MiniGameView.fromMap(localMinigame.toWireMap());
     }
 
     private Level loadOfflineLevel() {
@@ -395,6 +434,7 @@ public class PlayScene extends AbstractScene {
             reconcile(dt);
             advanceRemoteAnimations(dt);
             consumeNetFeedback();
+            mgView = net.client().minigame(); // replicated mini-game state
             if (p.particlesEnabled) {
                 Snapshot snap = net.client().latest();
                 if (snap != null) {
@@ -402,7 +442,19 @@ public class PlayScene extends AbstractScene {
                 }
             }
         } else {
+            // Same order as the server tick: the referee sees deaths before
+            // the world respawns them.
+            if (localMinigame != null) localMinigame.step(dt, List.of(me));
             world.step(dt, List.of(me), p);
+            if (localMinigame != null) {
+                for (String event : localMinigame.pollEvents()) {
+                    ruleStatus = event;
+                    ruleStatusTime = 3.5;
+                    ctx.sfx(Sfx.PICKUP);
+                }
+                localMinigame.pollInventoryChanges(); // local inventory is already live
+                mgView = MiniGameView.fromMap(localMinigame.toWireMap());
+            }
             stats.add("mobs_killed", world.pollKills());
             stats.add("deaths", world.pollDeaths());
             for (World.Impact im : world.pollImpacts()) impactFeedback(im, p);
@@ -470,6 +522,7 @@ public class PlayScene extends AbstractScene {
         me.x = level.spawnX;
         me.y = level.spawnY;
         me.vy = 0;
+        setupLocalMinigame(); // the destination level may run its own mini game
         camera.tileSize = level.tileSize;
         parallax = null;
         particles.clear();
@@ -941,7 +994,12 @@ public class PlayScene extends AbstractScene {
         if (p.gridVisible && camera.getPerspective() != Perspective.ISOMETRIC) drawGrid(g);
         drawDoors(g);
         drawWorldEntities(g, p);
+        if (mgView != null) MiniGameHud.drawWorld(g, camera, level, mgView, animClock);
         if (net != null) drawRemotePlayers(g);
+        if (mgView != null) {
+            MiniGameHud.drawTeamRing(g, camera, me.x + ps() / 2, me.y + ps(),
+                    ps(), mgView.teamOf(me.id), camera.zoom);
+        }
         drawPlayer(g, me.x, me.y, me.facingLeft, walkAnim.current(), null);
         if (swingTime > 0) drawSwing(g);
         if (cutscenes != null && cutscenes.active() != null) {
@@ -952,6 +1010,7 @@ public class PlayScene extends AbstractScene {
         if (p.particlesEnabled) particles.render(g, camera);
         if (net == null) drawDoorHint(g, p);
         if (p.hudVisible) drawHud(g);
+        if (mgView != null) MiniGameHud.drawHud(g, viewportWidth, viewportHeight, mgView, me.id);
         if (p.itemsEnabled) drawHotbar(g);
         if (p.combatEnabled || p.mobsEnabled) drawHealthBar(g);
         drawResourceBars(g);
@@ -1601,12 +1660,17 @@ public class PlayScene extends AbstractScene {
             t = Math.max(0.0, Math.min(1.0, t));
         }
 
+        double size = ps();
         for (PlayerState ps : latest.players()) {
             if (ps.id == me.id) continue;
             PlayerState old = prev != null ? prev.player(ps.id) : null;
             double x = old != null ? old.x + (ps.x - old.x) * t : ps.x;
             double y = old != null ? old.y + (ps.y - old.y) * t : ps.y;
             Animation anim = remoteAnims.computeIfAbsent(ps.id, this::buildRemoteAnimation);
+            if (mgView != null) {
+                MiniGameHud.drawTeamRing(g, camera, x + size / 2, y + size,
+                        size, mgView.teamOf(ps.id), camera.zoom);
+            }
             drawPlayer(g, x, y, ps.facingLeft, anim.current(), ps.name);
         }
     }
@@ -1853,8 +1917,11 @@ public class PlayScene extends AbstractScene {
 
     private Animation buildRemoteAnimation(int id) {
         int size = Math.max(8, (int) ps());
-        // Golden-ratio hue spacing gives each player a distinct, stable colour.
+        // Golden-ratio hue spacing gives each player a distinct, stable colour;
+        // in a mini game the body wears the team colour instead.
         Color body = Color.getHSBColor((id * 0.6180339887f) % 1f, 0.6f, 0.85f);
+        MiniGameView v = mgView;
+        if (v != null && v.teamOf(id) >= 0) body = Team.color(v.teamOf(id));
         SpriteSheet sprites = SpriteSheet.fromImage(
                 buildCharacterSheet(size, body), size, size);
         return sprites.animation(10, true);

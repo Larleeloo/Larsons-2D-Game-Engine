@@ -559,6 +559,7 @@ everything the registries know, in categories —
 | Surface  | per-face block details (grass tufts, hanging moss, twigs, icicles, cobwebs…) with face / open-closed / layer toggles |
 | Doors    | the game type's door list (external `doors.json`), each linking to another level |
 | Cutscenes | the level's scripted cutscenes — paint one to place its trigger marker; *Manage Cutscenes…* (or right-clicking an entry) opens the editor |
+| Mini Game | the *Mini Game Setup…* window plus the objective markers the four team modes are built from: flag bases, stockpile crates, team spawns, escort waypoints |
 | Tools    | player spawn, multiplayer spawn points, eraser, Brush Settings, the Generate button, the Stat Rules editor |
 
 Objects **you** created (via the "+" entries) wear a green corner badge in
@@ -734,6 +735,46 @@ while *Load Level* lists every level in the type so you can pick another.
 validates them against the host's feature toggles, and the authoritative
 results broadcast to every player in real time (other players are visible
 while you paint). Save/load/test stay offline-only features.
+
+---
+
+## Mini games (online team modes)
+
+Any level can be turned into a competitive team game in creative mode: the
+**Mini Game** palette's *Mini Game Setup…* window picks one of four modes and
+its rules, and the palette's markers build the arena — all placeable
+**anywhere on the map**, exactly like any other painted object. The setup
+saves *inside the level* ([`MiniGameConfig`](src/main/java/com/larsons/engine/minigame/MiniGameConfig.java)),
+so **hosting that level runs the game online** for everyone who joins, and
+playing it offline referees the same rules locally for solo testing.
+
+| Mode | Teams | The game |
+|------|-------|----------|
+| **Capture the Flag** | 2 | Steal the enemy flag (painted anywhere via the two *Flag Base* markers) and carry it home while your own flag is at its base. Dying drops the flag where you fell; the owning team can touch it to return it, or it flies home on its own after 25 s. First to the capture limit wins. |
+| **Stockpile** | 2-4 | Teams race to bank resources at their *Stockpile* marker — walk into its ring and every configured resource item in your inventory deposits automatically. **Which item keys count is chosen in creative** (default: coal, iron ingot, gold ingot), and **PvP is a toggle**. First team to the resource limit wins. |
+| **Battle** | 2-4 | Team deathmatch. Everyone spawns with a **magic-weapon loadout** (arcane staff, fire staff, sword, tools, bread); kills score for your team, first to the kill limit wins. PvP is always on. |
+| **Escort** | 2 | Red escorts a payload cart along the painted waypoint path (*Escort Waypoint* markers auto-number themselves; #1 is the start); Blue stops them. The cart only rolls while an escort is beside it and no defender is in range — Overwatch rules. Reaching the last waypoint wins for Red; running out the clock wins for Blue. |
+
+How it plays online: the server owns one
+[`MiniGame`](src/main/java/com/larsons/engine/minigame/MiniGame.java) referee —
+joiners are dealt onto the **smallest team**, spawn (and respawn) at their
+team's painted *Team Spawn* markers, and every action resolves
+server-side: melee swings and projectiles hit enemy players only when the
+mode's **PvP rule** allows it (never teammates, never with PvP off), flag
+pickups/captures and deposits happen where the server says the players are,
+and kill credit follows the last attacker. State broadcasts ride alongside
+snapshots as `mg` messages, driving every client's HUD — team score pills,
+the escort progress bar + clock, your team banner, flags, the payload cart,
+and team-coloured rings under every player. Announcements ("X took the Blue
+flag!") reuse the ordinary server event feed. When a team wins, the winner
+banner shows and the round **resets automatically** a few seconds later:
+scores clear, objectives reset, and everyone respawns at their base.
+
+Building checklist (creative): pick the mode in *Mini Game Setup…*, paint
+the mode's markers (CTF: both flag bases · Stockpile: one crate per team ·
+Escort: 2+ waypoints), optionally add per-team spawn points (every mode uses
+them; without them teams fall back to their flag/stockpile/path ends), then
+save and host. The setup window tells you what's still missing.
 
 ---
 

@@ -73,6 +73,12 @@ public class Level {
     public final List<SurfaceDecor.Placement> surfaceDecor = new ArrayList<>();
     /** Map-maker stat triggers evaluated while the level is played. */
     public final List<StatRule> statRules = new ArrayList<>();
+    /**
+     * The level's mini-game setup (Capture the Flag, Stockpile, Battle,
+     * Escort), configured in creative mode; {@code null} (or mode NONE) means
+     * a normal level. Saved with the level so the game ships with the map.
+     */
+    public com.larsons.engine.minigame.MiniGameConfig minigame;
     /** Map-maker cutscenes (triggers + sprite-sheet actors + step scripts). */
     public final List<Cutscene> cutscenes = new ArrayList<>();
     /**
@@ -411,6 +417,10 @@ public class Level {
             List<Object> rules = new ArrayList<>(statRules.size());
             for (StatRule rule : statRules) rules.add(rule.toMap());
             m.put("rules", rules);
+        }
+        if (minigame != null
+                && minigame.mode != com.larsons.engine.minigame.MiniGameConfig.Mode.NONE) {
+            m.put("minigame", minigame.toMap());
         }
         if (!cutscenes.isEmpty()) {
             List<Object> scenes = new ArrayList<>(cutscenes.size());

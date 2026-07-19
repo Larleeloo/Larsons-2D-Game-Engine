@@ -149,6 +149,12 @@ public final class LevelLoader {
             }
         }
 
+        if (root.get("minigame") instanceof Map<?, ?> mg) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> mm = (Map<String, Object>) mg;
+            lvl.minigame = com.larsons.engine.minigame.MiniGameConfig.fromMap(mm);
+        }
+
         if (root.get("cutscenes") instanceof List<?> scenes) {
             for (Object o : scenes) {
                 if (o instanceof Map<?, ?> cm) lvl.cutscenes.add(Cutscene.fromMap(cm));
