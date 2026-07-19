@@ -37,6 +37,9 @@ import com.larsons.engine.level.LevelGenerator;
 import com.larsons.engine.level.LevelLoader;
 import com.larsons.engine.level.LevelStore;
 import com.larsons.engine.level.StatRule;
+import com.larsons.engine.minigame.MiniGame;
+import com.larsons.engine.minigame.MiniGameConfig;
+import com.larsons.engine.minigame.Team;
 import com.larsons.engine.net.NetSession;
 import com.larsons.engine.net.Snapshot;
 import com.larsons.engine.scene.AbstractScene;
@@ -120,6 +123,16 @@ import java.util.Map;
  * them with letterbox bars and skippable captions ({@link Cutscene},
  * {@link CutsceneDirector}, {@link CutscenePlayer}).
  *
+ * <p><b>Mini games:</b> the MINI GAME palette turns a level into an online
+ * team game: Mini Game Setup… picks the mode (Capture the Flag, Stockpile,
+ * Battle, Escort) and its rules (teams, PvP, score/time limits, Stockpile's
+ * resource items), and the palette's markers build the arena — flag bases,
+ * stockpile crates, team spawns, and the escort payload's waypoint path, all
+ * placeable anywhere on the map ({@link MiniGame}, {@link MiniGameConfig}).
+ * The setup saves inside the level, so hosting that level runs the game for
+ * everyone who joins; offline play referees the same rules locally for solo
+ * testing.
+ *
  * <p><b>Doors:</b> the Doors palette is built from the game type's external
  * {@link DoorDirectory} ({@code doors.json} beside its saved levels); each
  * entry names another level of the same game type, and painted doors load it
@@ -177,10 +190,10 @@ public class CreativeScene extends AbstractScene {
 
     /** What the palette can paint. */
     private enum Category { BLOCKS, LIQUIDS, LIGHTS, MOBS, ITEMS, DECOR, SURFACE, DOORS,
-        CUTSCENES, TOOLS }
+        CUTSCENES, MINIGAME, TOOLS }
 
     private enum Dialog { NONE, NEW_LEVEL, SAVE, LOAD, CONFIRM_EXIT, GENERATE, DOORS, TEXTURE,
-        CUSTOM, RULES, BRUSH, CUTSCENES, CUTSCENE_ACTORS, CUTSCENE_STEPS }
+        CUSTOM, RULES, BRUSH, CUTSCENES, CUTSCENE_ACTORS, CUTSCENE_STEPS, MINIGAME }
 
     /** {@code custom} marks user-created objects (badged, deletable). */
     private record Entry(String kind, String key, String name, BufferedImage icon,
@@ -274,6 +287,9 @@ public class CreativeScene extends AbstractScene {
     private String csText = "";
     private int csStepX, csStepY; // tile coordinates in the editor fields
     private String csSeconds = "1.0";
+
+    // Mini Game Setup state (the Stockpile resource key fields).
+    private String mgRes1 = "", mgRes2 = "", mgRes3 = "";
 
     // Stat-rule editor state.
     private int ruleEditIndex; // 0 = new rule, 1.. = existing
@@ -494,6 +510,28 @@ public class CreativeScene extends AbstractScene {
         cutsceneEntries.add(new Entry("managecutscenes", "managecutscenes",
                 "Manage Cutscenes…", manageDoorsIcon()));
         palette.put(Category.CUTSCENES, cutsceneEntries);
+
+        // The MINIGAME palette: the setup window plus the objective markers
+        // each mode is built from (flag bases, stockpiles, team spawns, the
+        // escort waypoint path).
+        List<Entry> minigameEntries = new ArrayList<>();
+        minigameEntries.add(new Entry("mg_settings", "mg_settings",
+                "Mini Game Setup…", minigameSettingsIcon()));
+        for (int t = 0; t < 2; t++) {
+            minigameEntries.add(new Entry(MiniGame.KIND_FLAG, Team.markerType(t),
+                    Team.name(t) + " Flag Base", flagIcon(Team.color(t))));
+        }
+        for (int t = 0; t < Team.MAX; t++) {
+            minigameEntries.add(new Entry(MiniGame.KIND_STOCKPILE, Team.markerType(t),
+                    Team.name(t) + " Stockpile", stockpileIcon(Team.color(t))));
+        }
+        for (int t = 0; t < Team.MAX; t++) {
+            minigameEntries.add(new Entry(MiniGame.KIND_SPAWN, Team.markerType(t),
+                    Team.name(t) + " Team Spawn", teamSpawnIcon(Team.color(t))));
+        }
+        minigameEntries.add(new Entry(MiniGame.KIND_PATH, "auto",
+                "Escort Waypoint", waypointIcon()));
+        palette.put(Category.MINIGAME, minigameEntries);
 
         List<Entry> tools = new ArrayList<>();
         tools.add(new Entry("spawn", "spawn", "Player Spawn", spawnIcon()));
@@ -858,6 +896,52 @@ public class CreativeScene extends AbstractScene {
                 ctx.sfx(Sfx.CLICK);
                 setStatus("Multiplayer spawn point #" + countKind("mp_spawn") + " placed");
             }
+            case "mg_settings" -> {
+                if (firstClick) {
+                    if (net == null) openDialog(Dialog.MINIGAME);
+                    else setStatus("The mini game is configured before hosting, offline");
+                }
+            }
+            case MiniGame.KIND_FLAG, MiniGame.KIND_STOCKPILE -> {
+                if (!firstClick) return;
+                if (net != null) {
+                    setStatus("Mini game markers are painted before hosting, offline");
+                    return;
+                }
+                // One flag base / stockpile per team: painting again moves it.
+                level.entities.removeIf(e ->
+                        entry.kind.equals(e.kind) && entry.key.equals(e.type));
+                level.entities.add(new Level.EntitySpawn(entry.kind, entry.key, wx, wy));
+                ctx.sfx(Sfx.CLICK);
+                setStatus(entry.name + " placed" + minigameModeHint(entry.kind));
+            }
+            case MiniGame.KIND_SPAWN -> {
+                if (!firstClick) return;
+                if (net != null) {
+                    setStatus("Mini game markers are painted before hosting, offline");
+                    return;
+                }
+                level.entities.add(new Level.EntitySpawn(entry.kind, entry.key, wx, wy));
+                ctx.sfx(Sfx.CLICK);
+                int team = Team.fromMarkerType(entry.key);
+                setStatus(Team.name(team) + " spawn #"
+                        + countMarkers(MiniGame.KIND_SPAWN, entry.key) + " placed");
+            }
+            case MiniGame.KIND_PATH -> {
+                if (!firstClick) return;
+                if (net != null) {
+                    setStatus("Mini game markers are painted before hosting, offline");
+                    return;
+                }
+                int next = countKind(MiniGame.KIND_PATH) + 1;
+                level.entities.add(new Level.EntitySpawn(MiniGame.KIND_PATH,
+                        Integer.toString(next), wx, wy));
+                ctx.sfx(Sfx.CLICK);
+                setStatus(next == 1
+                        ? "Escort waypoint #1 placed — the payload starts here"
+                        : "Escort waypoint #" + next + " placed"
+                        + minigameModeHint(MiniGame.KIND_PATH));
+            }
             case "cutscene" -> {
                 if (!firstClick) return;
                 if (net != null) {
@@ -915,6 +999,52 @@ public class CreativeScene extends AbstractScene {
             if (kind.equals(e.kind)) n++;
         }
         return n;
+    }
+
+    /** Painted markers of a kind AND type (e.g. the Red team's spawns). */
+    private int countMarkers(String kind, String type) {
+        int n = 0;
+        for (Level.EntitySpawn e : level.entities) {
+            if (kind.equals(e.kind) && type.equals(e.type)) n++;
+        }
+        return n;
+    }
+
+    /**
+     * A gentle nudge when a painted mini-game marker doesn't match the level's
+     * configured mode (flags without CTF, waypoints without Escort…).
+     */
+    private String minigameModeHint(String kind) {
+        MiniGameConfig cfg = level.minigame;
+        MiniGameConfig.Mode wants = switch (kind) {
+            case MiniGame.KIND_FLAG -> MiniGameConfig.Mode.CTF;
+            case MiniGame.KIND_STOCKPILE -> MiniGameConfig.Mode.STOCKPILE;
+            case MiniGame.KIND_PATH -> MiniGameConfig.Mode.ESCORT;
+            default -> null;
+        };
+        if (wants == null) return "";
+        if (cfg == null || cfg.mode == MiniGameConfig.Mode.NONE) {
+            return " — pick " + wants.displayName + " in Mini Game Setup to use it";
+        }
+        return cfg.mode == wants ? "" : " (note: this level plays " + cfg.mode.displayName + ")";
+    }
+
+    /** Keep escort waypoints numbered 1..N after one is erased. */
+    private void renumberWaypoints() {
+        List<Level.EntitySpawn> path = new ArrayList<>();
+        for (Level.EntitySpawn e : level.entities) {
+            if (MiniGame.KIND_PATH.equals(e.kind)) path.add(e);
+        }
+        path.sort((a, b) -> Integer.compare(
+                MiniGame.pathIndex(a.type), MiniGame.pathIndex(b.type)));
+        for (int i = 0; i < path.size(); i++) {
+            Level.EntitySpawn old = path.get(i);
+            String want = Integer.toString(i + 1);
+            if (want.equals(old.type)) continue;
+            int at = level.entities.indexOf(old);
+            level.entities.set(at, new Level.EntitySpawn(
+                    MiniGame.KIND_PATH, want, old.x, old.y));
+        }
     }
 
     /**
@@ -998,6 +1128,7 @@ public class CreativeScene extends AbstractScene {
             Level.EntitySpawn near = nearestSpawn(wx, wy);
             if (near != null) {
                 level.entities.remove(near);
+                if (MiniGame.KIND_PATH.equals(near.kind)) renumberWaypoints();
                 ctx.sfx(Sfx.CLICK);
                 setStatus("Erased " + near.type);
                 return;
@@ -1066,7 +1197,9 @@ public class CreativeScene extends AbstractScene {
 
     private static boolean isErasableKind(String kind) {
         return switch (kind) {
-            case "mob", "item", "door", "decor_bg", "decor_fg", "mp_spawn" -> true;
+            case "mob", "item", "door", "decor_bg", "decor_fg", "mp_spawn",
+                 MiniGame.KIND_FLAG, MiniGame.KIND_STOCKPILE,
+                 MiniGame.KIND_SPAWN, MiniGame.KIND_PATH -> true;
             default -> false;
         };
     }
@@ -1164,6 +1297,10 @@ public class CreativeScene extends AbstractScene {
                 case "rules" -> {
                     if (net == null) openDialog(Dialog.RULES);
                     else setStatus("Stat rules are edited offline");
+                }
+                case "mg_settings" -> {
+                    if (net == null) openDialog(Dialog.MINIGAME);
+                    else setStatus("The mini game is configured before hosting, offline");
                 }
                 case "cutscene" -> setStatus(e.name
                         + " — click the canvas to place its trigger marker");
@@ -1813,6 +1950,7 @@ public class CreativeScene extends AbstractScene {
             case CUTSCENES -> "Cutscenes — " + level.name;
             case CUTSCENE_ACTORS -> "Actors — " + editingCutsceneName();
             case CUTSCENE_STEPS -> "Steps — " + editingCutsceneName();
+            case MINIGAME -> "Mini Game — " + level.name;
             default -> "";
         }).theme(MenuTheme.dark());
 
@@ -1912,8 +2050,112 @@ public class CreativeScene extends AbstractScene {
             case CUTSCENES -> buildCutscenesForm();
             case CUTSCENE_ACTORS -> buildCutsceneActorsForm();
             case CUTSCENE_STEPS -> buildCutsceneStepsForm();
+            case MINIGAME -> buildMiniGameForm();
             default -> { /* NONE */ }
         }
+    }
+
+    /**
+     * The Mini Game Setup window: pick the mode and its settings — team count
+     * (Stockpile/Battle), the PvP toggle (forced on for Battle), the score to
+     * win, the Escort clock, and which item keys count as Stockpile resources.
+     * The mode switch rebuilds the form so only relevant rows show.
+     */
+    private void buildMiniGameForm() {
+        if (level.minigame == null) level.minigame = new MiniGameConfig();
+        MiniGameConfig cfg = level.minigame;
+        if (!dialogRebuild) {
+            mgRes1 = cfg.resourceItems.size() > 0 ? cfg.resourceItems.get(0) : "";
+            mgRes2 = cfg.resourceItems.size() > 1 ? cfg.resourceItems.get(1) : "";
+            mgRes3 = cfg.resourceItems.size() > 2 ? cfg.resourceItems.get(2) : "";
+        }
+        dialogRebuild = false;
+
+        String[] modes = new String[MiniGameConfig.Mode.values().length];
+        for (MiniGameConfig.Mode m : MiniGameConfig.Mode.values()) {
+            modes[m.ordinal()] = m.displayName;
+        }
+        dialogForm.addEnum("Game mode", modes,
+                () -> cfg.mode.displayName,
+                v -> {
+                    for (MiniGameConfig.Mode m : MiniGameConfig.Mode.values()) {
+                        if (m.displayName.equals(v)) cfg.mode = m;
+                    }
+                    cfg.normalize();
+                    dialogRebuild = true;
+                    openDialog(Dialog.MINIGAME); // only relevant rows show
+                });
+        switch (cfg.mode) {
+            case CTF -> {
+                dialogForm.addAction("2 teams steal each other's flag "
+                        + "(paint both Flag Bases anywhere)", () -> { });
+                dialogForm.addInt("Captures to win", () -> cfg.scoreLimit,
+                        v -> cfg.scoreLimit = v, 1, 50, 1);
+                dialogForm.addToggle("PvP (players can fight)", () -> cfg.pvp,
+                        v -> cfg.pvp = v);
+            }
+            case STOCKPILE -> {
+                dialogForm.addAction("Teams race to bank resources at their "
+                        + "Stockpile marker", () -> { });
+                dialogForm.addInt("Teams", () -> cfg.teams, v -> cfg.teams = v, 2, Team.MAX, 1);
+                dialogForm.addInt("Resources to win", () -> cfg.scoreLimit,
+                        v -> cfg.scoreLimit = v, 1, 500, 1);
+                dialogForm.addToggle("PvP (players can fight)", () -> cfg.pvp,
+                        v -> cfg.pvp = v);
+                dialogForm.addText("Resource item 1 (key)", () -> mgRes1, v -> mgRes1 = v, 24);
+                dialogForm.addText("Resource item 2 (key)", () -> mgRes2, v -> mgRes2 = v, 24);
+                dialogForm.addText("Resource item 3 (key)", () -> mgRes3, v -> mgRes3 = v, 24);
+            }
+            case BATTLE -> {
+                dialogForm.addAction("Team deathmatch — everyone spawns with "
+                        + "magic weapons and tools", () -> { });
+                dialogForm.addInt("Teams", () -> cfg.teams, v -> cfg.teams = v, 2, Team.MAX, 1);
+                dialogForm.addInt("Kills to win", () -> cfg.scoreLimit,
+                        v -> cfg.scoreLimit = v, 1, 100, 1);
+                dialogForm.addAction("PvP: always ON in Battle", () -> { });
+            }
+            case ESCORT -> {
+                dialogForm.addAction("Red escorts the payload along the "
+                        + "waypoint path; Blue stops them", () -> { });
+                dialogForm.addInt("Round time (seconds)", () -> cfg.escortTimeSec,
+                        v -> cfg.escortTimeSec = v, 30, 1800, 30);
+                dialogForm.addToggle("PvP (players can fight)", () -> cfg.pvp,
+                        v -> cfg.pvp = v);
+            }
+            default -> dialogForm.addAction(
+                    "No mini game — this plays as a normal level", () -> { });
+        }
+        dialogForm.addAction("Done", () -> {
+            if (cfg.mode == MiniGameConfig.Mode.STOCKPILE) {
+                cfg.resourceItems = new ArrayList<>();
+                StringBuilder bad = new StringBuilder();
+                for (String key : new String[]{mgRes1, mgRes2, mgRes3}) {
+                    if (key == null || key.isBlank()) continue;
+                    if (ItemRegistry.standard().get(key.trim()) == null) {
+                        if (bad.length() > 0) bad.append(", ");
+                        bad.append(key.trim());
+                    } else {
+                        cfg.resourceItems.add(key.trim().toLowerCase());
+                    }
+                }
+                cfg.normalize();
+                if (bad.length() > 0) {
+                    closeDialog();
+                    setStatus("Saved — unknown item key(s) ignored: " + bad);
+                    return;
+                }
+            }
+            cfg.normalize();
+            closeDialog();
+            if (cfg.mode == MiniGameConfig.Mode.NONE) {
+                setStatus("Mini game off — this plays as a normal level");
+            } else {
+                String missing = new MiniGame(level, cfg).validate();
+                setStatus(missing != null ? missing
+                        : cfg.mode.displayName + " is ready — save, then host or play it");
+            }
+        });
+        dialogForm.addAction("Cancel", this::closeDialog);
     }
 
     /**
@@ -3375,7 +3617,10 @@ public class CreativeScene extends AbstractScene {
         MobRegistry mobs = MobRegistry.standard();
         ItemRegistry items = ItemRegistry.standard();
         drawDoors(g);
-        if (!testing) drawMpSpawnMarkers(g);
+        if (!testing) {
+            drawMpSpawnMarkers(g);
+            drawMiniGameMarkers(g);
+        }
         if (testing && testWorld != null) {
             for (DroppedItem item : testWorld.items()) {
                 drawItemAt(g, items.get(item.key), item.x, item.y);
@@ -3447,6 +3692,111 @@ public class CreativeScene extends AbstractScene {
                 String label = link != null ? link.label() : e.type;
                 g.drawString(label, x + dw / 2 - g.getFontMetrics().stringWidth(label) / 2,
                         y + dh + 12);
+            }
+        }
+    }
+
+    /**
+     * Editor-only mini-game markers: team flag bases, stockpile crates, team
+     * spawns, and the numbered escort waypoint path — all in team colours so
+     * the arena reads at a glance while building it.
+     */
+    private void drawMiniGameMarkers(Graphics2D g) {
+        double ts = level.tileSize;
+        // The waypoint path draws first (under the markers): dashes + numbers.
+        List<Level.EntitySpawn> path = new ArrayList<>();
+        for (Level.EntitySpawn e : level.entities) {
+            if (MiniGame.KIND_PATH.equals(e.kind)) path.add(e);
+        }
+        if (!path.isEmpty()) {
+            path.sort((a, b) -> Integer.compare(
+                    MiniGame.pathIndex(a.type), MiniGame.pathIndex(b.type)));
+            g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND,
+                    0, new float[]{8, 8}, 0));
+            g.setColor(new Color(240, 220, 130, 150));
+            int px = 0, py = 0;
+            for (int i = 0; i < path.size(); i++) {
+                camera.worldToScreen(path.get(i).x, path.get(i).y, pcorner);
+                if (i > 0) g.drawLine(px, py, pcorner[0], pcorner[1]);
+                px = pcorner[0];
+                py = pcorner[1];
+            }
+            g.setStroke(new BasicStroke(2f));
+            for (int i = 0; i < path.size(); i++) {
+                camera.worldToScreen(path.get(i).x, path.get(i).y, pcorner);
+                int r = Math.max(6, (int) (10 * camera.zoom));
+                g.setColor(new Color(50, 46, 26, 220));
+                g.fillOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2);
+                g.setColor(new Color(240, 220, 130));
+                g.drawOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2);
+                g.setFont(SMALL_FONT);
+                String n = path.get(i).type;
+                g.drawString(n, pcorner[0] - g.getFontMetrics().stringWidth(n) / 2,
+                        pcorner[1] + 4);
+            }
+            if (camera.zoom > 0.5) {
+                camera.worldToScreen(path.get(0).x, path.get(0).y, pcorner);
+                g.setColor(new Color(240, 220, 130));
+                g.drawString("payload start", pcorner[0] + 12, pcorner[1] - 8);
+            }
+        }
+        for (Level.EntitySpawn e : level.entities) {
+            int team = Team.fromMarkerType(e.type);
+            switch (e.kind) {
+                case MiniGame.KIND_FLAG -> {
+                    if (team < 0) break;
+                    Color c = Team.color(team);
+                    camera.worldToScreen(e.x, e.y, pcorner);
+                    int h = Math.max(10, (int) (ts * 0.9 * camera.zoom));
+                    g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(), 60));
+                    g.fillOval(pcorner[0] - h / 2, pcorner[1] - h / 6, h, h / 3);
+                    g.setColor(new Color(230, 230, 240));
+                    g.setStroke(new BasicStroke(2.5f));
+                    g.drawLine(pcorner[0], pcorner[1], pcorner[0], pcorner[1] - h);
+                    g.setColor(c);
+                    g.fillPolygon(
+                            new int[]{pcorner[0], pcorner[0] + (int) (h * 0.65), pcorner[0]},
+                            new int[]{pcorner[1] - h, pcorner[1] - h + h / 4,
+                                    pcorner[1] - h + h / 2}, 3);
+                    if (camera.zoom > 0.5) {
+                        g.setFont(SMALL_FONT);
+                        g.drawString(Team.name(team) + " flag", pcorner[0] + 6, pcorner[1] + 12);
+                    }
+                }
+                case MiniGame.KIND_STOCKPILE -> {
+                    if (team < 0) break;
+                    Color c = Team.color(team);
+                    camera.worldToScreen(e.x, e.y, pcorner);
+                    int s = Math.max(8, (int) (ts * 0.8 * camera.zoom));
+                    g.setColor(new Color(90, 65, 40));
+                    g.fillRoundRect(pcorner[0] - s / 2, pcorner[1] - s, s, s, s / 5, s / 5);
+                    g.setColor(c);
+                    g.setStroke(new BasicStroke(Math.max(2f, s / 10f)));
+                    g.drawRoundRect(pcorner[0] - s / 2, pcorner[1] - s, s, s, s / 5, s / 5);
+                    g.drawLine(pcorner[0] - s / 2, pcorner[1] - s / 2,
+                            pcorner[0] + s / 2, pcorner[1] - s / 2);
+                    if (camera.zoom > 0.5) {
+                        g.setFont(SMALL_FONT);
+                        g.drawString(Team.name(team) + " stockpile",
+                                pcorner[0] + s / 2 + 4, pcorner[1] - 2);
+                    }
+                }
+                case MiniGame.KIND_SPAWN -> {
+                    if (team < 0) break;
+                    Color c = Team.color(team);
+                    camera.worldToScreen(e.x, e.y, pcorner);
+                    int s = Math.max(6, (int) (14 * camera.zoom));
+                    g.setColor(c);
+                    g.setStroke(new BasicStroke(2f));
+                    g.drawLine(pcorner[0], pcorner[1] - s, pcorner[0], pcorner[1] + s / 2);
+                    g.fillPolygon(new int[]{pcorner[0], pcorner[0] + s, pcorner[0]},
+                            new int[]{pcorner[1] - s, pcorner[1] - s + s / 3,
+                                    pcorner[1] - s + 2 * s / 3}, 3);
+                    g.setFont(SMALL_FONT);
+                    g.drawString(Team.name(team).toLowerCase() + " spawn",
+                            pcorner[0] + 4, pcorner[1] + s / 2);
+                }
+                default -> { /* not a mini-game marker */ }
             }
         }
     }
@@ -3709,6 +4059,21 @@ public class CreativeScene extends AbstractScene {
                 camera.worldToScreen(aim[0], aim[1], pcorner);
                 g.setColor(new Color(120, 170, 240));
                 g.drawOval(pcorner[0] - 8, pcorner[1] - 8, 16, 16);
+            }
+            case MiniGame.KIND_FLAG, MiniGame.KIND_STOCKPILE, MiniGame.KIND_SPAWN -> {
+                camera.worldToScreen(aim[0], aim[1], pcorner);
+                g.setColor(Team.color(Team.fromMarkerType(entry.key)));
+                g.setStroke(new BasicStroke(2f));
+                g.drawOval(pcorner[0] - 8, pcorner[1] - 8, 16, 16);
+            }
+            case MiniGame.KIND_PATH -> {
+                camera.worldToScreen(aim[0], aim[1], pcorner);
+                g.setColor(new Color(240, 220, 130));
+                g.setStroke(new BasicStroke(2f));
+                g.drawOval(pcorner[0] - 8, pcorner[1] - 8, 16, 16);
+                g.setFont(SMALL_FONT);
+                g.drawString(Integer.toString(countKind(MiniGame.KIND_PATH) + 1),
+                        pcorner[0] - 3, pcorner[1] + 4);
             }
             case "cutscene" -> {
                 Cutscene cs = cutsceneByKey(entry.key);
@@ -4174,6 +4539,7 @@ public class CreativeScene extends AbstractScene {
             case SURFACE -> "Surface";
             case DOORS -> "Doors";
             case CUTSCENES -> "Cutscenes";
+            case MINIGAME -> "Mini Game";
             case TOOLS -> "Tools";
         };
     }
@@ -4304,6 +4670,85 @@ public class CreativeScene extends AbstractScene {
         g.drawLine(8, 20, 32, 20);
         g.setStroke(new BasicStroke(1.5f));
         g.drawRoundRect(2, 2, 36, 36, 10, 10);
+        g.dispose();
+        return img;
+    }
+
+    /** A trophy for the Mini Game Setup window. */
+    private static BufferedImage minigameSettingsIcon() {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setColor(new Color(240, 200, 90));
+        g.fillArc(8, 6, 24, 22, 180, 180);
+        g.setStroke(new BasicStroke(3f));
+        g.drawArc(4, 8, 10, 10, 90, 180);
+        g.drawArc(26, 8, 10, 10, 270, 180);
+        g.fillRect(17, 24, 6, 6);
+        g.fillRoundRect(11, 30, 18, 5, 3, 3);
+        g.dispose();
+        return img;
+    }
+
+    /** A team-coloured flag for CTF flag-base palette entries. */
+    private static BufferedImage flagIcon(Color c) {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setColor(new Color(230, 230, 240));
+        g.setStroke(new BasicStroke(3f));
+        g.drawLine(12, 4, 12, 36);
+        g.setColor(c);
+        g.fillPolygon(new int[]{12, 34, 12}, new int[]{4, 10, 18}, 3);
+        g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(), 90));
+        g.fillOval(4, 32, 18, 6);
+        g.dispose();
+        return img;
+    }
+
+    /** A team-coloured crate for Stockpile deposit palette entries. */
+    private static BufferedImage stockpileIcon(Color c) {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setColor(new Color(90, 65, 40));
+        g.fillRoundRect(8, 12, 24, 22, 6, 6);
+        g.setColor(c);
+        g.setStroke(new BasicStroke(3f));
+        g.drawRoundRect(8, 12, 24, 22, 6, 6);
+        g.drawLine(8, 23, 32, 23);
+        g.setColor(new Color(255, 235, 170));
+        g.fillOval(18, 18, 4, 4);
+        g.dispose();
+        return img;
+    }
+
+    /** A team-coloured spawn flag for team spawn palette entries. */
+    private static BufferedImage teamSpawnIcon(Color c) {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setColor(c);
+        g.setStroke(new BasicStroke(3f));
+        g.drawLine(14, 6, 14, 34);
+        g.fillPolygon(new int[]{14, 32, 14}, new int[]{6, 12, 18}, 3);
+        g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(), 110));
+        g.drawOval(6, 30, 16, 6);
+        g.dispose();
+        return img;
+    }
+
+    /** A numbered waypoint dot for the escort path. */
+    private static BufferedImage waypointIcon() {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setColor(new Color(240, 220, 130));
+        g.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND,
+                0, new float[]{5, 5}, 0));
+        g.drawLine(4, 32, 16, 20);
+        g.drawLine(24, 12, 36, 6);
+        g.setStroke(new BasicStroke(2.5f));
+        g.setColor(new Color(50, 46, 26));
+        g.fillOval(12, 10, 16, 16);
+        g.setColor(new Color(240, 220, 130));
+        g.drawOval(12, 10, 16, 16);
+        g.drawLine(20, 14, 20, 22);
         g.dispose();
         return img;
     }

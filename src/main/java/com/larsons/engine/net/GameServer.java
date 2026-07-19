@@ -9,6 +9,8 @@ import com.larsons.engine.entity.Mob;
 import com.larsons.engine.entity.Projectile;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
+import com.larsons.engine.minigame.MiniGame;
+import com.larsons.engine.minigame.Team;
 import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerPhysics;
 import com.larsons.engine.sim.PlayerState;
@@ -87,11 +89,33 @@ public final class GameServer {
 
     private record ClientRequest(Connection conn, Map<String, Object> msg) {}
 
+    /** The referee when the level carries a mini game, else {@code null}. */
+    private final MiniGame minigame;
+
     public GameServer(GameProfile profile, String levelJson) {
         this.profile = profile;
         this.level = LevelLoader.parse(levelJson); // validate up front
         this.world = new World(level);
         this.world.populateFromLevel(profile);
+        this.minigame = MiniGame.createIfConfigured(level);
+        if (minigame != null) {
+            minigame.setInventories(this::inventoryOf);
+            world.setPvpRule(minigame); // the rule itself honours the PvP toggle
+            world.setDeathListener(minigame::onPlayerDeath);
+            world.setRespawnProvider(minigame::respawnPoint);
+        }
+    }
+
+    /** The mini game this server referees, or {@code null} (for UI / tests). */
+    public MiniGame minigame() {
+        return minigame;
+    }
+
+    private Inventory inventoryOf(int playerId) {
+        for (Connection c : connections) {
+            if (c.joined && !c.closed && c.state.id == playerId) return c.inventory;
+        }
+        return null;
     }
 
     /** The live world (level + mobs + items) this server simulates. */
@@ -110,6 +134,13 @@ public final class GameServer {
         acceptThread.start();
         tickThread.start();
         log("Hosting '" + profile.name + "' / level '" + level.name + "' on port " + getPort());
+        if (minigame != null) {
+            log("Mini game: " + minigame.config().mode.displayName
+                    + " (" + minigame.config().teams + " teams, PvP "
+                    + (minigame.config().pvp ? "on" : "off") + ")");
+            String missing = minigame.validate();
+            if (missing != null) log("Warning: " + missing);
+        }
     }
 
     public int getPort() {
@@ -171,8 +202,21 @@ public final class GameServer {
             processDisconnects();
             processRequests();
             stepPlayers(dt);
+            // The referee runs after damage lands and before the world
+            // respawns the dead, so deaths are seen with flags still carried.
+            if (minigame != null) minigame.step(dt, joinedPlayers());
             world.step(dt, joinedPlayers(), profile);
             broadcastImpacts();
+            if (minigame != null) {
+                for (String event : minigame.pollEvents()) {
+                    broadcast(Protocol.info(event));
+                }
+                for (int id : minigame.pollInventoryChanges()) {
+                    for (Connection c : connections) {
+                        if (c.joined && !c.closed && c.state.id == id) sendInventory(c);
+                    }
+                }
+            }
             // Tiles the simulation changed on its own (liquid flow) are
             // authoritative block events like any player edit.
             for (var change : world.pollBlockChanges()) {
@@ -180,7 +224,10 @@ public final class GameServer {
             }
 
             tick++;
-            if (tick % SNAPSHOT_EVERY == 0) broadcastState();
+            if (tick % SNAPSHOT_EVERY == 0) {
+                broadcastState();
+                if (minigame != null) broadcast(Protocol.minigame(minigame.toWireMap()));
+            }
 
             next += nsPerTick;
             long sleep = next - System.nanoTime();
@@ -203,13 +250,22 @@ public final class GameServer {
             if (conn.closed) continue;
             int id = nextId.getAndIncrement();
             String name = uniqueName(conn.requestedName, id);
-            // Painted multiplayer spawn points deal players out round-robin.
-            double[] spawn = level.spawnPointFor(id);
+            // Mini games deal joiners onto the smallest team and spawn them at
+            // their team's painted spawns; otherwise the painted multiplayer
+            // spawn points deal players out round-robin.
+            int team = minigame != null ? minigame.assignTeam(id) : -1;
+            double[] spawn = minigame != null
+                    ? minigame.respawnPoint(id) : level.spawnPointFor(id);
             conn.state = new PlayerState(id, name, spawn[0], spawn[1]);
             conn.joined = true;
             // Serialize the live level so late joiners see every edit so far.
             conn.send(Protocol.welcome(id, TICK_RATE, profile, level.toJson()));
-            broadcast(Protocol.info(name + " joined"));
+            if (minigame != null) {
+                minigame.grantLoadout(id); // Battle's magic loadout (no-op otherwise)
+                broadcast(Protocol.info(name + " joined the " + Team.name(team) + " team"));
+            } else {
+                broadcast(Protocol.info(name + " joined"));
+            }
             log(name + " joined from " + conn.socket.getRemoteSocketAddress()
                     + " (" + playerCount() + " online)");
         }
@@ -225,6 +281,7 @@ public final class GameServer {
             if (c.closed) {
                 connections.remove(c);
                 if (c.joined) {
+                    if (minigame != null) minigame.removePlayer(c.state.id);
                     broadcast(Protocol.info(c.state.name + " left"));
                     log(c.state.name + " left (" + playerCount() + " online)");
                 }
@@ -264,7 +321,17 @@ public final class GameServer {
                     boolean melee = held == null || held.projectile() == null;
                     double damage = World.FIST_DAMAGE
                             + (melee && held != null ? held.damage() : 0);
-                    world.playerAttack(c.state, in.aimX, in.aimY, damage);
+                    // Mini-game PvP: an enemy player in reach takes the swing;
+                    // otherwise it resolves against mobs as always.
+                    PlayerState victim = minigame == null ? null
+                            : minigame.resolveMeleeHit(c.state, joinedPlayers(),
+                            in.aimX, in.aimY);
+                    if (victim != null) {
+                        victim.health -= damage;
+                        minigame.damaged(c.state.id, victim);
+                    } else {
+                        world.playerAttack(c.state, in.aimX, in.aimY, damage);
+                    }
                 }
             }
         }

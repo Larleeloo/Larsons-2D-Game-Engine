@@ -213,6 +213,18 @@ public final class Protocol {
         return encode(m);
     }
 
+    /**
+     * Server broadcasts the mini-game state (teams, scores, flags, payload) —
+     * see {@code MiniGame.toWireMap()}. Sent alongside snapshots when the
+     * level runs a mini game; clients without the concept ignore it.
+     */
+    public static String minigame(Map<String, Object> state) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t", "mg");
+        m.putAll(state);
+        return encode(m);
+    }
+
     /** Server tells everyone a projectile impacted (feedback: particles, sfx). */
     public static String fx(String projectileKey, double x, double y, boolean explosion) {
         Map<String, Object> m = new LinkedHashMap<>();

@@ -68,6 +68,29 @@ public final class World {
     }
 
     /**
+     * Player-versus-player rules (mini games set one): whether {@code attacker}
+     * may hurt {@code victim}, and a report whenever PvP damage lands so kills
+     * can be attributed. With no rule installed players never hurt each other,
+     * which is the engine's long-standing default.
+     */
+    public interface PvpRule {
+        boolean canHurt(int attackerId, PlayerState victim);
+
+        /** Called after PvP damage is applied (kill attribution). */
+        default void damaged(int attackerId, PlayerState victim) {}
+    }
+
+    /** Fired when a player dies, before they respawn (drop a carried flag…). */
+    public interface DeathListener {
+        void onDeath(PlayerState player, double deathX, double deathY);
+    }
+
+    /** Supplies a player's respawn point (mini games send teams home). */
+    public interface RespawnProvider {
+        double[] respawnPoint(int playerId);
+    }
+
+    /**
      * A projectile impact this tick — where feedback happens (particles, sfx).
      * The scene polls these offline; the server polls and broadcasts them as
      * {@code fx} messages so every client sees the same hit.
@@ -75,6 +98,9 @@ public final class World {
     public record Impact(String key, double x, double y, boolean explosion) {}
 
     private PickupListener pickupListener;
+    private PvpRule pvpRule;
+    private DeathListener deathListener;
+    private RespawnProvider respawnProvider;
 
     public World(Level level) {
         this(level, MobRegistry.standard(), ItemRegistry.standard());
@@ -89,6 +115,20 @@ public final class World {
 
     public void setPickupListener(PickupListener l) {
         this.pickupListener = l;
+    }
+
+    /** Enable PvP: projectiles and explosions hit players per this rule. */
+    public void setPvpRule(PvpRule rule) {
+        this.pvpRule = rule;
+    }
+
+    public void setDeathListener(DeathListener l) {
+        this.deathListener = l;
+    }
+
+    /** Override where dead players respawn (default: the level's spawns). */
+    public void setRespawnProvider(RespawnProvider p) {
+        this.respawnProvider = p;
     }
 
     public List<Mob> mobs() {
@@ -250,7 +290,7 @@ public final class World {
         }
 
         if (!projectiles.isEmpty()) {
-            stepProjectiles(dt, gravityOn, profile);
+            stepProjectiles(dt, gravityOn, players, profile);
         }
 
         // Players: hazard blocks burn, clamp health, respawn on death (at a
@@ -261,10 +301,12 @@ public final class World {
             if (hazard != null) p.health -= hazard.damage() * dt;
             if (p.health > PlayerState.MAX_HEALTH) p.health = PlayerState.MAX_HEALTH;
             if (p.health <= 0) {
+                if (deathListener != null) deathListener.onDeath(p, p.x, p.y);
                 p.health = PlayerState.MAX_HEALTH;
                 p.stamina = PlayerState.MAX_STAMINA;
                 p.mana = PlayerState.MAX_MANA;
-                double[] spawn = level.spawnPointFor(p.id);
+                double[] spawn = respawnProvider != null
+                        ? respawnProvider.respawnPoint(p.id) : level.spawnPointFor(p.id);
                 p.x = spawn[0];
                 p.y = spawn[1];
                 p.vy = 0;
@@ -354,9 +396,12 @@ public final class World {
     /**
      * Advance projectiles: flight (arcing under gravity in side-scroll),
      * mob hits (combat only — with combat off they're decorative physics),
-     * terrain impacts, explosions, and recoverable drops.
+     * player hits when a {@link PvpRule} allows them, terrain impacts,
+     * explosions, and recoverable drops.
      */
-    private void stepProjectiles(double dt, boolean gravityOn, GameProfile profile) {
+    private void stepProjectiles(double dt, boolean gravityOn,
+                                 List<PlayerState> players, GameProfile profile) {
+        double playerRadius = profile.playerSize * 0.45;
         Iterator<Projectile> it = projectiles.iterator();
         while (it.hasNext()) {
             Projectile p = it.next();
@@ -368,7 +413,7 @@ public final class World {
                     p.kill();
                     impacts.add(new Impact(p.def.key(), p.x, p.y, p.def.explosionRadius() > 0));
                     if (p.def.explosionRadius() > 0) {
-                        explode(p);
+                        explode(p, players, profile);
                     } else if (hit.damage(p.damage, p.x - p.vx)) {
                         mobs.remove(hit);
                         dropMobLoot(hit);
@@ -378,10 +423,26 @@ public final class World {
                     continue;
                 }
             }
+            if (!p.dead() && profile.combatEnabled && pvpRule != null) {
+                PlayerState hit = hittablePlayerAt(players, p.ownerId,
+                        p.x, p.y, p.def.radius() + playerRadius, profile);
+                if (hit != null) {
+                    p.kill();
+                    impacts.add(new Impact(p.def.key(), p.x, p.y, p.def.explosionRadius() > 0));
+                    if (p.def.explosionRadius() > 0) {
+                        explode(p, players, profile);
+                    } else {
+                        hit.health -= p.damage;
+                        pvpRule.damaged(p.ownerId, hit);
+                    }
+                    it.remove();
+                    continue;
+                }
+            }
             if (landed) {
                 impacts.add(new Impact(p.def.key(), p.x, p.y, p.def.explosionRadius() > 0));
                 if (p.def.explosionRadius() > 0 && profile.combatEnabled) {
-                    explode(p);
+                    explode(p, players, profile);
                 } else if (p.def.dropItem() != null && itemTypes.get(p.def.dropItem()) != null
                         && profile.itemsEnabled) {
                     // Physical projectiles land as recoverable items (ported
@@ -395,8 +456,27 @@ public final class World {
         }
     }
 
+    /** The nearest player the projectile owner may hurt within a hit circle. */
+    private PlayerState hittablePlayerAt(List<PlayerState> players, int ownerId,
+                                         double x, double y, double radius,
+                                         GameProfile profile) {
+        double half = profile.playerSize / 2.0;
+        PlayerState best = null;
+        double bestD = Double.MAX_VALUE;
+        for (PlayerState pl : players) {
+            if (pl.id == ownerId || pl.health <= 0) continue;
+            if (!pvpRule.canHurt(ownerId, pl)) continue;
+            double d = Math.hypot(pl.x + half - x, pl.y + half - y);
+            if (d < radius && d < bestD) {
+                bestD = d;
+                best = pl;
+            }
+        }
+        return best;
+    }
+
     /** Area damage with linear falloff (100% at the centre, 25% at the edge). */
-    private void explode(Projectile p) {
+    private void explode(Projectile p, List<PlayerState> players, GameProfile profile) {
         double radius = p.def.explosionRadius();
         List<Mob> died = null;
         for (Mob m : mobs) {
@@ -414,6 +494,18 @@ public final class World {
                 mobs.remove(m);
                 dropMobLoot(m);
                 killsByPlayers++;
+            }
+        }
+        if (pvpRule != null) {
+            double half = profile.playerSize / 2.0;
+            for (PlayerState pl : players) {
+                if (pl.id == p.ownerId || pl.health <= 0) continue;
+                if (!pvpRule.canHurt(p.ownerId, pl)) continue;
+                double d = Math.hypot(pl.x + half - p.x, pl.y + half - p.y);
+                if (d > radius + half) continue;
+                double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
+                pl.health -= p.damage * falloff;
+                pvpRule.damaged(p.ownerId, pl);
             }
         }
     }
