@@ -340,11 +340,15 @@ class MechanicsFixesTest {
     // --- player sizing ---------------------------------------------------------------
 
     @Test
-    void playerIsAlwaysExactlyOneBlock() {
+    void playerHitboxIsSlightlySmallerThanOneBlock() {
         GameProfile p = new GameProfile("sizing");
         p.tileSize = 48;
         p.playerSize = 90;
         p.normalize();
-        assertEquals(48, p.playerSize, "the player locks to exactly 1x1 tiles");
+        assertTrue(p.playerSize < p.tileSize,
+                "the player hitbox stays under one block so one-tile gaps fit");
+        assertEquals(GameProfile.playerSizeFor(48), p.playerSize,
+                "the hitbox locks to the player-tile fraction of the tile size");
+        assertEquals(43, p.playerSize, "0.9 of a 48px tile, floored");
     }
 }

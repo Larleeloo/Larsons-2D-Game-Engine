@@ -131,12 +131,14 @@ class NetworkTest {
     void gravityActsOnTheServerSimulation() throws IOException {
         GameServer server = startServer();
         try (GameClient client = GameClient.connect("127.0.0.1", server.getPort(), "Faller", 3000)) {
-            // Spawn is at y=64; the floor row starts at y=96, so a 32px player
-            // standing on it rests at y=64. Give it a tick to settle and check
-            // it doesn't fall through.
+            // Spawn is at y=64; the floor row starts at y=96, so a player
+            // standing on it rests with its feet on y=96 (the hitbox is just
+            // under one tile tall). Give it a tick to settle and check it
+            // doesn't fall through.
+            double restY = 96 - new GameProfile("Net Test Type").playerSize;
             await("settled on floor", () -> {
                 Snapshot s = client.latest();
-                return s != null && Math.abs(s.player(client.localId()).y - 64) < 0.01;
+                return s != null && Math.abs(s.player(client.localId()).y - restY) < 0.01;
             });
         } finally {
             server.stop();

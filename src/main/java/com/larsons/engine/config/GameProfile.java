@@ -19,6 +19,13 @@ import java.util.Map;
  */
 public class GameProfile {
 
+    /**
+     * The player hitbox as a fraction of a tile: slightly smaller than one
+     * block, so the player fits through one-tile gaps without pixel-perfect
+     * alignment. {@link #normalize()} locks {@link #playerSize} to this.
+     */
+    public static final double PLAYER_TILE_FRACTION = 0.9;
+
     public String name = "New Game Type";
 
     // Perspective the creator builds levels in (requirement #2).
@@ -80,11 +87,12 @@ public class GameProfile {
      */
     public String texturePackDir = "";
 
-    // Sizes of various entities (world pixels). The player is always exactly
-    // one block (1x1 tiles) so it fits one-tile gaps — normalize() keeps
-    // playerSize locked to tileSize.
+    // Sizes of various entities (world pixels). The player's hitbox is kept
+    // slightly smaller than one block (see PLAYER_TILE_FRACTION) so it slips
+    // into one-tile gaps without pixel-perfect alignment — normalize() keeps
+    // playerSize locked to that fraction of tileSize.
     public int tileSize = 32;
-    public int playerSize = 32;
+    public int playerSize = 28;
     public int defaultEntitySize = 32;
 
     // Shaders (requirement #5): a master toggle, a global strength, and one
@@ -284,7 +292,7 @@ public class GameProfile {
         minFps = Math.max(1, minFps);
         maxFps = Math.max(1, maxFps);
         tileSize = Math.max(1, tileSize);
-        playerSize = tileSize; // the player is exactly one block, 1x1 tiles
+        playerSize = playerSizeFor(tileSize); // slightly smaller than one block
         defaultEntitySize = Math.max(1, defaultEntitySize);
         shaderStrength = Math.max(0.0, Math.min(1.0, shaderStrength));
         shaderPixelSize = Math.max(1, Math.min(64, shaderPixelSize));
@@ -292,6 +300,11 @@ public class GameProfile {
         ambientLight = Math.max(0.0, Math.min(1.0, ambientLight));
         if (lastLevelPath == null) lastLevelPath = "";
         if (texturePackDir == null) texturePackDir = "";
+    }
+
+    /** The player hitbox for a tile size: {@link #PLAYER_TILE_FRACTION} of it. */
+    public static int playerSizeFor(int tileSize) {
+        return Math.max(1, (int) Math.floor(tileSize * PLAYER_TILE_FRACTION));
     }
 
     private static String str(Map<String, Object> m, String k, String def) {
