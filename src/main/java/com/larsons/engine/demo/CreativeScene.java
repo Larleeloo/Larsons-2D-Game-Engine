@@ -17,10 +17,12 @@ import com.larsons.engine.entity.MobDef;
 import com.larsons.engine.entity.MobRegistry;
 import com.larsons.engine.entity.Projectile;
 import com.larsons.engine.fx.Particles;
+import com.larsons.engine.graphics.Animation;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.CutscenePainter;
 import com.larsons.engine.graphics.EntitySprites;
 import com.larsons.engine.graphics.Perspective;
+import com.larsons.engine.graphics.PlayerSprites;
 import com.larsons.engine.graphics.SkinDef;
 import com.larsons.engine.graphics.SkinStore;
 import com.larsons.engine.graphics.Skins;
@@ -340,6 +342,10 @@ public class CreativeScene extends AbstractScene {
     private CutsceneDirector cutsceneDirector; // runs the level's cutscenes
     private CraftingPanel craftingPanel; // non-null while a station UI is open
     private double prevTestVy;
+    // The exact same walk sprite the play scene uses, so the play-test
+    // character is identical to the one "load level" play loads.
+    private Animation testWalkAnim;
+    private double testWalkClock; // advances only while moving (drives skins)
 
     public CreativeScene(GameContext ctx) {
         this.ctx = ctx;
@@ -536,6 +542,7 @@ public class CreativeScene extends AbstractScene {
         List<Entry> tools = new ArrayList<>();
         tools.add(new Entry("spawn", "spawn", "Player Spawn", spawnIcon()));
         tools.add(new Entry("mp_spawn", "mp_spawn", "Multiplayer Spawn", mpSpawnIcon()));
+        tools.add(new Entry("playerskin", "playerskin", "Player Skin…", playerSkinIcon()));
         tools.add(new Entry("eraser", "eraser", "Eraser", eraserIcon()));
         tools.add(new Entry("brush", "brush", "Brush Settings…", brushIcon()));
         tools.add(new Entry("generate", "generate", "Generate Level…", generateIcon()));
@@ -901,6 +908,9 @@ public class CreativeScene extends AbstractScene {
                     if (net == null) openDialog(Dialog.MINIGAME);
                     else setStatus("The mini game is configured before hosting, offline");
                 }
+            }
+            case "playerskin" -> {
+                if (firstClick) openPlayerSkinDialog();
             }
             case MiniGame.KIND_FLAG, MiniGame.KIND_STOCKPILE -> {
                 if (!firstClick) return;
@@ -1302,6 +1312,7 @@ public class CreativeScene extends AbstractScene {
                     if (net == null) openDialog(Dialog.MINIGAME);
                     else setStatus("The mini game is configured before hosting, offline");
                 }
+                case "playerskin" -> openPlayerSkinDialog();
                 case "cutscene" -> setStatus(e.name
                         + " — click the canvas to place its trigger marker");
                 default -> setStatus(e.name + (e.custom ? "  (your custom object)" : ""));
@@ -1375,9 +1386,23 @@ public class CreativeScene extends AbstractScene {
 
     private static boolean skinnable(String kind) {
         return switch (kind) {
-            case "block", "mob", "item", "decor", "surface" -> true;
+            case "block", "mob", "item", "decor", "surface", "playerskin" -> true;
             default -> false;
         };
+    }
+
+    /**
+     * Tools &rarr; Player Skin… (click or right-click): the texture-override
+     * dialog aimed at the player character. The assigned sheet renders the
+     * player everywhere — creative play-test and "load level" play alike —
+     * and persists in {@code skins.json} like any other texture.
+     */
+    private void openPlayerSkinDialog() {
+        texEntry = new Entry("playerskin", "playerskin", "Player Skin", playerSkinIcon());
+        texStates = List.of("default");
+        texStateIndex = 0;
+        loadTextureFields();
+        openDialog(Dialog.TEXTURE);
     }
 
     /** The palette entry index under a sidebar point, or -1. */
@@ -1449,6 +1474,9 @@ public class CreativeScene extends AbstractScene {
         testMe = new PlayerState(0, "", spawn[0], spawn[1]);
         prevHealth = testMe.health;
         prevTestVy = 0;
+        testWalkAnim = PlayerSprites.walkAnimation(profile().playerSize,
+                PlayerSprites.DEFAULT_BODY);
+        testWalkClock = 0;
     }
 
     private void bindTestPickups() {
@@ -1588,6 +1616,8 @@ public class CreativeScene extends AbstractScene {
         testStats.add("distance_traveled", Math.abs(testMe.x - preX) + Math.abs(testMe.y - preY));
         if (prevTestVy >= 0 && testMe.vy < 0) testStats.add("jumps", 1);
         prevTestVy = testMe.vy;
+        testWalkAnim.update(testMe.moving ? dt : 0);
+        if (testMe.moving) testWalkClock += dt;
 
         testWorld.step(dt, List.of(testMe), p);
         testStats.add("mobs_killed", testWorld.pollKills());
@@ -2393,6 +2423,7 @@ public class CreativeScene extends AbstractScene {
             case "item" -> "item/" + texEntry.key;
             case "decor" -> "decor/" + texEntry.key;
             case "surface" -> "surface/" + texEntry.key;
+            case "playerskin" -> PlayerSprites.SKIN_KEY;
             default -> "block/" + texEntry.key;
         };
     }
@@ -2451,6 +2482,8 @@ public class CreativeScene extends AbstractScene {
                     parseInt(texCount, 1), parseDouble(texFps));
             Skins.put(def);
             persistSkins();
+            // The Tools palette's Player Skin icon previews the current look.
+            if ("playerskin".equals(texEntry.kind)) buildPalette();
             closeDialog();
             setStatus(texEntry.name + " now uses " + def.sheet
                     + " (" + def.frameCount + " frames @ " + def.fps + " fps)");
@@ -2459,6 +2492,7 @@ public class CreativeScene extends AbstractScene {
             dialogForm.addAction("Remove Override", () -> {
                 Skins.remove(textureKey());
                 persistSkins();
+                if ("playerskin".equals(texEntry.kind)) buildPalette();
                 closeDialog();
                 setStatus(texEntry.name + " back to its procedural texture");
             });
@@ -3365,6 +3399,7 @@ public class CreativeScene extends AbstractScene {
         if (!testing) {
             drawCursorPreview(g);
             drawSidebar(g);
+            if (dialog == Dialog.NONE) drawPaletteTooltip(g);
         }
         drawTopBar(g);
         if (testing) {
@@ -3956,14 +3991,29 @@ public class CreativeScene extends AbstractScene {
         }
     }
 
+    /**
+     * The play-test player, drawn exactly like the play scene ("load level")
+     * draws its player: the shared animated walk sprite (or the assigned
+     * player skin), foot-anchored, mirrored when facing left.
+     */
     private void drawTestPlayer(Graphics2D g) {
-        int size = profile().playerSize;
+        double size = profile().playerSize;
+        if (testWalkAnim == null || testWalkAnim.frameCount() == 0) {
+            testWalkAnim = PlayerSprites.walkAnimation((int) size, PlayerSprites.DEFAULT_BODY);
+        }
+        BufferedImage frame = PlayerSprites.frame(testWalkAnim, testWalkClock);
         camera.worldToScreen(testMe.x + size / 2.0, testMe.y + size, pcorner);
-        int w = Math.max(6, (int) Math.round(size * camera.zoom));
-        g.setColor(new Color(70, 130, 220));
-        g.fillRoundRect(pcorner[0] - w / 2, pcorner[1] - w, w, w, w / 4, w / 4);
-        g.setColor(new Color(245, 210, 170));
-        g.fillOval(pcorner[0] - w / 4, pcorner[1] - w, w / 2, w / 2);
+        int w = (int) Math.round(size * camera.zoom);
+        int h = w;
+        int dx = pcorner[0] - w / 2;
+        int dy = pcorner[1] - h;
+        if (frame != null) {
+            if (testMe.facingLeft) {
+                g.drawImage(frame, dx + w, dy, -w, h, null);
+            } else {
+                g.drawImage(frame, dx, dy, w, h, null);
+            }
+        }
         if (swingTime > 0) {
             g.setColor(new Color(255, 255, 255, (int) (150 * Math.max(0, swingTime / 0.2))));
             g.setStroke(new BasicStroke(3f));
@@ -4193,6 +4243,176 @@ public class CreativeScene extends AbstractScene {
         g.setColor(new Color(150, 150, 165));
         g.setFont(SMALL_FONT);
         g.drawString("right-click icon = texture · Tab category", 10, viewportHeight - 6);
+    }
+
+    /**
+     * Hover tooltip beside the sidebar: the hovered palette entry's name plus
+     * a description of what it does, so every palette item explains itself.
+     */
+    private void drawPaletteTooltip(Graphics2D g) {
+        if (mouseX >= SIDEBAR_W) return;
+        List<Entry> entries = palette.get(category);
+        int idx = paletteIndexAt(mouseX, mouseY);
+        if (idx < 0 || idx >= entries.size()) return;
+        Entry e = entries.get(idx);
+        String desc = describeEntry(e);
+        if (desc == null || desc.isBlank()) return;
+
+        String title = e.name + (e.custom ? "  (custom)" : "");
+        g.setFont(SMALL_FONT);
+        List<String> lines = wrapText(desc, g.getFontMetrics(), 250);
+        int bodyW = 0;
+        for (String line : lines) {
+            bodyW = Math.max(bodyW, g.getFontMetrics().stringWidth(line));
+        }
+        g.setFont(HUD_FONT);
+        int w = Math.max(g.getFontMetrics().stringWidth(title), bodyW) + 24;
+        int h = 30 + lines.size() * 15 + 8;
+        int x = SIDEBAR_W + 10;
+        int y = Math.max(44, Math.min(mouseY - 12, viewportHeight - h - 8));
+
+        g.setColor(new Color(12, 12, 20, 235));
+        g.fillRoundRect(x, y, w, h, 10, 10);
+        g.setColor(new Color(255, 255, 255, 50));
+        g.setStroke(new BasicStroke(1f));
+        g.drawRoundRect(x, y, w, h, 10, 10);
+        g.setColor(new Color(255, 220, 120));
+        g.drawString(title, x + 12, y + 19);
+        g.setFont(SMALL_FONT);
+        g.setColor(new Color(205, 205, 220));
+        for (int i = 0; i < lines.size(); i++) {
+            g.drawString(lines.get(i), x + 12, y + 36 + i * 15);
+        }
+    }
+
+    /** Greedy word wrap of {@code text} to lines at most {@code maxW} px wide. */
+    private static List<String> wrapText(String text, java.awt.FontMetrics fm, int maxW) {
+        List<String> lines = new ArrayList<>();
+        StringBuilder line = new StringBuilder();
+        for (String word : text.split(" ")) {
+            String probe = line.isEmpty() ? word : line + " " + word;
+            if (fm.stringWidth(probe) > maxW && !line.isEmpty()) {
+                lines.add(line.toString());
+                line = new StringBuilder(word);
+            } else {
+                line = new StringBuilder(probe);
+            }
+        }
+        if (!line.isEmpty()) lines.add(line.toString());
+        return lines;
+    }
+
+    /**
+     * What a palette entry does: definitions describe themselves from their
+     * data ({@link PaletteInfo}, covering custom creations automatically),
+     * and the editor-specific entries (tools, doors, markers…) explain their
+     * editor behaviour.
+     */
+    private String describeEntry(Entry e) {
+        switch (e.kind) {
+            case "block" -> {
+                Block b = level.blocks.get(e.key);
+                return b != null ? PaletteInfo.describe(b) : "";
+            }
+            case "mob" -> {
+                MobDef d = MobRegistry.standard().get(e.key);
+                return d != null ? PaletteInfo.describe(d) : "";
+            }
+            case "item" -> {
+                ItemDef d = ItemRegistry.standard().get(e.key);
+                return d != null ? PaletteInfo.describe(d) : "";
+            }
+            case "decor" -> {
+                Decor d = DecorRegistry.standard().get(e.key);
+                return d != null ? PaletteInfo.describe(d) : "";
+            }
+            case "surface" -> {
+                SurfaceDecor d = SurfaceDecorRegistry.standard().get(e.key);
+                return d != null ? PaletteInfo.describe(d) : "";
+            }
+            case "door" -> {
+                DoorLink link = doors.get(e.key);
+                return "Door — press E at it in play to travel to "
+                        + (link != null && !link.targetLevel().isEmpty()
+                        ? "level \"" + link.targetLevel() + "\"."
+                        : "another level (no target set yet — see Manage Doors…).");
+            }
+            case "cutscene" -> {
+                Cutscene cs = cutsceneByKey(e.key);
+                if (cs == null) return "";
+                return switch (cs.trigger) {
+                    case ZONE -> "Cutscene — plays when the player walks within "
+                            + (int) cs.radiusTiles + " tiles of its marker.";
+                    case INTERACT -> "Cutscene — plays when the player presses E within "
+                            + (int) cs.radiusTiles + " tiles of its marker.";
+                    default -> "Cutscene — plays automatically when the level starts.";
+                };
+            }
+            case "new" -> {
+                return "Creates your own custom " + e.name.replace("+ New ", "").toLowerCase()
+                        + " — set its properties in a form; it registers live, joins"
+                        + " this palette, and saves with the game type.";
+            }
+            case MiniGame.KIND_FLAG -> {
+                return "Capture the Flag marker — this team's flag base. Steal the"
+                        + " enemy flag and run it home to score.";
+            }
+            case MiniGame.KIND_STOCKPILE -> {
+                return "Stockpile marker — this team's crate: deposit the configured"
+                        + " resource items here to score.";
+            }
+            case MiniGame.KIND_SPAWN -> {
+                return "Team spawn marker — players on this team appear here during"
+                        + " the mini game.";
+            }
+            case MiniGame.KIND_PATH -> {
+                return "Escort waypoint — the payload travels the waypoints in order;"
+                        + " escort it to the last one to win.";
+            }
+            case "mg_settings" -> {
+                return "Opens Mini Game Setup: pick this level's mode (Capture the"
+                        + " Flag, Stockpile, Battle, Escort) and its rules.";
+            }
+            case "spawn" -> {
+                return "Sets where the player starts — click the canvas to move the"
+                        + " spawn point.";
+            }
+            case "mp_spawn" -> {
+                return "Adds a multiplayer spawn point — hosted games scatter joining"
+                        + " players across these.";
+            }
+            case "playerskin" -> {
+                return "Customize the player character: assign any sprite sheet as"
+                        + " its skin, used in play and play-test alike.";
+            }
+            case "eraser" -> {
+                return "Removes what you click — entities first, then surface"
+                        + " details, then blocks (uses the brush shape and size).";
+            }
+            case "brush" -> {
+                return "Opens Brush Settings: the stroke shape, its size, and the"
+                        + " multi-block mix painted per stamp.";
+            }
+            case "generate" -> {
+                return "Opens the level generator: Perlin terrain with caves, ores"
+                        + " and liquids, or a top-down maze.";
+            }
+            case "rules" -> {
+                return "Opens Stat Rules: programmable triggers over tracked stats"
+                        + " (\"mined 50 blocks → reward…\") that run in play.";
+            }
+            case "managedoors" -> {
+                return "Opens the door manager: name doors and link each to another"
+                        + " level of this game type.";
+            }
+            case "managecutscenes" -> {
+                return "Opens the cutscene manager: script triggerable scenes with"
+                        + " actors, animation states, and step scripts.";
+            }
+            default -> {
+                return "";
+            }
+        }
     }
 
     /**
@@ -4545,6 +4765,17 @@ public class CreativeScene extends AbstractScene {
     }
 
     // --- palette tool icons -----------------------------------------------------------
+
+    /** The player character as it currently looks (assigned skin or default). */
+    private static BufferedImage playerSkinIcon() {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        BufferedImage frame = PlayerSprites.frame(
+                PlayerSprites.walkAnimation(40, PlayerSprites.DEFAULT_BODY), 0);
+        if (frame != null) g.drawImage(frame, 0, 0, 40, 40, null);
+        g.dispose();
+        return img;
+    }
 
     private static BufferedImage spawnIcon() {
         BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);

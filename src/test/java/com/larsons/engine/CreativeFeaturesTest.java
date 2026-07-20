@@ -361,4 +361,46 @@ class CreativeFeaturesTest {
         g.dispose();
         assertEquals("CreativeScene", scenes.current().name());
     }
+
+    @Test
+    void paletteTooltipsAndPlayTestPlayerRenderHeadless() {
+        System.setProperty("java.awt.headless", "true");
+        var ctx = new com.larsons.engine.config.GameContext(null,
+                new com.larsons.engine.config.GameTypeStore());
+        ctx.setProfile(new GameProfile("Creative Test"));
+
+        var scenes = new com.larsons.engine.scene.SceneManager();
+        scenes.setViewport(800, 600);
+        scenes.register("creative", new com.larsons.engine.demo.CreativeScene(ctx));
+        scenes.setScene("creative");
+
+        var input = new com.larsons.engine.input.InputManager();
+        var src = new java.awt.Container();
+        var frame = new java.awt.image.BufferedImage(800, 600,
+                java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        var g = frame.createGraphics();
+
+        // Hover the palette grid: the entry under the mouse renders its
+        // description tooltip beside the sidebar.
+        input.mouseMoved(new java.awt.event.MouseEvent(src,
+                java.awt.event.MouseEvent.MOUSE_MOVED, 0, 0, 40, 320, 0, false));
+        for (int i = 0; i < 5; i++) {
+            input.newFrame();
+            scenes.update(1.0 / 120.0, input);
+            scenes.render(g, 0f);
+        }
+
+        // P enters play-test: the test player simulates and draws with the
+        // shared player walk sprite (identical to the play scene's).
+        input.keyPressed(new java.awt.event.KeyEvent(src,
+                java.awt.event.KeyEvent.KEY_PRESSED, 0, 0,
+                java.awt.event.KeyEvent.VK_P, 'p'));
+        for (int i = 0; i < 10; i++) {
+            input.newFrame();
+            scenes.update(1.0 / 120.0, input);
+            scenes.render(g, 0f);
+        }
+        g.dispose();
+        assertEquals("CreativeScene", scenes.current().name());
+    }
 }

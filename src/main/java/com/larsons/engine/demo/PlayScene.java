@@ -28,8 +28,8 @@ import com.larsons.engine.graphics.CutscenePainter;
 import com.larsons.engine.graphics.EntitySprites;
 import com.larsons.engine.graphics.ParallaxBackground;
 import com.larsons.engine.graphics.Perspective;
+import com.larsons.engine.graphics.PlayerSprites;
 import com.larsons.engine.graphics.Skins;
-import com.larsons.engine.graphics.SpriteSheet;
 import com.larsons.engine.graphics.SurfaceDecorPainter;
 import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.input.InputManager;
@@ -69,7 +69,6 @@ import java.awt.Composite;
 import java.awt.Font;
 import java.awt.Graphics2D;
 import java.awt.RadialGradientPaint;
-import java.awt.RenderingHints;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.awt.event.KeyEvent;
@@ -124,6 +123,8 @@ public class PlayScene extends AbstractScene {
     private Level level;
     private Camera camera;
     private Animation walkAnim;
+    /** Walk-cycle time: advances only while moving, drives the player skin. */
+    private double walkClock;
 
     private PlayerState me = new PlayerState();
     private int inputSeq;
@@ -532,6 +533,7 @@ public class PlayScene extends AbstractScene {
         double size = ps();
         camera.centerOn(me.x + size / 2.0, me.y + size / 2.0);
         walkAnim.update(me.moving ? dt : 0);
+        if (me.moving) walkClock += dt;
 
         // Cutscene triggers watch the player: zones fire on entry, INTERACT
         // ones on E (doors and stations already had their chance above).
@@ -1300,7 +1302,7 @@ public class PlayScene extends AbstractScene {
             MiniGameHud.drawTeamRing(g, camera, me.x + ps() / 2, me.y + ps(),
                     ps(), mgView.teamOf(me.id), camera.zoom);
         }
-        drawPlayer(g, me.x, me.y, me.facingLeft, walkAnim.current(), null);
+        drawPlayer(g, me.x, me.y, me.facingLeft, PlayerSprites.frame(walkAnim, walkClock), null);
         if (swingTime > 0) drawSwing(g);
         if (cutscenes != null && cutscenes.active() != null) {
             CutscenePainter.drawActors(g, camera, cutscenes.active());
@@ -2296,10 +2298,7 @@ public class PlayScene extends AbstractScene {
     private double ps() { return profile().playerSize; }
 
     private void rebuildSprite() {
-        int size = Math.max(8, (int) ps());
-        SpriteSheet sprites = SpriteSheet.fromImage(
-                buildCharacterSheet(size, new Color(70, 130, 220)), size, size);
-        walkAnim = sprites.animation(10, true);
+        walkAnim = PlayerSprites.walkAnimation((int) ps(), PlayerSprites.DEFAULT_BODY);
         remoteAnims.clear(); // rebuilt lazily at the (possibly new) size
     }
 
@@ -2310,31 +2309,6 @@ public class PlayScene extends AbstractScene {
         Color body = Color.getHSBColor((id * 0.6180339887f) % 1f, 0.6f, 0.85f);
         MiniGameView v = mgView;
         if (v != null && v.teamOf(id) >= 0) body = Team.color(v.teamOf(id));
-        SpriteSheet sprites = SpriteSheet.fromImage(
-                buildCharacterSheet(size, body), size, size);
-        return sprites.animation(10, true);
-    }
-
-    private BufferedImage buildCharacterSheet(int size, Color body) {
-        int frames = 4;
-        BufferedImage img = new BufferedImage(size * frames, size, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g = img.createGraphics();
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        for (int f = 0; f < frames; f++) {
-            int ox = f * size;
-            int bob = (f % 2 == 0) ? 0 : Math.max(1, size / 16);
-            g.setColor(body);
-            g.fillRoundRect(ox + size / 4, size / 4 + bob, size / 2, size / 2, size / 6, size / 6);
-            g.setColor(new Color(245, 210, 170));
-            g.fillOval(ox + size / 3, size / 8 + bob, size / 3, size / 3);
-            g.setColor(new Color(40, 40, 60));
-            int legW = Math.max(2, size / 10);
-            int legY = size * 3 / 4 + bob;
-            int spread = (f % 2 == 0) ? size / 12 : size / 6;
-            g.fillRect(ox + size / 2 - spread - legW, legY, legW, size / 5);
-            g.fillRect(ox + size / 2 + spread, legY, legW, size / 5);
-        }
-        g.dispose();
-        return img;
+        return PlayerSprites.walkAnimation(size, body);
     }
 }

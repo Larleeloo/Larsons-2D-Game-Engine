@@ -26,6 +26,6 @@
   "audioEnabled": true,
   "lastLevelPath": "",
   "tileSize": 32,
-  "playerSize": 32,
+  "playerSize": 28,
   "defaultEntitySize": 32
 }

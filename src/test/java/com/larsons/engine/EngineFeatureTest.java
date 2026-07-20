@@ -134,8 +134,9 @@ class EngineFeatureTest {
             PlayerPhysics.step(s, in, lvl, p, com.larsons.engine.graphics.Perspective.SIDE_SCROLL,
                     1 / 120.0);
         }
-        // The wall at col 5 must stop the 32px player flush against x=4*32.
-        assertTrue(s.x <= 5 * 32 - 32 + 0.01,
+        // The wall at col 5 must stop the player flush against it (the
+        // hitbox is slightly under one tile, so flush is 5*32 - playerSize).
+        assertTrue(s.x <= 5 * 32 - p.playerSize + 0.01,
                 "player passed through the wall: x=" + s.x);
         assertTrue(s.x > 4 * 32 - 8, "player should reach the wall: x=" + s.x);
     }
