@@ -123,8 +123,11 @@ public class PlayScene extends AbstractScene {
     private Level level;
     private Camera camera;
     private Animation walkAnim;
-    /** Walk-cycle time: advances only while moving, drives the player skin. */
-    private double walkClock;
+    // The player's current action state (idle/walk/run/jump/fall/swim) and
+    // how long it has played — picks which skin animation draws, and from
+    // which frame (the clock resets whenever the state changes).
+    private String animState = "idle";
+    private double animStateClock;
 
     private PlayerState me = new PlayerState();
     private int inputSeq;
@@ -461,7 +464,8 @@ public class PlayScene extends AbstractScene {
         Perspective simPerspective = net != null ? p.perspective : camera.getPerspective();
         prevVy = me.vy;
         double preX = me.x, preY = me.y;
-        if (!stepRiding(in, p, dt)) {
+        boolean riding = stepRiding(in, p, dt);
+        if (!riding) {
             PlayerPhysics.step(me, in, level, p, simPerspective, dt);
         }
         if (me.vy < -1 && prevVy >= 0) {
@@ -533,7 +537,16 @@ public class PlayScene extends AbstractScene {
         double size = ps();
         camera.centerOn(me.x + size / 2.0, me.y + size / 2.0);
         walkAnim.update(me.moving ? dt : 0);
-        if (me.moving) walkClock += dt;
+        // A mounted player sits (idle art); otherwise classify the action so
+        // the matching skin animation plays, restarting on state changes.
+        String state = riding ? "idle"
+                : PlayerSprites.actionState(me, level, p, simPerspective, in.sprint);
+        if (!state.equals(animState)) {
+            animState = state;
+            animStateClock = 0;
+        } else {
+            animStateClock += dt;
+        }
 
         // Cutscene triggers watch the player: zones fire on entry, INTERACT
         // ones on E (doors and stations already had their chance above).
@@ -1302,7 +1315,8 @@ public class PlayScene extends AbstractScene {
             MiniGameHud.drawTeamRing(g, camera, me.x + ps() / 2, me.y + ps(),
                     ps(), mgView.teamOf(me.id), camera.zoom);
         }
-        drawPlayer(g, me.x, me.y, me.facingLeft, PlayerSprites.frame(walkAnim, walkClock), null);
+        drawPlayer(g, me.x, me.y, me.facingLeft,
+                PlayerSprites.frame(animState, walkAnim, animStateClock), null);
         if (swingTime > 0) drawSwing(g);
         if (cutscenes != null && cutscenes.active() != null) {
             CutscenePainter.drawActors(g, camera, cutscenes.active());
