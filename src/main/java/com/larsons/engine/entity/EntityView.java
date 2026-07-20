@@ -4,10 +4,10 @@ import java.util.Map;
 
 /**
  * The render-side view of a replicated entity: what a multiplayer client
- * knows about a mob, dropped item, or projectile from the latest snapshot.
- * Mirrors {@link Mob#toMap()} / {@link DroppedItem#toMap()} /
- * {@link Projectile#toMap()} — clients don't simulate these (the server is
- * authoritative); they just draw them.
+ * knows about a mob, dropped item, projectile, or vehicle from the latest
+ * snapshot. Mirrors {@link Mob#toMap()} / {@link DroppedItem#toMap()} /
+ * {@link Projectile#toMap()} / {@link Vehicle#toMap()} — clients don't
+ * simulate these (the server is authoritative); they just draw them.
  */
 public final class EntityView {
 
@@ -19,9 +19,12 @@ public final class EntityView {
     public final int aiState;   // Mob.AIState ordinal (drives hurt/dead tint)
     public final int count;     // dropped-item stack size
     public final double vx, vy; // projectile velocity (drives sprite rotation)
+    public final int status;    // mob status bits (burn/chill/poison/shield tint)
+    public final int rider;     // vehicle rider player id, or -1 when riderless
 
     private EntityView(int id, String key, double x, double y, boolean facingLeft,
-                       double health, int aiState, int count, double vx, double vy) {
+                       double health, int aiState, int count, double vx, double vy,
+                       int status, int rider) {
         this.id = id;
         this.key = key;
         this.x = x;
@@ -32,22 +35,26 @@ public final class EntityView {
         this.count = count;
         this.vx = vx;
         this.vy = vy;
+        this.status = status;
+        this.rider = rider;
     }
 
     public static EntityView fromMap(Map<String, Object> m) {
         return new EntityView(
-                num(m.get("id")),
+                num(m.get("id"), 0),
                 m.get("k") instanceof String s ? s : "",
                 dbl(m.get("x")), dbl(m.get("y")),
                 Boolean.TRUE.equals(m.get("f")),
                 dbl(m.get("h")),
-                num(m.get("s")),
-                Math.max(1, num(m.get("n"))),
-                dbl(m.get("vx")), dbl(m.get("vy")));
+                num(m.get("s"), 0),
+                Math.max(1, num(m.get("n"), 0)),
+                dbl(m.get("vx")), dbl(m.get("vy")),
+                num(m.get("e"), 0),
+                num(m.get("p"), -1));
     }
 
-    private static int num(Object o) {
-        return o instanceof Number n ? n.intValue() : 0;
+    private static int num(Object o, int def) {
+        return o instanceof Number n ? n.intValue() : def;
     }
 
     private static double dbl(Object o) {

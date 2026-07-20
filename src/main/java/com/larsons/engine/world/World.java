@@ -12,9 +12,14 @@ import com.larsons.engine.entity.MobRegistry;
 import com.larsons.engine.entity.Projectile;
 import com.larsons.engine.entity.ProjectileDef;
 import com.larsons.engine.entity.ProjectileRegistry;
+import com.larsons.engine.entity.Vehicle;
+import com.larsons.engine.entity.VehicleDef;
+import com.larsons.engine.entity.VehicleRegistry;
 import com.larsons.engine.level.Level;
+import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerState;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -44,15 +49,26 @@ public final class World {
     /** Day length in seconds when the day/night cycle is on. */
     public static final double DAY_LENGTH = 120;
 
+    /** Soft cap on live mobs, so summoners can't flood the simulation. */
+    private static final int MOB_CAP = 80;
+
     public final Level level;
     public final MobRegistry mobTypes;
     public final ItemRegistry itemTypes;
     public final ProjectileRegistry projectileTypes;
+    public final VehicleRegistry vehicleTypes;
 
     private final List<Mob> mobs = new ArrayList<>();
     private final List<DroppedItem> items = new ArrayList<>();
     private final List<Projectile> projectiles = new ArrayList<>();
+    private final List<Vehicle> vehicles = new ArrayList<>();
     private final List<Impact> impacts = new ArrayList<>();
+    /** Deferred area blasts (DEATH_BURST chains) resolved after the mob loop. */
+    private final ArrayDeque<double[]> pendingBursts = new ArrayDeque<>();
+    /** Deferred SUMMON spawns — the mob list can't grow mid-iteration. */
+    private final List<PendingSummon> pendingSummons = new ArrayList<>();
+
+    private record PendingSummon(String key, double x, double y) {}
     private int killsByPlayers; // mobs killed by player damage since last poll
     private int playerDeaths;   // player respawns since last poll (stat tracking)
     private final LiquidSim liquids = new LiquidSim();
@@ -111,6 +127,24 @@ public final class World {
         this.mobTypes = mobTypes;
         this.itemTypes = itemTypes;
         this.projectileTypes = ProjectileRegistry.standard();
+        this.vehicleTypes = VehicleRegistry.standard();
+    }
+
+    /**
+     * Consumes one {@code key} item from a player's inventory, wherever that
+     * inventory lives — the scene's local one offline, the connection's
+     * server-side one online. Lets simulation-owned effects (the Phoenix
+     * Feather's death-cheat) spend items without the World holding
+     * inventories itself.
+     */
+    public interface ItemConsumer {
+        boolean consumeOne(PlayerState player, String key);
+    }
+
+    private ItemConsumer itemConsumer;
+
+    public void setItemConsumer(ItemConsumer c) {
+        this.itemConsumer = c;
     }
 
     public void setPickupListener(PickupListener l) {
@@ -141,6 +175,18 @@ public final class World {
 
     public List<Projectile> projectiles() {
         return projectiles;
+    }
+
+    public List<Vehicle> vehicles() {
+        return vehicles;
+    }
+
+    /** The live vehicle with this entity id, or {@code null}. */
+    public Vehicle vehicle(int id) {
+        for (Vehicle v : vehicles) {
+            if (v.id == id) return v;
+        }
+        return null;
     }
 
     /** Mobs killed by player damage since the last call (stat tracking). */
@@ -207,7 +253,7 @@ public final class World {
         return t * t * p.nightDarkness;
     }
 
-    /** Spawn the mobs/items a level's entity list declares (feature-gated). */
+    /** Spawn the mobs/items/vehicles a level's entity list declares (feature-gated). */
     public void populateFromLevel(GameProfile profile) {
         for (Level.EntitySpawn e : level.entities) {
             switch (e.kind) {
@@ -217,6 +263,7 @@ public final class World {
                 case "item" -> {
                     if (profile.itemsEnabled) spawnItem(e.type, 1, e.x, e.y);
                 }
+                case "vehicle" -> spawnVehicle(e.type, e.x, e.y);
                 default -> { /* "entity" spawns (e.g. "player") are scene concerns */ }
             }
         }
@@ -237,9 +284,18 @@ public final class World {
         return item;
     }
 
-    /** Remove a mob or dropped item by entity id (creative erase, online too). */
+    public Vehicle spawnVehicle(String key, double x, double y) {
+        VehicleDef def = vehicleTypes.get(key);
+        if (def == null) return null;
+        Vehicle v = new Vehicle(nextEntityId++, def, x, y);
+        vehicles.add(v);
+        return v;
+    }
+
+    /** Remove a mob, dropped item, or vehicle by entity id (creative erase, online too). */
     public boolean removeEntity(int id) {
-        return mobs.removeIf(m -> m.id == id) || items.removeIf(i -> i.id == id);
+        return mobs.removeIf(m -> m.id == id) || items.removeIf(i -> i.id == id)
+                || vehicles.removeIf(v -> v.id == id);
     }
 
     /** Advance everything one tick. Dead mobs drop loot and are removed. */
@@ -260,6 +316,7 @@ public final class World {
             while (it.hasNext()) {
                 Mob m = it.next();
                 m.step(level, players, projectiles, gravityOn, profile.combatEnabled, dt);
+                drainMobActions(m, profile);
                 Block hazard = hazardAt(m.x + m.def.size() / 2, m.y + m.def.size() / 2);
                 if (hazard != null) m.environmentDamage(hazard.damage() * dt);
                 if (m.dead()) {
@@ -268,10 +325,24 @@ public final class World {
                     it.remove();
                 }
             }
-            if (died != null && profile.itemsEnabled) {
-                for (Mob m : died) dropMobLoot(m);
+            if (died != null) {
+                for (Mob m : died) handleMobDeath(m, profile.itemsEnabled, profile);
             }
+            if (!pendingSummons.isEmpty()) {
+                for (PendingSummon s : pendingSummons) {
+                    Mob minion = spawnMob(s.key(), s.x(), s.y());
+                    if (minion != null) {
+                        impacts.add(new Impact("summon",
+                                minion.x + minion.def.size() / 2,
+                                minion.y + minion.def.size() / 2, false));
+                    }
+                }
+                pendingSummons.clear();
+            }
+            resolvePendingBursts(players, profile);
         }
+
+        stepVehicles(dt, gravityOn, players, profile);
 
         if (profile.itemsEnabled) {
             Iterator<DroppedItem> it = items.iterator();
@@ -279,7 +350,8 @@ public final class World {
                 DroppedItem item = it.next();
                 item.step(level, gravityOn, dt);
                 if (item.pickupDelay > 0) continue;
-                PlayerState taker = nearestWithin(players, item.x, item.y, PICKUP_RANGE);
+                // Base vacuum range, extended per player by the Magnet Charm.
+                PlayerState taker = nearestPickerUpper(players, item.x, item.y);
                 if (taker != null) {
                     if (pickupListener != null) {
                         pickupListener.onPickup(taker, item.key, item.count);
@@ -294,14 +366,23 @@ public final class World {
         }
 
         // Players: hazard blocks burn, clamp health, respawn on death (at a
-        // painted multiplayer spawn point when the level has them).
+        // painted multiplayer spawn point when the level has them). A carried
+        // Phoenix Feather burns up instead: the player revives in place.
         double size = profile.playerSize;
         for (PlayerState p : players) {
             Block hazard = hazardAt(p.x + size / 2, p.y + size / 2);
             if (hazard != null) p.health -= hazard.damage() * dt;
             if (p.health > PlayerState.MAX_HEALTH) p.health = PlayerState.MAX_HEALTH;
             if (p.health <= 0) {
+                if (profile.itemsEnabled && itemConsumer != null
+                        && itemConsumer.consumeOne(p, "phoenix_feather")) {
+                    p.health = PlayerState.MAX_HEALTH * 0.5;
+                    p.stamina = PlayerState.MAX_STAMINA;
+                    impacts.add(new Impact("revive", p.x + size / 2, p.y + size / 2, false));
+                    continue;
+                }
                 if (deathListener != null) deathListener.onDeath(p, p.x, p.y);
+                dismount(p); // death unseats: the mount stays where it fell
                 p.health = PlayerState.MAX_HEALTH;
                 p.stamina = PlayerState.MAX_STAMINA;
                 p.mana = PlayerState.MAX_MANA;
@@ -311,6 +392,107 @@ public final class World {
                 p.y = spawn[1];
                 p.vy = 0;
                 playerDeaths++;
+            }
+        }
+    }
+
+    // --- mob abilities: side effects drained after each mob's step ------------------
+
+    /** Resolve the actions a mob queued this tick: ranged shots, summons, blinks. */
+    private void drainMobActions(Mob m, GameProfile profile) {
+        double[] shot = m.pollRangedShot();
+        if (shot != null && profile.projectilesEnabled && m.def.projectile() != null) {
+            ProjectileDef def = projectileTypes.get(m.def.projectile());
+            if (def != null) {
+                double cx = m.x + m.def.size() / 2, cy = m.y + m.def.size() / 2;
+                double dx = shot[0] - cx, dy = shot[1] - cy;
+                double len = Math.max(0.001, Math.hypot(dx, dy));
+                // Mob-owned shots carry a negative owner id: never dodged by
+                // their own side, never hitting mobs, always hitting players.
+                Projectile p = new Projectile(nextEntityId++, def, -m.id,
+                        cx, cy, dx / len * def.speed(), dy / len * def.speed());
+                if (m.def.damage() > 0) p.damage = m.def.damage();
+                projectiles.add(p);
+            }
+        }
+        if (m.pollSummon() && m.def.abilityArg() != null && mobs.size() < MOB_CAP) {
+            // Deferred: the mob list is mid-iteration; spawn after the loop.
+            double ts = level.tileSize;
+            pendingSummons.add(new PendingSummon(m.def.abilityArg(),
+                    m.x + (m.id % 2 == 0 ? ts : -ts), m.y));
+        }
+        double[] blink = m.pollBlinkFx();
+        if (blink != null) {
+            impacts.add(new Impact("blink", blink[0], blink[1], false));
+            impacts.add(new Impact("blink", m.x + m.def.size() / 2,
+                    m.y + m.def.size() / 2, false));
+        }
+    }
+
+    /**
+     * One dead mob's aftermath: loot, and the species' death trick — SPLIT
+     * breaks it into two children, DEATH_BURST queues an area blast (deferred,
+     * so chains of exploders resolve without re-entering the mob loop).
+     */
+    private void handleMobDeath(Mob m, boolean withLoot, GameProfile profile) {
+        double cx = m.x + m.def.size() / 2, cy = m.y + m.def.size() / 2;
+        if (withLoot) dropMobLoot(m);
+        switch (m.def.ability()) {
+            case SPLIT -> {
+                // A null profile (direct melee-kill path) counts as all-enabled.
+                if (m.def.abilityArg() != null
+                        && (profile == null || profile.mobsEnabled)
+                        && mobs.size() < MOB_CAP) {
+                    spawnMob(m.def.abilityArg(), m.x - m.def.size() * 0.3, m.y);
+                    spawnMob(m.def.abilityArg(), m.x + m.def.size() * 0.3, m.y);
+                    impacts.add(new Impact("summon", cx, cy, false));
+                }
+            }
+            case DEATH_BURST -> {
+                double radius = Math.max(48, m.def.size() * 1.6);
+                pendingBursts.add(new double[]{cx, cy, radius, m.def.damage() * 2});
+                String fxKey = m.def.abilityArg() != null ? m.def.abilityArg() : "fireball";
+                impacts.add(new Impact(fxKey, cx, cy, true));
+            }
+            default -> { /* most species just die */ }
+        }
+    }
+
+    /**
+     * Resolve queued death blasts. A blast may kill further exploders, whose
+     * own blasts join the queue — the classic chain reaction, bounded by the
+     * mob population itself.
+     */
+    private void resolvePendingBursts(List<PlayerState> players, GameProfile profile) {
+        while (!pendingBursts.isEmpty()) {
+            double[] burst = pendingBursts.poll();
+            if (!profile.combatEnabled) continue;
+            double bx = burst[0], by = burst[1], radius = burst[2], dmg = burst[3];
+            List<Mob> killed = null;
+            for (Mob m : mobs) {
+                if (m.dead()) continue;
+                double d = Math.hypot(m.x + m.def.size() / 2 - bx,
+                        m.y + m.def.size() / 2 - by);
+                if (d > radius + m.def.size() / 2) continue;
+                double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
+                if (m.damage(dmg * falloff, bx)) {
+                    if (killed == null) killed = new ArrayList<>();
+                    killed.add(m);
+                }
+            }
+            if (killed != null) {
+                for (Mob m : killed) {
+                    mobs.remove(m);
+                    handleMobDeath(m, profile.itemsEnabled, profile);
+                }
+            }
+            // Mob-sourced blasts hurt every player caught in them.
+            double half = profile.playerSize / 2.0;
+            for (PlayerState pl : players) {
+                double d = Math.hypot(pl.x + half - bx, pl.y + half - by);
+                if (d > radius + half) continue;
+                double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
+                pl.health -= dmg * falloff;
             }
         }
     }
@@ -347,9 +529,40 @@ public final class World {
         }
         if (best != null && best.damage(damage, px)) {
             mobs.remove(best);
-            dropMobLoot(best);
+            handleMobDeath(best, true, null);
             killsByPlayers++;
         }
+        return best;
+    }
+
+    /**
+     * Swing at an empty vehicle instead: within reach of the aim point it
+     * packs back up into its source item, so mounts are never stranded.
+     * Returns the packed vehicle, or {@code null} (nothing there / ridden).
+     */
+    public Vehicle packUpVehicle(double aimX, double aimY, boolean withDrop) {
+        Vehicle best = null;
+        double bestD = Double.MAX_VALUE;
+        for (Vehicle v : vehicles) {
+            if (v.ridden()) continue;
+            double d = Math.hypot(v.x + v.def.size() / 2 - aimX,
+                    v.y + v.def.size() / 2 - aimY);
+            if (d < v.def.size() / 2 + 24 && d < bestD) {
+                bestD = d;
+                best = v;
+            }
+        }
+        if (best == null) return null;
+        vehicles.remove(best);
+        if (withDrop && best.def.sourceItem() != null
+                && itemTypes.get(best.def.sourceItem()) != null) {
+            spawnItem(best.def.sourceItem(), 1,
+                    best.x + best.def.size() / 2 - DroppedItem.SIZE / 2,
+                    best.y + best.def.size() / 2 - DroppedItem.SIZE / 2)
+                    .toss(0, -180);
+        }
+        impacts.add(new Impact("summon", best.x + best.def.size() / 2,
+                best.y + best.def.size() / 2, false));
         return best;
     }
 
@@ -385,10 +598,56 @@ public final class World {
             dy = 0;
             len = 1;
         }
-        Projectile p = new Projectile(nextEntityId++, def, shooter.id,
-                shooter.x, shooter.y,
-                dx / len * def.speed(), dy / len * def.speed());
-        if (held.damage() > 0) p.damage = held.damage();
+
+        // Salvo weapons fire patterns instead of a single bolt: the Meteor
+        // Staff calls its projectiles down from the sky above the aim point,
+        // the Scatter Bow fans three arrows.
+        if ("meteor_staff".equals(held.key())) {
+            Projectile first = null;
+            for (int i = -1; i <= 1; i++) {
+                double sx = aimX + i * 46;
+                double sy = Math.max(8, aimY - 280);
+                double mdx = aimX - sx, mdy = aimY - sy;
+                double mlen = Math.max(0.001, Math.hypot(mdx, mdy));
+                Projectile p = new Projectile(nextEntityId++, def, shooter.id,
+                        sx, sy, mdx / mlen * def.speed(), mdy / mlen * def.speed());
+                if (held.damage() > 0) p.damage = held.damage();
+                projectiles.add(p);
+                if (first == null) first = p;
+            }
+            return first;
+        }
+        int shots = "scatter_bow".equals(held.key()) ? 3 : 1;
+        Projectile first = null;
+        for (int i = 0; i < shots; i++) {
+            double spread = shots == 1 ? 0 : (i - (shots - 1) / 2.0) * Math.toRadians(9);
+            double angle = Math.atan2(dy, dx) + spread;
+            Projectile p = new Projectile(nextEntityId++, def, shooter.id,
+                    shooter.x, shooter.y,
+                    Math.cos(angle) * def.speed(), Math.sin(angle) * def.speed());
+            if (held.damage() > 0) p.damage = held.damage();
+            projectiles.add(p);
+            if (first == null) first = p;
+        }
+        return first;
+    }
+
+    /**
+     * Fire a ridden vehicle's armament (a war dragon's fireball) toward the
+     * aim point. Free but cooldown-limited; the shot is owned by the rider,
+     * so PvP rules and kill credit apply exactly as if they'd cast it.
+     * Returns the projectile, or {@code null} (unarmed / still cooling down).
+     */
+    public Projectile vehicleShoot(Vehicle v, PlayerState rider,
+                                   double aimX, double aimY) {
+        ProjectileDef def = v.def.projectile() == null
+                ? null : projectileTypes.get(v.def.projectile());
+        if (def == null || !v.tryFire()) return null;
+        double cx = v.x + v.def.size() / 2, cy = v.y + v.def.size() / 2;
+        double dx = aimX - cx, dy = aimY - cy;
+        double len = Math.max(0.001, Math.hypot(dx, dy));
+        Projectile p = new Projectile(nextEntityId++, def, rider.id,
+                cx, cy, dx / len * def.speed(), dy / len * def.speed());
         projectiles.add(p);
         return p;
     }
@@ -397,7 +656,11 @@ public final class World {
      * Advance projectiles: flight (arcing under gravity in side-scroll),
      * mob hits (combat only — with combat off they're decorative physics),
      * player hits when a {@link PvpRule} allows them, terrain impacts,
-     * explosions, and recoverable drops.
+     * explosions, elemental statuses, terrain shatter, and recoverable drops.
+     *
+     * <p>Mob-owned shots (negative owner id) mirror the rules: they never hit
+     * mobs, and they hit <em>any</em> player — no {@link PvpRule} needed,
+     * exactly like a mob's melee strike.
      */
     private void stepProjectiles(double dt, boolean gravityOn,
                                  List<PlayerState> players, GameProfile profile) {
@@ -406,24 +669,29 @@ public final class World {
         while (it.hasNext()) {
             Projectile p = it.next();
             boolean landed = p.step(level, gravityOn, dt);
+            boolean mobShot = p.ownerId < 0;
 
-            if (!p.dead() && profile.combatEnabled && profile.mobsEnabled) {
+            if (!p.dead() && !mobShot && profile.combatEnabled && profile.mobsEnabled) {
                 Mob hit = mobAt(p.x, p.y, p.def.radius());
                 if (hit != null) {
                     p.kill();
                     impacts.add(new Impact(p.def.key(), p.x, p.y, p.def.explosionRadius() > 0));
                     if (p.def.explosionRadius() > 0) {
                         explode(p, players, profile);
-                    } else if (hit.damage(p.damage, p.x - p.vx)) {
-                        mobs.remove(hit);
-                        dropMobLoot(hit);
-                        killsByPlayers++;
+                    } else {
+                        applyElementToMob(p, hit, profile);
+                        if (hit.damage(p.damage, p.x - p.vx)) {
+                            mobs.remove(hit);
+                            handleMobDeath(hit, true, profile);
+                            killsByPlayers++;
+                        }
                     }
+                    resolveImpactEffects(p, players, profile);
                     it.remove();
                     continue;
                 }
             }
-            if (!p.dead() && profile.combatEnabled && pvpRule != null) {
+            if (!p.dead() && profile.combatEnabled && (mobShot || pvpRule != null)) {
                 PlayerState hit = hittablePlayerAt(players, p.ownerId,
                         p.x, p.y, p.def.radius() + playerRadius, profile);
                 if (hit != null) {
@@ -433,8 +701,12 @@ public final class World {
                         explode(p, players, profile);
                     } else {
                         hit.health -= p.damage;
-                        pvpRule.damaged(p.ownerId, hit);
+                        if (p.def.element() == ProjectileDef.Element.ICE) {
+                            hit.stamina = 0; // webs and frost sap the sprint
+                        }
+                        if (!mobShot && pvpRule != null) pvpRule.damaged(p.ownerId, hit);
                     }
+                    resolveImpactEffects(p, players, profile);
                     it.remove();
                     continue;
                 }
@@ -451,12 +723,115 @@ public final class World {
                             p.x - DroppedItem.SIZE / 2, p.y - DroppedItem.SIZE / 2)
                             .toss(-p.vx * 0.1, -160);
                 }
+                resolveImpactEffects(p, players, profile);
                 it.remove();
             }
         }
     }
 
-    /** The nearest player the projectile owner may hurt within a hit circle. */
+    /**
+     * Impact effects every resolution path shares: terrain-shattering blasts
+     * (bombs, harvest orbs — honouring the block-editing toggle) and the Warp
+     * Staff's owner-teleport to wherever its bolt struck.
+     */
+    private void resolveImpactEffects(Projectile p, List<PlayerState> players,
+                                      GameProfile profile) {
+        if (p.def.breakRadius() > 0 && profile.blockEditingEnabled) {
+            breakTerrain(p.x, p.y, p.def.breakRadius(), profile.itemsEnabled);
+        }
+        if ("warp_bolt".equals(p.def.key()) && p.ownerId >= 0) {
+            for (PlayerState pl : players) {
+                if (pl.id != p.ownerId) continue;
+                double ts = level.tileSize;
+                pl.x = Math.max(0, Math.min(p.x - profile.playerSize / 2,
+                        level.width * ts - profile.playerSize));
+                pl.y = Math.max(0, Math.min(p.y - profile.playerSize,
+                        level.height * ts - profile.playerSize));
+                pl.vy = 0;
+                impacts.add(new Impact("warp", pl.x + profile.playerSize / 2,
+                        pl.y + profile.playerSize / 2, false));
+                break;
+            }
+        }
+    }
+
+    private void applyElementToMob(Projectile p, Mob hit, GameProfile profile) {
+        applyElementToMob(p, hit, profile, true);
+    }
+
+    /**
+     * Apply a projectile's elemental status to the mob it struck.
+     * {@code allowChain} is false inside area-damage loops (a chain would
+     * mutate the mob list mid-iteration).
+     */
+    private void applyElementToMob(Projectile p, Mob hit, GameProfile profile,
+                                   boolean allowChain) {
+        switch (p.def.element()) {
+            case FIRE -> hit.burnTime = Math.max(hit.burnTime, 3.0);
+            case ICE -> hit.chillTime = Math.max(hit.chillTime, 2.5);
+            case POISON -> hit.poisonTime = Math.max(hit.poisonTime, 4.0);
+            case LIGHTNING -> {
+                if (!allowChain) return;
+                // Chain to the nearest other mob in arc range for 60% damage.
+                Mob chained = null;
+                double bestD = 110;
+                for (Mob m : mobs) {
+                    if (m == hit || m.dead()) continue;
+                    double d = Math.hypot(m.x + m.def.size() / 2 - p.x,
+                            m.y + m.def.size() / 2 - p.y);
+                    if (d < bestD) {
+                        bestD = d;
+                        chained = m;
+                    }
+                }
+                if (chained != null) {
+                    impacts.add(new Impact("chain", chained.x + chained.def.size() / 2,
+                            chained.y + chained.def.size() / 2, false));
+                    if (chained.damage(p.damage * 0.6, p.x)) {
+                        mobs.remove(chained);
+                        handleMobDeath(chained, true, profile);
+                        if (p.ownerId >= 0) killsByPlayers++;
+                    }
+                }
+            }
+            default -> { /* ARCANE, VOID, EARTH, NONE: no status */ }
+        }
+    }
+
+    /**
+     * Shatter every mineable block within {@code radius} px of a world point:
+     * each pops its drop (when items are on) and is recorded as an
+     * authoritative block change, so online servers broadcast the crater to
+     * every client exactly like liquid flow. Liquids are left alone (blasts
+     * don't dig water).
+     */
+    public int breakTerrain(double wx, double wy, double radius, boolean withDrops) {
+        double ts = level.tileSize;
+        int c0 = Math.max(0, (int) Math.floor((wx - radius) / ts));
+        int c1 = Math.min(level.width - 1, (int) Math.floor((wx + radius) / ts));
+        int r0 = Math.max(0, (int) Math.floor((wy - radius) / ts));
+        int r1 = Math.min(level.height - 1, (int) Math.floor((wy + radius) / ts));
+        int broken = 0;
+        for (int r = r0; r <= r1; r++) {
+            for (int c = c0; c <= c1; c++) {
+                double d = Math.hypot((c + 0.5) * ts - wx, (r + 0.5) * ts - wy);
+                if (d > radius) continue;
+                Block b = level.blockAt(c, r);
+                if (b == null || b.liquid()) continue;
+                if (mineBlock(c, r, withDrops) != null) {
+                    blockChanges.add(new LiquidSim.Change(c, r, 0));
+                    broken++;
+                }
+            }
+        }
+        return broken;
+    }
+
+    /**
+     * The nearest player the projectile owner may hurt within a hit circle.
+     * Mob-owned shots (negative owner) may hurt anyone; player-owned shots go
+     * through the {@link PvpRule}.
+     */
     private PlayerState hittablePlayerAt(List<PlayerState> players, int ownerId,
                                          double x, double y, double radius,
                                          GameProfile profile) {
@@ -465,7 +840,7 @@ public final class World {
         double bestD = Double.MAX_VALUE;
         for (PlayerState pl : players) {
             if (pl.id == ownerId || pl.health <= 0) continue;
-            if (!pvpRule.canHurt(ownerId, pl)) continue;
+            if (ownerId >= 0 && (pvpRule == null || !pvpRule.canHurt(ownerId, pl))) continue;
             double d = Math.hypot(pl.x + half - x, pl.y + half - y);
             if (d < radius && d < bestD) {
                 bestD = d;
@@ -478,12 +853,17 @@ public final class World {
     /** Area damage with linear falloff (100% at the centre, 25% at the edge). */
     private void explode(Projectile p, List<PlayerState> players, GameProfile profile) {
         double radius = p.def.explosionRadius();
+        boolean mobShot = p.ownerId < 0;
         List<Mob> died = null;
         for (Mob m : mobs) {
             if (m.dead()) continue;
+            // A mob's own blast never wounds the species that made it — a
+            // pyromancer doesn't rout its own warband — but everyone else's do.
+            if (mobShot && m.id == -p.ownerId) continue;
             double d = Math.hypot(m.x + m.def.size() / 2 - p.x, m.y + m.def.size() / 2 - p.y);
             if (d > radius + m.def.size() / 2) continue;
             double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
+            applyElementToMob(p, m, profile, false);
             if (m.damage(p.damage * falloff, p.x)) {
                 if (died == null) died = new ArrayList<>();
                 died.add(m);
@@ -492,20 +872,20 @@ public final class World {
         if (died != null) {
             for (Mob m : died) {
                 mobs.remove(m);
-                dropMobLoot(m);
-                killsByPlayers++;
+                handleMobDeath(m, true, profile);
+                if (!mobShot) killsByPlayers++;
             }
         }
-        if (pvpRule != null) {
+        if (mobShot || pvpRule != null) {
             double half = profile.playerSize / 2.0;
             for (PlayerState pl : players) {
                 if (pl.id == p.ownerId || pl.health <= 0) continue;
-                if (!pvpRule.canHurt(p.ownerId, pl)) continue;
+                if (!mobShot && !pvpRule.canHurt(p.ownerId, pl)) continue;
                 double d = Math.hypot(pl.x + half - p.x, pl.y + half - p.y);
                 if (d > radius + half) continue;
                 double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
                 pl.health -= p.damage * falloff;
-                pvpRule.damaged(p.ownerId, pl);
+                if (!mobShot) pvpRule.damaged(p.ownerId, pl);
             }
         }
     }
@@ -528,6 +908,208 @@ public final class World {
     /** Mana cost of casting an ammo-less ranged weapon (staves). */
     public static double manaCost(ItemDef held) {
         return Math.max(8, held.damage() * 1.2);
+    }
+
+    // --- relic actives ([F]-activated accessories) --------------------------------
+
+    /** Mana cost of an [F]-activated relic, or {@code null} (not an active relic). */
+    public static Double relicManaCost(String itemKey) {
+        return switch (itemKey == null ? "" : itemKey) {
+            case "nova_crystal" -> 30.0;
+            case "tremor_totem" -> 25.0;
+            default -> null;
+        };
+    }
+
+    /**
+     * Activate a relic the player is holding: the Nova Crystal detonates an
+     * arcane blast around them, the Tremor Totem shatters the surrounding
+     * terrain into drops. Resolved by the same World everywhere, so relics
+     * behave identically offline and on the authoritative server. Returns
+     * whether the relic fired (mana and feature toggles permitting) — the
+     * relic itself is never consumed.
+     */
+    public boolean useRelic(PlayerState p, String itemKey, GameProfile profile) {
+        Double cost = relicManaCost(itemKey);
+        if (cost == null || p.mana < cost) return false;
+        double cx = p.x + profile.playerSize / 2, cy = p.y + profile.playerSize / 2;
+        switch (itemKey) {
+            case "nova_crystal" -> {
+                if (!profile.combatEnabled) return false;
+                p.mana -= cost;
+                double radius = 130;
+                List<Mob> died = null;
+                for (Mob m : mobs) {
+                    if (m.dead()) continue;
+                    double d = Math.hypot(m.x + m.def.size() / 2 - cx,
+                            m.y + m.def.size() / 2 - cy);
+                    if (d > radius + m.def.size() / 2) continue;
+                    double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
+                    if (m.damage(22 * falloff, cx)) {
+                        if (died == null) died = new ArrayList<>();
+                        died.add(m);
+                    }
+                }
+                if (died != null) {
+                    for (Mob m : died) {
+                        mobs.remove(m);
+                        handleMobDeath(m, profile.itemsEnabled, profile);
+                        killsByPlayers++;
+                    }
+                }
+                impacts.add(new Impact("nova", cx, cy, true));
+                return true;
+            }
+            case "tremor_totem" -> {
+                if (!profile.blockEditingEnabled) return false;
+                p.mana -= cost;
+                breakTerrain(cx, cy, level.tileSize * 2.6, profile.itemsEnabled);
+                impacts.add(new Impact("tremor", cx, cy, true));
+                return true;
+            }
+            default -> {
+                return false;
+            }
+        }
+    }
+
+    // --- vehicles & mounts ---------------------------------------------------------
+
+    /** How close a player must stand to mount a vehicle, in world px. */
+    public static final double MOUNT_RANGE = 70;
+
+    /** The vehicle a player could mount from (px, py), or {@code null}. */
+    public Vehicle mountableNear(double px, double py) {
+        Vehicle best = null;
+        double bestD = MOUNT_RANGE;
+        for (Vehicle v : vehicles) {
+            if (v.ridden()) continue;
+            double d = Math.hypot(v.x + v.def.size() / 2 - px,
+                    v.y + v.def.size() / 2 - py);
+            if (d <= bestD) {
+                bestD = d;
+                best = v;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Seat a player on a vehicle. Validates range and that the saddle is
+     * free, so online clients can't teleport onto a mount across the map.
+     */
+    public boolean mount(PlayerState p, int vehicleId, GameProfile profile) {
+        Vehicle v = vehicle(vehicleId);
+        if (v == null || v.ridden() || p.riding >= 0) return false;
+        double d = Math.hypot(v.x + v.def.size() / 2 - (p.x + profile.playerSize / 2),
+                v.y + v.def.size() / 2 - (p.y + profile.playerSize / 2));
+        if (d > MOUNT_RANGE * 1.5) return false;
+        v.riderId = p.id;
+        p.riding = v.id;
+        v.seat(p, profile.playerSize);
+        impacts.add(new Impact("mount", v.x + v.def.size() / 2, v.y, false));
+        return true;
+    }
+
+    /** Unseat a player from whatever they're riding. Returns the vehicle left. */
+    public Vehicle dismount(PlayerState p) {
+        if (p.riding < 0) return null;
+        Vehicle v = vehicle(p.riding);
+        p.riding = -1;
+        if (v != null && v.riderId == p.id) {
+            v.riderId = -1;
+            p.y = v.y - 4; // step off onto (roughly) the saddle height
+            p.vy = 0;
+        }
+        return v;
+    }
+
+    /**
+     * Drive a ridden vehicle with its rider's input for one tick, then lock
+     * the rider to the saddle. The drill kind additionally grinds through the
+     * terrain it's driven into (block-editing toggle permitting) — broken
+     * blocks pop drops and broadcast like any other authoritative edit.
+     * Called by the scene offline and by the server's player step online,
+     * <em>instead of</em> {@code PlayerPhysics.step} for that player.
+     */
+    public void driveVehicle(Vehicle v, PlayerState rider, PlayerInput in,
+                             GameProfile profile, double dt) {
+        boolean gravityOn = profile.gravityEnabled
+                && level.perspective == com.larsons.engine.graphics.Perspective.SIDE_SCROLL;
+        if (v.def.kind() == VehicleDef.Kind.DRILL && profile.blockEditingEnabled) {
+            drillTerrain(v, in, profile, dt);
+        }
+        v.stepDriven(level, in, gravityOn, dt);
+        v.seat(rider, profile.playerSize);
+    }
+
+    /** Grind the tiles the drill is driving into (ahead, and below when held). */
+    private void drillTerrain(Vehicle v, PlayerInput in, GameProfile profile, double dt) {
+        double ts = level.tileSize;
+        double size = v.def.size();
+        boolean withDrops = profile.itemsEnabled;
+        if (in.left || in.right) {
+            double aheadX = in.left ? v.x - ts * 0.4 : v.x + size + ts * 0.4;
+            int col = (int) Math.floor(aheadX / ts);
+            int rTop = (int) Math.floor((v.y + 2) / ts);
+            int rBot = (int) Math.floor((v.y + size - 2) / ts);
+            for (int r = rTop; r <= rBot; r++) drillTile(col, r, withDrops);
+        }
+        if (in.down) {
+            int row = (int) Math.floor((v.y + size + ts * 0.4) / ts);
+            int cL = (int) Math.floor((v.x + 2) / ts);
+            int cR = (int) Math.floor((v.x + size - 2) / ts);
+            for (int c = cL; c <= cR; c++) drillTile(c, row, withDrops);
+        }
+    }
+
+    private void drillTile(int col, int row, boolean withDrops) {
+        Block b = level.blockAt(col, row);
+        if (b == null || b.liquid()) return;
+        if (mineBlock(col, row, withDrops) != null) {
+            blockChanges.add(new LiquidSim.Change(col, row, 0));
+            impacts.add(new Impact("tremor", (col + 0.5) * level.tileSize,
+                    (row + 0.5) * level.tileSize, false));
+        }
+    }
+
+    /**
+     * Per-tick vehicle upkeep inside {@link #step}: idle physics for empty
+     * (or abandoned) vehicles, and ramming damage for armoured mounts driven
+     * into mobs at speed.
+     */
+    private void stepVehicles(double dt, boolean gravityOn,
+                              List<PlayerState> players, GameProfile profile) {
+        for (Vehicle v : vehicles) {
+            boolean driven = v.consumeDriven();
+            if (!driven) {
+                // A rider who vanished (disconnect) leaves the saddle empty.
+                if (v.ridden() && playerById(players, v.riderId) == null) v.riderId = -1;
+                v.stepIdle(level, gravityOn, dt);
+            }
+            if (driven && v.def.contactDamage() > 0 && profile.combatEnabled
+                    && profile.mobsEnabled
+                    && Math.abs(v.vx) > v.def.speed() * 0.5) {
+                Mob hit = mobAt(v.x + v.def.size() / 2, v.y + v.def.size() / 2,
+                        v.def.size() * 0.55);
+                if (hit != null && v.tryRam()) {
+                    impacts.add(new Impact("chain", hit.x + hit.def.size() / 2,
+                            hit.y + hit.def.size() / 2, false));
+                    if (hit.damage(v.def.contactDamage(), v.x)) {
+                        mobs.remove(hit);
+                        handleMobDeath(hit, profile.itemsEnabled, profile);
+                        killsByPlayers++;
+                    }
+                }
+            }
+        }
+    }
+
+    private static PlayerState playerById(List<PlayerState> players, int id) {
+        for (PlayerState p : players) {
+            if (p.id == id) return p;
+        }
+        return null;
     }
 
     // --- block durability (hold-to-mine) -----------------------------------------
@@ -621,16 +1203,50 @@ public final class World {
         return level.setTile(col, row, id);
     }
 
+    /** Species-specific loot (elemental essences, trinkets); key -> {item, count}. */
+    private static final Map<String, Object[]> SPECIES_LOOT = Map.ofEntries(
+            Map.entry("skeleton", new Object[]{"arrow", 3}),
+            Map.entry("skeleton_archer", new Object[]{"arrow", 4}),
+            Map.entry("goblin_slinger", new Object[]{"rock", 3}),
+            Map.entry("dark_ranger", new Object[]{"throwing_knife", 2}),
+            Map.entry("fire_imp", new Object[]{"fire_essence", 1}),
+            Map.entry("pyromancer", new Object[]{"fire_essence", 2}),
+            Map.entry("phoenix", new Object[]{"phoenix_feather", 1}),
+            Map.entry("ice_witch", new Object[]{"frost_essence", 1}),
+            Map.entry("frost_revenant", new Object[]{"frost_essence", 2}),
+            Map.entry("yeti", new Object[]{"frost_essence", 1}),
+            Map.entry("storm_caller", new Object[]{"storm_essence", 1}),
+            Map.entry("venom_spitter", new Object[]{"venom_gland", 1}),
+            Map.entry("sand_scorpion", new Object[]{"venom_gland", 1}),
+            Map.entry("plague_rat", new Object[]{"venom_gland", 1}),
+            Map.entry("shadow_wraith", new Object[]{"shadow_essence", 1}),
+            Map.entry("banshee", new Object[]{"shadow_essence", 1}),
+            Map.entry("necromancer", new Object[]{"scroll", 1}),
+            Map.entry("void_stalker", new Object[]{"void_shard", 1}),
+            Map.entry("stone_golem", new Object[]{"stone", 3}),
+            Map.entry("treant", new Object[]{"oak_log", 2}),
+            Map.entry("vampire", new Object[]{"ruby", 1}),
+            Map.entry("ancient_dragon", new Object[]{"dragon_egg", 1}),
+            Map.entry("ember_wisp", new Object[]{"fire_essence", 1}),
+            Map.entry("firefly", new Object[]{"torch", 1}));
+
     private void dropMobLoot(Mob m) {
-        // Skeletons drop arrows (the ammo economy for bows); everything else
-        // drops by temperament as before.
-        String loot = "skeleton".equals(m.def.key()) ? "arrow"
-                : switch (m.def.temperament()) {
-            case PASSIVE -> "cooked_meat";
-            case NEUTRAL -> "leather";
-            case HOSTILE -> "coal";
-        };
-        int count = "arrow".equals(loot) ? 3 : 1;
+        // Species with signature loot drop it (the essence economy for
+        // elemental crafting); everything else drops by temperament as before.
+        Object[] special = SPECIES_LOOT.get(m.def.key());
+        String loot;
+        int count;
+        if (special != null && itemTypes.get((String) special[0]) != null) {
+            loot = (String) special[0];
+            count = (Integer) special[1];
+        } else {
+            loot = switch (m.def.temperament()) {
+                case PASSIVE -> "cooked_meat";
+                case NEUTRAL -> "leather";
+                case HOSTILE -> "coal";
+            };
+            count = 1;
+        }
         if (itemTypes.get(loot) != null) {
             spawnItem(loot, count, m.x + m.def.size() / 2, m.y + m.def.size() / 2)
                     .toss(0, -200);
@@ -714,13 +1330,18 @@ public final class World {
         };
     }
 
-    private static PlayerState nearestWithin(List<PlayerState> players,
-                                             double x, double y, double range) {
+    /**
+     * The player a dropped item should fly to: nearest one within the base
+     * pickup range, extended per player by a carried Magnet Charm
+     * ({@code PlayerState.pickupBonus}).
+     */
+    private static PlayerState nearestPickerUpper(List<PlayerState> players,
+                                                  double x, double y) {
         PlayerState best = null;
-        double bestD = range;
+        double bestD = Double.MAX_VALUE;
         for (PlayerState p : players) {
             double d = Math.hypot(p.x - x, p.y - y);
-            if (d <= bestD) {
+            if (d <= PICKUP_RANGE + p.pickupBonus && d < bestD) {
                 bestD = d;
                 best = p;
             }

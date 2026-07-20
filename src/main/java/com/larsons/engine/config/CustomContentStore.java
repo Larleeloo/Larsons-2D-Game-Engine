@@ -339,18 +339,33 @@ public final class CustomContentStore {
         m.put("detectRange", d.detectRange());
         m.put("attackRange", d.attackRange());
         m.put("flying", d.flying());
+        // Combat extras, absent when default (files from older builds load fine).
+        if (d.projectile() != null) m.put("projectile", d.projectile());
+        if (d.ability() != MobDef.Ability.NONE) m.put("ability", d.ability().name());
+        if (d.abilityArg() != null) m.put("abilityArg", d.abilityArg());
         return m;
     }
 
     private static MobDef mobFrom(Map<String, Object> m) {
         try {
+            MobDef.Ability ability = MobDef.Ability.NONE;
+            if (m.get("ability") instanceof String a) {
+                try {
+                    ability = MobDef.Ability.valueOf(a);
+                } catch (IllegalArgumentException ignored) {
+                    // An ability from a newer build: degrade to a plain mob.
+                }
+            }
             return new MobDef(str(m.get("key")), str(m.get("name")),
                     color(m.get("body"), Color.GRAY), color(m.get("accent"), Color.DARK_GRAY),
                     dbl(m.get("size"), 28), dbl(m.get("speed"), 60),
                     dbl(m.get("maxHealth"), 20), dbl(m.get("damage"), 5),
                     MobDef.Temperament.valueOf(str(m.get("temperament"))),
                     dbl(m.get("detectRange"), 220), dbl(m.get("attackRange"), 34),
-                    Boolean.TRUE.equals(m.get("flying")));
+                    Boolean.TRUE.equals(m.get("flying")),
+                    m.get("projectile") instanceof String p ? p : null,
+                    ability,
+                    m.get("abilityArg") instanceof String arg ? arg : null);
         } catch (RuntimeException e) {
             System.err.println("CustomContentStore: bad mob entry: " + e.getMessage());
             return null;

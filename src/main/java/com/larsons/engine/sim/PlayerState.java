@@ -39,6 +39,25 @@ public final class PlayerState {
     public int airJumpsUsed;
     public int bonusAirJumps;
 
+    // Relic passives (simulation-side; not replicated). Refreshed from the
+    // carried inventory each tick by Inventory.applyPassivesTo — on the
+    // authoritative server from the server-side inventory, locally from the
+    // mirrored one, so prediction and authority agree.
+    /** Ground-speed multiplier (Hermes Boots). */
+    public double speedFactor = 1.0;
+    /** Falls gently under reduced gravity (Gravity Amulet). */
+    public boolean slowFall;
+    /** Holding jump/up flies (Aether Wings). */
+    public boolean canFly;
+    /** Extra dropped-item vacuum range in px (Magnet Charm). */
+    public double pickupBonus;
+    /** Extra melee damage added to swings (Power Gauntlet). */
+    public double meleeBonus;
+
+    /** Id of the vehicle this player is riding, or -1 (simulation-side; the
+     *  replicated vehicle carries the rider id for everyone else to render). */
+    public int riding = -1;
+
     public PlayerState() {}
 
     public PlayerState(int id, String name, double x, double y) {

@@ -245,9 +245,20 @@ public final class GameClient implements Closeable {
         if (connected) outbox.offer(Protocol.invDrop(slot, count));
     }
 
-    /** Ask the server to consume the item in a slot (eat / drink). */
+    /** Ask the server to consume/activate the item in a slot (eat / drink /
+     *  fire a relic / deploy a vehicle). */
     public void sendUseItem(int slot) {
         if (connected) outbox.offer(Protocol.useItem(slot));
+    }
+
+    /** Ask the server to seat us on a vehicle (validated server-side). */
+    public void sendMount(int vehicleId) {
+        if (connected) outbox.offer(Protocol.mount(vehicleId));
+    }
+
+    /** Ask the server to unseat us from whatever we're riding. */
+    public void sendDismount() {
+        if (connected) outbox.offer(Protocol.dismount());
     }
 
     @Override
@@ -323,9 +334,11 @@ public final class GameClient implements Closeable {
         List<EntityView> mobs = parseEntities(msg.get("mobs"));
         List<EntityView> items = parseEntities(msg.get("items"));
         List<EntityView> shots = parseEntities(msg.get("shots"));
+        List<EntityView> vehicles = parseEntities(msg.get("veh"));
         double time = msg.get("time") instanceof Number n ? n.doubleValue() : 0.25;
         previous = latest;
-        latest = new Snapshot(tick, players, mobs, items, shots, time, System.nanoTime());
+        latest = new Snapshot(tick, players, mobs, items, shots, vehicles,
+                time, System.nanoTime());
     }
 
     private static List<EntityView> parseEntities(Object o) {

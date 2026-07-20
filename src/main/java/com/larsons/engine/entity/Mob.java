@@ -37,6 +37,18 @@ import java.util.Random;
  *       evasive hop/dash (with a cooldown, so volleys still land).</li>
  * </ul>
  *
+ * <p><b>Species abilities</b> ({@link MobDef.Ability}) extend the machine
+ * without changing it: ranged species fire their {@link MobDef#projectile()}
+ * from the ATTACK state, leapers and chargers add burst movement in CHASE,
+ * wraiths blink, necromancers queue summons, trolls regenerate, vampires
+ * lifesteal, and golems cycle a shield stance. Side effects that need the
+ * world (spawning the projectile or minion, blink FX) are queued here and
+ * drained by {@code World.step}, so the mob itself stays a pure simulation.
+ *
+ * <p><b>Elemental statuses</b>: burn and poison tick damage over time, chill
+ * multiplies movement speed down — applied by elemental projectile hits (see
+ * {@code World}), replicated to clients as {@link #statusBits()}.
+ *
  * <p>Movement resolves through the same AABB helpers players use
  * ({@link PlayerPhysics#slideX}/{@code slideY}), so mobs collide with walls,
  * ceilings and floors under identical rules.
@@ -64,6 +76,28 @@ public final class Mob {
     private static final double SWIM_RISE = 260;         // px/sec^2 upward stroke
     private static final double SWIM_SINK = 180;         // px/sec^2 passive sink
 
+    // Ability tuning.
+    private static final double RANGED_COOLDOWN = 2.1;   // seconds between shots
+    private static final double LEAP_COOLDOWN = 2.4;
+    private static final double CHARGE_COOLDOWN = 3.2;
+    private static final double CHARGE_WINDUP = 0.5;     // stand still, then dash
+    private static final double TELEPORT_COOLDOWN = 3.6;
+    private static final double SUMMON_COOLDOWN = 8.0;
+    private static final double REGEN_RATE = 2.5;        // hp/sec while alive
+    private static final double SHIELD_DOWN = 4.0;       // vulnerable seconds
+    private static final double SHIELD_UP = 1.6;         // invulnerable seconds
+
+    // Elemental status tuning (see World's elemental hits).
+    private static final double BURN_DPS = 4.0;
+    private static final double POISON_DPS = 3.0;
+    private static final double CHILL_SPEED = 0.45;      // speed multiplier
+
+    // Status bits replicated in snapshots (statusBits()).
+    public static final int STATUS_BURNING = 1;
+    public static final int STATUS_CHILLED = 2;
+    public static final int STATUS_POISONED = 4;
+    public static final int STATUS_SHIELDED = 8;
+
     public final int id;
     public final MobDef def;
     public double x, y;        // top-left, world px
@@ -71,6 +105,11 @@ public final class Mob {
     public boolean facingLeft;
     public double health;
     public AIState state = AIState.IDLE;
+
+    // Elemental status timers (seconds left); applied by World on elemental hits.
+    public double burnTime;
+    public double chillTime;
+    public double poisonTime;
 
     // AI working state (server/simulation side only; not replicated).
     private final Random rng;
@@ -84,6 +123,18 @@ public final class Mob {
     private double dodgeDx;      // evasive burst applied while > 0 (sign = dir)
     private double dodgeTime;    // seconds left on the evasive burst
 
+    // Ability working state.
+    private double abilityTimer;    // cooldown until the ability may fire again
+    private double burstDx, burstDy; // leap/charge movement burst (px/sec)
+    private double burstTime;       // seconds left on the burst
+    private double windupTime;      // charge stands still while > 0
+    private double shieldClock;     // SHIELD stance cycle position
+
+    // Side effects queued for the World to resolve after this step.
+    private double[] pendingShot;   // {aimX, aimY} of a ranged attack, or null
+    private boolean pendingSummon;
+    private double[] pendingBlinkFx; // {oldX, oldY} of a teleport, or null
+
     public Mob(int id, MobDef def, double x, double y) {
         this.id = id;
         this.def = def;
@@ -92,6 +143,7 @@ public final class Mob {
         this.health = def.maxHealth();
         this.rng = new Random(0x9E3779B9L * (id + 1) + def.key().hashCode());
         this.idleFor = 0.5 + rng.nextDouble() * 2.0;
+        this.abilityTimer = 0.5 + rng.nextDouble() * 1.5; // stagger first casts
     }
 
     public boolean dead() {
@@ -103,9 +155,29 @@ public final class Mob {
         return hurtTimer > 0;
     }
 
+    /** True while the SHIELD stance is up: damage is shrugged off. */
+    public boolean shielded() {
+        return def.ability() == MobDef.Ability.SHIELD
+                && shieldClock % (SHIELD_DOWN + SHIELD_UP) >= SHIELD_DOWN;
+    }
+
+    /** Replicated status flags (burn/chill/poison tint, shield glow). */
+    public int statusBits() {
+        int bits = 0;
+        if (burnTime > 0) bits |= STATUS_BURNING;
+        if (chillTime > 0) bits |= STATUS_CHILLED;
+        if (poisonTime > 0) bits |= STATUS_POISONED;
+        if (shielded()) bits |= STATUS_SHIELDED;
+        return bits;
+    }
+
     /** Apply damage with knockback away from (fromX). Returns true if this killed it. */
     public boolean damage(double amount, double fromX) {
         if (dead()) return false;
+        if (shielded()) {
+            hurtTimer = HURT_FLASH * 0.5; // a clank, not a wound
+            return false;
+        }
         health -= amount;
         hurtTimer = HURT_FLASH;
         if (!def.flying()) vy = -220; // knock up a touch
@@ -138,6 +210,29 @@ public final class Mob {
         }
     }
 
+    // --- pending side effects (drained by World.step) ---------------------------
+
+    /** The ranged attack queued this tick as {aimX, aimY}, or {@code null}. */
+    public double[] pollRangedShot() {
+        double[] shot = pendingShot;
+        pendingShot = null;
+        return shot;
+    }
+
+    /** Whether a SUMMON was queued this tick (World spawns the minion). */
+    public boolean pollSummon() {
+        boolean s = pendingSummon;
+        pendingSummon = false;
+        return s;
+    }
+
+    /** The old position of a teleport this tick (blink FX), or {@code null}. */
+    public double[] pollBlinkFx() {
+        double[] fx = pendingBlinkFx;
+        pendingBlinkFx = null;
+        return fx;
+    }
+
     /** Pre-projectile-awareness signature, for callers without a live world. */
     public void step(Level level, List<PlayerState> players, boolean gravityOn,
                      boolean combatOn, double dt) {
@@ -159,6 +254,17 @@ public final class Mob {
         if (attackTimer > 0) attackTimer -= dt;
         if (dodgeTimer > 0) dodgeTimer -= dt;
         if (dodgeTime > 0) dodgeTime -= dt;
+        if (abilityTimer > 0) abilityTimer -= dt;
+        if (burstTime > 0) burstTime -= dt;
+        if (windupTime > 0) windupTime -= dt;
+        if (def.ability() == MobDef.Ability.SHIELD) shieldClock += dt;
+
+        tickStatuses(dt);
+        if (dead()) return; // burn/poison finished it this tick
+
+        if (def.ability() == MobDef.Ability.REGEN && health < def.maxHealth()) {
+            health = Math.min(def.maxHealth(), health + REGEN_RATE * dt);
+        }
 
         PlayerState nearest = nearestPlayer(players);
         // Distances are edge-aware: measured centre-to-centre minus this mob's
@@ -209,6 +315,7 @@ public final class Mob {
         double pcx = nearest == null ? cx : nearest.x + ts / 2;
         double pcy = nearest == null ? cy : nearest.y + ts / 2;
         double dx = 0, dyPlanar = 0;
+        double speedFactor = chillTime > 0 ? CHILL_SPEED : 1.0;
         switch (state) {
             case WANDER -> {
                 dx = Math.signum(wanderTargetX - x) * def.speed() * 0.5;
@@ -224,12 +331,31 @@ public final class Mob {
                 if (nearest != null) {
                     dx = steer(pcx - cx) * def.speed();
                     if (planar) dyPlanar = steer(pcy - cy) * def.speed();
+                    chaseAbilities(level, nearest, dist, gravityOn, planar, ts);
                 }
             }
             case ATTACK -> {
                 if (nearest != null && attackTimer <= 0 && dist <= def.attackRange() * 1.2) {
-                    attackTimer = ATTACK_COOLDOWN;
-                    nearest.health -= def.damage();
+                    if (def.ranged()) {
+                        // Ranged species loose their projectile at the player
+                        // instead of striking — the World spawns and owns it.
+                        if (combatOn) {
+                            attackTimer = RANGED_COOLDOWN + rng.nextDouble() * 0.6;
+                            pendingShot = new double[]{pcx, pcy};
+                            facingLeft = pcx < cx;
+                        }
+                    } else {
+                        attackTimer = ATTACK_COOLDOWN;
+                        nearest.health -= def.damage();
+                        if (def.ability() == MobDef.Ability.LIFESTEAL) {
+                            health = Math.min(def.maxHealth(), health + def.damage() * 0.5);
+                        }
+                    }
+                }
+                // Summoners keep the ritual going even while pinned in melee.
+                if (def.ability() == MobDef.Ability.SUMMON && abilityTimer <= 0) {
+                    abilityTimer = SUMMON_COOLDOWN;
+                    pendingSummon = true;
                 }
             }
             case FLEE -> {
@@ -240,6 +366,19 @@ public final class Mob {
             }
             default -> { /* IDLE / DEAD: stand still */ }
         }
+
+        // A charging windup roots the mob; then the leap/charge burst
+        // overrides steering (the windup is checked first — the burst timer
+        // is pre-loaded to cover windup + dash).
+        if (windupTime > 0) {
+            dx = 0;
+            dyPlanar = 0;
+        } else if (burstTime > 0) {
+            dx = burstDx;
+            if (planar) dyPlanar = burstDy;
+        }
+        dx *= speedFactor;
+        dyPlanar *= speedFactor;
 
         // --- projectile awareness: sidestep incoming shots ---
         double size = def.size();
@@ -258,7 +397,7 @@ public final class Mob {
                 }
             }
         }
-        if (dodgeTime > 0) dx = dodgeDx * def.speed() * 1.4;
+        if (dodgeTime > 0) dx = dodgeDx * def.speed() * 1.4 * speedFactor;
 
         // --- hazard sense: don't walk into lava/acid/spikes (unless fleeing) ---
         if (dx != 0 && state != AIState.FLEE && dodgeTime <= 0
@@ -285,7 +424,7 @@ public final class Mob {
             double targetY = nearest != null && (state == AIState.CHASE || state == AIState.ATTACK)
                     ? nearest.y : y + Math.sin(stateTime * 2.5) * 12 * dt;
             double dy = Math.signum(targetY - y)
-                    * Math.min(Math.abs(targetY - y), def.speed() * 0.7 * dt);
+                    * Math.min(Math.abs(targetY - y), def.speed() * 0.7 * speedFactor * dt);
             y = PlayerPhysics.slideY(level, x, y, size, size, dy);
         } else if (inLiquid && gravityOn) {
             // Swimming: buoyancy instead of gravity. Stroke upward toward the
@@ -337,11 +476,102 @@ public final class Mob {
         y = Math.max(0, Math.min(y, level.height * (double) level.tileSize - size));
     }
 
+    /** Burn and poison tick damage; chill only slows (handled where speed is read). */
+    private void tickStatuses(double dt) {
+        if (burnTime > 0) {
+            burnTime -= dt;
+            health -= BURN_DPS * dt;
+        }
+        if (poisonTime > 0) {
+            poisonTime -= dt;
+            health -= POISON_DPS * dt;
+        }
+        if (chillTime > 0) chillTime -= dt;
+        if (health <= 0) {
+            health = 0;
+            state = AIState.DEAD;
+        }
+    }
+
+    /** Movement abilities that trigger while chasing: LEAP, CHARGE, TELEPORT. */
+    private void chaseAbilities(Level level, PlayerState target, double dist,
+                                boolean gravityOn, boolean planar, double ts) {
+        if (abilityTimer > 0) return;
+        double size = def.size();
+        double towardX = Math.signum(target.x - x);
+        switch (def.ability()) {
+            case LEAP -> {
+                boolean grounded = !gravityOn
+                        || PlayerPhysics.onGround(level, x, y, size, size);
+                if (dist > def.attackRange() * 1.3 && dist < def.detectRange() * 0.7
+                        && grounded) {
+                    abilityTimer = LEAP_COOLDOWN + rng.nextDouble();
+                    burstTime = 0.45;
+                    burstDx = towardX * def.speed() * 1.9;
+                    burstDy = planar ? Math.signum(target.y - y) * def.speed() * 1.9 : 0;
+                    if (gravityOn && !def.flying()) vy = -JUMP_VELOCITY * 1.05;
+                }
+            }
+            case CHARGE -> {
+                if (dist > def.attackRange() * 1.4 && dist < def.detectRange() * 0.9
+                        && burstTime <= 0 && windupTime <= 0) {
+                    // Wind up rooted, then dash; the dash itself is queued by
+                    // letting windup expire into the burst below.
+                    windupTime = CHARGE_WINDUP;
+                    abilityTimer = CHARGE_COOLDOWN + rng.nextDouble();
+                    burstTime = CHARGE_WINDUP + 0.55; // starts after the windup
+                    burstDx = towardX * def.speed() * 3.0;
+                    burstDy = planar ? Math.signum(target.y - y) * def.speed() * 3.0 : 0;
+                    facingLeft = towardX < 0;
+                }
+            }
+            case TELEPORT -> {
+                if (dist > def.attackRange() * 1.5) {
+                    double destX = target.x + (rng.nextBoolean() ? 1 : -1) * ts * 1.5;
+                    double destY = target.y;
+                    destX = Math.max(0, Math.min(destX,
+                            level.width * (double) level.tileSize - size));
+                    destY = Math.max(0, Math.min(destY,
+                            level.height * (double) level.tileSize - size));
+                    if (!blocked(level, destX, destY, size)) {
+                        abilityTimer = TELEPORT_COOLDOWN + rng.nextDouble();
+                        pendingBlinkFx = new double[]{x + size / 2, y + size / 2};
+                        x = destX;
+                        y = destY;
+                        vy = 0;
+                    } else {
+                        abilityTimer = 0.5; // blocked destination: retry soon
+                    }
+                }
+            }
+            case SUMMON -> {
+                abilityTimer = SUMMON_COOLDOWN;
+                pendingSummon = true;
+            }
+            default -> { /* other abilities don't trigger from CHASE */ }
+        }
+    }
+
+    /** Whether a body of {@code size} at (wx, wy) would overlap solid tiles. */
+    private static boolean blocked(Level level, double wx, double wy, double size) {
+        double ts = level.tileSize;
+        for (double ox : new double[]{1, size - 1}) {
+            for (double oy : new double[]{1, size - 1}) {
+                if (level.solidAt((int) Math.floor((wx + ox) / ts),
+                        (int) Math.floor((wy + oy) / ts))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     /** The nearest projectile flying toward this mob within awareness range. */
     private Projectile incomingThreat(List<Projectile> projectiles) {
         double cx = x + def.size() / 2, cy = y + def.size() / 2;
         for (Projectile p : projectiles) {
             if (p.dead()) continue;
+            if (p.ownerId < 0) continue; // don't dodge our own side's volleys
             double dxp = cx - p.x, dyp = cy - p.y;
             double dist = Math.hypot(dxp, dyp);
             if (dist > DODGE_RANGE || dist < 0.001) continue;
@@ -442,6 +672,8 @@ public final class Mob {
         m.put("f", facingLeft);
         m.put("h", health);
         m.put("s", state.ordinal());
+        int bits = statusBits();
+        if (bits != 0) m.put("e", bits); // absent when clean, like input flags
         return m;
     }
 }

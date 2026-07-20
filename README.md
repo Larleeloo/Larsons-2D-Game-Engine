@@ -833,6 +833,123 @@ A batch of gameplay and editor refinements layered onto the systems above:
 
 ---
 
+## The menagerie, the reliquary & the garage
+
+A content expansion across three fronts — mobs, magic items, and rideable
+vehicles — all simulated in the shared
+[`World`](src/main/java/com/larsons/engine/world/World.java), so every one of
+these behaves identically in single-player, the creative play-test, and on
+the authoritative multiplayer server (clients render replicated snapshots;
+none of it can be conjured client-side).
+
+### Mobs with jobs
+
+The roster nearly triples (~48 species), and species are no longer just stat
+rows — [`MobDef`](src/main/java/com/larsons/engine/entity/MobDef.java) gained
+`projectile` (ranged species open fire from their attack range) and an
+`ability` (a per-species trick layered onto the shared AI state machine):
+
+- **Marksmen** — *Skeleton Archer* (arrows), *Goblin Slinger* (rocks),
+  *Dark Ranger* (knives) fight at range; their shots are mob-owned
+  projectiles that never hit other mobs and hit players without any PvP rule,
+  exactly like a melee strike. Mobs also stopped dodging their own side's
+  volleys.
+- **Elemental casters** — *Fire Imp* and *Pyromancer* burn, *Ice Witch*
+  chills, *Storm Caller* chains lightning, *Venom Spitter* sickens,
+  *Banshee* wails shadow, and the *Ancient Dragon* rains fireballs.
+- **Ability specialists** — *Shadow Panther* **pounces** (LEAP), *Wild Boar*
+  and *Sand Scorpion* **charge** with a rooted windup, *Shadow Wraith* /
+  *Frost Revenant* / *Void Stalker* **blink** next to their prey (TELEPORT),
+  *Necromancer* and *Spider Queen* **summon** minions, the *Giant Slime*
+  **splits** into two slimes on death, the *Boomshroom* **detonates** on
+  death (chains of exploders resolve as a proper chain reaction), *Troll*
+  and *Treant* **regenerate**, the *Vampire* **lifesteals**, and *Stone
+  Golem* / *Royal Guard* cycle a briefly-invulnerable **shield** stance
+  (rendered as a glowing ring).
+- **Wildlife** — *Yeti*, *Harpy*, *Griffin*, *Ember Wisp*, *Plague Rat*,
+  *Turtle*, *Penguin*, *Firefly* round out the calmer corners.
+- **Essence loot** — elemental species drop their school's essence
+  (*Fire/Frost/Storm Essence*, *Venom Gland*, *Shadow Essence*, *Void
+  Shard*), the alchemy reagents the new staves are brewed from; the phoenix
+  drops its feather.
+
+Elemental **statuses** live on the mob (`burn`/`chill`/`poison` timers plus
+the shield flag), tick in its own deterministic step, and ride snapshots as
+a status bitmask — so a burning zombie glows, sheds embers, and dies of its
+burns on every client at once. Chilled mobs move at half speed; poisoned
+ones drip.
+
+### Relics & the elemental arsenal
+
+The item catalog grows elemental staves, area weapons, and a shelf of relics
+([`ItemRegistry`](src/main/java/com/larsons/engine/entity/ItemRegistry.java)):
+
+- **Elemental staves** — *Ember Wand*, *Frost Staff*, *Storm Staff* (chains
+  to a second target), *Venom Staff*, *Void Staff*; each fires its school's
+  bolt with matching impact particles (embers float, ice shards rain,
+  sparks snap, venom drips) via the styled particle system.
+- **Explosives & AoE mining** — thrown *Bomb* / *Mega Bomb* and the *Meteor
+  Staff* (a three-meteor salvo called down from the sky above your aim)
+  explode for area damage **and shatter terrain**: `ProjectileDef.breakRadius`
+  mines every block in the crater, popping drops, honouring the game type's
+  block-editing toggle, and broadcasting each broken tile as an
+  authoritative block event online. The *Harvest Staff* is the pacifist
+  version — it shatters terrain into drops and harms no one.
+- **The Warp Staff** — the completely-new one: its bolt deals a scratch, but
+  wherever it lands, *the caster follows*. Aimed teleportation as a weapon
+  slot, resolved server-side so it works (and can't be faked) online.
+- **Relic passives** — carried anywhere in the inventory, applied each tick
+  from the *server's* copy online (`Inventory.applyPassivesTo`): *Hermes
+  Boots* (+35% speed), *Gravity Amulet* (slow fall), *Aether Wings* (hold
+  jump to **fly**), *Magnet Charm* (4× pickup vacuum), *Power Gauntlet*
+  (+6 melee) — joining the Feather Charm / Sky Totem / Wings of Icarus
+  triple-to-infinite jump family, whose bonus now correctly applies on the
+  server too.
+- **Relic actives** — hold one and press `F`: the *Nova Crystal* detonates
+  an arcane ring around you (30 mana), the *Tremor Totem* quakes the ground
+  into drops (25 mana).
+- **The Phoenix Feather** — dying consumes it and revives you *in place* at
+  half health in a fountain of embers, instead of respawning. Works online:
+  the feather burns out of your server-side inventory.
+- **Scatter Bow** — fans three arrows per drawn arrow.
+
+New particle styles (`FOUNTAIN` geysers, `IMPLODE` collapsing rings) join
+the burst/ember/shard/spark/drip/ring/mote set, and every ability has wire
+FX — blinks, summons, warps, novas, tremors, chain arcs, and revives all
+broadcast as `fx` events so everyone sees the same fireworks.
+
+### Vehicles & mounts
+
+Rideables are a fourth replicated entity family
+([`VehicleDef`](src/main/java/com/larsons/engine/entity/VehicleDef.java) /
+[`Vehicle`](src/main/java/com/larsons/engine/entity/Vehicle.java) /
+[`VehicleRegistry`](src/main/java/com/larsons/engine/entity/VehicleRegistry.java)),
+obtained through the ordinary item economy: craft the item, press `F` to
+deploy it, walk up and press `E` to ride, `E` again to dismount, and a swing
+at the empty vehicle packs it back into its item so mounts are never lost.
+
+- **Ground mounts** — *Horse* (fast, real jump), *Ostrich* (faster, huge
+  jump), *Battle Boar* (rams mobs at speed for contact damage).
+- **Fliers** — *Magic Carpet*, *Broomstick*, and the *War Dragon*, which
+  breathes fireballs when its rider attacks (shots are rider-owned, so PvP
+  rules and kill credit apply normally).
+- **Boat** — floats up to the surface and skims across water, sluggish
+  ashore.
+- **Drill Machine** — the creative one: a tunneler that grinds through
+  terrain it's driven into (hold *down* to dig a shaft), popping block drops
+  and broadcasting every broken tile.
+
+While mounted, your input drives the vehicle's own deterministic physics
+(the same AABB collision players use) and you're locked to the saddle.
+Online, the server validates mounting (`mount`/`dismount` messages — near
+the vehicle, saddle free), simulates every vehicle, and replicates them in
+snapshots (`veh`); the riding client *predicts* its vehicle with the same
+step and blends toward the server state, exactly like player prediction, so
+a gallop feels instant at any ping. Levels can also declare vehicles in
+their entity lists (`{"kind":"vehicle","type":"horse",…}`).
+
+---
+
 ## Auto Battler (online, 2-10 players)
 
 A complete standalone game inside the engine, launched straight from the
@@ -1499,7 +1616,10 @@ engine.scenes().setScene("mine"); // or transitionTo for a fade
 [`MechanicsFixesTest`](src/test/java/com/larsons/engine/MechanicsFixesTest.java),
 [`AutoBattlerNetTest`](src/test/java/com/larsons/engine/autobattler/AutoBattlerNetTest.java),
 [`AutoBattlerSceneTest`](src/test/java/com/larsons/engine/AutoBattlerSceneTest.java),
-[`EngineFeatureTest`](src/test/java/com/larsons/engine/EngineFeatureTest.java))
+[`EngineFeatureTest`](src/test/java/com/larsons/engine/EngineFeatureTest.java),
+[`MobExpansionTest`](src/test/java/com/larsons/engine/MobExpansionTest.java),
+[`RelicsTest`](src/test/java/com/larsons/engine/RelicsTest.java),
+[`VehicleTest`](src/test/java/com/larsons/engine/VehicleTest.java))
 covering JSON read/write, level loading (both tile modes + round-trips),
 sprite-sheet slicing, input edge detection, game-type save/load, the
 `ConfigForm` widget's keyboard/mouse interaction (including scrolling),
@@ -1522,6 +1642,18 @@ sequencing — captions, moves with walk-state restore and facing, camera
 pans, skipping applying every remaining effect — the trigger director's
 zone/interact/level-start semantics with once-per-run and re-arming, and
 level-JSON round-trips),
+the expanded menagerie (ranged mobs whose shots hurt players but never other
+mobs, summoners, splitters, death-bursts, blinks, regen/lifesteal/shield,
+elemental burn/chill/poison/chain statuses and their wire bits, essence
+loot), relics and elemental weapons (passives flowing from inventory to
+physics — speed, slow fall, flight, magnetism, melee power — the Phoenix
+Feather revive, Nova/Tremor actives, bombs cratering terrain under the
+editing toggle, the Harvest Orb, the Warp Staff's owner-teleport, meteor
+salvos and the Scatter Bow, and recipe-catalog integrity), vehicles (item
+links, mount validation, gallop/jump physics, buoyant boats, flying
+carpets, the terrain-grinding drill, dragon fire, pack-up recovery, wire
+form — plus a full online ride: mount request, replicated gallop with the
+rider glued to the saddle, dismount),
 and full loopback multiplayer (a real server + clients: handshake, movement,
 join/leave, version rejection, shutdown — plus block edits replicating to
 every client and late joiners, painted mobs appearing in snapshots and being

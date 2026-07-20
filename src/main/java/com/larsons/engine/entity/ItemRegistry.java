@@ -77,6 +77,14 @@ public final class ItemRegistry {
         r.register(ItemDef.material("scroll", "Scroll", ItemDef.Rarity.RARE, new Color(230, 220, 190)));
         r.register(ItemDef.material("dragon_egg", "Dragon Egg", ItemDef.Rarity.MYTHIC, new Color(120, 40, 130)));
         r.register(ItemDef.material("stick", "Stick", ItemDef.Rarity.COMMON, new Color(170, 135, 85)));
+        // Elemental essences: signature loot of the elemental mobs, and the
+        // alchemy reagents the new staves are brewed from.
+        r.register(ItemDef.material("fire_essence", "Fire Essence", ItemDef.Rarity.UNCOMMON, new Color(255, 130, 50)));
+        r.register(ItemDef.material("frost_essence", "Frost Essence", ItemDef.Rarity.UNCOMMON, new Color(150, 215, 250)));
+        r.register(ItemDef.material("storm_essence", "Storm Essence", ItemDef.Rarity.RARE, new Color(255, 245, 150)));
+        r.register(ItemDef.material("venom_gland", "Venom Gland", ItemDef.Rarity.UNCOMMON, new Color(150, 200, 70)));
+        r.register(ItemDef.material("shadow_essence", "Shadow Essence", ItemDef.Rarity.RARE, new Color(110, 75, 160)));
+        r.register(ItemDef.material("void_shard", "Void Shard", ItemDef.Rarity.EPIC, new Color(120, 60, 190)));
         // Tools: matching blocks (Block.tool) mine toolPower× faster.
         r.register(ItemDef.tool("wooden_pickaxe", "Wooden Pickaxe", ItemDef.Rarity.COMMON,
                 new Color(165, 125, 75), "pickaxe", 2, 3));
@@ -107,15 +115,40 @@ public final class ItemRegistry {
         r.register(ItemDef.weapon("legendary_sword", "Legendary Sword", ItemDef.Rarity.LEGENDARY, new Color(255, 180, 60), 22));
         r.register(ItemDef.weapon("frostmourne", "Frostmourne", ItemDef.Rarity.MYTHIC, new Color(140, 220, 255), 28));
         // Ranged weapons fire ProjectileRegistry entries; bows consume arrows,
-        // staves fire freely (their rarity is the cost).
+        // staves fire freely (mana is their cost).
         r.register(ItemDef.ranged("wooden_bow", "Wooden Bow",
                 ItemDef.Rarity.COMMON, new Color(150, 110, 60), 6, "arrow", "arrow"));
         r.register(ItemDef.ranged("longbow", "Longbow",
                 ItemDef.Rarity.RARE, new Color(120, 90, 50), 12, "arrow", "arrow"));
+        // The Scatter Bow fans three arrows per draw (one arrow spent).
+        r.register(ItemDef.ranged("scatter_bow", "Scatter Bow",
+                ItemDef.Rarity.EPIC, new Color(150, 120, 90), 8, "arrow", "arrow"));
         r.register(ItemDef.ranged("arcane_staff", "Arcane Staff",
                 ItemDef.Rarity.RARE, new Color(120, 100, 220), 9, "magic_bolt", null));
         r.register(ItemDef.ranged("fire_staff", "Fire Staff",
                 ItemDef.Rarity.EPIC, new Color(230, 110, 50), 15, "fireball", null));
+        // Elemental staves: each fires its school's bolt — burns, chills,
+        // chains, sickens — with the matching impact particles.
+        r.register(ItemDef.ranged("ember_wand", "Ember Wand",
+                ItemDef.Rarity.UNCOMMON, new Color(240, 130, 60), 7, "ember_bolt", null));
+        r.register(ItemDef.ranged("frost_staff", "Frost Staff",
+                ItemDef.Rarity.EPIC, new Color(130, 205, 250), 13, "frost_orb", null));
+        r.register(ItemDef.ranged("storm_staff", "Storm Staff",
+                ItemDef.Rarity.EPIC, new Color(240, 230, 130), 11, "lightning_bolt", null));
+        r.register(ItemDef.ranged("venom_staff", "Venom Staff",
+                ItemDef.Rarity.RARE, new Color(140, 190, 70), 8, "poison_glob", null));
+        r.register(ItemDef.ranged("void_staff", "Void Staff",
+                ItemDef.Rarity.LEGENDARY, new Color(110, 55, 170), 16, "void_bolt", null));
+        // The Warp Staff: its bolt deals a scratch, but wherever it lands, the
+        // caster follows — aimed teleportation as a weapon slot.
+        r.register(ItemDef.ranged("warp_staff", "Warp Staff",
+                ItemDef.Rarity.LEGENDARY, new Color(195, 140, 255), 4, "warp_bolt", null));
+        // The Meteor Staff calls a three-meteor salvo down onto the aim point.
+        r.register(ItemDef.ranged("meteor_staff", "Meteor Staff",
+                ItemDef.Rarity.MYTHIC, new Color(255, 120, 40), 20, "meteor", null));
+        // The Harvest Staff shatters terrain into drops without hurting a fly.
+        r.register(ItemDef.ranged("harvest_staff", "Harvest Staff",
+                ItemDef.Rarity.RARE, new Color(170, 220, 110), 0, "harvest_orb", null));
         // Throwables consume themselves; physical ones land as recoverable drops.
         r.register(ItemDef.throwable("arrow", "Arrow",
                 ItemDef.Rarity.COMMON, new Color(180, 180, 170), 4, "arrow"));
@@ -123,6 +156,11 @@ public final class ItemRegistry {
                 ItemDef.Rarity.COMMON, new Color(140, 135, 130), 5, "rock"));
         r.register(ItemDef.throwable("throwing_knife", "Throwing Knife",
                 ItemDef.Rarity.UNCOMMON, new Color(190, 195, 205), 8, "knife"));
+        // Bombs: thrown explosives that hurt what's near and crater what's under.
+        r.register(ItemDef.throwable("bomb", "Bomb",
+                ItemDef.Rarity.RARE, new Color(70, 70, 78), 18, "bomb"));
+        r.register(ItemDef.throwable("mega_bomb", "Mega Bomb",
+                ItemDef.Rarity.LEGENDARY, new Color(170, 60, 60), 34, "mega_bomb"));
         // Food.
         r.register(ItemDef.food("apple", "Apple", new Color(210, 60, 50), 10));
         r.register(ItemDef.food("bread", "Bread", new Color(205, 160, 90), 15));
@@ -148,6 +186,45 @@ public final class ItemRegistry {
                 ItemDef.Rarity.EPIC, new Color(140, 190, 245), 1, 0, 0, null, null, null));
         r.register(new ItemDef("wings_of_icarus", "Wings of Icarus", ItemDef.Category.ACCESSORY,
                 ItemDef.Rarity.MYTHIC, new Color(255, 240, 180), 1, 0, 0, null, null, null));
+        // Relic passives: carried anywhere in the inventory, always on
+        // (Inventory.applyPassivesTo feeds the PlayerState fields each tick).
+        r.register(new ItemDef("hermes_boots", "Hermes Boots", ItemDef.Category.ACCESSORY,
+                ItemDef.Rarity.EPIC, new Color(240, 200, 90), 1, 0, 0, null, null, null));
+        r.register(new ItemDef("gravity_amulet", "Gravity Amulet", ItemDef.Category.ACCESSORY,
+                ItemDef.Rarity.RARE, new Color(160, 140, 230), 1, 0, 0, null, null, null));
+        r.register(new ItemDef("aether_wings", "Aether Wings", ItemDef.Category.ACCESSORY,
+                ItemDef.Rarity.MYTHIC, new Color(180, 235, 255), 1, 0, 0, null, null, null));
+        r.register(new ItemDef("magnet_charm", "Magnet Charm", ItemDef.Category.ACCESSORY,
+                ItemDef.Rarity.RARE, new Color(200, 90, 90), 1, 0, 0, null, null, null));
+        r.register(new ItemDef("power_gauntlet", "Power Gauntlet", ItemDef.Category.ACCESSORY,
+                ItemDef.Rarity.EPIC, new Color(220, 150, 70), 1, 0, 0, null, null, null));
+        // The Phoenix Feather burns up to cheat death: dying consumes it and
+        // revives you at half health in place, with a blaze of particles.
+        r.register(new ItemDef("phoenix_feather", "Phoenix Feather", ItemDef.Category.ACCESSORY,
+                ItemDef.Rarity.LEGENDARY, new Color(255, 170, 60), 4, 0, 0, null, null, null));
+        // Relic actives: hold and press [F] to unleash (mana-fuelled).
+        r.register(new ItemDef("nova_crystal", "Nova Crystal", ItemDef.Category.ACCESSORY,
+                ItemDef.Rarity.LEGENDARY, new Color(150, 220, 255), 1, 0, 0, null, null, null));
+        r.register(new ItemDef("tremor_totem", "Tremor Totem", ItemDef.Category.ACCESSORY,
+                ItemDef.Rarity.EPIC, new Color(180, 140, 90), 1, 0, 0, null, null, null));
+        // Vehicle & mount items: [F] deploys the ride in front of you; a swing
+        // at the empty vehicle packs it back into this item.
+        r.register(new ItemDef("horse_saddle", "Horse Saddle", ItemDef.Category.OTHER,
+                ItemDef.Rarity.UNCOMMON, new Color(150, 105, 65), 1, 0, 0, null, null, null));
+        r.register(new ItemDef("boar_saddle", "Boar Saddle", ItemDef.Category.OTHER,
+                ItemDef.Rarity.RARE, new Color(120, 85, 60), 1, 0, 0, null, null, null));
+        r.register(new ItemDef("ostrich_saddle", "Ostrich Saddle", ItemDef.Category.OTHER,
+                ItemDef.Rarity.RARE, new Color(200, 190, 170), 1, 0, 0, null, null, null));
+        r.register(new ItemDef("magic_carpet", "Magic Carpet", ItemDef.Category.OTHER,
+                ItemDef.Rarity.EPIC, new Color(190, 70, 100), 1, 0, 0, null, null, null));
+        r.register(new ItemDef("broomstick", "Broomstick", ItemDef.Category.OTHER,
+                ItemDef.Rarity.EPIC, new Color(140, 100, 60), 1, 0, 0, null, null, null));
+        r.register(new ItemDef("dragon_horn", "Dragon Horn", ItemDef.Category.OTHER,
+                ItemDef.Rarity.MYTHIC, new Color(90, 160, 120), 1, 0, 0, null, null, null));
+        r.register(new ItemDef("oak_boat", "Boat", ItemDef.Category.OTHER,
+                ItemDef.Rarity.UNCOMMON, new Color(160, 120, 75), 1, 0, 0, null, null, null));
+        r.register(new ItemDef("drill_kit", "Drill Kit", ItemDef.Category.OTHER,
+                ItemDef.Rarity.LEGENDARY, new Color(190, 160, 70), 1, 0, 0, null, null, null));
         return r;
     }
 
