@@ -188,6 +188,49 @@ public final class Inventory {
         return bonus;
     }
 
+    // --- relic passives: carried accessories that change how the player moves ---
+
+    /** Ground-speed multiplier: Hermes Boots make everything a sprint. */
+    public double speedFactor() {
+        return totalOf("hermes_boots") > 0 ? 1.35 : 1.0;
+    }
+
+    /** Gravity Amulet: reduced gravity and a soft terminal velocity. */
+    public boolean slowFall() {
+        return totalOf("gravity_amulet") > 0;
+    }
+
+    /** Aether Wings: hold jump to fly. */
+    public boolean canFly() {
+        return totalOf("aether_wings") > 0;
+    }
+
+    /** Magnet Charm: extra dropped-item vacuum range, in world px. */
+    public double pickupBonus() {
+        return totalOf("magnet_charm") > 0 ? 120 : 0;
+    }
+
+    /** Power Gauntlet: extra melee damage on every swing. */
+    public double meleeBonus() {
+        return totalOf("power_gauntlet") > 0 ? 6 : 0;
+    }
+
+    /**
+     * Refresh every inventory-driven passive onto a player state. Called each
+     * tick by the scenes (local prediction) and by the authoritative server
+     * from its own copy of the inventory, so movement passives — extra air
+     * jumps, speed, slow fall, flight, magnetism, melee power — behave
+     * identically offline and online.
+     */
+    public void applyPassivesTo(com.larsons.engine.sim.PlayerState s, boolean itemsEnabled) {
+        s.bonusAirJumps = itemsEnabled ? airJumpBonus() : 0;
+        s.speedFactor = itemsEnabled ? speedFactor() : 1.0;
+        s.slowFall = itemsEnabled && slowFall();
+        s.canFly = itemsEnabled && canFly();
+        s.pickupBonus = itemsEnabled ? pickupBonus() : 0;
+        s.meleeBonus = itemsEnabled ? meleeBonus() : 0;
+    }
+
     public void clear() {
         for (int i = 0; i < SIZE; i++) slots[i] = null;
     }

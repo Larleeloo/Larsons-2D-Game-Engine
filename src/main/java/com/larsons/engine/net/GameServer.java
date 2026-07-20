@@ -7,6 +7,8 @@ import com.larsons.engine.entity.ItemDef;
 import com.larsons.engine.entity.ItemStack;
 import com.larsons.engine.entity.Mob;
 import com.larsons.engine.entity.Projectile;
+import com.larsons.engine.entity.Vehicle;
+import com.larsons.engine.entity.VehicleDef;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
 import com.larsons.engine.minigame.MiniGame;
@@ -97,6 +99,16 @@ public final class GameServer {
         this.level = LevelLoader.parse(levelJson); // validate up front
         this.world = new World(level);
         this.world.populateFromLevel(profile);
+        // Simulation-owned item consumption (the Phoenix Feather's revive)
+        // spends from the dying player's server-side inventory.
+        this.world.setItemConsumer((player, key) -> {
+            Inventory inv = inventoryOf(player.id);
+            if (inv == null || inv.remove(key, 1) < 1) return false;
+            for (Connection c : connections) {
+                if (c.joined && !c.closed && c.state.id == player.id) sendInventory(c);
+            }
+            return true;
+        });
         this.minigame = MiniGame.createIfConfigured(level);
         if (minigame != null) {
             minigame.setInventories(this::inventoryOf);
@@ -293,9 +305,24 @@ public final class GameServer {
         for (Connection c : connections) {
             if (!c.joined || c.closed) continue;
             PlayerInput in = c.latestInput.get();
-            // Physics always uses the profile's perspective: a client switching
-            // its local camera view must not change how it moves on the server.
-            PlayerPhysics.step(c.state, in, level, profile, profile.perspective, dt);
+            // Relic passives (extra air jumps, speed, slow fall, flight,
+            // magnetism, melee power) come from the server-side inventory, so
+            // they can't be conjured client-side.
+            c.inventory.applyPassivesTo(c.state, profile.itemsEnabled);
+
+            // A mounted player drives the vehicle instead of walking: the same
+            // deterministic vehicle step the client predicts with. The rider
+            // is then locked to the saddle, which is what snapshots carry.
+            Vehicle riding = c.state.riding >= 0 ? world.vehicle(c.state.riding) : null;
+            if (c.state.riding >= 0 && riding == null) c.state.riding = -1; // erased
+            if (riding != null) {
+                world.driveVehicle(riding, c.state, in, profile, dt);
+            } else {
+                // Physics always uses the profile's perspective: a client
+                // switching its local camera view must not change how it
+                // moves on the server.
+                PlayerPhysics.step(c.state, in, level, profile, profile.perspective, dt);
+            }
             c.state.lastSeq = in.seq;
             // The input carries the hotbar selection, so "what is this player
             // holding" (melee damage, ranged shots, placements) stays current.
@@ -310,6 +337,11 @@ public final class GameServer {
                     || (profile.projectilesEnabled && profile.itemsEnabled);
             if (in.attack && canAct && in.seq != c.lastAttackSeq) {
                 c.lastAttackSeq = in.seq;
+                // An armed vehicle (war dragon) fires its own weapon first.
+                if (riding != null && profile.projectilesEnabled
+                        && world.vehicleShoot(riding, c.state, in.aimX, in.aimY) != null) {
+                    continue;
+                }
                 Projectile shot = null;
                 if (profile.projectilesEnabled && profile.itemsEnabled) {
                     shot = world.playerShoot(c.state, c.inventory, in.aimX, in.aimY);
@@ -319,18 +351,19 @@ public final class GameServer {
                 } else if (profile.combatEnabled) {
                     ItemDef held = profile.itemsEnabled ? c.inventory.selectedDef() : null;
                     boolean melee = held == null || held.projectile() == null;
-                    double damage = World.FIST_DAMAGE
+                    double damage = World.FIST_DAMAGE + c.state.meleeBonus
                             + (melee && held != null ? held.damage() : 0);
                     // Mini-game PvP: an enemy player in reach takes the swing;
-                    // otherwise it resolves against mobs as always.
+                    // otherwise it resolves against mobs as always — and a
+                    // whiffed swing near an empty vehicle packs it up.
                     PlayerState victim = minigame == null ? null
                             : minigame.resolveMeleeHit(c.state, joinedPlayers(),
                             in.aimX, in.aimY);
                     if (victim != null) {
                         victim.health -= damage;
                         minigame.damaged(c.state.id, victim);
-                    } else {
-                        world.playerAttack(c.state, in.aimX, in.aimY, damage);
+                    } else if (world.playerAttack(c.state, in.aimX, in.aimY, damage) == null) {
+                        world.packUpVehicle(in.aimX, in.aimY, profile.itemsEnabled);
                     }
                 }
             }
@@ -386,7 +419,10 @@ public final class GameServer {
                     double y = dblOf(msg.get("y"));
                     if ("mob".equals(kind) && profile.mobsEnabled) world.spawnMob(type, x, y);
                     if ("item".equals(kind) && profile.itemsEnabled) world.spawnItem(type, 1, x, y);
+                    if ("vehicle".equals(kind)) world.spawnVehicle(type, x, y);
                 }
+                case "mount" -> world.mount(conn.state, intOf(msg.get("id")), profile);
+                case "dismount" -> world.dismount(conn.state);
                 case "erase" -> {
                     if (profile.creativeEnabled) world.removeEntity(intOf(msg.get("id")));
                 }
@@ -443,11 +479,37 @@ public final class GameServer {
         sendInventory(conn);
     }
 
-    /** Eat/drink the item in a slot: heals and consumes server-side. */
+    /**
+     * Use the item in a slot server-side: deploy a vehicle item, fire a relic
+     * active, drink a mana potion, or eat/drink a healing consumable — the
+     * same [F] menu the offline scene resolves locally.
+     */
     private void consumeFromInventory(Connection conn, int slot) {
         ItemStack stack = conn.inventory.slot(slot);
         ItemDef def = stack == null ? null : world.itemTypes.get(stack.key);
-        if (def == null || def.heal() <= 0) return;
+        if (def == null) return;
+        // Vehicle items become the vehicle, placed at the user's feet.
+        VehicleDef vehicle = world.vehicleTypes.bySourceItem(def.key());
+        if (vehicle != null) {
+            if (conn.inventory.removeAt(slot, 1) < 1) return;
+            world.spawnVehicle(vehicle.key(),
+                    conn.state.x + (conn.state.facingLeft ? -20 : 20), conn.state.y);
+            sendInventory(conn);
+            return;
+        }
+        // Relic actives (Nova Crystal, Tremor Totem) fire without being spent.
+        if (World.relicManaCost(def.key()) != null) {
+            world.useRelic(conn.state, def.key(), profile);
+            return;
+        }
+        if ("mana_potion".equals(def.key())) {
+            if (conn.state.mana >= PlayerState.MAX_MANA) return;
+            if (conn.inventory.removeAt(slot, 1) < 1) return;
+            conn.state.mana = Math.min(PlayerState.MAX_MANA, conn.state.mana + 50);
+            sendInventory(conn);
+            return;
+        }
+        if (def.heal() <= 0) return;
         if (conn.state.health >= PlayerState.MAX_HEALTH) return;
         if (conn.inventory.removeAt(slot, 1) < 1) return;
         // Same food effects as offline play: heal, stamina, and (for rare
@@ -486,7 +548,10 @@ public final class GameServer {
         for (DroppedItem i : world.items()) items.add(i.toMap());
         List<Map<String, Object>> shots = new ArrayList<>(world.projectiles().size());
         for (Projectile p : world.projectiles()) shots.add(p.toMap());
-        broadcast(Protocol.state(tick, players, mobs, items, shots, world.timeOfDay()));
+        List<Map<String, Object>> vehicles = new ArrayList<>(world.vehicles().size());
+        for (Vehicle v : world.vehicles()) vehicles.add(v.toMap());
+        broadcast(Protocol.state(tick, players, mobs, items, shots, vehicles,
+                world.timeOfDay()));
     }
 
     private static int intOf(Object o) {
@@ -555,7 +620,8 @@ public final class GameServer {
                     switch (Protocol.type(msg)) {
                         case "join" -> handleJoin(msg);
                         case "input" -> latestInput.set(PlayerInput.fromMap(msg));
-                        case "edit", "paint", "erase", "invmove", "invdrop", "use" -> {
+                        case "edit", "paint", "erase", "invmove", "invdrop", "use",
+                             "mount", "dismount" -> {
                             // World edits and inventory ops are applied by the
                             // tick thread, which owns the level, entities, and
                             // every player's inventory.

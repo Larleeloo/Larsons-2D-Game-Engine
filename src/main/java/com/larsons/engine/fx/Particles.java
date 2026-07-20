@@ -38,7 +38,11 @@ public final class Particles {
         /** A uniform outward blast ring (explosive). */
         RING,
         /** Weightless motes that linger (radiation). */
-        MOTES
+        MOTES,
+        /** An upward geyser that falls back down (harvest, revive). */
+        FOUNTAIN,
+        /** Spawn on a ring and rush inward — collapsing space (warp, blink). */
+        IMPLODE
     }
 
     private final double[] x = new double[MAX];
@@ -115,6 +119,24 @@ public final class Particles {
                     vy[p] = Math.sin(angle) * speed - 12;
                     grav[p] = 0;
                     maxLife[p] = life[p] = 0.9 + rng.nextDouble() * 0.7;
+                    size[p] = 2f + rng.nextFloat() * 2f;
+                }
+                case FOUNTAIN -> {
+                    vx[p] = (rng.nextDouble() * 2 - 1) * 60;
+                    vy[p] = -180 - rng.nextDouble() * 160;
+                    grav[p] = 1.1;
+                    maxLife[p] = life[p] = 0.5 + rng.nextDouble() * 0.4;
+                    size[p] = 2.5f + rng.nextFloat() * 2.5f;
+                }
+                case IMPLODE -> {
+                    double ring = 22 + rng.nextDouble() * 16;
+                    x[p] = wx + Math.cos(angle) * ring;
+                    y[p] = wy + Math.sin(angle) * ring;
+                    double speed = 90 + rng.nextDouble() * 60;
+                    vx[p] = -Math.cos(angle) * speed;
+                    vy[p] = -Math.sin(angle) * speed;
+                    grav[p] = 0;
+                    maxLife[p] = life[p] = 0.25 + rng.nextDouble() * 0.15;
                     size[p] = 2f + rng.nextFloat() * 2f;
                 }
                 default -> {

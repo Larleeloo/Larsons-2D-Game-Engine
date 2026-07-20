@@ -53,6 +53,12 @@ public final class PlayerPhysics {
     // in the inventory raise PlayerState.bonusAirJumps for triple/quad/infinite.
     public static final double AIR_JUMP_FACTOR = 0.92;   // of a grounded jump
 
+    // Relic passives (see PlayerState.speedFactor / slowFall / canFly).
+    public static final double FLY_ACCEL = 2600;         // Aether Wings climb accel
+    public static final double FLY_MAX_RISE = 380;       // px/sec climbing
+    public static final double SLOW_FALL_GRAVITY = 0.45; // gravity multiplier
+    public static final double SLOW_FALL_MAX = 170;      // px/sec terminal velocity
+
     /**
      * Tolerance for "flush against a tile boundary": bodies clamp exactly
      * onto tile edges (a landing rests at precisely {@code row*ts - h}), and
@@ -80,7 +86,7 @@ public final class PlayerPhysics {
 
         boolean wantsMove = in.left || in.right;
         boolean sprinting = in.sprint && wantsMove && !inLiquid && s.stamina > 0;
-        double speed = SPEED;
+        double speed = SPEED * s.speedFactor;
         if (inLiquid) speed *= SWIM_SPEED_FACTOR;
         if (sprinting) speed *= SPRINT_FACTOR;
 
@@ -124,7 +130,16 @@ public final class PlayerPhysics {
                     s.vy = -JUMP * AIR_JUMP_FACTOR;
                     s.stamina = Math.max(0, s.stamina - JUMP_COST);
                 }
-                s.vy += GRAVITY * dt;
+                if (s.canFly && in.up) {
+                    // Aether Wings: holding up climbs instead of falling.
+                    s.vy = Math.max(s.vy - FLY_ACCEL * dt, -FLY_MAX_RISE);
+                } else if (s.slowFall && s.vy >= 0) {
+                    // Gravity Amulet: drift down under a soft terminal velocity.
+                    s.vy = Math.min(s.vy + GRAVITY * SLOW_FALL_GRAVITY * dt,
+                            SLOW_FALL_MAX);
+                } else {
+                    s.vy += GRAVITY * dt;
+                }
             }
             double dy = s.vy * dt;
             double ny = slideY(level, s.x, s.y, size, size, dy);

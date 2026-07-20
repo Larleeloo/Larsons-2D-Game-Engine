@@ -96,8 +96,15 @@ public final class RecipeRegistry {
         r.register(craft("legendary_sword", 1, of("gold_ingot", 2), of("diamond", 2), of("ruby", 1)));
         r.register(craft("wooden_bow", 1, of("stick", 3), of("rope", 1)));
         r.register(craft("longbow", 1, of("wooden_bow", 1), of("rope", 1), of("iron_ingot", 1)));
+        r.register(craft("scatter_bow", 1, of("longbow", 1), of("storm_essence", 1), of("rope", 2)));
         r.register(craft("arrow", 4, of("stick", 1), of("stone", 1)));
         r.register(craft("throwing_knife", 2, of("iron_ingot", 1), of("stick", 1)));
+        // Vehicles & mounts: craft the item, [F] deploys the ride.
+        r.register(craft("horse_saddle", 1, of("leather", 3), of("iron_ingot", 1)));
+        r.register(craft("boar_saddle", 1, of("horse_saddle", 1), of("leather", 2)));
+        r.register(craft("ostrich_saddle", 1, of("horse_saddle", 1), of("rope", 2)));
+        r.register(craft("oak_boat", 1, of("planks", 4), of("rope", 1)));
+        r.register(craft("drill_kit", 1, of("iron_ingot", 4), of("diamond", 2), of("coal", 4)));
         // Food.
         r.register(craft("bread", 1, of("tall_grass", 3)));
 
@@ -115,6 +122,27 @@ public final class RecipeRegistry {
         r.register(brew("golden_apple", 1, of("apple", 1), of("gold_ingot", 2)));
         r.register(brew("arcane_staff", 1, of("stick", 2), of("amethyst", 2), of("scroll", 1)));
         r.register(brew("fire_staff", 1, of("stick", 2), of("ruby", 2), of("coal", 4)));
+        // Elemental staves & relics: brewed from the essences their mobs drop.
+        r.register(brew("ember_wand", 1, of("stick", 1), of("fire_essence", 2)));
+        r.register(brew("frost_staff", 1, of("stick", 2), of("frost_essence", 3), of("amethyst", 1)));
+        r.register(brew("storm_staff", 1, of("stick", 2), of("storm_essence", 3), of("silver_ingot", 1)));
+        r.register(brew("venom_staff", 1, of("stick", 2), of("venom_gland", 3)));
+        r.register(brew("void_staff", 1, of("stick", 2), of("void_shard", 2), of("shadow_essence", 2)));
+        r.register(brew("warp_staff", 1, of("stick", 2), of("shadow_essence", 3), of("amethyst", 2)));
+        r.register(brew("meteor_staff", 1, of("fire_staff", 1), of("fire_essence", 4), of("dragon_egg", 1)));
+        r.register(brew("harvest_staff", 1, of("stick", 2), of("emerald", 2), of("leaves", 4)));
+        r.register(brew("bomb", 2, of("coal", 3), of("rope", 1)));
+        r.register(brew("mega_bomb", 1, of("bomb", 3), of("fire_essence", 1)));
+        r.register(brew("hermes_boots", 1, of("leather", 2), of("gold_ingot", 2), of("storm_essence", 1)));
+        r.register(brew("gravity_amulet", 1, of("amethyst", 2), of("rope", 1)));
+        r.register(brew("aether_wings", 1, of("feather_charm", 1), of("frost_essence", 2), of("diamond", 2)));
+        r.register(brew("magnet_charm", 1, of("iron_ingot", 3), of("copper", 2)));
+        r.register(brew("power_gauntlet", 1, of("leather", 2), of("iron_ingot", 3), of("ruby", 1)));
+        r.register(brew("nova_crystal", 1, of("crystal", 2), of("storm_essence", 2), of("diamond", 1)));
+        r.register(brew("tremor_totem", 1, of("stone", 4), of("emerald", 1)));
+        r.register(brew("magic_carpet", 1, of("leather", 3), of("shadow_essence", 2)));
+        r.register(brew("broomstick", 1, of("stick", 2), of("tall_grass", 4), of("shadow_essence", 1)));
+        r.register(brew("dragon_horn", 1, of("dragon_egg", 1), of("gold_ingot", 3), of("fire_essence", 3)));
         r.register(brew("glowstone", 2, of("glow_mushroom", 2), of("stone", 1)));
         r.register(brew("magic_light", 1, of("amethyst", 1), of("torch", 1)));
         r.register(brew("crystal", 2, of("diamond", 1), of("stone", 2)));

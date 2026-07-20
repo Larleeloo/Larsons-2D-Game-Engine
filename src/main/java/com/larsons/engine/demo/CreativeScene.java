@@ -1579,7 +1579,7 @@ public class CreativeScene extends AbstractScene {
         in.jump = input.isKeyJustPressed(KeyEvent.VK_W)
                 || input.isKeyJustPressed(KeyEvent.VK_UP)
                 || input.isKeyJustPressed(KeyEvent.VK_SPACE);
-        testMe.bonusAirJumps = p.itemsEnabled ? testInv.airJumpBonus() : 0;
+        testInv.applyPassivesTo(testMe, p.itemsEnabled);
         double preX = testMe.x, preY = testMe.y;
         // Play-test simulates in the level's own perspective, so a top-down
         // maze tests as a top-down maze even inside a side-scroll game type.

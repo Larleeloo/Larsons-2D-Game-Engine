@@ -38,7 +38,11 @@ import java.util.Map;
  *   // every request with an {"t":"inv","items":[...]} push):
  *   client -> server   {"t":"invmove","a":fromSlot,"b":toSlot}    (move/merge/swap)
  *   client -> server   {"t":"invdrop","i":slot,"n":count}         (drop into the world)
- *   client -> server   {"t":"use","i":slot}                       (eat food / drink potion)
+ *   client -> server   {"t":"use","i":slot}    (eat / drink / fire a relic / deploy a vehicle)
+ *
+ *   // vehicles &amp; mounts (replicated in snapshots as "veh" entries):
+ *   client -> server   {"t":"mount","id":vehicleId}   (validated: near + saddle free)
+ *   client -> server   {"t":"dismount"}
  *
  *   // projectile impact feedback (particles + sfx on every client):
  *   server -> all      {"t":"fx","k":"arrow","x":..,"y":..,"e":true|false}
@@ -120,12 +124,21 @@ public final class Protocol {
     }
 
     public static String state(long tick, List<PlayerState> players) {
-        return state(tick, players, List.of(), List.of(), List.of(), 0.25);
+        return state(tick, players, List.of(), List.of(), List.of(), List.of(), 0.25);
+    }
+
+    /** Pre-vehicle snapshot shape, kept so existing callers read the same. */
+    public static String state(long tick, List<PlayerState> players,
+                               List<Map<String, Object>> mobs,
+                               List<Map<String, Object>> items,
+                               List<Map<String, Object>> shots,
+                               double timeOfDay) {
+        return state(tick, players, mobs, items, shots, List.of(), timeOfDay);
     }
 
     /**
      * A full snapshot: players plus replicated world entities (mobs, dropped
-     * items, projectiles in flight — already in wire-map form from
+     * items, projectiles in flight, vehicles — already in wire-map form from
      * {@code Mob.toMap()} etc.) and the time of day driving the clients'
      * lighting.
      */
@@ -133,6 +146,7 @@ public final class Protocol {
                                List<Map<String, Object>> mobs,
                                List<Map<String, Object>> items,
                                List<Map<String, Object>> shots,
+                               List<Map<String, Object>> vehicles,
                                double timeOfDay) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("t", "state");
@@ -143,7 +157,23 @@ public final class Protocol {
         if (!mobs.isEmpty()) m.put("mobs", new ArrayList<Object>(mobs));
         if (!items.isEmpty()) m.put("items", new ArrayList<Object>(items));
         if (!shots.isEmpty()) m.put("shots", new ArrayList<Object>(shots));
+        if (!vehicles.isEmpty()) m.put("veh", new ArrayList<Object>(vehicles));
         m.put("time", timeOfDay);
+        return encode(m);
+    }
+
+    /** Client asks to mount the vehicle with this entity id ([E] near it). */
+    public static String mount(int vehicleId) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t", "mount");
+        m.put("id", vehicleId);
+        return encode(m);
+    }
+
+    /** Client asks to dismount whatever it is riding. */
+    public static String dismount() {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t", "dismount");
         return encode(m);
     }
 

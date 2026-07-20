@@ -22,14 +22,68 @@ import java.awt.Color;
  * @param detectRange world px within which hostiles notice a player
  * @param attackRange world px within which an attack lands
  * @param flying      ignores gravity (bat, dragon)
+ * @param projectile  {@link ProjectileDef} key this species fires at players
+ *                    in range instead of striking with melee ({@code null} =
+ *                    melee only). Ranged species pair this with a long
+ *                    {@code attackRange} so they open fire from a distance.
+ * @param ability     special behaviour layered onto the shared AI (see
+ *                    {@link Ability}); {@link Ability#NONE} for plain mobs
+ * @param abilityArg  ability parameter: the mob key SUMMON spawns / SPLIT
+ *                    breaks into, or the projectile key whose colours a
+ *                    DEATH_BURST explosion borrows; {@code null} otherwise
  */
 public record MobDef(String key, String displayName, Color body, Color accent,
                      double size, double speed, double maxHealth, double damage,
                      Temperament temperament, double detectRange,
-                     double attackRange, boolean flying) {
+                     double attackRange, boolean flying,
+                     String projectile, Ability ability, String abilityArg) {
 
     /** Ported from the side-scroller's mob registry categories. */
     public enum Temperament { HOSTILE, NEUTRAL, PASSIVE }
+
+    /**
+     * A species' unique trick, run by {@link Mob#step} / resolved by the
+     * {@link com.larsons.engine.world.World} — all simulation-side, so every
+     * ability behaves identically offline and on the authoritative server
+     * (clients just render the replicated result).
+     */
+    public enum Ability {
+        /** Plain melee/ranged AI, no extra trick. */
+        NONE,
+        /** Pounces at chased players with long arcing jumps (panther). */
+        LEAP,
+        /** Winds up, then dashes at triple speed in a straight line (boar). */
+        CHARGE,
+        /** Blinks next to a chased player instead of walking (wraith). */
+        TELEPORT,
+        /** Periodically calls in a minion of {@code abilityArg} (necromancer). */
+        SUMMON,
+        /** Death breaks it into two {@code abilityArg} children (giant slime). */
+        SPLIT,
+        /** Death detonates an area blast styled after {@code abilityArg}. */
+        DEATH_BURST,
+        /** Slowly knits wounds closed while alive (troll). */
+        REGEN,
+        /** Melee hits drink half the damage back as health (vampire). */
+        LIFESTEAL,
+        /** Cycles a briefly-invulnerable glowing guard stance (golem). */
+        SHIELD
+    }
+
+    /** Pre-ability constructor shape, kept so existing registrations read the same. */
+    public MobDef(String key, String displayName, Color body, Color accent,
+                  double size, double speed, double maxHealth, double damage,
+                  Temperament temperament, double detectRange,
+                  double attackRange, boolean flying) {
+        this(key, displayName, body, accent, size, speed, maxHealth, damage,
+                temperament, detectRange, attackRange, flying,
+                null, Ability.NONE, null);
+    }
+
+    /** This species fights at range (fires {@link #projectile} while attacking). */
+    public boolean ranged() {
+        return projectile != null;
+    }
 
     public static MobDef hostile(String key, String name, Color body, Color accent,
                                  double size, double speed, double hp, double dmg) {
@@ -47,5 +101,26 @@ public record MobDef(String key, String displayName, Color body, Color accent,
                                  double size, double speed, double hp, double dmg) {
         return new MobDef(key, name, body, accent, size, speed, hp, dmg,
                 Temperament.NEUTRAL, 180, 30, false);
+    }
+
+    /**
+     * A ranged hostile: keeps a {@code range}-px firing distance and looses
+     * {@code projectile} at players instead of swinging.
+     */
+    public static MobDef ranged(String key, String name, Color body, Color accent,
+                                double size, double speed, double hp, double dmg,
+                                String projectile, double range) {
+        return new MobDef(key, name, body, accent, size, speed, hp, dmg,
+                Temperament.HOSTILE, Math.max(260, range * 1.4), range, false,
+                projectile, Ability.NONE, null);
+    }
+
+    /** A flying ranged hostile (imps, banshees, dragons). */
+    public static MobDef flyingRanged(String key, String name, Color body, Color accent,
+                                      double size, double speed, double hp, double dmg,
+                                      String projectile, double range) {
+        return new MobDef(key, name, body, accent, size, speed, hp, dmg,
+                Temperament.HOSTILE, Math.max(260, range * 1.4), range, true,
+                projectile, Ability.NONE, null);
     }
 }

@@ -3,6 +3,7 @@ package com.larsons.engine.graphics;
 import com.larsons.engine.entity.ItemDef;
 import com.larsons.engine.entity.MobDef;
 import com.larsons.engine.entity.ProjectileDef;
+import com.larsons.engine.entity.VehicleDef;
 import com.larsons.engine.world.Block;
 import com.larsons.engine.world.Decor;
 
@@ -100,6 +101,15 @@ public final class EntitySprites {
                     g.fillRect(s / 2, s * 3 / 8, s * 2 / 5, Math.max(2, s / 10));
                     g.fillRect(s * 3 / 4, s * 3 / 8, Math.max(2, s / 12), s / 5);
                 }
+                case ACCESSORY -> { // amulet: a cord and a hanging gem
+                    g.setStroke(new BasicStroke(Math.max(2, s / 12f)));
+                    g.drawArc(s / 5, s / 8, s * 3 / 5, s * 2 / 5, 200, 140);
+                    int[] gx = {s / 2, s * 5 / 8, s / 2, s * 3 / 8};
+                    int[] gy = {s * 2 / 5, s * 3 / 5, s * 4 / 5, s * 3 / 5};
+                    g.fillPolygon(gx, gy, 4);
+                    g.setColor(new Color(255, 255, 255, 170));
+                    g.fillOval(s * 7 / 16, s / 2, s / 8, s / 8);
+                }
                 default -> { // material lump / misc
                     int[] xs = {s / 2, s * 4 / 5, s * 3 / 5, s / 4};
                     int[] ys = {s / 6, s / 2, s * 5 / 6, s * 3 / 5};
@@ -139,6 +149,62 @@ public final class EntitySprites {
                 g.fillPolygon(xs, ys, 3);
                 g.setColor(new Color(200, 70, 60));
                 g.fillRect(0, s / 3, Math.max(2, s / 8), s / 3);
+            }
+        });
+    }
+
+    /**
+     * A vehicle sprite, facing +X (scenes flip it like mobs): each movement
+     * kind gets its own silhouette — a legged mount, a winged flier over a
+     * carpet plank, a hull with a sail, a tracked drill with its bit.
+     */
+    public static BufferedImage vehicle(VehicleDef def, int size) {
+        return cached("vehicle:" + def.key() + ":" + size, size, g -> {
+            int s = size;
+            Color body = def.body(), accent = def.accent();
+            switch (def.kind()) {
+                case GROUND -> { // body on legs, neck + head forward
+                    g.setColor(body);
+                    g.fillRoundRect(s / 8, s * 2 / 5, s * 5 / 8, s * 3 / 10, s / 6, s / 6);
+                    g.fillRect(s * 5 / 8, s / 5, s / 6, s / 3);         // neck
+                    g.fillOval(s * 2 / 3, s / 10, s * 4 / 15, s / 5);   // head
+                    g.setColor(body.darker());
+                    int legW = Math.max(2, s / 10);
+                    g.fillRect(s / 5, s * 7 / 10, legW, s / 4);
+                    g.fillRect(s * 3 / 5, s * 7 / 10, legW, s / 4);
+                    g.setColor(accent);
+                    g.fillRect(s / 4, s * 2 / 5, s * 2 / 5, Math.max(2, s / 12)); // saddle
+                }
+                case FLYING -> { // a plank/carpet with upswept wings
+                    g.setColor(body);
+                    g.fillRoundRect(s / 10, s / 2, s * 4 / 5, s / 5, s / 6, s / 6);
+                    g.setColor(accent);
+                    g.fillArc(-s / 6, s / 5, s / 2, s / 2, 20, 140);
+                    g.fillArc(s * 2 / 3, s / 5, s / 2, s / 2, 20, 140);
+                    g.setColor(accent.brighter());
+                    g.fillRect(s / 5, s * 11 / 20, s * 3 / 5, Math.max(2, s / 14));
+                }
+                case BOAT -> { // hull + mast + sail
+                    g.setColor(body);
+                    int[] hx = {s / 10, s * 9 / 10, s * 7 / 10, s * 3 / 10};
+                    int[] hy = {s * 3 / 5, s * 3 / 5, s * 9 / 10, s * 9 / 10};
+                    g.fillPolygon(hx, hy, 4);
+                    g.setColor(body.darker());
+                    g.fillRect(s / 2 - Math.max(1, s / 24), s / 8, Math.max(2, s / 12), s / 2);
+                    g.setColor(accent);
+                    g.fillPolygon(new int[]{s / 2, s / 2, s * 4 / 5},
+                            new int[]{s / 8, s * 11 / 20, s * 2 / 5}, 3);
+                }
+                case DRILL -> { // tracked box with a pointed bit up front
+                    g.setColor(body);
+                    g.fillRoundRect(s / 10, s * 2 / 5, s * 3 / 5, s * 2 / 5, s / 8, s / 8);
+                    g.setColor(accent);
+                    g.fillPolygon(new int[]{s * 7 / 10, s, s * 7 / 10},
+                            new int[]{s * 2 / 5, s * 3 / 5, s * 4 / 5}, 3);
+                    g.setColor(body.darker());
+                    g.fillOval(s / 8, s * 7 / 10, s / 4, s / 4);
+                    g.fillOval(s * 2 / 5, s * 7 / 10, s / 4, s / 4);
+                }
             }
         });
     }

@@ -18,6 +18,9 @@ import com.larsons.engine.entity.MobRegistry;
 import com.larsons.engine.entity.Projectile;
 import com.larsons.engine.entity.ProjectileDef;
 import com.larsons.engine.entity.ProjectileRegistry;
+import com.larsons.engine.entity.Vehicle;
+import com.larsons.engine.entity.VehicleDef;
+import com.larsons.engine.entity.VehicleRegistry;
 import com.larsons.engine.fx.Particles;
 import com.larsons.engine.graphics.Animation;
 import com.larsons.engine.graphics.Camera;
@@ -144,6 +147,14 @@ public class PlayScene extends AbstractScene {
 
     private ParallaxBackground parallax;
     private final Particles particles = new Particles();
+    /**
+     * Online only: the locally-predicted copy of the vehicle this player is
+     * riding, stepped with the same deterministic physics the server runs and
+     * blended toward its snapshot state — the mounted twin of the player's
+     * own prediction. {@code null} while on foot (or offline, where the
+     * world's own vehicle is driven directly).
+     */
+    private Vehicle predictedVehicle;
     private double swingTime;      // seconds left on the melee swing visual
     private double prevVy;
     private double prevHealth = PlayerState.MAX_HEALTH;
@@ -183,6 +194,7 @@ public class PlayScene extends AbstractScene {
         net = ctx.session();
         remoteAnims.clear();
         particles.clear();
+        predictedVehicle = null;
         showInventory = false;
         cursorSlot = -1;
         swingTime = 0;
@@ -340,9 +352,11 @@ public class PlayScene extends AbstractScene {
         if (ruleStatusTime > 0) ruleStatusTime -= dt;
 
         // Walk into a painted door and press E: load its target level; with no
-        // door, E opens a nearby crafting/alchemy station instead
-        // (single-player only; online the server owns the level). The
-        // container panel keeps the inventory open beside it, so E still
+        // door, E opens a nearby crafting/alchemy station, and with neither,
+        // it mounts (or dismounts) a nearby vehicle. Doors and stations are
+        // single-player concerns (online the server owns the level), but
+        // mounting works everywhere — online it's a validated server request.
+        // The container panel keeps the inventory open beside it, so E still
         // closes it while the inventory shows.
         if (net == null && (!showInventory || containerPanel != null)
                 && input.isKeyJustPressed(KeyEvent.VK_E)) {
@@ -350,8 +364,29 @@ public class PlayScene extends AbstractScene {
                 craftingPanel = null;
             } else if (containerPanel != null) {
                 containerPanel.beginClose();
-            } else if (!tryDoorTravel(p)) {
-                tryOpenStation(p);
+            } else if (me.riding >= 0) {
+                world.dismount(me);
+                ctx.sfx(Sfx.CLICK);
+            } else if (!tryDoorTravel(p) && !tryOpenStation(p)) {
+                Vehicle mountable = world.mountableNear(me.x + ps() / 2, me.y + ps() / 2);
+                if (mountable != null && world.mount(me, mountable.id, p)) {
+                    ctx.sfx(Sfx.CLICK);
+                }
+            }
+        }
+        if (net != null && !showInventory && input.isKeyJustPressed(KeyEvent.VK_E)) {
+            Snapshot snap = net.client().latest();
+            if (snap != null) {
+                if (snap.vehicleRiddenBy(me.id) != null) {
+                    net.client().sendDismount();
+                    ctx.sfx(Sfx.CLICK);
+                } else {
+                    EntityView near = nearestSnapshotVehicle(snap);
+                    if (near != null) {
+                        net.client().sendMount(near.id);
+                        ctx.sfx(Sfx.CLICK);
+                    }
+                }
             }
         }
         // A mined-away chest closes its panel instantly; a finished closing
@@ -409,7 +444,9 @@ public class PlayScene extends AbstractScene {
                 || input.isKeyJustPressed(KeyEvent.VK_SPACE);
         // The server resolves attacks against what this player holds.
         in.selected = inventory.selectedIndex();
-        me.bonusAirJumps = p.itemsEnabled ? inventory.airJumpBonus() : 0;
+        // Relic passives — extra air jumps, speed, slow fall, flight,
+        // magnetism, melee power — refresh from the carried inventory.
+        inventory.applyPassivesTo(me, p.itemsEnabled);
 
         if (!showInventory && craftingPanel == null && containerPanel == null) {
             handleMouseActions(input, p, in, dt);
@@ -419,10 +456,13 @@ public class PlayScene extends AbstractScene {
 
         // Online, physics must not depend on the local camera view — the server
         // simulates with the profile's perspective, so prediction does too.
+        // A mounted player drives their vehicle instead of walking.
         Perspective simPerspective = net != null ? p.perspective : camera.getPerspective();
         prevVy = me.vy;
         double preX = me.x, preY = me.y;
-        PlayerPhysics.step(me, in, level, p, simPerspective, dt);
+        if (!stepRiding(in, p, dt)) {
+            PlayerPhysics.step(me, in, level, p, simPerspective, dt);
+        }
         if (me.vy < -1 && prevVy >= 0) {
             stats.add("jumps", 1);
             ctx.sfx(Sfx.JUMP);
@@ -440,6 +480,7 @@ public class PlayScene extends AbstractScene {
                 if (snap != null) {
                     for (EntityView s : snap.shots()) emitTrail(s.key, s.x, s.y);
                 }
+                emitStatusParticles(dt);
             }
         } else {
             // Same order as the server tick: the referee sees deaths before
@@ -458,8 +499,18 @@ public class PlayScene extends AbstractScene {
             stats.add("mobs_killed", world.pollKills());
             stats.add("deaths", world.pollDeaths());
             for (World.Impact im : world.pollImpacts()) impactFeedback(im, p);
+            // Tiles the simulation broke on its own (bomb craters, the drill,
+            // the Tremor Totem) shower shards like hand-mined blocks do.
+            for (var change : world.pollBlockChanges()) {
+                if (p.particlesEnabled && change.id() == 0) {
+                    particles.burst((change.col() + 0.5) * ts(),
+                            (change.row() + 0.5) * ts(),
+                            new Color(150, 130, 100), 5);
+                }
+            }
             if (p.particlesEnabled) {
                 for (Projectile pr : world.projectiles()) emitTrail(pr.def.key(), pr.x, pr.y);
+                emitStatusParticles(dt);
             }
             // The level's programmable stat rules run against this run's stats.
             for (StatRuleEngine.Fired fired : ruleEngine.update(stats, inventory)) {
@@ -530,8 +581,11 @@ public class PlayScene extends AbstractScene {
         return true;
     }
 
-    /** Standing near a crafting table / alchemy station / chest, E opens its panel. */
-    private void tryOpenStation(GameProfile p) {
+    /**
+     * Standing near a crafting table / alchemy station / chest, E opens its
+     * panel. Returns whether one opened (so E can fall through to mounting).
+     */
+    private boolean tryOpenStation(GameProfile p) {
         double ts = ts();
         int pc = (int) Math.floor((me.x + p.playerSize / 2.0) / ts);
         int pr = (int) Math.floor((me.y + p.playerSize / 2.0) / ts);
@@ -548,7 +602,7 @@ public class PlayScene extends AbstractScene {
                     craftingPanel = new CraftingPanel(station, RecipeRegistry.standard(),
                             world != null ? world.itemTypes : ItemRegistry.standard());
                     ctx.sfx(Sfx.CLICK);
-                    return;
+                    return true;
                 }
                 if (b.container() && p.itemsEnabled) {
                     // The chest/barrel's second inventory, stored in the level.
@@ -560,10 +614,30 @@ public class PlayScene extends AbstractScene {
                     showInventory = true;
                     cursorSlot = -1;
                     ctx.sfx(Sfx.CLICK);
-                    return;
+                    return true;
                 }
             }
         }
+        return false;
+    }
+
+    /** The nearest riderless snapshot vehicle within mounting range, or null. */
+    private EntityView nearestSnapshotVehicle(Snapshot snap) {
+        EntityView best = null;
+        double bestD = World.MOUNT_RANGE;
+        double half = ps() / 2;
+        for (EntityView v : snap.vehicles()) {
+            if (v.rider >= 0) continue;
+            VehicleDef def = VehicleRegistry.standard().get(v.key);
+            double size = def != null ? def.size() : ts();
+            double d = Math.hypot(v.x + size / 2 - (me.x + half),
+                    v.y + size / 2 - (me.y + half));
+            if (d <= bestD) {
+                bestD = d;
+                best = v;
+            }
+        }
+        return best;
     }
 
     /** Crafting overlay input: wheel scrolls it, clicking a lit recipe crafts. */
@@ -621,16 +695,34 @@ public class PlayScene extends AbstractScene {
             dropStack(inventory.selectedIndex(), 1);
         }
 
-        // F consumes the selected food/potion. Online it's a request — the
-        // server owns health and inventory, checks, heals, and pushes both back.
+        // F uses the selected item: deploy a vehicle item, fire a relic
+        // active, or consume the food/potion. Online it's a request — the
+        // server owns health, mana, the world, and the inventory, and pushes
+        // the results back.
         if (input.isKeyJustPressed(KeyEvent.VK_F)) {
             ItemDef def = inventory.selectedDef();
             boolean edible = def != null && def.heal() > 0 && me.health < PlayerState.MAX_HEALTH;
             boolean manaDrink = def != null && "mana_potion".equals(def.key())
                     && me.mana < PlayerState.MAX_MANA;
+            boolean relic = def != null && World.relicManaCost(def.key()) != null;
+            VehicleDef vehDef = def == null ? null
+                    : (world != null ? world.vehicleTypes : VehicleRegistry.standard())
+                    .bySourceItem(def.key());
             if (net != null) {
                 net.client().sendUseItem(inventory.selectedIndex());
-                if (edible) ctx.sfx(Sfx.EAT);
+                if (edible || manaDrink) ctx.sfx(Sfx.EAT);
+                else if (relic) ctx.sfx(Sfx.BOOM);
+                else if (vehDef != null) ctx.sfx(Sfx.PLACE);
+            } else if (vehDef != null) {
+                if (inventory.consumeSelected()) {
+                    world.spawnVehicle(vehDef.key(),
+                            me.x + (me.facingLeft ? -24 : 24), me.y);
+                    ruleStatus = vehDef.name() + " deployed — [E] to ride";
+                    ruleStatusTime = 3.0;
+                    ctx.sfx(Sfx.PLACE);
+                }
+            } else if (relic) {
+                if (world.useRelic(me, def.key(), p)) ctx.sfx(Sfx.BOOM);
             } else if (manaDrink && inventory.consumeSelected()) {
                 me.mana = Math.min(PlayerState.MAX_MANA, me.mana + 50);
                 ctx.sfx(Sfx.EAT);
@@ -762,7 +854,9 @@ public class PlayScene extends AbstractScene {
         }
 
         if (leftClick) {
-            if (shoots) {
+            if (p.projectilesEnabled && ridingArmedVehicle() != null) {
+                fireVehicleAt(aim[0], aim[1], in);
+            } else if (shoots) {
                 shootAt(aim[0], aim[1], in);
             } else if (net != null && p.blockEditingEnabled && inReach
                     && level.tileAt(col, row) > 0) {
@@ -837,7 +931,8 @@ public class PlayScene extends AbstractScene {
     private void swingAt(double aimX, double aimY, PlayerInput in, GameProfile p) {
         swingTime = 0.2;
         ItemDef held = p.itemsEnabled ? inventory.selectedDef() : null;
-        double damage = World.FIST_DAMAGE + (held != null ? held.damage() : 0);
+        double damage = World.FIST_DAMAGE + me.meleeBonus
+                + (held != null ? held.damage() : 0);
         if (net != null) {
             in.attackAt(aimX, aimY); // the server resolves the hit
             return;
@@ -849,6 +944,33 @@ public class PlayScene extends AbstractScene {
                 particles.burst(hit.x + hit.def.size() / 2, hit.y + hit.def.size() / 2,
                         hit.def.body(), 8);
             }
+        } else {
+            // A whiffed swing near an empty vehicle packs it back into its item.
+            Vehicle packed = world.packUpVehicle(aimX, aimY, p.itemsEnabled);
+            if (packed != null) {
+                ctx.sfx(Sfx.PICKUP);
+                ruleStatus = packed.def.name() + " packed up";
+                ruleStatusTime = 2.5;
+            }
+        }
+    }
+
+    /**
+     * Fire the ridden vehicle's armament (a war dragon's fireball). Online the
+     * shot rides the attack input — the server sees we're mounted and fires
+     * the vehicle's weapon; offline the local world does the same thing.
+     */
+    private void fireVehicleAt(double aimX, double aimY, PlayerInput in) {
+        swingTime = 0.1;
+        if (net != null) {
+            in.attackAt(aimX, aimY);
+            ctx.sfx(Sfx.SHOOT); // predicted; the server validates the cooldown
+            return;
+        }
+        Vehicle v = world.vehicle(me.riding);
+        if (v != null && world.vehicleShoot(v, me, aimX, aimY) != null) {
+            stats.add("shots_fired", 1);
+            ctx.sfx(Sfx.SHOOT);
         }
     }
 
@@ -873,20 +995,138 @@ public class PlayScene extends AbstractScene {
         }
     }
 
-    /** Particles + sound for a projectile impact (local or replicated). */
+    /**
+     * Particles + sound for a world impact (local or replicated): projectile
+     * hits styled by their element, plus the ability/relic FX keys the World
+     * emits — blinks, summons, warps, novas, tremors, chain arcs, revives.
+     */
     private void impactFeedback(World.Impact im, GameProfile p) {
+        boolean fx = p.particlesEnabled;
+        switch (im.key()) {
+            case "blink" -> {
+                if (fx) particles.burst(im.x(), im.y(), new Color(170, 140, 255), 10,
+                        Particles.Style.IMPLODE);
+                return;
+            }
+            case "warp" -> {
+                ctx.sfx(Sfx.PICKUP);
+                if (fx) {
+                    particles.burst(im.x(), im.y(), new Color(200, 150, 255), 16,
+                            Particles.Style.IMPLODE);
+                    particles.burst(im.x(), im.y(), new Color(240, 220, 255), 8,
+                            Particles.Style.MOTES);
+                }
+                return;
+            }
+            case "summon" -> {
+                if (fx) particles.burst(im.x(), im.y(), new Color(150, 230, 160), 12,
+                        Particles.Style.MOTES);
+                return;
+            }
+            case "chain" -> {
+                if (fx) particles.burst(im.x(), im.y(), new Color(255, 245, 150), 14,
+                        Particles.Style.SPARKS);
+                return;
+            }
+            case "nova" -> {
+                ctx.sfx(Sfx.BOOM);
+                if (fx) {
+                    particles.burst(im.x(), im.y(), new Color(140, 220, 255), 30,
+                            Particles.Style.RING);
+                    particles.burst(im.x(), im.y(), Color.WHITE, 10, Particles.Style.SPARKS);
+                }
+                return;
+            }
+            case "tremor" -> {
+                ctx.sfx(Sfx.BREAK);
+                if (fx) particles.burst(im.x(), im.y(), new Color(170, 140, 95), 18,
+                        Particles.Style.SHARDS);
+                return;
+            }
+            case "revive" -> {
+                ctx.sfx(Sfx.PICKUP);
+                if (fx) particles.burst(im.x(), im.y(), new Color(255, 190, 80), 24,
+                        Particles.Style.FOUNTAIN);
+                return;
+            }
+            case "mount" -> {
+                if (fx) particles.burst(im.x(), im.y(), new Color(220, 220, 230), 6);
+                return;
+            }
+            default -> { /* a projectile impact: styled below */ }
+        }
         ProjectileDef def = projectileTypes().get(im.key());
         Color color = def == null ? Color.GRAY
                 : def.glows() ? def.lightColor() : def.color();
         if (im.explosion()) {
             ctx.sfx(Sfx.BOOM);
-            if (p.particlesEnabled) {
-                particles.burst(im.x(), im.y(), color, 22);
-                particles.burst(im.x(), im.y(), new Color(255, 225, 130), 12);
+            if (fx) {
+                particles.burst(im.x(), im.y(), color, 18, Particles.Style.RING);
+                particles.burst(im.x(), im.y(), color, 12);
+                particles.burst(im.x(), im.y(), new Color(255, 225, 130), 10);
             }
         } else {
             ctx.sfx(Sfx.HIT);
-            if (p.particlesEnabled) particles.burst(im.x(), im.y(), color, 6);
+            if (fx) {
+                particles.burst(im.x(), im.y(), color, 6,
+                        def == null ? Particles.Style.BURST : elementStyle(def.element()));
+            }
+        }
+    }
+
+    /** The particle style an elemental school's impacts read as. */
+    private static Particles.Style elementStyle(ProjectileDef.Element element) {
+        return switch (element) {
+            case FIRE -> Particles.Style.EMBERS;
+            case ICE -> Particles.Style.SHARDS;
+            case LIGHTNING -> Particles.Style.SPARKS;
+            case POISON -> Particles.Style.DRIP;
+            case ARCANE -> Particles.Style.MOTES;
+            case VOID -> Particles.Style.IMPLODE;
+            case EARTH -> Particles.Style.SHARDS;
+            case NONE -> Particles.Style.BURST;
+        };
+    }
+
+    // Cadence for ambient status particles (embers off burning mobs…).
+    private double statusEmitClock;
+
+    /**
+     * Ambient particles for status-afflicted mobs: burning mobs shed embers,
+     * poisoned ones drip, chilled ones glint — sourced from the offline world
+     * or the latest snapshot's status bits, so online players see the same
+     * burning zombie the host does.
+     */
+    private void emitStatusParticles(double dt) {
+        statusEmitClock += dt;
+        if (statusEmitClock < 0.12) return;
+        statusEmitClock = 0;
+        if (net == null) {
+            for (Mob m : world.mobs()) {
+                emitStatusFor(m.statusBits(), m.x + m.def.size() / 2,
+                        m.y + m.def.size() / 2);
+            }
+        } else {
+            Snapshot snap = net.client().latest();
+            if (snap == null) return;
+            MobRegistry mobs = MobRegistry.standard();
+            for (EntityView mv : snap.mobs()) {
+                MobDef def = mobs.get(mv.key);
+                double half = def != null ? def.size() / 2 : 14;
+                emitStatusFor(mv.status, mv.x + half, mv.y + half);
+            }
+        }
+    }
+
+    private void emitStatusFor(int bits, double cx, double cy) {
+        if ((bits & Mob.STATUS_BURNING) != 0) {
+            particles.burst(cx, cy, new Color(255, 150, 60), 2, Particles.Style.EMBERS);
+        }
+        if ((bits & Mob.STATUS_POISONED) != 0) {
+            particles.burst(cx, cy, new Color(150, 210, 80), 1, Particles.Style.DRIP);
+        }
+        if ((bits & Mob.STATUS_CHILLED) != 0) {
+            particles.burst(cx, cy, new Color(190, 235, 255), 1, Particles.Style.MOTES);
         }
     }
 
@@ -928,11 +1168,71 @@ public class PlayScene extends AbstractScene {
     }
 
     /**
+     * Drive whatever this player is riding for one tick — instead of player
+     * physics. Offline the world's own vehicle is driven directly; online a
+     * predicted copy runs the same deterministic step and is blended toward
+     * the snapshot, exactly like the player's own prediction. Returns whether
+     * the player is mounted (and was moved by the vehicle).
+     */
+    private boolean stepRiding(PlayerInput in, GameProfile p, double dt) {
+        if (net == null) {
+            if (me.riding < 0 || world == null) return false;
+            Vehicle v = world.vehicle(me.riding);
+            if (v == null) {
+                me.riding = -1; // erased under us (creative delete)
+                return false;
+            }
+            world.driveVehicle(v, me, in, p, dt);
+            return true;
+        }
+        Snapshot snap = net.client().latest();
+        EntityView rv = snap == null ? null : snap.vehicleRiddenBy(me.id);
+        VehicleDef def = rv == null ? null : VehicleRegistry.standard().get(rv.key);
+        if (def == null) {
+            predictedVehicle = null;
+            return false;
+        }
+        if (predictedVehicle == null || predictedVehicle.id != rv.id) {
+            predictedVehicle = new Vehicle(rv.id, def, rv.x, rv.y);
+        }
+        predictedVehicle.riderId = me.id;
+        // Same gravity rule the server's world uses for vehicle physics.
+        boolean gravityOn = p.gravityEnabled
+                && level.perspective == Perspective.SIDE_SCROLL;
+        predictedVehicle.stepDriven(level, in, gravityOn, dt);
+        double ex = rv.x - predictedVehicle.x;
+        double ey = rv.y - predictedVehicle.y;
+        if (ex * ex + ey * ey > SNAP_DISTANCE * SNAP_DISTANCE) {
+            predictedVehicle.x = rv.x;
+            predictedVehicle.y = rv.y;
+        } else {
+            double k = Math.min(1.0, CORRECTION_PER_SEC * dt);
+            predictedVehicle.x += ex * k;
+            predictedVehicle.y += ey * k;
+        }
+        predictedVehicle.seat(me, p.playerSize);
+        return true;
+    }
+
+    /** The armed vehicle under this player, or {@code null} (unarmed / on foot). */
+    private VehicleDef ridingArmedVehicle() {
+        if (net == null) {
+            if (me.riding < 0 || world == null) return null;
+            Vehicle v = world.vehicle(me.riding);
+            return v != null && v.def.projectile() != null ? v.def : null;
+        }
+        return predictedVehicle != null && predictedVehicle.def.projectile() != null
+                ? predictedVehicle.def : null;
+    }
+
+    /**
      * Blend the predicted local player toward the server's authoritative state.
      * Small errors (network jitter, sampling differences) are smoothed away;
-     * large ones (teleport, heavy lag) snap.
+     * large ones (teleport, heavy lag) snap. While mounted, the vehicle's own
+     * prediction blend does this job instead.
      */
     private void reconcile(double dt) {
+        if (predictedVehicle != null) return;
         Snapshot snap = net.client().latest();
         if (snap == null) return;
         PlayerState server = snap.player(me.id);
@@ -1009,6 +1309,7 @@ public class PlayScene extends AbstractScene {
         SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), true, animClock);
         if (p.particlesEnabled) particles.render(g, camera);
         if (net == null) drawDoorHint(g, p);
+        drawVehicleHint(g, p);
         if (p.hudVisible) drawHud(g);
         if (mgView != null) MiniGameHud.drawHud(g, viewportWidth, viewportHeight, mgView, me.id);
         if (p.itemsEnabled) drawHotbar(g);
@@ -1478,6 +1779,44 @@ public class PlayScene extends AbstractScene {
         g.drawString(text, x, y);
     }
 
+    /** "[E] Ride …" / "[E] Dismount" prompt near vehicles, above the door hint. */
+    private void drawVehicleHint(Graphics2D g, GameProfile p) {
+        String text = null;
+        if (net == null) {
+            if (world == null) return;
+            if (me.riding >= 0) {
+                Vehicle v = world.vehicle(me.riding);
+                if (v != null) {
+                    text = "[E] Dismount " + v.def.name()
+                            + (v.def.projectile() != null ? " · click fires" : "");
+                }
+            } else {
+                Vehicle near = world.mountableNear(me.x + ps() / 2, me.y + ps() / 2);
+                if (near != null) text = "[E] Ride " + near.def.name();
+            }
+        } else {
+            Snapshot snap = net.client().latest();
+            if (snap == null) return;
+            if (predictedVehicle != null) {
+                text = "[E] Dismount " + predictedVehicle.def.name()
+                        + (predictedVehicle.def.projectile() != null ? " · click fires" : "");
+            } else {
+                EntityView near = nearestSnapshotVehicle(snap);
+                VehicleDef def = near == null ? null
+                        : VehicleRegistry.standard().get(near.key);
+                if (def != null) text = "[E] Ride " + def.name();
+            }
+        }
+        if (text == null) return;
+        g.setFont(HUD_FONT);
+        int tw = g.getFontMetrics().stringWidth(text);
+        int x = (viewportWidth - tw) / 2, y = viewportHeight - 116;
+        g.setColor(new Color(0, 0, 0, 170));
+        g.fillRoundRect(x - 10, y - 16, tw + 20, 24, 8, 8);
+        g.setColor(new Color(170, 225, 255));
+        g.drawString(text, x, y);
+    }
+
     private void drawGrid(Graphics2D g) {
         int ts = (int) ts();
         int[] b = visibleTileBounds();
@@ -1494,15 +1833,18 @@ public class PlayScene extends AbstractScene {
         }
     }
 
-    /** Mobs + dropped items + projectiles: the offline world's, or the server snapshot's. */
+    /** Mobs + items + projectiles + vehicles: the offline world's, or the snapshot's. */
     private void drawWorldEntities(Graphics2D g, GameProfile p) {
         if (net == null) {
+            for (Vehicle v : world.vehicles()) {
+                drawVehicleSprite(g, v.def, v.x, v.y, v.facingLeft);
+            }
             for (DroppedItem item : world.items()) {
                 drawItemSprite(g, item.key, item.x, item.y, item.count);
             }
             for (Mob m : world.mobs()) {
                 drawMobSprite(g, m.def, m.x, m.y, m.facingLeft, m.health, m.hurting(),
-                        stateKeyFor(m.state.ordinal(), m.hurting()));
+                        stateKeyFor(m.state.ordinal(), m.hurting()), m.statusBits());
             }
             for (Projectile pr : world.projectiles()) {
                 drawProjectileSprite(g, pr.def.key(), pr.x, pr.y, pr.vx, pr.vy);
@@ -1510,6 +1852,18 @@ public class PlayScene extends AbstractScene {
         } else {
             Snapshot snap = net.client().latest();
             if (snap == null) return;
+            VehicleRegistry vehicles = VehicleRegistry.standard();
+            for (EntityView v : snap.vehicles()) {
+                // The vehicle we're riding renders from our own prediction so
+                // it never lags behind the player glued to its saddle.
+                if (predictedVehicle != null && v.id == predictedVehicle.id) continue;
+                VehicleDef def = vehicles.get(v.key);
+                if (def != null) drawVehicleSprite(g, def, v.x, v.y, v.facingLeft);
+            }
+            if (predictedVehicle != null) {
+                drawVehicleSprite(g, predictedVehicle.def, predictedVehicle.x,
+                        predictedVehicle.y, predictedVehicle.facingLeft);
+            }
             for (EntityView item : snap.items()) {
                 drawItemSprite(g, item.key, item.x, item.y, item.count);
             }
@@ -1518,12 +1872,28 @@ public class PlayScene extends AbstractScene {
                 MobDef def = mobs.get(mv.key);
                 if (def != null) {
                     drawMobSprite(g, def, mv.x, mv.y, mv.facingLeft, mv.health, false,
-                            stateKeyFor(mv.aiState, false));
+                            stateKeyFor(mv.aiState, false), mv.status);
                 }
             }
             for (EntityView s : snap.shots()) {
                 drawProjectileSprite(g, s.key, s.x, s.y, s.vx, s.vy);
             }
+        }
+    }
+
+    /** A vehicle, flipped to its facing like mobs are. */
+    private void drawVehicleSprite(Graphics2D g, VehicleDef def, double x, double y,
+                                   boolean facingLeft) {
+        BufferedImage img = Skins.frame("vehicle/" + def.key(), animClock);
+        if (img == null) img = EntitySprites.vehicle(def, 48);
+        int w = (int) Math.round(def.size() * camera.zoom);
+        camera.worldToScreen(x + def.size() / 2, y + def.size(), corner);
+        int dx = corner[0] - w / 2;
+        int dy = corner[1] - w;
+        if (facingLeft) {
+            g.drawImage(img, dx + w, dy, -w, w, null);
+        } else {
+            g.drawImage(img, dx, dy, w, w, null);
         }
     }
 
@@ -1554,7 +1924,7 @@ public class PlayScene extends AbstractScene {
 
     private void drawMobSprite(Graphics2D g, MobDef def, double x, double y,
                                boolean facingLeft, double health, boolean hurt,
-                               String state) {
+                               String state, int statusBits) {
         BufferedImage img = Skins.frame("mob/" + def.key() + "/" + state, animClock);
         if (img == null && !"idle".equals(state)) {
             img = Skins.frame("mob/" + def.key() + "/idle", animClock);
@@ -1572,6 +1942,24 @@ public class PlayScene extends AbstractScene {
         if (hurt) {
             g.setColor(new Color(255, 60, 60, 90));
             g.fillRect(dx, dy, w, w);
+        }
+        // Elemental status tints (replicated bits, so online matches offline).
+        if ((statusBits & Mob.STATUS_BURNING) != 0) {
+            g.setColor(new Color(255, 130, 40, 70));
+            g.fillRect(dx, dy, w, w);
+        }
+        if ((statusBits & Mob.STATUS_CHILLED) != 0) {
+            g.setColor(new Color(120, 200, 255, 80));
+            g.fillRect(dx, dy, w, w);
+        }
+        if ((statusBits & Mob.STATUS_POISONED) != 0) {
+            g.setColor(new Color(120, 210, 80, 65));
+            g.fillRect(dx, dy, w, w);
+        }
+        if ((statusBits & Mob.STATUS_SHIELDED) != 0) {
+            g.setColor(new Color(120, 230, 255, 180));
+            g.setStroke(new BasicStroke(2f));
+            g.drawOval(dx - 3, dy - 3, w + 6, w + 6);
         }
         if (health < def.maxHealth() - 0.01) {
             int bw = Math.max(14, w);
