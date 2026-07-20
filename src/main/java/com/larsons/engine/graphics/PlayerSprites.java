@@ -1,9 +1,15 @@
 package com.larsons.engine.graphics;
 
+import com.larsons.engine.config.GameProfile;
+import com.larsons.engine.level.Level;
+import com.larsons.engine.sim.PlayerPhysics;
+import com.larsons.engine.sim.PlayerState;
+
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.util.List;
 
 /**
  * The player character's sprite, shared by every place a player renders —
@@ -11,15 +17,28 @@ import java.awt.image.BufferedImage;
  * players online — so the character looks identical everywhere.
  *
  * <p>The default look is the procedural 4-frame walk sheet (body, head,
- * alternating legs). Like blocks/mobs/items, the player is reskinnable via
- * the {@link Skins} system under texture key {@value #SKIN_KEY}: assign a
- * sprite sheet (creative mode's Tools &rarr; Player Skin…) and
- * {@link #frame} returns its frames instead of the procedural art.
+ * alternating legs). Like mobs, the player is reskinnable <em>per action
+ * state</em> via the {@link Skins} system: creative mode's Tools &rarr;
+ * Player Skin… assigns one sprite sheet (with its own frame size, count, and
+ * fps) to each of {@link #ACTION_STATES} under texture keys
+ * {@code player/<state>}. {@link #frame} resolves the state playing right
+ * now, falling back through related states (run&rarr;walk, fall&rarr;jump,
+ * swim&rarr;walk, everything&rarr;idle) so one assigned sheet is enough to
+ * reskin the whole character, then to the legacy single {@value #SKIN_KEY}
+ * key, then to the procedural art.
  */
 public final class PlayerSprites {
 
-    /** {@link Skins} texture key of the player-character override. */
+    /** Legacy single-sheet skin key (still honoured as the last fallback). */
     public static final String SKIN_KEY = "player";
+
+    /**
+     * The player's skinnable action states, in the order the Player Skin…
+     * dialog cycles them: standing still, walking, sprinting, rising in a
+     * jump, falling, and swimming in a liquid.
+     */
+    public static final List<String> ACTION_STATES =
+            List.of("idle", "walk", "run", "jump", "fall", "swim");
 
     /** The default (unskinned) body colour of the local player. */
     public static final Color DEFAULT_BODY = new Color(70, 130, 220);
@@ -29,16 +48,75 @@ public final class PlayerSprites {
 
     private PlayerSprites() {}
 
+    /** The {@link Skins} texture key of one action state's sheet. */
+    public static String stateKey(String state) {
+        return SKIN_KEY + "/" + state;
+    }
+
     /**
-     * The frame to draw right now: the assigned player skin's frame at
-     * {@code walkSeconds} when one is installed, else the procedural walk
-     * animation's current frame. {@code walkSeconds} should only advance
-     * while the player moves, so both art styles stand still when idle.
+     * Classify what the player is doing right now into one of
+     * {@link #ACTION_STATES}: swimming beats everything, airborne splits into
+     * jump (rising) / fall (sinking), and on the ground it's run / walk /
+     * idle. Top-down and gravity-free games never report jump or fall.
      */
-    public static BufferedImage frame(Animation walkAnim, double walkSeconds) {
-        BufferedImage skin = Skins.frame(SKIN_KEY, walkSeconds);
-        if (skin != null) return skin;
+    public static String actionState(PlayerState s, Level level, GameProfile profile,
+                                     Perspective perspective, boolean sprintHeld) {
+        double size = profile.playerSize;
+        double ts = level.tileSize;
+        boolean inLiquid = level.liquidAt(
+                (int) Math.floor((s.x + size / 2.0) / ts),
+                (int) Math.floor((s.y + size / 2.0) / ts)) != null;
+        boolean sideScroll = perspective == Perspective.SIDE_SCROLL && profile.gravityEnabled;
+        boolean grounded = !sideScroll
+                || PlayerPhysics.onGround(level, s.x, s.y, size, size);
+        return actionState(grounded, inLiquid, s.moving, sprintHeld && s.moving, s.vy);
+    }
+
+    /** {@link #actionState(PlayerState, Level, GameProfile, Perspective, boolean)}, from raw facts. */
+    public static String actionState(boolean grounded, boolean inLiquid, boolean moving,
+                                     boolean sprinting, double vy) {
+        if (inLiquid) return "swim";
+        if (!grounded) return vy < 0 ? "jump" : "fall";
+        if (!moving) return "idle";
+        return sprinting ? "run" : "walk";
+    }
+
+    /**
+     * The frame to draw right now for {@code state}, at {@code stateSeconds}
+     * into that state (reset the clock when the state changes so every
+     * animation starts at its first frame).
+     *
+     * <p>Resolution order: the state's own {@code player/<state>} sheet, its
+     * nearest assigned relatives (run&rarr;walk, fall&rarr;jump,
+     * swim&rarr;walk), the {@code player/idle} sheet, the legacy single
+     * {@code player} sheet, and finally the procedural walk animation. When
+     * an <em>idle</em> player borrows a moving state's sheet (or the legacy
+     * one), it freezes on frame 0 instead of walking in place.
+     */
+    public static BufferedImage frame(String state, Animation walkAnim, double stateSeconds) {
+        for (String candidate : fallbackChain(state)) {
+            double t = "idle".equals(state) && !"idle".equals(candidate) ? 0 : stateSeconds;
+            BufferedImage img = Skins.frame(stateKey(candidate), t);
+            if (img != null) return img;
+        }
+        BufferedImage legacy = Skins.frame(SKIN_KEY,
+                "idle".equals(state) ? 0 : stateSeconds);
+        if (legacy != null) return legacy;
         return walkAnim != null ? walkAnim.current() : null;
+    }
+
+    /** The state keys tried for {@code state}, most specific first. */
+    private static String[] fallbackChain(String state) {
+        return switch (state == null ? "" : state) {
+            case "run" -> new String[]{"run", "walk", "idle"};
+            case "jump" -> new String[]{"jump", "idle", "walk"};
+            case "fall" -> new String[]{"fall", "jump", "idle", "walk"};
+            case "swim" -> new String[]{"swim", "walk", "idle"};
+            case "walk" -> new String[]{"walk", "idle"};
+            // Idle borrows the walk sheet when it's all there is — frozen on
+            // frame 0 by frame()'s idle rule, so nobody walks in place.
+            default -> new String[]{"idle", "walk"};
+        };
     }
 
     /** A looping walk animation over {@link #sheet}, at {@link #WALK_FPS}. */

@@ -146,7 +146,10 @@ import java.util.Map;
  *
  * <p><b>Textures:</b> right-click any palette icon to assign a sprite sheet
  * to that block/item/mob/decoration (per animation state for mobs) via the
- * {@link Skins} system; assignments persist in {@code skins.json}.
+ * {@link Skins} system; assignments persist in {@code skins.json}. The Tools
+ * palette's Player Skin… entry does the same for the player character, with
+ * one animation per action state (idle/walk/run/jump/fall/swim) played back
+ * in play-test and play.
  *
  * <p><b>Generate:</b> the Tools palette's Generate button builds a large
  * Perlin-noise level — Minecraft-style terrain/caves/ores/liquids fused with
@@ -343,9 +346,12 @@ public class CreativeScene extends AbstractScene {
     private CraftingPanel craftingPanel; // non-null while a station UI is open
     private double prevTestVy;
     // The exact same walk sprite the play scene uses, so the play-test
-    // character is identical to the one "load level" play loads.
+    // character is identical to the one "load level" play loads. The action
+    // state (idle/walk/run/jump/fall/swim) picks which skin animation plays;
+    // its clock resets on every state change.
     private Animation testWalkAnim;
-    private double testWalkClock; // advances only while moving (drives skins)
+    private String testAnimState = "idle";
+    private double testAnimClock;
 
     public CreativeScene(GameContext ctx) {
         this.ctx = ctx;
@@ -1376,6 +1382,10 @@ public class CreativeScene extends AbstractScene {
             setStatus("No texture override for " + e.name);
             return;
         }
+        if ("playerskin".equals(e.kind)) {
+            openPlayerSkinDialog(); // per-action-state, with legacy migration
+            return;
+        }
         texEntry = e;
         texStates = e.kind.equals("mob")
                 ? List.of("idle", "walk", "attack", "hurt") : List.of("default");
@@ -1393,13 +1403,26 @@ public class CreativeScene extends AbstractScene {
 
     /**
      * Tools &rarr; Player Skin… (click or right-click): the texture-override
-     * dialog aimed at the player character. The assigned sheet renders the
-     * player everywhere — creative play-test and "load level" play alike —
-     * and persists in {@code skins.json} like any other texture.
+     * dialog aimed at the player character, one sheet per <em>action
+     * state</em> (idle/walk/run/jump/fall/swim — cycle the Action state row,
+     * like mobs). Unassigned states borrow their nearest assigned relative
+     * (run→walk, fall→jump, everything→idle), so a single idle sheet already
+     * reskins the whole character. Assignments render the player everywhere
+     * — creative play-test and "load level" play alike — and persist in
+     * {@code skins.json} like any other texture.
      */
     private void openPlayerSkinDialog() {
+        // A pre-action-state skins.json may carry the old single "player"
+        // sheet; fold it into the idle state (every state falls back there).
+        SkinDef legacy = Skins.get(PlayerSprites.SKIN_KEY);
+        if (legacy != null && Skins.get(PlayerSprites.stateKey("idle")) == null) {
+            Skins.put(new SkinDef(PlayerSprites.stateKey("idle"), legacy.sheet,
+                    legacy.frameWidth, legacy.frameHeight, legacy.frameCount, legacy.fps));
+            Skins.remove(PlayerSprites.SKIN_KEY);
+            persistSkins();
+        }
         texEntry = new Entry("playerskin", "playerskin", "Player Skin", playerSkinIcon());
-        texStates = List.of("default");
+        texStates = PlayerSprites.ACTION_STATES;
         texStateIndex = 0;
         loadTextureFields();
         openDialog(Dialog.TEXTURE);
@@ -1476,7 +1499,8 @@ public class CreativeScene extends AbstractScene {
         prevTestVy = 0;
         testWalkAnim = PlayerSprites.walkAnimation(profile().playerSize,
                 PlayerSprites.DEFAULT_BODY);
-        testWalkClock = 0;
+        testAnimState = "idle";
+        testAnimClock = 0;
     }
 
     private void bindTestPickups() {
@@ -1617,7 +1641,16 @@ public class CreativeScene extends AbstractScene {
         if (prevTestVy >= 0 && testMe.vy < 0) testStats.add("jumps", 1);
         prevTestVy = testMe.vy;
         testWalkAnim.update(testMe.moving ? dt : 0);
-        if (testMe.moving) testWalkClock += dt;
+        // Play-test classifies the action in the level's own perspective,
+        // exactly like the play scene, so the same skin animations play.
+        String state = PlayerSprites.actionState(testMe, level, p,
+                level.perspective, in.sprint);
+        if (!state.equals(testAnimState)) {
+            testAnimState = state;
+            testAnimClock = 0;
+        } else {
+            testAnimClock += dt;
+        }
 
         testWorld.step(dt, List.of(testMe), p);
         testStats.add("mobs_killed", testWorld.pollKills());
@@ -2423,7 +2456,7 @@ public class CreativeScene extends AbstractScene {
             case "item" -> "item/" + texEntry.key;
             case "decor" -> "decor/" + texEntry.key;
             case "surface" -> "surface/" + texEntry.key;
-            case "playerskin" -> PlayerSprites.SKIN_KEY;
+            case "playerskin" -> PlayerSprites.stateKey(state);
             default -> "block/" + texEntry.key;
         };
     }
@@ -4001,7 +4034,7 @@ public class CreativeScene extends AbstractScene {
         if (testWalkAnim == null || testWalkAnim.frameCount() == 0) {
             testWalkAnim = PlayerSprites.walkAnimation((int) size, PlayerSprites.DEFAULT_BODY);
         }
-        BufferedImage frame = PlayerSprites.frame(testWalkAnim, testWalkClock);
+        BufferedImage frame = PlayerSprites.frame(testAnimState, testWalkAnim, testAnimClock);
         camera.worldToScreen(testMe.x + size / 2.0, testMe.y + size, pcorner);
         int w = (int) Math.round(size * camera.zoom);
         int h = w;
@@ -4382,8 +4415,9 @@ public class CreativeScene extends AbstractScene {
                         + " players across these.";
             }
             case "playerskin" -> {
-                return "Customize the player character: assign any sprite sheet as"
-                        + " its skin, used in play and play-test alike.";
+                return "Customize the player character: assign a sprite-sheet"
+                        + " animation to each action state (idle, walk, run, jump,"
+                        + " fall, swim), used in play and play-test alike.";
             }
             case "eraser" -> {
                 return "Removes what you click — entities first, then surface"
@@ -4770,7 +4804,7 @@ public class CreativeScene extends AbstractScene {
     private static BufferedImage playerSkinIcon() {
         BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
-        BufferedImage frame = PlayerSprites.frame(
+        BufferedImage frame = PlayerSprites.frame("idle",
                 PlayerSprites.walkAnimation(40, PlayerSprites.DEFAULT_BODY), 0);
         if (frame != null) g.drawImage(frame, 0, 0, 40, 40, null);
         g.dispose();
