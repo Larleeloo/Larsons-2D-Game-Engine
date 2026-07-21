@@ -7,6 +7,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -112,5 +113,30 @@ public final class LevelStore {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+    }
+
+    /**
+     * Delete this game type's whole levels folder — every level plus the
+     * {@code doors.json} / {@code custom.json} that live beside them — used when
+     * a game type itself is deleted. Returns whether a folder existed and was
+     * removed (false when there was nothing there, so calling it twice is safe).
+     */
+    public boolean deleteGameTypeFolder() {
+        Path dir = directory();
+        if (!Files.isDirectory(dir)) return false;
+        try (Stream<Path> walk = Files.walk(dir)) {
+            // Reverse (deepest-first) order so children are removed before the
+            // directories that contain them.
+            walk.sorted(Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    Files.delete(p);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            });
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return true;
     }
 }

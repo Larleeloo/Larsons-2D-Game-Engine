@@ -13,6 +13,7 @@ import com.larsons.engine.ui.MenuTheme;
 
 import java.awt.Color;
 import java.awt.Font;
+import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.event.KeyEvent;
 import java.io.IOException;
@@ -42,12 +43,19 @@ public class MainMenuScene extends AbstractScene {
     private ConfigForm exportForm;
     private boolean exportFinalized;
 
+    // Inline "delete game type" confirmation — destructive, so it is guarded by
+    // an explicit warning and a second, deliberate choice (see startDelete).
+    private boolean deleting;
+    private Menu deleteMenu;
+    private int deleteLevelCount;
+
     public MainMenuScene(GameContext ctx) { this.ctx = ctx; }
 
     @Override
     public void onEnter() {
         renaming = false;
         exporting = false;
+        deleting = false;
         status = "";
         buildMenu();
     }
@@ -71,7 +79,10 @@ public class MainMenuScene extends AbstractScene {
                     .add("Rename Game Type", this::startRename)
                     .add("Export Game Type (.larsonsengine)", this::startExport);
         }
-        menu.add("Change Game Type", () -> scenes.transitionTo("startup"))
+        // Deleting is library management (removing a type you no longer want),
+        // not content editing, so it stays available even for finalized types.
+        menu.add("Delete Game Type", this::startDelete)
+                .add("Change Game Type", () -> scenes.transitionTo("startup"))
                 .add("Quit", () -> System.exit(0));
     }
 
@@ -169,6 +180,44 @@ public class MainMenuScene extends AbstractScene {
         buildMenu();
     }
 
+    /**
+     * Open the delete confirmation for the active game type. "Cancel" is the
+     * first (and therefore default-selected) choice, so a stray Enter backs out
+     * instead of deleting; removing the type is the deliberate second choice.
+     * The number of levels about to be lost is captured up front for the warning.
+     */
+    private void startDelete() {
+        GameProfile p = ctx.profile();
+        status = "";
+        deleting = true;
+        deleteLevelCount = new LevelStore(p.name).list().size();
+        deleteMenu = new Menu("Delete \"" + p.name + "\"?")
+                .subtitle("This permanently removes the game type — it cannot be undone")
+                .theme(MenuTheme.dark())
+                .add("Cancel — keep this game type", () -> deleting = false)
+                .add("Delete permanently", this::applyDelete);
+    }
+
+    /**
+     * Permanently remove the active game type: its whole levels folder (levels,
+     * doors, and custom content) and then its profile JSON. Afterwards there is
+     * no active type to return to, so drop back to the startup picker where a
+     * different type can be chosen or a new one created.
+     */
+    private void applyDelete() {
+        GameProfile p = ctx.profile();
+        deleting = false;
+        try {
+            new LevelStore(p.name).deleteGameTypeFolder(); // levels + doors + custom content
+            ctx.store().delete(p.name);                    // the gametypes/<name>.json profile
+        } catch (RuntimeException e) {
+            status = "Delete failed: " + e.getMessage();
+            buildMenu();
+            return;
+        }
+        scenes.transitionTo("startup");
+    }
+
     @Override
     public void update(double dt, InputManager input) {
         if (renaming) {
@@ -183,6 +232,12 @@ public class MainMenuScene extends AbstractScene {
                 return;
             }
             exportForm.update(dt, input);
+        } else if (deleting) {
+            if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+                deleting = false; // Esc backs out of the destructive confirmation
+                return;
+            }
+            deleteMenu.update(dt, input);
         } else {
             menu.update(dt, input);
         }
@@ -210,6 +265,25 @@ public class MainMenuScene extends AbstractScene {
                     24, viewportHeight - 24);
             return;
         }
+        if (deleting) {
+            g.setColor(new Color(28, 16, 16));
+            g.fillRect(0, 0, viewportWidth, viewportHeight);
+            deleteMenu.render(g, viewportWidth, viewportHeight);
+            // Spell out exactly what will be lost, in a warning colour, in the
+            // gap between the confirmation's subtitle and its choices.
+            g.setFont(new Font("SansSerif", Font.BOLD, 16));
+            g.setColor(new Color(235, 120, 120));
+            int cx = viewportWidth / 2;
+            int wy = viewportHeight / 4 + 96;
+            String levels = deleteLevelCount == 1 ? "1 level" : deleteLevelCount + " levels";
+            drawCentered(g, "Deletes this game type and all " + levels + " inside it.", cx, wy);
+            drawCentered(g, "Its doors and custom content are removed too.", cx, wy + 24);
+            g.setColor(new Color(120, 120, 140));
+            g.setFont(new Font("SansSerif", Font.PLAIN, 14));
+            g.drawString("Choose \"Delete permanently\" to confirm · Esc to cancel",
+                    24, viewportHeight - 24);
+            return;
+        }
         menu.render(g, viewportWidth, viewportHeight);
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         if (!status.isEmpty()) {
@@ -219,5 +293,10 @@ public class MainMenuScene extends AbstractScene {
         g.setColor(new Color(120, 120, 140));
         g.drawString("Arrow keys / mouse to navigate, Enter to select",
                 24, viewportHeight - 24);
+    }
+
+    private static void drawCentered(Graphics2D g, String s, int cx, int cy) {
+        FontMetrics fm = g.getFontMetrics();
+        g.drawString(s, cx - fm.stringWidth(s) / 2, cy);
     }
 }

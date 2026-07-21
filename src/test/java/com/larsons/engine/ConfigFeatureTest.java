@@ -4,6 +4,7 @@ import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.config.GameTypeStore;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.level.LevelStore;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.util.Json;
 import org.junit.jupiter.api.BeforeAll;
@@ -18,6 +19,7 @@ import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseWheelEvent;
 import java.awt.image.BufferedImage;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashMap;
@@ -91,6 +93,33 @@ class ConfigFeatureTest {
         assertTrue(Files.exists(dir.resolve("cool_game.json")), "filename should be sanitized");
         assertEquals(1, store.listProfiles().size());
         assertEquals(90, store.load("Cool Game!").maxFps);
+    }
+
+    @Test
+    void deleteGameTypeRemovesProfileAndLevels(@TempDir Path dir) throws IOException {
+        // A game type is a profile file plus a levels folder holding levels,
+        // doors, and custom content. Deleting the type must remove both — this
+        // is what MainMenuScene's "Delete Game Type" confirmation carries out.
+        GameTypeStore store = new GameTypeStore(dir.resolve("gametypes").toString());
+        store.save(new GameProfile("My Game"));
+        assertTrue(store.exists("My Game"));
+
+        LevelStore levels = new LevelStore(dir.resolve("levels").toString(), "My Game");
+        Files.createDirectories(levels.directory());
+        Files.writeString(levels.directory().resolve("level1.json"), "{}");
+        Files.writeString(levels.directory().resolve("doors.json"), "{}");
+        Files.writeString(levels.directory().resolve("custom.json"), "{}");
+        assertTrue(Files.isDirectory(levels.directory()));
+
+        assertTrue(levels.deleteGameTypeFolder(), "levels folder existed and was removed");
+        assertFalse(Files.exists(levels.directory()), "levels folder should be gone");
+
+        assertTrue(store.delete("My Game"), "profile existed and was removed");
+        assertFalse(store.exists("My Game"), "profile should be gone");
+
+        // Idempotent: deleting an already-gone type is a harmless no-op.
+        assertFalse(levels.deleteGameTypeFolder());
+        assertFalse(store.delete("My Game"));
     }
 
     @Test
