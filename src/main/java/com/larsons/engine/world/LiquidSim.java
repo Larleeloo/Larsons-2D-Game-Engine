@@ -4,7 +4,9 @@ import com.larsons.engine.level.Level;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Cellular liquid simulation for {@link Block#liquid()} blocks (water, lava,
@@ -72,14 +74,58 @@ public final class LiquidSim {
 
     private void tick(Level level, boolean gravityOn, List<Change> changes) {
         BlockRegistry blocks = level.blocks;
-        if (gravityOn) fallBlocks(level, changes);
-        quenchLava(level, changes);
-        // One pass per distinct liquid family that has a flow twin.
+        // One cheap presence scan gates the expensive passes. Most levels
+        // carry no liquids or falling blocks at all, but the cellular passes
+        // below allocate whole-grid BFS buffers and rescan the map several
+        // times each — on a big custom level that regularly blew the 60 Hz
+        // multiplayer server's tick budget and stuttered everyone's game.
+        Set<Integer> present = presentTileIds(level);
+        boolean anyFalling = false;
+        for (int id : present) {
+            Block b = blocks.get(id);
+            if (b != null && b.falling()) {
+                anyFalling = true;
+                break;
+            }
+        }
+        if (gravityOn && anyFalling) fallBlocks(level, changes);
+        if (containsAny(blocks, present, "lava", "lava_flow")
+                && containsAny(blocks, present, "water", "water_flow")) {
+            quenchLava(level, changes);
+        }
+        // One pass per distinct liquid family that has a flow twin and is
+        // actually on the map.
         for (Block b : blocks.all()) {
-            if (b.liquid() && !b.isFlow() && blocks.flowFor(b) != null) {
+            if (b.liquid() && !b.isFlow() && blocks.flowFor(b) != null
+                    && (present.contains(b.id())
+                    || present.contains(blocks.flowFor(b).id()))) {
                 flowFamily(level, b, changes);
             }
         }
+    }
+
+    /** The distinct non-empty tile ids on the grid (one fast scan). */
+    private static Set<Integer> presentTileIds(Level level) {
+        Set<Integer> present = new HashSet<>();
+        int last = 0;
+        for (int[] row : level.tiles) {
+            for (int id : row) {
+                if (id != 0 && id != last) {
+                    present.add(id);
+                    last = id;
+                }
+            }
+        }
+        return present;
+    }
+
+    private static boolean containsAny(BlockRegistry blocks, Set<Integer> present,
+                                       String... keys) {
+        for (String key : keys) {
+            Block b = blocks.get(key);
+            if (b != null && present.contains(b.id())) return true;
+        }
+        return false;
     }
 
     /**

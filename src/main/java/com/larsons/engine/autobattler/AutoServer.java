@@ -142,16 +142,11 @@ public final class AutoServer implements AutoGame.Sink {
             game.tick(dt);
 
             next += nsPerTick;
-            long sleep = next - System.nanoTime();
-            if (sleep > 0) {
-                try {
-                    Thread.sleep(sleep / 1_000_000L, (int) (sleep % 1_000_000L));
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-            } else {
-                next = System.nanoTime();
+            long now = System.nanoTime();
+            if (next <= now) {
+                next = now; // fell behind; don't try to catch up
+            } else if (!com.larsons.engine.core.GameLoop.waitUntil(next)) {
+                return; // interrupted during shutdown
             }
         }
     }

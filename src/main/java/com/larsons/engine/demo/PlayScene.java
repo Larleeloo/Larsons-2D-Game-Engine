@@ -101,14 +101,22 @@ import java.util.Map;
  */
 public class PlayScene extends AbstractScene {
 
-    /** Remote players are drawn this far in the past, between two snapshots. */
-    private static final long INTERP_DELAY_NANOS = 100_000_000L; // 100 ms
+    /**
+     * Remote players and entities are drawn this far in the past, between two
+     * buffered snapshots — two snapshot intervals (at the server's 30 Hz
+     * broadcast rate), enough that arrival jitter almost never leaves the
+     * render time without a newer snapshot to interpolate toward.
+     */
+    private static final long INTERP_DELAY_NANOS = 70_000_000L; // 70 ms
 
     /** Prediction errors beyond this snap instantly (teleports, big lag spikes). */
     private static final double SNAP_DISTANCE = 128;
 
     /** How aggressively prediction errors are blended away, per second. */
     private static final double CORRECTION_PER_SEC = 8.0;
+
+    /** Pending predicted steps kept for reconciliation (~3 s at 120 Hz). */
+    private static final int MAX_PENDING_STEPS = 360;
 
     /** Mining / placing reach, in tiles from the player centre. */
     private static final int REACH_TILES = 5;
@@ -134,6 +142,26 @@ public class PlayScene extends AbstractScene {
 
     private NetSession net; // null in single-player
     private final Map<Integer, Animation> remoteAnims = new HashMap<>();
+
+    /**
+     * Online: every locally-predicted step since the last server
+     * acknowledgement, oldest first. Reconciliation replays these on top of
+     * the authoritative state so the corrected position is at the <em>same
+     * simulation time</em> as the prediction — comparing against the raw
+     * (older) server position instead used to drag the player backwards by
+     * the round trip every frame, which felt like heavy lag even on a LAN.
+     */
+    private final java.util.ArrayDeque<PredictedStep> pendingSteps = new java.util.ArrayDeque<>();
+
+    private record PredictedStep(int seq, PlayerInput in, double dt) {}
+
+    /**
+     * Online hold-to-mine: the locally-predicted progress on the cell being
+     * mined, driving the crack overlay and break feel. The server runs the
+     * identical accumulation and broadcasts the authoritative break.
+     */
+    private int netMineCol = Integer.MIN_VALUE, netMineRow = Integer.MIN_VALUE;
+    private double netMineProgress;
 
     // Offline world simulation (mobs, items, drops). Online the server owns it.
     private World world;
@@ -454,8 +482,9 @@ public class PlayScene extends AbstractScene {
 
         if (!showInventory && craftingPanel == null && containerPanel == null) {
             handleMouseActions(input, p, in, dt);
-        } else if (world != null) {
-            world.cancelMining();
+        } else {
+            if (world != null) world.cancelMining();
+            cancelPredictedMining();
         }
 
         // Online, physics must not depend on the local camera view — the server
@@ -467,6 +496,16 @@ public class PlayScene extends AbstractScene {
         boolean riding = stepRiding(in, p, dt);
         if (!riding) {
             PlayerPhysics.step(me, in, level, p, simPerspective, dt);
+        }
+        if (net != null) {
+            // Remember this predicted step for reconciliation replay. While
+            // mounted the vehicle prediction blend does the job instead.
+            if (riding) {
+                pendingSteps.clear();
+            } else {
+                pendingSteps.addLast(new PredictedStep(in.seq, in, dt));
+                while (pendingSteps.size() > MAX_PENDING_STEPS) pendingSteps.pollFirst();
+            }
         }
         if (me.vy < -1 && prevVy >= 0) {
             stats.add("jumps", 1);
@@ -821,8 +860,9 @@ public class PlayScene extends AbstractScene {
      * Left click: fire the held ranged weapon / throwable (if projectiles are
      * on), else swing at mobs (if combat is on). <em>Holding</em> left over a
      * block in reach mines it over time — block durability, sped up by a
-     * matching tool (offline; online mining stays a per-click server
-     * request). Right click: place the selected hotbar block.
+     * matching tool. Online the same hold rides the input command as mining
+     * intent and the server accumulates identical progress, so durability is
+     * the same in multiplayer. Right click: place the selected hotbar block.
      */
     private void handleMouseActions(InputManager input, GameProfile p, PlayerInput in,
                                     double dt) {
@@ -839,10 +879,19 @@ public class PlayScene extends AbstractScene {
         ItemDef held = p.itemsEnabled ? inventory.selectedDef() : null;
         boolean shoots = p.projectilesEnabled && held != null && held.projectile() != null;
 
-        // Hold-to-mine against block durability (offline world only).
-        boolean miningNow = net == null && input.isMouseDown() && !shoots
+        // Hold-to-mine against block durability — everywhere. Offline the
+        // local world accumulates the progress; online the mining intent
+        // rides the input command and the server accumulates the identical
+        // progress, so blocks are exactly as durable in multiplayer.
+        boolean miningNow = input.isMouseDown() && !shoots
                 && p.blockEditingEnabled && inReach && level.tileAt(col, row) > 0;
-        if (miningNow) {
+        if (miningNow && net != null) {
+            swingTime = Math.max(swingTime, 0.1);
+            in.mine = true;
+            in.mineCol = col;
+            in.mineRow = row;
+            predictMining(col, row, held, dt);
+        } else if (miningNow) {
             swingTime = Math.max(swingTime, 0.1);
             if (level.blockAt(col, row) == null) {
                 // Legacy palette tile with no block definition: instant break.
@@ -864,8 +913,9 @@ public class PlayScene extends AbstractScene {
                     wearHeldTool(held);
                 }
             }
-        } else if (net == null && world != null) {
-            world.cancelMining();
+        } else {
+            if (net == null && world != null) world.cancelMining();
+            cancelPredictedMining();
         }
 
         if (leftClick) {
@@ -873,9 +923,6 @@ public class PlayScene extends AbstractScene {
                 fireVehicleAt(aim[0], aim[1], in);
             } else if (shoots) {
                 shootAt(aim[0], aim[1], in);
-            } else if (net != null && p.blockEditingEnabled && inReach
-                    && level.tileAt(col, row) > 0) {
-                net.client().sendBlockEdit(col, row, 0, "play");
             } else if (!miningNow && net == null && inReach
                     && tryChopDecor(aim[0], aim[1], held, p)) {
                 // harvested (or chipped at) a destructible decoration
@@ -886,6 +933,33 @@ public class PlayScene extends AbstractScene {
         if (rightClick && p.blockEditingEnabled && inReach) {
             placeAt(col, row, p);
         }
+    }
+
+    /**
+     * Online: advance the local prediction of mining progress with the same
+     * hardness/tool formula the server runs, for the crack overlay. The break
+     * itself arrives as an authoritative {@code block} broadcast.
+     */
+    private void predictMining(int col, int row, ItemDef held, double dt) {
+        if (col != netMineCol || row != netMineRow) {
+            netMineCol = col;
+            netMineRow = row;
+            netMineProgress = 0;
+        }
+        Block b = level.blockAt(col, row);
+        double hardness = b == null || b.liquid() ? 0 : b.hardness();
+        if (hardness <= 0) {
+            netMineProgress = 1;
+            return;
+        }
+        double power = held != null && held.toolClass() != null
+                && held.toolClass().equals(b.tool()) ? held.toolPower() : 1.0;
+        netMineProgress = Math.min(1, netMineProgress + dt * power / hardness);
+    }
+
+    private void cancelPredictedMining() {
+        netMineCol = netMineRow = Integer.MIN_VALUE;
+        netMineProgress = 0;
     }
 
     /** Wear the held tool one point on a finished block; report a break. */
@@ -1165,6 +1239,9 @@ public class PlayScene extends AbstractScene {
                     particles.burst((e[0] + 0.5) * ts(), (e[1] + 0.5) * ts(),
                             new Color(160, 150, 140), 8);
                 }
+                // The block we were chipping at broke (authoritatively) —
+                // clear the predicted stroke so the cracks vanish with it.
+                if (e[0] == netMineCol && e[1] == netMineRow) cancelPredictedMining();
             } else {
                 ctx.sfx(Sfx.PLACE);
             }
@@ -1241,10 +1318,16 @@ public class PlayScene extends AbstractScene {
     }
 
     /**
-     * Blend the predicted local player toward the server's authoritative state.
-     * Small errors (network jitter, sampling differences) are smoothed away;
-     * large ones (teleport, heavy lag) snap. While mounted, the vehicle's own
-     * prediction blend does this job instead.
+     * Reconcile the predicted local player with the server: take the latest
+     * authoritative state, replay every predicted step the server hasn't
+     * acknowledged yet (snapshots echo the last applied input sequence), and
+     * compare the result — which sits at the same simulation time as the
+     * prediction — against where prediction actually put us. When both
+     * simulations agree the error is zero and nothing tugs at the player;
+     * comparing against the raw server position instead would lag the
+     * comparison by a round trip and drag the player backwards while moving.
+     * Small errors blend away; large ones (teleports, heavy lag) snap. While
+     * mounted, the vehicle's own prediction blend does this job instead.
      */
     private void reconcile(double dt) {
         if (predictedVehicle != null) return;
@@ -1253,17 +1336,41 @@ public class PlayScene extends AbstractScene {
         PlayerState server = snap.player(me.id);
         if (server == null) return;
 
-        double ex = server.x - me.x;
-        double ey = server.y - me.y;
+        // Steps the server has already applied are no longer pending.
+        while (!pendingSteps.isEmpty() && pendingSteps.peekFirst().seq() <= server.lastSeq) {
+            pendingSteps.pollFirst();
+        }
+
+        GameProfile p = profile();
+        PlayerState corrected = server.copy();
+        // Simulation-side fields snapshots don't carry: keep the local view
+        // (relic passives are re-applied from the inventory each tick anyway).
+        corrected.airJumpsUsed = me.airJumpsUsed;
+        corrected.bonusAirJumps = me.bonusAirJumps;
+        corrected.speedFactor = me.speedFactor;
+        corrected.slowFall = me.slowFall;
+        corrected.canFly = me.canFly;
+        for (PredictedStep step : pendingSteps) {
+            PlayerPhysics.step(corrected, step.in(), level, p, p.perspective, step.dt());
+        }
+
+        double ex = corrected.x - me.x;
+        double ey = corrected.y - me.y;
         if (ex * ex + ey * ey > SNAP_DISTANCE * SNAP_DISTANCE) {
-            me.x = server.x;
-            me.y = server.y;
-            me.vy = server.vy;
+            me.x = corrected.x;
+            me.y = corrected.y;
+            me.vy = corrected.vy;
         } else {
             double k = Math.min(1.0, CORRECTION_PER_SEC * dt);
             me.x += ex * k;
             me.y += ey * k;
+            me.vy += (corrected.vy - me.vy) * k;
         }
+        // Resources are server-authoritative too (shots spend mana, sprint
+        // spends stamina); track them closely without HUD pops.
+        double rk = Math.min(1.0, 10 * dt);
+        me.stamina += (corrected.stamina - me.stamina) * rk;
+        me.mana += (corrected.mana - me.mana) * rk;
     }
 
     private void advanceRemoteAnimations(double dt) {
@@ -1305,7 +1412,7 @@ public class PlayScene extends AbstractScene {
         drawDecorLayer(g, false); // background scenery behind the terrain
         SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), false, animClock);
         drawTiles(g);
-        if (net == null) drawMiningCracks(g);
+        drawMiningCracks(g);
         if (p.gridVisible && camera.getPerspective() != Perspective.ISOMETRIC) drawGrid(g);
         drawDoors(g);
         drawWorldEntities(g, p);
@@ -1349,11 +1456,19 @@ public class PlayScene extends AbstractScene {
         if (net != null && !net.client().isConnected()) drawDisconnectOverlay(g);
     }
 
-    /** Crack overlay on the block being held-mined, scaled by progress. */
+    /** Crack overlay on the block being held-mined, scaled by progress.
+     *  Offline it reads the world's stroke; online, the local prediction. */
     private void drawMiningCracks(Graphics2D g) {
-        if (world == null) return;
-        int[] cell = world.miningCell();
-        double progress = world.miningProgress();
+        int[] cell;
+        double progress;
+        if (net != null) {
+            cell = netMineCol == Integer.MIN_VALUE ? null : new int[]{netMineCol, netMineRow};
+            progress = netMineProgress;
+        } else {
+            if (world == null) return;
+            cell = world.miningCell();
+            progress = world.miningProgress();
+        }
         if (cell == null || progress <= 0.01) return;
         double ts = ts();
         camera.worldToScreen(cell[0] * ts, cell[1] * ts, corner);
@@ -1516,10 +1631,12 @@ public class PlayScene extends AbstractScene {
     private void openPause() {
         paused = true;
         if (pauseForm == null) buildPauseForm();
-        // Online, the server keeps applying the latest input command — send an
-        // idle one so the player doesn't keep walking while the menu is open.
+        // Online, the server keeps applying the held input command — send an
+        // idle one so the player doesn't keep walking (or mining) while the
+        // menu is open.
         if (net != null) {
             net.client().sendInput(new PlayerInput(false, false, false, false, ++inputSeq));
+            cancelPredictedMining();
         }
     }
 
@@ -1866,35 +1983,67 @@ public class PlayScene extends AbstractScene {
                 drawProjectileSprite(g, pr.def.key(), pr.x, pr.y, pr.vx, pr.vy);
             }
         } else {
-            Snapshot snap = net.client().latest();
-            if (snap == null) return;
+            // Replicated entities interpolate between the two buffered
+            // snapshots straddling the render time — drawing the raw latest
+            // snapshot stepped everything at the 30 Hz broadcast rate, which
+            // read as constant stutter next to the 120 fps local player.
+            long renderTime = System.nanoTime() - INTERP_DELAY_NANOS;
+            Snapshot[] pair = net.client().snapshotPair(renderTime);
+            if (pair == null) return;
+            Snapshot from = pair[0], to = pair[1];
+            double t = interpFactor(from, to, renderTime);
             VehicleRegistry vehicles = VehicleRegistry.standard();
-            for (EntityView v : snap.vehicles()) {
+            Map<Integer, EntityView> old = viewsById(from.vehicles());
+            for (EntityView v : to.vehicles()) {
                 // The vehicle we're riding renders from our own prediction so
                 // it never lags behind the player glued to its saddle.
                 if (predictedVehicle != null && v.id == predictedVehicle.id) continue;
                 VehicleDef def = vehicles.get(v.key);
-                if (def != null) drawVehicleSprite(g, def, v.x, v.y, v.facingLeft);
+                if (def != null) {
+                    drawVehicleSprite(g, def, lerpX(old.get(v.id), v, t),
+                            lerpY(old.get(v.id), v, t), v.facingLeft);
+                }
             }
             if (predictedVehicle != null) {
                 drawVehicleSprite(g, predictedVehicle.def, predictedVehicle.x,
                         predictedVehicle.y, predictedVehicle.facingLeft);
             }
-            for (EntityView item : snap.items()) {
-                drawItemSprite(g, item.key, item.x, item.y, item.count);
+            old = viewsById(from.items());
+            for (EntityView item : to.items()) {
+                drawItemSprite(g, item.key, lerpX(old.get(item.id), item, t),
+                        lerpY(old.get(item.id), item, t), item.count);
             }
             MobRegistry mobs = MobRegistry.standard();
-            for (EntityView mv : snap.mobs()) {
+            old = viewsById(from.mobs());
+            for (EntityView mv : to.mobs()) {
                 MobDef def = mobs.get(mv.key);
                 if (def != null) {
-                    drawMobSprite(g, def, mv.x, mv.y, mv.facingLeft, mv.health, false,
+                    drawMobSprite(g, def, lerpX(old.get(mv.id), mv, t),
+                            lerpY(old.get(mv.id), mv, t), mv.facingLeft, mv.health, false,
                             stateKeyFor(mv.aiState, false), mv.status);
                 }
             }
-            for (EntityView s : snap.shots()) {
-                drawProjectileSprite(g, s.key, s.x, s.y, s.vx, s.vy);
+            old = viewsById(from.shots());
+            for (EntityView s : to.shots()) {
+                drawProjectileSprite(g, s.key, lerpX(old.get(s.id), s, t),
+                        lerpY(old.get(s.id), s, t), s.vx, s.vy);
             }
         }
+    }
+
+    private static Map<Integer, EntityView> viewsById(List<EntityView> views) {
+        if (views.isEmpty()) return Map.of();
+        Map<Integer, EntityView> byId = new HashMap<>(views.size() * 2);
+        for (EntityView v : views) byId.put(v.id, v);
+        return byId;
+    }
+
+    private static double lerpX(EntityView from, EntityView to, double t) {
+        return from == null ? to.x : from.x + (to.x - from.x) * t;
+    }
+
+    private static double lerpY(EntityView from, EntityView to, double t) {
+        return from == null ? to.y : from.y + (to.y - from.y) * t;
     }
 
     /** A vehicle, flipped to its facing like mobs are. */
@@ -2049,25 +2198,21 @@ public class PlayScene extends AbstractScene {
         g.drawArc(corner[0] - r, corner[1] - r, r * 2, r * 2, start, 120);
     }
 
-    /** Draw every other player, interpolated between the two latest snapshots. */
+    /**
+     * Draw every other player, interpolated at a fixed delay behind real time
+     * between the two buffered snapshots that straddle it.
+     */
     private void drawRemotePlayers(Graphics2D g) {
-        GameClient client = net.client();
-        Snapshot latest = client.latest();
-        if (latest == null) return;
-        Snapshot prev = client.previous();
-
-        double t = 1.0;
-        if (prev != null && latest.receivedNanos() > prev.receivedNanos()) {
-            long renderTime = System.nanoTime() - INTERP_DELAY_NANOS;
-            t = (renderTime - prev.receivedNanos())
-                    / (double) (latest.receivedNanos() - prev.receivedNanos());
-            t = Math.max(0.0, Math.min(1.0, t));
-        }
+        long renderTime = System.nanoTime() - INTERP_DELAY_NANOS;
+        Snapshot[] pair = net.client().snapshotPair(renderTime);
+        if (pair == null) return;
+        Snapshot from = pair[0], to = pair[1];
+        double t = interpFactor(from, to, renderTime);
 
         double size = ps();
-        for (PlayerState ps : latest.players()) {
+        for (PlayerState ps : to.players()) {
             if (ps.id == me.id) continue;
-            PlayerState old = prev != null ? prev.player(ps.id) : null;
+            PlayerState old = from.player(ps.id);
             double x = old != null ? old.x + (ps.x - old.x) * t : ps.x;
             double y = old != null ? old.y + (ps.y - old.y) * t : ps.y;
             Animation anim = remoteAnims.computeIfAbsent(ps.id, this::buildRemoteAnimation);
@@ -2077,6 +2222,14 @@ public class PlayScene extends AbstractScene {
             }
             drawPlayer(g, x, y, ps.facingLeft, anim.current(), ps.name);
         }
+    }
+
+    /** Interpolation fraction of {@code renderTime} between two snapshots. */
+    private static double interpFactor(Snapshot from, Snapshot to, long renderTime) {
+        if (to == from || to.receivedNanos() <= from.receivedNanos()) return 1.0;
+        double t = (renderTime - from.receivedNanos())
+                / (double) (to.receivedNanos() - from.receivedNanos());
+        return Math.max(0.0, Math.min(1.0, t));
     }
 
     private void drawPlayer(Graphics2D g, double x, double y, boolean facingLeft,

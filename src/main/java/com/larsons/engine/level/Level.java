@@ -389,15 +389,13 @@ public class Level {
             chunkMap.putAll(chunked.dirtyChunksRle());
             m.put("chunks", chunkMap);
         } else {
-            List<Object> rows = new ArrayList<>(tiles == null ? 0 : tiles.length);
-            if (tiles != null) {
-                for (int[] row : tiles) {
-                    List<Object> cols = new ArrayList<>(row.length);
-                    for (int id : row) cols.add(id);
-                    rows.add(cols);
-                }
-            }
-            m.put("tiles", rows);
+            // Run-length encoded, row-major over the whole grid: pairs of
+            // (tileId, runLength). Levels are mostly runs of air and terrain,
+            // so this is dramatically smaller (and faster to write) than the
+            // old row-of-arrays form — which matters both for saves and for
+            // the multiplayer welcome message that carries the level as one
+            // line. LevelLoader still reads the legacy "tiles" shape.
+            m.put("tilesRle", rleTiles());
         }
         if (!surfaceDecor.isEmpty()) {
             List<Object> sds = new ArrayList<>(surfaceDecor.size());
@@ -463,8 +461,48 @@ public class Level {
         return m;
     }
 
+    /**
+     * RLE runs (id, length, id, length, …) over the dense grid, row-major.
+     * Emitted against the level bounds (ragged legacy rows pad with air) so
+     * the decoder can rebuild rows from {@code width} alone.
+     */
+    private List<Object> rleTiles() {
+        List<Object> runs = new ArrayList<>();
+        if (tiles == null) return runs;
+        int runId = 0, runLen = 0;
+        for (int r = 0; r < height; r++) {
+            for (int c = 0; c < width; c++) {
+                int id = tileAt(c, r);
+                if (runLen > 0 && id == runId) {
+                    runLen++;
+                } else {
+                    if (runLen > 0) {
+                        runs.add(runId);
+                        runs.add(runLen);
+                    }
+                    runId = id;
+                    runLen = 1;
+                }
+            }
+        }
+        if (runLen > 0) {
+            runs.add(runId);
+            runs.add(runLen);
+        }
+        return runs;
+    }
+
     public String toJson() {
         return Json.stringify(toMap());
+    }
+
+    /**
+     * Single-line JSON for the wire. The pretty form puts every value on its
+     * own indented line — harmless in a save file, ruinous inside a one-line
+     * protocol message — so the multiplayer welcome sends this instead.
+     */
+    public String toJsonCompact() {
+        return Json.stringifyCompact(toMap());
     }
 
     private static String hex(Color c) {
