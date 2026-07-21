@@ -58,6 +58,16 @@ public final class GameClient implements Closeable {
 
     private volatile Snapshot latest;
     private volatile Snapshot previous;
+
+    /**
+     * Recent snapshots, oldest first, guarded by itself. Keeping a short
+     * history (rather than just the last two) lets scenes interpolate at a
+     * fixed delay behind real time even when snapshot arrival jitters —
+     * with only two, any delay longer than one snapshot interval clamps to
+     * the older snapshot and remote motion steps instead of glides.
+     */
+    private final java.util.ArrayDeque<Snapshot> history = new java.util.ArrayDeque<>();
+    private static final int SNAPSHOT_HISTORY = 12;
     private volatile boolean connected = true;
     private volatile String disconnectReason;
     private volatile int pingMillis = -1;
@@ -102,10 +112,13 @@ public final class GameClient implements Closeable {
             out.flush();
 
             // Read until the welcome (or a rejection); skip anything else.
+            // The welcome line carries the whole level, so decode it against
+            // the large server-line cap — the default cap silently dropped
+            // big custom levels and the join would just time out.
             while (true) {
                 String line = in.readLine();
                 if (line == null) throw new IOException("Server closed the connection");
-                Map<String, Object> msg = Protocol.decode(line);
+                Map<String, Object> msg = Protocol.decode(line, Protocol.MAX_SERVER_LINE_LENGTH);
                 if (msg == null) continue;
                 switch (Protocol.type(msg)) {
                     case "welcome" -> {
@@ -202,6 +215,30 @@ public final class GameClient implements Closeable {
     /** The snapshot before {@link #latest()}, for interpolation. */
     public Snapshot previous() { return previous; }
 
+    /**
+     * The two snapshots straddling {@code renderTimeNanos} (by arrival time),
+     * oldest first, for interpolated rendering at a fixed delay behind real
+     * time. Clamps to the oldest/newest pair when the time falls outside the
+     * kept history; {@code null} before the first snapshot arrives.
+     */
+    public Snapshot[] snapshotPair(long renderTimeNanos) {
+        synchronized (history) {
+            if (history.isEmpty()) return null;
+            Snapshot before = null, after = null;
+            for (Snapshot s : history) {
+                if (s.receivedNanos() <= renderTimeNanos) {
+                    before = s;
+                } else {
+                    after = s;
+                    break;
+                }
+            }
+            if (before == null) before = after;
+            if (after == null) after = before;
+            return new Snapshot[]{before, after};
+        }
+    }
+
     public boolean isConnected() { return connected; }
 
     /** Why the connection ended, or {@code null} while healthy. */
@@ -272,7 +309,7 @@ public final class GameClient implements Closeable {
         try {
             String line;
             while (connected && (line = in.readLine()) != null) {
-                Map<String, Object> msg = Protocol.decode(line);
+                Map<String, Object> msg = Protocol.decode(line, Protocol.MAX_SERVER_LINE_LENGTH);
                 if (msg == null) continue;
                 switch (Protocol.type(msg)) {
                     case "state" -> handleState(msg);
@@ -280,12 +317,12 @@ public final class GameClient implements Closeable {
                         int col = msg.get("c") instanceof Number n ? n.intValue() : -1;
                         int row = msg.get("r") instanceof Number n ? n.intValue() : -1;
                         int id = msg.get("b") instanceof Number n ? n.intValue() : 0;
-                        // Tile writes are single ints; a frame that races one
-                        // simply draws it a frame late, which is harmless.
-                        if (level != null && level.setTile(col, row, id)) {
-                            blockEvents.addLast(new int[]{col, row, id});
-                            while (blockEvents.size() > MAX_BLOCK_EVENTS) blockEvents.pollFirst();
-                        }
+                        applyBlock(col, row, id);
+                    }
+                    case "blocks" -> {
+                        // A batched burst (liquid flow, explosions): flat
+                        // col,row,id triples in one message.
+                        if (msg.get("l") instanceof List<?> flat) applyBlockBatch(flat);
                     }
                     case "inv" -> {
                         if (msg.get("items") instanceof List<?> list) {
@@ -323,6 +360,26 @@ public final class GameClient implements Closeable {
         }
     }
 
+    /** Apply one authoritative tile write and remember it for local feedback. */
+    private void applyBlock(int col, int row, int id) {
+        // Tile writes are single ints; a frame that races one simply draws it
+        // a frame late, which is harmless.
+        if (level != null && level.setTile(col, row, id)) {
+            blockEvents.addLast(new int[]{col, row, id});
+            while (blockEvents.size() > MAX_BLOCK_EVENTS) blockEvents.pollFirst();
+        }
+    }
+
+    /** Apply a batched {@code blocks} message: flat col,row,id triples. */
+    private void applyBlockBatch(List<?> flat) {
+        for (int k = 0; k + 2 < flat.size(); k += 3) {
+            int col = flat.get(k) instanceof Number n ? n.intValue() : -1;
+            int row = flat.get(k + 1) instanceof Number n ? n.intValue() : -1;
+            int id = flat.get(k + 2) instanceof Number n ? n.intValue() : 0;
+            applyBlock(col, row, id);
+        }
+    }
+
     private void handleState(Map<String, Object> msg) {
         long tick = msg.get("tick") instanceof Number n ? n.longValue() : 0;
         List<PlayerState> players = new ArrayList<>();
@@ -336,9 +393,14 @@ public final class GameClient implements Closeable {
         List<EntityView> shots = parseEntities(msg.get("shots"));
         List<EntityView> vehicles = parseEntities(msg.get("veh"));
         double time = msg.get("time") instanceof Number n ? n.doubleValue() : 0.25;
-        previous = latest;
-        latest = new Snapshot(tick, players, mobs, items, shots, vehicles,
+        Snapshot snap = new Snapshot(tick, players, mobs, items, shots, vehicles,
                 time, System.nanoTime());
+        synchronized (history) {
+            history.addLast(snap);
+            while (history.size() > SNAPSHOT_HISTORY) history.pollFirst();
+        }
+        previous = latest;
+        latest = snap;
     }
 
     private static List<EntityView> parseEntities(Object o) {

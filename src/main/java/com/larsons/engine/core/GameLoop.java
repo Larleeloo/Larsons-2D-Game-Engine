@@ -127,8 +127,14 @@ public final class GameLoop implements Runnable {
      * precision than a bare {@code Thread.sleep}: sleep coarsely while more
      * than ~2 ms remains, then park in 100 µs slices for the tail. Returns
      * {@code false} if interrupted.
+     *
+     * <p>Public because the multiplayer servers pace their fixed-rate tick
+     * loops with it too: a bare sleep oversleeps by a scheduler quantum
+     * (~15 ms on Windows), which would drop a 60 Hz server to ~40 real ticks
+     * per second — the simulation everyone plays on would run slow and every
+     * client would feel permanently laggy no matter the ping.
      */
-    private static boolean waitUntil(long deadlineNanos) {
+    public static boolean waitUntil(long deadlineNanos) {
         final long coarseMargin = 2_000_000L; // trust sleep() up to 2 ms early
         long remaining;
         while ((remaining = deadlineNanos - System.nanoTime()) > coarseMargin) {

@@ -41,6 +41,17 @@ public final class PlayerInput {
      */
     public int selected;
 
+    /**
+     * Hold-to-mine intent: while the player holds the mouse over a block in
+     * reach, every input names the cell being mined. The server accumulates
+     * mining progress against the block's hardness (sped up by a matching
+     * held tool) exactly like offline play, so online blocks have the same
+     * durability instead of breaking on a click. Absent on the wire when not
+     * mining.
+     */
+    public boolean mine;
+    public int mineCol, mineRow;
+
     public PlayerInput() {}
 
     public PlayerInput(boolean left, boolean right, boolean up, boolean down, int seq) {
@@ -73,6 +84,11 @@ public final class PlayerInput {
             m.put("ax", aimX);
             m.put("ay", aimY);
         }
+        if (mine) {
+            m.put("mi", true);
+            m.put("mc", mineCol);
+            m.put("mr", mineRow);
+        }
         return m;
     }
 
@@ -89,6 +105,9 @@ public final class PlayerInput {
         in.attack = Boolean.TRUE.equals(m.get("a"));
         in.aimX = m.get("ax") instanceof Number n ? n.doubleValue() : 0;
         in.aimY = m.get("ay") instanceof Number n ? n.doubleValue() : 0;
+        in.mine = Boolean.TRUE.equals(m.get("mi"));
+        in.mineCol = m.get("mc") instanceof Number n ? n.intValue() : 0;
+        in.mineRow = m.get("mr") instanceof Number n ? n.intValue() : 0;
         return in;
     }
 }

@@ -58,13 +58,23 @@ import java.util.Map;
 public final class Protocol {
 
     /** Protocol version; bumped on incompatible changes. */
-    public static final int VERSION = 3;
+    public static final int VERSION = 4;
 
     /** Default server port (the engine's "25565"). */
     public static final int DEFAULT_PORT = 7777;
 
-    /** Sanity cap on a single message line, to shrug off garbage input. */
+    /**
+     * Sanity cap on a single client-&gt;server message line, to shrug off
+     * garbage input. Client commands are all tiny, so anything huge is noise.
+     */
     public static final int MAX_LINE_LENGTH = 256 * 1024;
+
+    /**
+     * Cap on a server-&gt;client line. The welcome message carries the whole
+     * level (RLE-compressed, but a heavily-edited giant world is still big),
+     * so clients accept far larger lines than the server does.
+     */
+    public static final int MAX_SERVER_LINE_LENGTH = 64 * 1024 * 1024;
 
     public static final int MAX_NAME_LENGTH = 24;
 
@@ -76,7 +86,16 @@ public final class Protocol {
 
     /** Parse one message line; returns {@code null} if it isn't a JSON object. */
     public static Map<String, Object> decode(String line) {
-        if (line == null || line.isEmpty() || line.length() > MAX_LINE_LENGTH) return null;
+        return decode(line, MAX_LINE_LENGTH);
+    }
+
+    /**
+     * Parse one message line against an explicit size cap — clients pass
+     * {@link #MAX_SERVER_LINE_LENGTH} because server messages (the welcome's
+     * embedded level, big snapshots) legitimately dwarf client commands.
+     */
+    public static Map<String, Object> decode(String line, int maxLength) {
+        if (line == null || line.isEmpty() || line.length() > maxLength) return null;
         try {
             Object parsed = Json.parse(line);
             return parsed instanceof Map<?, ?> ? Json.asObject(parsed) : null;
@@ -195,6 +214,25 @@ public final class Protocol {
         m.put("c", col);
         m.put("r", row);
         m.put("b", blockId);
+        return encode(m);
+    }
+
+    /**
+     * Server tells everyone many blocks changed at once — one message instead
+     * of one per tile, so a liquid tick that pours hundreds of cells can't
+     * flood (and overflow) every client's outbound queue. {@code changes} is a
+     * flat list of {@code col,row,blockId} triples.
+     */
+    public static String blockBatch(List<int[]> changes) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t", "blocks");
+        List<Object> flat = new ArrayList<>(changes.size() * 3);
+        for (int[] c : changes) {
+            flat.add(c[0]);
+            flat.add(c[1]);
+            flat.add(c[2]);
+        }
+        m.put("l", flat);
         return encode(m);
     }
 

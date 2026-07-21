@@ -1,6 +1,7 @@
 package com.larsons.engine.net;
 
 import com.larsons.engine.config.GameProfile;
+import com.larsons.engine.core.GameLoop;
 import com.larsons.engine.entity.DroppedItem;
 import com.larsons.engine.entity.Inventory;
 import com.larsons.engine.entity.ItemDef;
@@ -17,6 +18,7 @@ import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerPhysics;
 import com.larsons.engine.sim.PlayerState;
 import com.larsons.engine.world.Block;
+import com.larsons.engine.world.LiquidSim;
 import com.larsons.engine.world.World;
 
 import java.io.BufferedReader;
@@ -36,7 +38,6 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * The authoritative game server (requirement #3). Host one like a Minecraft
@@ -54,7 +55,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Threading: one accept thread, two lightweight threads per connection
  * (blocking read; queued write so a slow client can't stall the tick), and one
  * tick thread that owns all player state. Cross-thread handoff is confined to
- * a join queue, per-connection input references, and outbound queues.
+ * a join queue, per-connection input queues, and outbound queues.
  */
 public final class GameServer {
 
@@ -67,7 +68,26 @@ public final class GameServer {
     /** Clients silent for this long are kicked (they ping every 2 s). */
     private static final long TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(15);
 
-    private static final int OUTBOX_CAPACITY = 256;
+    /**
+     * Outbound queue bound per client. Generous: a single simulation tick can
+     * legitimately emit bursts (block events, FX, inventory pushes), and a
+     * client that briefly stalls shouldn't be kicked over a full queue.
+     */
+    private static final int OUTBOX_CAPACITY = 2048;
+
+    /**
+     * Pending-input bound per client (~1-2 s of input at the client's send
+     * rate). The tick thread drains the queue every tick, so it only fills if
+     * the simulation stalls; then the oldest inputs drop first.
+     */
+    private static final int INBOX_CAPACITY = 128;
+
+    /**
+     * Server-side mining reach, in tiles from the player centre — the
+     * client's five-tile rule plus slack for the small offset between a
+     * predicted position and the authoritative one.
+     */
+    private static final double MINE_REACH_TILES = 6.5;
 
     private final GameProfile profile;
     private final Level level;
@@ -230,10 +250,11 @@ public final class GameServer {
                 }
             }
             // Tiles the simulation changed on its own (liquid flow) are
-            // authoritative block events like any player edit.
-            for (var change : world.pollBlockChanges()) {
-                broadcast(Protocol.blockSet(change.col(), change.row(), change.id()));
-            }
+            // authoritative block events like any player edit. Bursts go out
+            // as one batched message: a liquid tick can change hundreds of
+            // cells at once, and a message per cell used to overflow every
+            // client's outbound queue and disconnect them.
+            broadcastBlockChanges(world.pollBlockChanges());
 
             tick++;
             if (tick % SNAPSHOT_EVERY == 0) {
@@ -242,18 +263,29 @@ public final class GameServer {
             }
 
             next += nsPerTick;
-            long sleep = next - System.nanoTime();
-            if (sleep > 0) {
-                try {
-                    Thread.sleep(sleep / 1_000_000L, (int) (sleep % 1_000_000L));
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-            } else {
-                next = System.nanoTime(); // fell behind; don't try to catch up
+            long now = System.nanoTime();
+            if (next <= now) {
+                next = now; // fell behind; don't try to catch up
+            } else if (!GameLoop.waitUntil(next)) {
+                return; // interrupted during shutdown
             }
         }
+    }
+
+    /** One {@code block} message for a lone change, one batch for a burst. */
+    private void broadcastBlockChanges(List<LiquidSim.Change> changes) {
+        if (changes.isEmpty()) return;
+        if (changes.size() <= 3) {
+            for (LiquidSim.Change change : changes) {
+                broadcast(Protocol.blockSet(change.col(), change.row(), change.id()));
+            }
+            return;
+        }
+        List<int[]> flat = new ArrayList<>(changes.size());
+        for (LiquidSim.Change change : changes) {
+            flat.add(new int[]{change.col(), change.row(), change.id()});
+        }
+        broadcast(Protocol.blockBatch(flat));
     }
 
     private void processJoins() {
@@ -271,7 +303,10 @@ public final class GameServer {
             conn.state = new PlayerState(id, name, spawn[0], spawn[1]);
             conn.joined = true;
             // Serialize the live level so late joiners see every edit so far.
-            conn.send(Protocol.welcome(id, TICK_RATE, profile, level.toJson()));
+            // Compact + RLE: the welcome is one protocol line, and the pretty
+            // form put every tile on its own indented line — big custom levels
+            // overflowed the line cap and joiners timed out waiting for it.
+            conn.send(Protocol.welcome(id, TICK_RATE, profile, level.toJsonCompact()));
             if (minigame != null) {
                 minigame.grantLoadout(id); // Battle's magic loadout (no-op otherwise)
                 broadcast(Protocol.info(name + " joined the " + Team.name(team) + " team"));
@@ -304,7 +339,29 @@ public final class GameServer {
     private void stepPlayers(double dt) {
         for (Connection c : connections) {
             if (!c.joined || c.closed) continue;
-            PlayerInput in = c.latestInput.get();
+            // Drain everything received since the last tick. Movement keys use
+            // the most recent input, but edge-triggered intents — jump presses
+            // and attack clicks — are collected from every drained input.
+            // Clients send faster than the server ticks, so sampling only the
+            // latest input used to overwrite (and lose) about half of all
+            // clicks and jumps; and reusing a stale jump across ticks used to
+            // burn every air jump at once.
+            boolean jumpPressed = false;
+            List<PlayerInput> attacks = null;
+            PlayerInput latest = null;
+            PlayerInput queued;
+            while ((queued = c.inputQueue.poll()) != null) {
+                if (queued.jump) jumpPressed = true;
+                if (queued.attack && queued.seq != c.lastAttackSeq) {
+                    if (attacks == null) attacks = new ArrayList<>(2);
+                    attacks.add(queued);
+                }
+                latest = queued;
+            }
+            if (latest != null) c.heldInput = latest;
+            PlayerInput in = c.heldInput;
+            in.jump = jumpPressed;
+
             // Relic passives (extra air jumps, speed, slow fall, flight,
             // magnetism, melee power) come from the server-side inventory, so
             // they can't be conjured client-side.
@@ -323,50 +380,125 @@ public final class GameServer {
                 // moves on the server.
                 PlayerPhysics.step(c.state, in, level, profile, profile.perspective, dt);
             }
+            in.jump = false; // consumed; must not re-fire while the input is held
             c.state.lastSeq = in.seq;
             // The input carries the hotbar selection, so "what is this player
             // holding" (melee damage, ranged shots, placements) stays current.
             c.inventory.select(in.selected);
 
-            // Attacks are edge-triggered by sequence number: the same input is
-            // re-applied every tick until the next one arrives, but a swing
-            // must land only once per click. A held ranged weapon or throwable
-            // fires a projectile instead of swinging; ammo comes out of this
-            // player's server-side inventory, so shots can't be fabricated.
-            boolean canAct = profile.combatEnabled
-                    || (profile.projectilesEnabled && profile.itemsEnabled);
-            if (in.attack && canAct && in.seq != c.lastAttackSeq) {
-                c.lastAttackSeq = in.seq;
-                // An armed vehicle (war dragon) fires its own weapon first.
-                if (riding != null && profile.projectilesEnabled
-                        && world.vehicleShoot(riding, c.state, in.aimX, in.aimY) != null) {
-                    continue;
+            // Hold-to-mine progress against block durability, mirroring
+            // offline play (see stepMining). Runs off the held input, so a
+            // stroke keeps chipping between input arrivals.
+            stepMining(c, in, dt);
+
+            if (attacks != null) {
+                for (PlayerInput atk : attacks) {
+                    resolveAttack(c, atk, riding);
                 }
-                Projectile shot = null;
-                if (profile.projectilesEnabled && profile.itemsEnabled) {
-                    shot = world.playerShoot(c.state, c.inventory, in.aimX, in.aimY);
-                }
-                if (shot != null) {
-                    sendInventory(c);
-                } else if (profile.combatEnabled) {
-                    ItemDef held = profile.itemsEnabled ? c.inventory.selectedDef() : null;
-                    boolean melee = held == null || held.projectile() == null;
-                    double damage = World.FIST_DAMAGE + c.state.meleeBonus
-                            + (melee && held != null ? held.damage() : 0);
-                    // Mini-game PvP: an enemy player in reach takes the swing;
-                    // otherwise it resolves against mobs as always — and a
-                    // whiffed swing near an empty vehicle packs it up.
-                    PlayerState victim = minigame == null ? null
-                            : minigame.resolveMeleeHit(c.state, joinedPlayers(),
-                            in.aimX, in.aimY);
-                    if (victim != null) {
-                        victim.health -= damage;
-                        minigame.damaged(c.state.id, victim);
-                    } else if (world.playerAttack(c.state, in.aimX, in.aimY, damage) == null) {
-                        world.packUpVehicle(in.aimX, in.aimY, profile.itemsEnabled);
-                    }
-                }
+                c.inventory.select(in.selected); // restore the live selection
             }
+        }
+    }
+
+    /**
+     * Resolve one attack click. A held ranged weapon or throwable fires a
+     * projectile instead of swinging; ammo comes out of this player's
+     * server-side inventory, so shots can't be fabricated. Each click is
+     * edge-triggered by its sequence number and resolved exactly once.
+     */
+    private void resolveAttack(Connection c, PlayerInput atk, Vehicle riding) {
+        boolean canAct = profile.combatEnabled
+                || (profile.projectilesEnabled && profile.itemsEnabled);
+        if (!canAct) return;
+        c.lastAttackSeq = atk.seq;
+        // Resolve against what the player held when they clicked.
+        c.inventory.select(atk.selected);
+        // An armed vehicle (war dragon) fires its own weapon first.
+        if (riding != null && profile.projectilesEnabled
+                && world.vehicleShoot(riding, c.state, atk.aimX, atk.aimY) != null) {
+            return;
+        }
+        Projectile shot = null;
+        if (profile.projectilesEnabled && profile.itemsEnabled) {
+            shot = world.playerShoot(c.state, c.inventory, atk.aimX, atk.aimY);
+        }
+        if (shot != null) {
+            sendInventory(c);
+        } else if (profile.combatEnabled) {
+            ItemDef held = profile.itemsEnabled ? c.inventory.selectedDef() : null;
+            boolean melee = held == null || held.projectile() == null;
+            double damage = World.FIST_DAMAGE + c.state.meleeBonus
+                    + (melee && held != null ? held.damage() : 0);
+            // Mini-game PvP: an enemy player in reach takes the swing;
+            // otherwise it resolves against mobs as always — and a
+            // whiffed swing near an empty vehicle packs it up.
+            PlayerState victim = minigame == null ? null
+                    : minigame.resolveMeleeHit(c.state, joinedPlayers(),
+                    atk.aimX, atk.aimY);
+            if (victim != null) {
+                victim.health -= damage;
+                minigame.damaged(c.state.id, victim);
+            } else if (world.playerAttack(c.state, atk.aimX, atk.aimY, damage) == null) {
+                world.packUpVehicle(atk.aimX, atk.aimY, profile.itemsEnabled);
+            }
+        }
+    }
+
+    /**
+     * The server-side twin of offline hold-to-mine ({@code World.continueMining}):
+     * progress accumulates against the block's hardness, a matching held tool
+     * multiplies speed, switching cells restarts, and the break lands — with
+     * drops, tool wear, and the authoritative broadcast — only when progress
+     * completes. This is what gives blocks their durability online instead of
+     * breaking on a single click.
+     */
+    private void stepMining(Connection c, PlayerInput in, double dt) {
+        if (!in.mine || !profile.blockEditingEnabled) {
+            c.resetMining();
+            return;
+        }
+        int col = in.mineCol;
+        int row = in.mineRow;
+        double ts = level.tileSize;
+        double px = c.state.x + profile.playerSize / 2.0;
+        double py = c.state.y + profile.playerSize / 2.0;
+        boolean inReach = Math.hypot((col + 0.5) * ts - px, (row + 0.5) * ts - py)
+                <= MINE_REACH_TILES * ts;
+        if (!inReach || level.tileAt(col, row) <= 0) {
+            c.resetMining();
+            return;
+        }
+        Block b = level.blockAt(col, row);
+        if (b != null && b.liquid()) { // liquids aren't minable
+            c.resetMining();
+            return;
+        }
+        if (col != c.mineCol || row != c.mineRow) {
+            c.mineCol = col;
+            c.mineRow = row;
+            c.mineProgress = 0;
+        }
+        ItemDef held = profile.itemsEnabled ? c.inventory.selectedDef() : null;
+        // Legacy palette tiles have no block definition (hardness unknown):
+        // instant, exactly like offline play.
+        double hardness = b == null ? 0 : b.hardness();
+        if (hardness > 0) {
+            double power = held != null && held.toolClass() != null
+                    && held.toolClass().equals(b.tool()) ? held.toolPower() : 1.0;
+            c.mineProgress += dt * power / hardness;
+            if (c.mineProgress < 1) return;
+        }
+        c.resetMining();
+        Block mined = world.mineBlock(col, row, profile.itemsEnabled);
+        boolean changed = mined != null || level.setTile(col, row, 0);
+        if (!changed) return;
+        broadcast(Protocol.blockSet(col, row, level.tileAt(col, row)));
+        // Finished blocks wear the held tool, as offline (it may break).
+        if (mined != null && held != null && held.toolClass() != null && profile.itemsEnabled) {
+            if (c.inventory.damageSelected(1)) {
+                c.send(Protocol.info(held.name() + " broke!"));
+            }
+            sendInventory(c);
         }
     }
 
@@ -400,9 +532,12 @@ public final class GameServer {
                     if (paint ? !profile.creativeEnabled : !profile.blockEditingEnabled) continue;
                     boolean changed;
                     if (id == 0) {
-                        // Mining in play mode pops the block's drop out.
-                        boolean withDrops = !paint && profile.itemsEnabled;
-                        Block mined = world.mineBlock(col, row, withDrops);
+                        // Creative erase only. Play-mode mining is hold-to-mine
+                        // via the input command (see stepMining), so blocks
+                        // keep their durability online — a bare "break this"
+                        // request would bypass it.
+                        if (!paint) continue;
+                        Block mined = world.mineBlock(col, row, false);
                         changed = mined != null || level.setTile(col, row, 0);
                     } else if (paint) {
                         changed = level.setTile(col, row, id);
@@ -585,17 +720,34 @@ public final class GameServer {
         final BufferedReader in;
         final BufferedWriter out;
         final LinkedBlockingQueue<String> outbox = new LinkedBlockingQueue<>(OUTBOX_CAPACITY);
-        final AtomicReference<PlayerInput> latestInput = new AtomicReference<>(new PlayerInput());
+        /**
+         * Inputs received since the last tick, oldest first. The tick thread
+         * drains all of them so edge-triggered intents (jumps, attack clicks)
+         * are never lost between ticks, however fast the client sends.
+         */
+        final LinkedBlockingQueue<PlayerInput> inputQueue =
+                new LinkedBlockingQueue<>(INBOX_CAPACITY);
 
         volatile String requestedName = "Player";
         volatile PlayerState state;      // assigned by the tick thread on join
         volatile boolean joined;
         volatile boolean closed;
         volatile long lastHeardNanos = System.nanoTime();
+        /** The most recent input; held keys keep applying until the next one
+         *  arrives (tick thread only, with edges already consumed). */
+        PlayerInput heldInput = new PlayerInput();
         /** Input sequence whose attack was already applied (tick thread only). */
         int lastAttackSeq;
+        /** Hold-to-mine progress on the current cell (tick thread only). */
+        int mineCol = Integer.MIN_VALUE, mineRow = Integer.MIN_VALUE;
+        double mineProgress;
         /** Server-side inventory: what this player has picked up (tick thread only). */
         final Inventory inventory = new Inventory(world.itemTypes);
+
+        void resetMining() {
+            mineCol = mineRow = Integer.MIN_VALUE;
+            mineProgress = 0;
+        }
 
         Connection(Socket socket) throws IOException {
             this.socket = socket;
@@ -619,7 +771,12 @@ public final class GameServer {
                     if (msg == null) continue;
                     switch (Protocol.type(msg)) {
                         case "join" -> handleJoin(msg);
-                        case "input" -> latestInput.set(PlayerInput.fromMap(msg));
+                        case "input" -> {
+                            // Queue full means the tick thread has stalled for
+                            // seconds; shed the oldest input and keep the new.
+                            PlayerInput parsed = PlayerInput.fromMap(msg);
+                            while (!inputQueue.offer(parsed)) inputQueue.poll();
+                        }
                         case "edit", "paint", "erase", "invmove", "invdrop", "use",
                              "mount", "dismount" -> {
                             // World edits and inventory ops are applied by the

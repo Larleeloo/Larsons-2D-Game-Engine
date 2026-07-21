@@ -21,7 +21,10 @@ import java.util.Map;
  * {@link Json} parser, so no third-party libraries are required
  * (requirement #4).
  *
- * <p>Expected JSON shape (only {@code tiles} is required):
+ * <p>Expected JSON shape (a tile grid is required — either the legacy
+ * {@code tiles} row arrays below, or the RLE form {@code Level.toMap} writes:
+ * {@code "tilesRle": [id,runLength, ...]} row-major with explicit
+ * {@code width}/{@code height}):
  * <pre>
  * {
  *   "name": "Sample",
@@ -100,6 +103,28 @@ public final class LevelLoader {
                     }
                 }
             }
+        } else if (root.get("tilesRle") instanceof List<?> rle) {
+            // Run-length encoded grid (what Level.toMap writes): pairs of
+            // (tileId, runLength) row-major over width x height.
+            int width = intOf(root.get("width"), 0);
+            int height = intOf(root.get("height"), 0);
+            if (width <= 0 || height <= 0) {
+                throw new IllegalArgumentException("RLE level needs width and height");
+            }
+            int[][] tiles = new int[height][width];
+            int cell = 0;
+            long total = (long) width * height;
+            List<Object> runs = Json.asArray(rle);
+            for (int k = 0; k + 1 < runs.size() && cell < total; k += 2) {
+                int id = intOf(runs.get(k), 0);
+                int len = intOf(runs.get(k + 1), 0);
+                for (int j = 0; j < len && cell < total; j++, cell++) {
+                    tiles[cell / width][cell % width] = id;
+                }
+            }
+            lvl.tiles = tiles;
+            lvl.width = width;
+            lvl.height = height;
         } else {
             Object tilesObj = root.get("tiles");
             if (!(tilesObj instanceof List)) {

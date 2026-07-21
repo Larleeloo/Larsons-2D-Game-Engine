@@ -250,4 +250,145 @@ class NetworkTest {
         assertEquals("state", Protocol.type(msg));
         assertEquals(42, ((Number) msg.get("tick")).intValue());
     }
+
+    /** A registry-mode level with a varied grid, as the creative editor saves. */
+    private static Level customLevel(int width, int height) {
+        Level lvl = Level.empty("Custom", width, height, 32);
+        int dirt = lvl.blocks.get("dirt").id();
+        int stone = lvl.blocks.get("stone").id();
+        for (int c = 0; c < width; c++) {
+            lvl.setTile(c, height - 1, (c % 2 == 0) ? dirt : stone);
+            lvl.setTile(c, height - 2, (c % 3 == 0) ? stone : 0);
+        }
+        return lvl;
+    }
+
+    @Test
+    void bigCustomLevelsJoinWithoutTimingOut() throws IOException {
+        // A 400x300 grid in the old pretty row-of-arrays serialization was
+        // several times the protocol line cap: the client silently dropped
+        // the welcome and every join timed out. RLE + compact must fit.
+        Level big = customLevel(400, 300);
+        GameProfile profile = new GameProfile("Big Level Type");
+        GameServer server = new GameServer(profile, big.toJson());
+        server.start(0);
+        try (GameClient client = GameClient.connect(
+                "127.0.0.1", server.getPort(), "Joiner", 5000)) {
+            Level received = client.level();
+            assertNotNull(received, "client should hold the served level");
+            assertEquals(400, received.width);
+            assertEquals(300, received.height);
+            for (int c = 0; c < 400; c += 37) {
+                assertEquals(big.tileAt(c, 299), received.tileAt(c, 299),
+                        "tile mismatch at col " + c);
+            }
+            await("first snapshot", () -> client.latest() != null);
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
+    void levelsRoundTripThroughRleSerialization() {
+        Level lvl = customLevel(50, 20);
+        Level back = LevelLoader.parse(lvl.toJson());
+        assertEquals(lvl.width, back.width);
+        assertEquals(lvl.height, back.height);
+        for (int r = 0; r < lvl.height; r++) {
+            for (int c = 0; c < lvl.width; c++) {
+                assertEquals(lvl.tileAt(c, r), back.tileAt(c, r),
+                        "tile mismatch at " + c + "," + r);
+            }
+        }
+    }
+
+    @Test
+    void onlineBlocksHaveDurabilityInsteadOfBreakingInstantly() throws IOException {
+        Level lvl = Level.empty("Mine Test", 20, 15, 32);
+        int dirt = lvl.blocks.get("dirt").id(); // 0.6 s of bare-handed mining
+        lvl.setTile(3, 4, dirt);
+        GameProfile profile = new GameProfile("Mine Test Type");
+        profile.gravityEnabled = false; // hold the player at the spawn
+        GameServer server = new GameServer(profile, lvl.toJson());
+        server.start(0);
+        try (GameClient client = GameClient.connect(
+                "127.0.0.1", server.getPort(), "Miner", 3000)) {
+            await("first snapshot", () -> client.latest() != null);
+
+            // A bare "break this block" request must not work any more —
+            // that was the instant-breaking bug.
+            client.sendBlockEdit(3, 4, 0, "play");
+            sleep(400);
+            assertEquals(dirt, client.level().tileAt(3, 4),
+                    "a bare edit request must not break the block");
+
+            // Hold-to-mine intent rides the input command; the server chips
+            // away at the block's hardness and only then breaks it.
+            PlayerInput in = new PlayerInput(false, false, false, false, 1);
+            in.mine = true;
+            in.mineCol = 3;
+            in.mineRow = 4;
+            client.sendInput(in);
+            sleep(200); // well under dirt's 0.6 s hardness
+            assertEquals(dirt, client.level().tileAt(3, 4),
+                    "the block should survive the start of the stroke");
+            await("block mined through its durability",
+                    () -> client.level().tileAt(3, 4) == 0);
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
+    void releasedMiningStrokeResetsProgress() throws IOException {
+        Level lvl = Level.empty("Mine Reset Test", 20, 15, 32);
+        int stone = lvl.blocks.get("stone").id(); // 1.6 s bare-handed
+        lvl.setTile(3, 4, stone);
+        GameProfile profile = new GameProfile("Mine Reset Type");
+        profile.gravityEnabled = false;
+        GameServer server = new GameServer(profile, lvl.toJson());
+        server.start(0);
+        try (GameClient client = GameClient.connect(
+                "127.0.0.1", server.getPort(), "Waffler", 3000)) {
+            await("first snapshot", () -> client.latest() != null);
+            PlayerInput mining = new PlayerInput(false, false, false, false, 1);
+            mining.mine = true;
+            mining.mineCol = 3;
+            mining.mineRow = 4;
+            client.sendInput(mining);
+            sleep(700); // roughly half of stone's hardness
+            client.sendInput(new PlayerInput(false, false, false, false, 2)); // release
+            sleep(300);
+            PlayerInput again = new PlayerInput(false, false, false, false, 3);
+            again.mine = true;
+            again.mineCol = 3;
+            again.mineRow = 4;
+            client.sendInput(again);
+            sleep(700); // a fresh stroke: not enough on its own
+            assertEquals(stone, client.level().tileAt(3, 4),
+                    "releasing the mouse must reset mining progress");
+        } finally {
+            server.stop();
+        }
+    }
+
+    @Test
+    void blockBatchesRoundTrip() {
+        String line = Protocol.blockBatch(java.util.List.of(
+                new int[]{1, 2, 7}, new int[]{3, 4, 0}));
+        Map<String, Object> msg = Protocol.decode(line);
+        assertEquals("blocks", Protocol.type(msg));
+        java.util.List<Object> flat = com.larsons.engine.util.Json.asArray(msg.get("l"));
+        assertEquals(6, flat.size());
+        assertEquals(7, ((Number) flat.get(2)).intValue());
+        assertEquals(0, ((Number) flat.get(5)).intValue());
+    }
+
+    private static void sleep(long millis) {
+        try {
+            Thread.sleep(millis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
 }

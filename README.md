@@ -1269,26 +1269,38 @@ designed for: *input commands in, state snapshots out*.
 
 - Clients never send positions. Each tick the client sends a
   [`PlayerInput`](src/main/java/com/larsons/engine/sim/PlayerInput.java)
-  (left/right/up/down + sequence number); the server applies each player's
-  latest input and steps
+  (left/right/up/down + sequence number); the server drains each player's
+  queued inputs (so edge-triggered jumps and attack clicks are never lost
+  between ticks, however fast the client sends) and steps
   [`PlayerPhysics`](src/main/java/com/larsons/engine/sim/PlayerPhysics.java)
-  at a fixed 60 Hz, then broadcasts snapshots at 30 Hz. Cheating by
-  teleporting isn't possible, and a laggy client only degrades itself.
-- **Prediction:** the local player runs the *identical* `PlayerPhysics` step
-  locally, so movement feels instant; incoming snapshots correct the
-  prediction (small errors blend away smoothly, large ones snap).
-- **Interpolation:** remote players are drawn ~100 ms in the past, blended
-  between the two most recent snapshots, so they move smoothly regardless of
-  snapshot timing.
+  at a fixed 60 Hz — paced with the same precise coarse-sleep/fine-park
+  waits as the render loop, so the tick rate holds on every OS — then
+  broadcasts snapshots at 30 Hz. Cheating by teleporting isn't possible,
+  and a laggy client only degrades itself.
+- **Prediction & reconciliation:** the local player runs the *identical*
+  `PlayerPhysics` step locally, so movement feels instant. Snapshots echo the
+  last input sequence the server applied; the client rewinds to that
+  authoritative state, **replays its still-unacknowledged inputs**, and
+  compares like with like — when both simulations agree nothing tugs at the
+  player, so there is no rubber-banding at any ping (small residual errors
+  blend away smoothly, large ones snap).
+- **Interpolation:** remote players *and* replicated entities are drawn
+  ~70 ms in the past, blended between the two buffered snapshots straddling
+  that moment, so everything moves smoothly regardless of snapshot timing.
 - **Entity replication:** the server simulates mobs, dropped items, and
   projectiles in flight (the same `World` code single-player runs) and
   includes them in snapshots; clients just render them. Snapshots also carry
   the time of day, so the lighting pass darkens every screen in sync.
-- **World edits:** mining, placing, and creative painting are requests
+- **World edits:** placing and creative painting are requests
   (`edit`/`paint`/`erase`); the server validates them against the host's
   feature toggles, applies them on the tick thread, and broadcasts the
-  authoritative `block` result to everyone. Late joiners get the *live*
-  level (the server serializes its current world on join), so an
+  authoritative `block` result to everyone (bursts — liquid flow, explosions —
+  batch into one `blocks` message). **Play-mode mining is hold-to-mine
+  online too:** the mining intent rides the input command and the server
+  accumulates progress against the block's hardness (matching tools speed it
+  up, finished blocks wear the tool), so durability behaves exactly as
+  offline. Late joiners get the *live* level — serialized compact +
+  run-length-encoded so even giant custom levels fit the handshake — so an
   hour of collaborative painting is never lost on them.
 - **Combat, shooting & pickups:** attack intent rides the input command
   (edge-triggered by sequence number so one click is one swing), along with
