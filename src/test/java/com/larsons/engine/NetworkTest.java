@@ -372,6 +372,69 @@ class NetworkTest {
         }
     }
 
+    /**
+     * Regression: quitting an online session nulls the scene's net reference,
+     * but the menu fade keeps <em>rendering</em> the play scene for a few more
+     * frames — and online there is no local World, so the offline render
+     * paths crashed the game loop with an NPE ({@code world.darkness}).
+     */
+    @Test
+    void quittingAnOnlineSessionSurvivesTheMenuFade() throws IOException {
+        System.setProperty("java.awt.headless", "true");
+        GameServer server = startServer();
+        GameClient client = GameClient.connect(
+                "127.0.0.1", server.getPort(), "Quitter", 3000);
+        com.larsons.engine.config.GameContext ctx =
+                new com.larsons.engine.config.GameContext(
+                        null, new com.larsons.engine.config.GameTypeStore());
+        ctx.setProfile(client.profile());
+        ctx.setSession(new com.larsons.engine.net.NetSession(client, server));
+
+        com.larsons.engine.scene.SceneManager scenes =
+                new com.larsons.engine.scene.SceneManager();
+        scenes.setViewport(640, 360);
+        scenes.register("menu", new com.larsons.engine.demo.MainMenuScene(ctx));
+        scenes.register("play", new com.larsons.engine.demo.PlayScene(
+                ctx, "levels/sample_level.json"));
+
+        com.larsons.engine.input.InputManager input =
+                new com.larsons.engine.input.InputManager();
+        java.awt.image.BufferedImage frame = new java.awt.image.BufferedImage(
+                640, 360, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        java.awt.Graphics2D g = frame.createGraphics();
+        try {
+            scenes.setScene("play");
+            for (int i = 0; i < 10; i++) {
+                input.newFrame();
+                scenes.update(1.0 / 120.0, input);
+                scenes.render(g, 0f);
+            }
+
+            // The server goes away (the host quit); the client notices...
+            server.stop();
+            await("client sees the disconnect", () -> !client.isConnected());
+
+            // ...and the player presses Enter on the disconnect overlay,
+            // which tears the session down and starts the menu fade. Every
+            // frame of that fade still renders this scene.
+            java.awt.Component src = new java.awt.Canvas();
+            input.keyPressed(new java.awt.event.KeyEvent(src,
+                    java.awt.event.KeyEvent.KEY_PRESSED, 0L, 0,
+                    java.awt.event.KeyEvent.VK_ENTER, '\n'));
+            for (int i = 0; i < 120; i++) { // enough frames to finish the fade
+                input.newFrame();
+                scenes.update(1.0 / 120.0, input);
+                scenes.render(g, 0f);
+            }
+            assertEquals("MainMenuScene", scenes.current().name(),
+                    "the quit should land on the menu without crashing");
+        } finally {
+            g.dispose();
+            ctx.closeSession();
+            server.stop();
+        }
+    }
+
     @Test
     void blockBatchesRoundTrip() {
         String line = Protocol.blockBatch(java.util.List.of(

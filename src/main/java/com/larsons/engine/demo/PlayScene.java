@@ -141,6 +141,17 @@ public class PlayScene extends AbstractScene {
     private int inputSeq;
 
     private NetSession net; // null in single-player
+
+    /**
+     * Set when the player quits an online session, until the scene switch
+     * lands. Quitting nulls {@link #net}, but the menu transition keeps
+     * <em>rendering</em> this scene through the fade — and with no session
+     * every {@code net == null} branch assumes an offline {@link #world},
+     * which an online session never had. While leaving, update and render
+     * are no-ops (the fade covers the blank frame).
+     */
+    private boolean leaving;
+
     private final Map<Integer, Animation> remoteAnims = new HashMap<>();
 
     /**
@@ -222,6 +233,7 @@ public class PlayScene extends AbstractScene {
     @Override
     public void onEnter() {
         paused = false;
+        leaving = false;
         pauseForm = null;
         net = ctx.session();
         remoteAnims.clear();
@@ -336,12 +348,11 @@ public class PlayScene extends AbstractScene {
 
     @Override
     public void update(double dt, InputManager input) {
+        if (leaving) return; // session torn down; waiting out the scene fade
         if (net != null && !net.client().isConnected()) {
             if (input.isKeyJustPressed(KeyEvent.VK_ENTER)
                     || input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
-                ctx.closeSession();
-                net = null;
-                scenes.transitionTo("menu");
+                leaveSession();
             }
             return;
         }
@@ -1396,6 +1407,13 @@ public class PlayScene extends AbstractScene {
 
     @Override
     public void render(Graphics2D g, float alpha) {
+        if (leaving) {
+            // Session gone; hold a blank frame while the menu fade finishes.
+            ctx.lighting().setDarkness(0);
+            g.setColor(level != null ? level.background : Color.BLACK);
+            g.fillRect(0, 0, viewportWidth, viewportHeight);
+            return;
+        }
         GameProfile p = profile();
         feedLighting(p);
 
@@ -1645,6 +1663,20 @@ public class PlayScene extends AbstractScene {
         syncCameraFromProfile();
     }
 
+    /**
+     * Quit an online session (host stop or client disconnect): tear the
+     * session down and head for the menu. The scene keeps receiving render
+     * calls through the fade transition, so {@link #leaving} silences it —
+     * without that, the post-quit frames took the offline code paths against
+     * the {@code world} an online session never had and crashed the loop.
+     */
+    private void leaveSession() {
+        leaving = true;
+        ctx.closeSession();
+        net = null;
+        scenes.transitionTo("menu");
+    }
+
     private void buildPauseForm() {
         GameProfile p = profile();
         pauseForm = new ConfigForm("Paused — " + p.name).theme(MenuTheme.dark());
@@ -1663,11 +1695,8 @@ public class PlayScene extends AbstractScene {
             pauseForm.addAction("Edit in Creative",
                             () -> scenes.transitionTo("creative"))
                     .enabledWhen(() -> p.creativeEnabled);
-            pauseForm.addAction(net.isHost() ? "Stop Server & Quit" : "Disconnect & Quit", () -> {
-                ctx.closeSession();
-                net = null;
-                scenes.transitionTo("menu");
-            });
+            pauseForm.addAction(net.isHost() ? "Stop Server & Quit" : "Disconnect & Quit",
+                    this::leaveSession);
         }
     }
 
