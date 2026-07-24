@@ -10,6 +10,9 @@ import com.larsons.engine.demo.BoardCustomizeScene;
 import com.larsons.engine.demo.CreativeScene;
 import com.larsons.engine.demo.DeckGameScene;
 import com.larsons.engine.demo.DeckLobbyScene;
+import com.larsons.engine.demo.EvolutionCatalogScene;
+import com.larsons.engine.demo.EvolutionLobbyScene;
+import com.larsons.engine.demo.EvolutionScene;
 import com.larsons.engine.demo.GameTypeEditorScene;
 import com.larsons.engine.demo.LevelSelectScene;
 import com.larsons.engine.demo.MainMenuScene;
@@ -74,6 +77,9 @@ public class Main {
         engine.scenes().register("autoguide", new AutoBattlerGuideScene(context));
         engine.scenes().register("decklobby", new DeckLobbyScene(context));
         engine.scenes().register("deckgame", new DeckGameScene(context));
+        engine.scenes().register("evolutionlobby", new EvolutionLobbyScene(context));
+        engine.scenes().register("evolution", new EvolutionScene(context));
+        engine.scenes().register("evolutioncatalog", new EvolutionCatalogScene(context));
         engine.scenes().register("skins", new SkinEditorScene(context));
         engine.scenes().register("boardtheme", new BoardCustomizeScene(context));
 

@@ -45,8 +45,13 @@ public class StartupScene extends AbstractScene {
         menu.add("Auto Battler (2-10 Online)", () -> scenes.transitionTo("autolobby"));
         menu.add("Council of Six (Deckbuilder, 2-6 Online)",
                 () -> scenes.transitionTo("decklobby"));
+        menu.add("Evolution (Artificial Life Simulator)",
+                () -> scenes.transitionTo("evolutionlobby"));
         menu.add("Quit", () -> System.exit(0));
     }
+
+    /** The launch menu, exposed so tests can assert what the game offers. */
+    public Menu menu() { return menu; }
 
     @Override
     public void update(double dt, InputManager input) {
