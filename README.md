@@ -73,6 +73,14 @@ over in a generic, data-driven form and wired to the same toggles:
   to fill seats, turn timers, and **shader-lit particle effects** (every
   table event bursts through the mode's bloom pass). Deliberately simpler
   than Magic. See [Council of Six](#council-of-six-deckbuilding-board-game-2-6-online).
+- **Evolution** — a third complete standalone game mode, its own option on the
+  launch menu: an **artificial life simulator** where organisms are strands of
+  red/green/blue DNA that replicate imperfectly, express traits and shapes from
+  hard-coded genetic rules, and are pruned by hunger, crowding, temperature and
+  each other. You seed one square cell, feed the dish, and earn shop credit for
+  every strand and colony combination that has never existed before — each one
+  written out as its own JSON file in a reference book that ships empty on
+  purpose. See [Evolution](#evolution-artificial-life-simulator).
 - **Skins (texture overrides)** — drop PNG sprite sheets in
   `resources/skins/` and assign them in the lobby's **Customize Skins** menu:
   frame pixel width/height + frame count + a 0-120 fps playback rate, per
@@ -1170,6 +1178,137 @@ pauses (the table keeps playing online).
 
 ---
 
+## Evolution (artificial life simulator)
+
+A third complete standalone game on the launch menu: **Evolution (Artificial
+Life Simulator)** — a Petri dish you scan like a microscope slide, full of
+organisms that are nothing but **strands of coloured DNA**. Every rule for
+reading that DNA is hard-coded and deterministic; *which* strands ever exist is
+not. The game ships with an empty reference book, and the whole point is
+finding out what the rules can produce.
+
+### DNA is the animal
+
+An organism is a sequence of **red**, **green** and **blue** nucleotides —
+literally three colours of pixel — and everything about it is decoded from
+that strand by
+[`Phenotype`](src/main/java/com/larsons/engine/evolution/Phenotype.java):
+
+- **Red encodes hostility**, **blue encodes altruism**. Each is simply its
+  share of the strand, so a cell's colour (the average of its nucleotides) is a
+  direct read-out of what it does — pure red hunts, pure blue cooperates, an
+  even mix reads white.
+- **Green is a wild card read by slot.** A green in slot *s* expresses
+  `Trait.forSlot(s)` with magnitude *s*: slot 1 is speed, slot 2 consumption
+  rate, **slot 3 is light emission**, slot 4 heat tolerance, 5 digestive
+  efficiency, 6 memory, 7 vision, 8 pattern recognition — and the wheel repeats
+  every eight slots, so a longer strand reaches the same traits at higher
+  magnitudes.
+- **The nucleotide after a green modifies it**: a following **red doubles** the
+  magnitude, a following **blue halves** it but refines digestion, a following
+  **green adds one** and chains on. (A green in slot 3 is light emission of 3;
+  followed by red it is 6.)
+- **Every adjacent pair also unlocks an ability**, so the same letters read
+  twice — once for magnitude, once for capability:
+
+  | Pair | Ability | Pair | Ability | Pair | Ability |
+  |---|---|---|---|---|---|
+  | `RR` | predation | `GR` | *(doubles the green)* | `BR` | kin defence |
+  | `RG` | exothermy | `GG` | complex digestion | `BG` | broadcast |
+  | `RB` | venom | `GB` | endothermy | `BB` | sharing |
+
+- **Two abilities need a long strand**, the "eventually unlockable" traits:
+  **tool use** (a `GRG` motif at slot 9 or later, in a strand that also
+  recognises patterns) and **multicellularity** (`BBB` in a strand of 14+).
+- **The tail of the strand governs copying fidelity** — greens near the end
+  make replication sloppier, so offspring variability is itself under
+  selection — and green content over the whole strand sets how fast a body
+  rots back into food after death.
+- **Shape follows what a strand commits to**, then feeds back as a modifier.
+  Everything starts as the primordial **square** and only differentiates at six
+  nucleotides: triangle (hunter), circle (altruist), star (light emitter),
+  hexagon (colonist), diamond (tool user), cross (complex digester), pentagon
+  (scout).
+
+### The dish does the selecting
+
+[`Dish`](src/main/java/com/larsons/engine/evolution/Dish.java) is pure
+simulation — no drawing, no scene state, so the whole ecology runs headlessly
+in tests at any speed. Every rule is local, and the interesting behaviour
+(blooms, crashes, predator/prey cycles, colonies) is emergent rather than
+scripted:
+
+- **Scarcity.** Energy is finite. Corpses and digested waste recycle back into
+  orbs — strictly energy-neutral, nothing minted or lost — so a dish is a
+  closed loop a well-adapted population can ride indefinitely and a greedy one
+  drains and starves in.
+- **Crowding.** Upkeep rises with local density, so a bloom eats its own margin.
+- **Temperature.** A diffusing heat field, pushed around by your sources and by
+  the dish's own exothermic and endothermic strands; cells outside their
+  evolved comfort band burn extra energy.
+- **Predation**, with **pattern recognition** as the counter — prey that can
+  read a hunter's colours run from it.
+- **Light.** The slide has unlit patches, and sight range scales with how well
+  lit a spot is. Bioluminescence is fed to the engine's
+  [`LightingPass`](src/main/java/com/larsons/engine/graphics/shader/LightingPass.java)
+  through the same GLSL-first shader chain everything else uses — the radius
+  that lights the screen *is* the radius the simulation forages with.
+- **Death**, from starvation or old age, so nothing stagnates.
+
+Neighbour lookups go through a uniform spatial grid rebuilt each tick, so a
+full dish (260 organisms, 1500 orbs) costs about **1.2 ms per tick** — well
+inside the 8.3 ms budget at 120 Hz.
+
+### The game around it
+
+You start exactly as the design calls for: **one dish, one square organism** of
+whichever colour you pick, and **100 energy orbs** to place by hand.
+
+- **Credit for novelty.** Every strand that has never existed before is
+  catalogued and paid for, scaled to its complexity — as is every new **colony
+  combination** multicellular strands invent between themselves. Breeding
+  complexity is what funds the lab.
+- **The shop** sells food (simple and complex energy), life (starter colonies,
+  more dishes, transfer spatulas, cell tool kits), environment (barrier
+  pillars, exothermic sources, endothermic sinks, spotlights, mutagen vials)
+  and three permanent **instruments**: the thermometer (temperature overlay),
+  the **DNA catalog scanner** (reads a cell's exact strand instead of guessing)
+  and the time warp dial (0.25× to 8×).
+- **Cell tools** are dropped *for the organisms* — only a strand that evolved
+  tool use can pick up a flagellum, scalpel, sieve or lantern, each with a
+  limited number of uses that pass to whoever picks it up next when the carrier
+  dies.
+- **The run ends** when every dish has run out of life and there is no way left
+  to reseed one.
+
+### The reference book
+
+Nothing in the catalog ships with the game. Each discovery is written as **its
+own JSON file** named after the DNA that produced it
+(`resources/evolution/catalog/<DNA>.json`), decoded traits and all, so a
+catalog entry is a readable artefact on its own rather than a row in a table
+the game shipped with. The book outlives any single experiment — starting over
+replaces the save but never deletes what earlier runs found — and there are
+**24 achievements** for the discoveries worth bragging about (first predator,
+bioluminescence, tool use, multicellularity, all eight body shapes, a strand at
+the 48-nucleotide maximum, …).
+
+Saves are JSON too (`resources/evolution/save.json`): dishes and everything in
+them, the bench, the credit balance and the book's index, written on exit, from
+the pause menu, and automatically every 90 seconds.
+
+### Controls
+
+Keys `1`-`9` and `0` pick a tool (energy, complex energy, starter colony,
+barrier, heat, cold, spotlight, mutagen, tool kit, spatula); `I` or `` ` ``
+goes back to inspecting. **Left-click** uses the held tool, **right-drag** (or
+WASD/arrows) pans the stage, the **wheel** zooms around the cursor. **B** opens
+the shop, **K** the reference book, **Tab** switches dish, **T** toggles the
+thermometer overlay, **[** and **]** work the time warp, **H** explains the
+genetics, **Esc** pauses.
+
+---
+
 ## Skins (texture overrides)
 
 Every game texture is overridable with your own art, without touching code:
@@ -1631,7 +1770,10 @@ engine.scenes().setScene("mine"); // or transitionTo for a fade
 [`EngineFeatureTest`](src/test/java/com/larsons/engine/EngineFeatureTest.java),
 [`MobExpansionTest`](src/test/java/com/larsons/engine/MobExpansionTest.java),
 [`RelicsTest`](src/test/java/com/larsons/engine/RelicsTest.java),
-[`VehicleTest`](src/test/java/com/larsons/engine/VehicleTest.java))
+[`VehicleTest`](src/test/java/com/larsons/engine/VehicleTest.java),
+[`GenomeTest`](src/test/java/com/larsons/engine/evolution/GenomeTest.java),
+[`EvolutionGameTest`](src/test/java/com/larsons/engine/evolution/EvolutionGameTest.java),
+[`EvolutionSceneTest`](src/test/java/com/larsons/engine/EvolutionSceneTest.java))
 covering JSON read/write, level loading (both tile modes + round-trips),
 sprite-sheet slicing, input edge detection, game-type save/load, the
 `ConfigForm` widget's keyboard/mouse interaction (including scrolling),
@@ -1681,6 +1823,27 @@ seeded battles, whole bot games running headlessly to a winner (PvE rounds,
 ghosts, eliminations, placements), real loopback lobbies with host-only
 controls and combat replication, and both scenes rendering off-screen
 against a live server.
+
+Evolution is covered end to end from the genetics up:
+[`GenomeTest`](src/test/java/com/larsons/engine/evolution/GenomeTest.java)
+pins the decoding rules themselves (the design's worked example — a green in
+slot 3 is light emission of 3, doubled by a following red — the whole
+wild-card wheel and its wrap-around, all nine pair abilities, the long-strand
+unlockables, colour and shape derivation, and that replication miscopies often
+enough to explore while still letting a faithful long strand breed true);
+[`EvolutionGameTest`](src/test/java/com/larsons/engine/evolution/EvolutionGameTest.java)
+runs the ecology headlessly (the opening state the design specifies,
+replication and divergence, starvation ending a run, energy-neutral corpse
+recycling, digestion waste, complex energy gated on the ability that eats it,
+predators actually killing, barriers and dish walls holding, heat diffusing,
+shadows and spotlights, the shop, the spatula spending only on a real
+transfer, catalog uniqueness and colony combinations) and the JSON layer (save
+round-trips, one file per discovery, the book outliving a new experiment, and
+corrupt or junk-bearing saves being reported rather than thrown); and
+[`EvolutionSceneTest`](src/test/java/com/larsons/engine/EvolutionSceneTest.java)
+renders every screen off-screen against a live dish — lobby, microscope, shop,
+help, pause, and both pages of the reference book — and drives the tool tray
+and inspector by synthesized clicks.
 
 The presentation/customization layer has its own suite:
 [`AutoBattlerFxTest`](src/test/java/com/larsons/engine/autobattler/AutoBattlerFxTest.java)
