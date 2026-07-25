@@ -9,6 +9,7 @@ import com.larsons.engine.evolution.Phenotype;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.Menu;
+import com.larsons.engine.ui.MenuItem;
 import com.larsons.engine.ui.MenuTheme;
 
 import java.awt.Color;
@@ -17,6 +18,7 @@ import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.event.KeyEvent;
+import java.util.List;
 
 /**
  * The front door to the evolution game: start a new experiment (choosing the
@@ -75,6 +77,9 @@ public class EvolutionLobbyScene extends AbstractScene {
         }
         menu.add("Reference Book (" + catalogued + " catalogued)",
                 () -> scenes.transitionTo("evolutioncatalog"));
+        if (hasSave) {
+            menu.add("Reset the Lab (respend your credits)", this::startReset);
+        }
         menu.add("Back to Game Types", () -> scenes.transitionTo("startup"));
     }
 
@@ -107,6 +112,37 @@ public class EvolutionLobbyScene extends AbstractScene {
         game.catalog().drainPendingWrites(); // restored records are already on disk
         store.save(game);
         handOff(game);
+    }
+
+    /**
+     * Reset from the menu: the same redistribution the pause menu offers, for a
+     * player who wants to start the lab over without loading into it first.
+     */
+    private void startReset() {
+        EvolutionGame game = store.load();
+        if (game == null) {
+            status = "There is no experiment to reset";
+            buildMenu();
+            return;
+        }
+        choosingColor = true;
+        colorMenu = new Menu("Reset the lab")
+                .subtitle("Keeps your reference book · returns all "
+                        + game.catalog().creditEarned() + " credits it has ever earned")
+                .theme(MenuTheme.dark());
+        for (Nucleotide n : new Nucleotide[]{Nucleotide.R, Nucleotide.G, Nucleotide.B}) {
+            Phenotype p = Phenotype.of(Genome.starter(n));
+            colorMenu.add(capitalize(n.displayName()) + "  ·  " + Genome.starter(n).sequence()
+                    + "  ·  " + p.summary().toLowerCase(), () -> {
+                game.resetExperiment(n);
+                store.save(game);
+                handOff(game);
+            });
+        }
+        colorMenu.add("Cancel", () -> {
+            choosingColor = false;
+            buildMenu();
+        });
     }
 
     private void continueGame() {
@@ -173,24 +209,44 @@ public class EvolutionLobbyScene extends AbstractScene {
                 24, viewportHeight - 24);
     }
 
-    /** The three starting strands drawn as their actual coloured nucleotides. */
+    /**
+     * Draw each starting strand as its actual coloured nucleotides, immediately
+     * left of the menu row it belongs to.
+     *
+     * <p>{@link Menu} records every item's hit box while it renders, and the
+     * menu's own layout moves with the window size and the number of rows — so
+     * the swatches are positioned from those boxes rather than from guessed
+     * offsets, which is what used to leave them drifting out of line with the
+     * text they annotate. Must therefore be called after the menu has rendered.
+     */
     private void drawColorSwatches(Graphics2D g) {
-        int cy = viewportHeight / 4 + 96;
+        List<MenuItem> items = colorMenu.items();
         Nucleotide[] order = {Nucleotide.R, Nucleotide.G, Nucleotide.B};
-        for (int i = 0; i < order.length; i++) {
+        int lastBottom = 0;
+        for (int i = 0; i < order.length && i < items.size(); i++) {
+            MenuItem item = items.get(i);
+            if (item.width <= 0) continue; // scrolled out of view
             Genome starter = Genome.starter(order[i]);
-            int y = cy + i * 54 - 12;
-            int x = viewportWidth / 2 - 300;
+            int cell = 9;
+            int totalW = starter.length() * cell;
+            int x = item.x - totalW - 16;
+            int y = item.y + (item.height - 12) / 2;
             for (int slot = 1; slot <= starter.length(); slot++) {
                 g.setColor(starter.at(slot).color());
-                g.fillRect(x + (slot - 1) * 12, y, 10, 12);
+                g.fillRect(x + (slot - 1) * cell, y, cell - 1, 12);
             }
+            lastBottom = Math.max(lastBottom, item.y + item.height);
         }
+        if (lastBottom == 0) return;
+
+        // Parked above the control hint rather than under the last swatch: the
+        // menu has a Cancel row below these three, and anchoring to the swatches
+        // put this note straight through it.
         g.setFont(new Font("SansSerif", Font.PLAIN, 13));
         g.setColor(TEXT);
         FontMetrics fm = g.getFontMetrics();
-        String note = "Every strand starts four nucleotides long — shapes appear at six";
-        g.drawString(note, viewportWidth / 2 - fm.stringWidth(note) / 2, cy + 3 * 54 + 12);
+        String note = "Every strand starts four nucleotides long — body shapes appear at six";
+        g.drawString(note, viewportWidth / 2 - fm.stringWidth(note) / 2, viewportHeight - 58);
     }
 
     private static String capitalize(String s) {

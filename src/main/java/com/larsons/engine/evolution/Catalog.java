@@ -35,8 +35,15 @@ public final class Catalog {
     private final List<SpeciesRecord> pendingWrites = new ArrayList<>();
     private final List<Achievement> announcements = new ArrayList<>();
 
-    /** Total credit this book has paid out, for the end-of-run summary. */
+    /**
+     * Total credit this book has ever paid out, across every experiment. This is
+     * the player's lifetime score, and it is what a reset hands back so the same
+     * discoveries can be spent on a different lab — see
+     * {@link EvolutionGame#resetExperiment()}.
+     */
     private int creditEarned;
+    /** How many experiments have been started against this book. */
+    private int runs = 1;
 
     // --- discovery ------------------------------------------------------------------
 
@@ -136,7 +143,46 @@ public final class Catalog {
 
     public int combinationCount() { return combinations.size(); }
 
+    /** Credit this book has paid out across every experiment ever run. */
     public int creditEarned() { return creditEarned; }
+
+    /** How many experiments have been started against this book. */
+    public int runs() { return runs; }
+
+    /** Count another experiment started (a reset, or a fresh game over this book). */
+    public void countRun() { runs++; }
+
+    /** The longest strand in the book, or {@code null} while it is empty. */
+    public SpeciesRecord longestStrand() {
+        SpeciesRecord best = null;
+        for (SpeciesRecord r : species.values()) {
+            if (best == null || r.sequence.length() > best.sequence.length()) best = r;
+        }
+        return best;
+    }
+
+    /** The most elaborate strand in the book, or {@code null} while it is empty. */
+    public SpeciesRecord mostComplex() {
+        SpeciesRecord best = null;
+        for (SpeciesRecord r : species.values()) {
+            if (best == null || r.phenotype().complexity() > best.phenotype().complexity()) best = r;
+        }
+        return best;
+    }
+
+    /** The deepest lineage the book has recorded. */
+    public int deepestGeneration() {
+        int best = 0;
+        for (SpeciesRecord r : species.values()) best = Math.max(best, r.generation);
+        return best;
+    }
+
+    /** How many distinct abilities have ever been seen, out of all of them. */
+    public int abilitiesSeen() {
+        Set<Ability> seen = EnumSet.noneOf(Ability.class);
+        for (SpeciesRecord r : species.values()) seen.addAll(r.phenotype().abilities());
+        return seen.size();
+    }
 
     public Set<BodyShape> shapesSeen() { return shapesSeen; }
 
@@ -176,6 +222,7 @@ public final class Catalog {
         for (Achievement a : unlocked) ach.add(a.name());
         m.put("achievements", ach);
         m.put("creditEarned", creditEarned);
+        m.put("runs", runs);
         return m;
     }
 
@@ -204,6 +251,7 @@ public final class Catalog {
             }
         }
         if (m.get("creditEarned") instanceof Number n) c.creditEarned = n.intValue();
+        if (m.get("runs") instanceof Number n) c.runs = Math.max(1, n.intValue());
         return c;
     }
 

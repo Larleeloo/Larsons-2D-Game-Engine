@@ -57,8 +57,8 @@ public class EvolutionCatalogScene extends AbstractScene {
         Sort(String label) { this.label = label; }
     }
 
-    /** Which half of the book is open. */
-    private enum Tab { SPECIES, ACHIEVEMENTS }
+    /** Which page of the book is open. */
+    private enum Tab { SPECIES, LIFETIME, ACHIEVEMENTS }
 
     private final GameContext ctx;
     private final EvolutionStore store;
@@ -74,6 +74,7 @@ public class EvolutionCatalogScene extends AbstractScene {
 
     private final List<Rectangle> rowRects = new ArrayList<>();
     private final Rectangle speciesTab = new Rectangle();
+    private final Rectangle lifetimeTab = new Rectangle();
     private final Rectangle achievementsTab = new Rectangle();
     private final Rectangle sortButton = new Rectangle();
     private final Rectangle backButton = new Rectangle();
@@ -95,7 +96,13 @@ public class EvolutionCatalogScene extends AbstractScene {
         ctx.applyLiveSettings();
         species.clear();
         species.addAll(store.loadSpecies());
+        // The save's index carries the running totals (credit ever earned, runs,
+        // combinations, achievements); the discoveries themselves live in their
+        // own files. Fold the files back in so the lifetime page can report the
+        // things derived from them — shapes and abilities seen, the deepest
+        // lineage, the record holders — instead of an index full of zeroes.
         catalog = store.loadCatalogIndex();
+        for (SpeciesRecord rec : species) catalog.restore(rec);
         applySort();
         selected = 0;
         scroll = 0;
@@ -122,7 +129,9 @@ public class EvolutionCatalogScene extends AbstractScene {
             return;
         }
         if (input.isKeyJustPressed(KeyEvent.VK_TAB)) {
-            tab = tab == Tab.SPECIES ? Tab.ACHIEVEMENTS : Tab.SPECIES;
+            Tab[] pages = Tab.values();
+            tab = pages[(tab.ordinal() + 1) % pages.length];
+            scroll = 0;
         }
 
         int wheel = input.getWheelRotation();
@@ -136,6 +145,7 @@ public class EvolutionCatalogScene extends AbstractScene {
                 return;
             }
             if (speciesTab.contains(mouseX, mouseY)) tab = Tab.SPECIES;
+            if (lifetimeTab.contains(mouseX, mouseY)) tab = Tab.LIFETIME;
             if (achievementsTab.contains(mouseX, mouseY)) tab = Tab.ACHIEVEMENTS;
             if (sortButton.contains(mouseX, mouseY)) {
                 Sort[] all = Sort.values();
@@ -183,11 +193,13 @@ public class EvolutionCatalogScene extends AbstractScene {
                 + "not written", 28, 64);
 
         drawChrome(g);
-        if (tab == Tab.SPECIES) {
-            drawSpeciesList(g);
-            drawDetail(g);
-        } else {
-            drawAchievements(g);
+        switch (tab) {
+            case SPECIES -> {
+                drawSpeciesList(g);
+                drawDetail(g);
+            }
+            case LIFETIME -> drawLifetime(g);
+            case ACHIEVEMENTS -> drawAchievements(g);
         }
 
         g.setFont(new Font("SansSerif", Font.PLAIN, 13));
@@ -198,15 +210,110 @@ public class EvolutionCatalogScene extends AbstractScene {
 
     private void drawChrome(Graphics2D g) {
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-        speciesTab.setBounds(viewportWidth - 430, 24, 116, 28);
-        achievementsTab.setBounds(viewportWidth - 306, 24, 132, 28);
-        sortButton.setBounds(viewportWidth - 430, 58, 240, 26);
-        backButton.setBounds(viewportWidth - 160, 24, 128, 28);
+        speciesTab.setBounds(viewportWidth - 540, 24, 104, 28);
+        lifetimeTab.setBounds(viewportWidth - 428, 24, 104, 28);
+        achievementsTab.setBounds(viewportWidth - 316, 24, 140, 28);
+        sortButton.setBounds(viewportWidth - 540, 58, 240, 26);
+        backButton.setBounds(viewportWidth - 168, 24, 136, 28);
 
         drawButton(g, speciesTab, "Species", tab == Tab.SPECIES);
+        drawButton(g, lifetimeTab, "Lifetime", tab == Tab.LIFETIME);
         drawButton(g, achievementsTab, "Achievements", tab == Tab.ACHIEVEMENTS);
         drawButton(g, backButton, "Back", false);
         if (tab == Tab.SPECIES) drawButton(g, sortButton, "Sorted by " + sort.label, false);
+    }
+
+    /**
+     * The lifetime page: what this reference book has accumulated across every
+     * experiment ever run against it, as opposed to the species list (which is
+     * the same discoveries, one at a time) or the achievement wall.
+     *
+     * <p>This is also where the credit total that a lab reset hands back is
+     * shown, since that number <em>is</em> the lifetime score.
+     */
+    private void drawLifetime(Graphics2D g) {
+        int x = 28;
+        int y = 100;
+        int w = viewportWidth - 56;
+        int h = viewportHeight - 150;
+        g.setColor(PANEL);
+        g.fillRoundRect(x, y, w, h, 10, 10);
+        g.setColor(PANEL_EDGE);
+        g.drawRoundRect(x, y, w, h, 10, 10);
+
+        SpeciesRecord longest = catalog.longestStrand();
+        SpeciesRecord complex = catalog.mostComplex();
+        // The book on disk is the authority on how many strands exist; the
+        // save's index carries the running totals that are not derivable from it.
+        int strands = Math.max(species.size(), catalog.speciesCount());
+
+        int ty = y + 40;
+        g.setFont(new Font("SansSerif", Font.BOLD, 20));
+        g.setColor(TEXT);
+        g.drawString("Lifetime discoveries", x + 24, ty);
+        ty += 12;
+
+        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
+        g.setColor(TEXT_DIM);
+        g.drawString("Everything every experiment has ever turned up, kept across resets",
+                x + 24, ty + 12);
+        ty += 46;
+
+        String[][] rows = {
+                {"Strands catalogued", String.valueOf(strands)},
+                {"Colony combinations", String.valueOf(catalog.combinationCount())},
+                {"Credits ever earned", String.valueOf(catalog.creditEarned())},
+                {"Experiments run", String.valueOf(catalog.runs())},
+                {"Body shapes seen", catalog.shapesSeen().size() + " of "
+                        + com.larsons.engine.evolution.BodyShape.values().length},
+                {"Abilities seen", catalog.abilitiesSeen() + " of "
+                        + com.larsons.engine.evolution.Ability.values().length},
+                {"Deepest lineage", "generation " + catalog.deepestGeneration()},
+                {"Achievements", catalog.unlockedAchievements().size() + " of "
+                        + Achievement.values().length},
+        };
+        for (String[] row : rows) {
+            g.setFont(new Font("SansSerif", Font.PLAIN, 15));
+            g.setColor(TEXT_DIM);
+            g.drawString(row[0], x + 24, ty);
+            g.setFont(new Font("SansSerif", Font.BOLD, 15));
+            g.setColor(row[0].startsWith("Credits") ? GOLD : TEXT);
+            g.drawString(row[1], x + 260, ty);
+            ty += 28;
+        }
+
+        ty += 14;
+        g.setFont(new Font("SansSerif", Font.BOLD, 15));
+        g.setColor(TEXT);
+        g.drawString("Record holders", x + 24, ty);
+        ty += 26;
+        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
+        if (longest == null) {
+            g.setColor(TEXT_DIM);
+            g.drawString("Nothing catalogued yet.", x + 24, ty);
+        } else {
+            drawRecordHolder(g, "Longest strand", longest, x + 24, ty, w - 48);
+            ty += 44;
+            drawRecordHolder(g, "Most complex", complex, x + 24, ty, w - 48);
+        }
+
+        g.setFont(new Font("SansSerif", Font.PLAIN, 13));
+        g.setColor(GOLD);
+        g.drawString("Resetting the lab returns all " + catalog.creditEarned()
+                        + " of these credits to spend again — the discoveries are permanent.",
+                x + 24, y + h - 22);
+    }
+
+    private void drawRecordHolder(Graphics2D g, String label, SpeciesRecord rec,
+                                  int x, int y, int width) {
+        if (rec == null) return;
+        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
+        g.setColor(TEXT_DIM);
+        g.drawString(label, x, y);
+        drawStrand(g, rec.genome(), x + 160, y - 11, Math.min(240, width - 200));
+        g.setColor(TEXT);
+        g.drawString(rec.name + "  (" + rec.sequence.length() + "nt · "
+                + rec.phenotype().complexity() + " complexity)", x + 160, y + 18);
     }
 
     private void drawButton(Graphics2D g, Rectangle r, String label, boolean active) {
@@ -357,9 +464,9 @@ public class EvolutionCatalogScene extends AbstractScene {
 
     private void drawAchievements(Graphics2D g) {
         Achievement[] all = Achievement.values();
-        int cols = Math.max(1, (viewportWidth - 60) / 380);
+        int cols = Math.max(1, (viewportWidth - 60) / 400);
         int cardW = (viewportWidth - 60 - (cols - 1) * 16) / cols;
-        int cardH = 74;
+        int cardH = 104;
         int x0 = 28;
         int y0 = 100;
 
@@ -396,13 +503,15 @@ public class EvolutionCatalogScene extends AbstractScene {
 
             g.setFont(new Font("SansSerif", Font.BOLD, 14));
             g.setColor(got ? GOOD : new Color(120, 128, 146));
-            g.drawString(a.title(), x + 12, y + 22);
+            g.drawString(clip(g, a.title(), cardW - 24), x + 12, y + 22);
+            // Descriptions and hints wrap rather than clip: a hint cut off
+            // mid-sentence is worse than no hint at all.
             g.setFont(new Font("SansSerif", Font.PLAIN, 12));
             g.setColor(TEXT_DIM);
-            g.drawString(clip(g, a.description(), cardW - 24), x + 12, y + 42);
+            int after = drawWrapped(g, a.description(), x + 12, y + 40, cardW - 24, 15, 2);
             g.setColor(got ? new Color(96, 132, 104) : new Color(96, 102, 118));
-            g.drawString(clip(g, got ? "unlocked" : "hint: " + a.hint(), cardW - 24),
-                    x + 12, y + 60);
+            drawWrapped(g, got ? "unlocked" : "hint: " + a.hint(),
+                    x + 12, after + 16, cardW - 24, 15, 2);
         }
         g.setClip(oldClip);
     }
@@ -415,6 +524,45 @@ public class EvolutionCatalogScene extends AbstractScene {
             g.setColor(genome.at(i).color());
             g.fillRect(x + (i - 1) * cell, y, Math.max(1, cell - 1), 12);
         }
+    }
+
+    /**
+     * Draw text wrapped to {@code width} over at most {@code maxLines} lines,
+     * returning the baseline of the last line drawn so the caller can stack
+     * something under it.
+     */
+    private static int drawWrapped(Graphics2D g, String text, int x, int y, int width,
+                                   int lineHeight, int maxLines) {
+        FontMetrics fm = g.getFontMetrics();
+        String[] words = text.split(" ");
+        StringBuilder line = new StringBuilder();
+        int lines = 0;
+        int lastY = y;
+        for (int i = 0; i < words.length; i++) {
+            String candidate = line.length() == 0 ? words[i] : line + " " + words[i];
+            if (fm.stringWidth(candidate) > width && line.length() > 0) {
+                lastY = y + lines * lineHeight;
+                if (lines + 1 >= maxLines) {
+                    // No room to wrap again: everything left goes on this line,
+                    // clipped, so the text ends with an ellipsis rather than
+                    // simply stopping mid-word.
+                    StringBuilder tail = new StringBuilder(line);
+                    for (int k = i; k < words.length; k++) tail.append(' ').append(words[k]);
+                    g.drawString(clip(g, tail.toString(), width), x, lastY);
+                    return lastY;
+                }
+                g.drawString(line.toString(), x, lastY);
+                lines++;
+                line = new StringBuilder(words[i]);
+            } else {
+                line = new StringBuilder(candidate);
+            }
+        }
+        if (line.length() > 0) {
+            lastY = y + lines * lineHeight;
+            g.drawString(clip(g, line.toString(), width), x, lastY);
+        }
+        return lastY;
     }
 
     private static String clip(Graphics2D g, String s, int width) {

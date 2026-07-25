@@ -17,15 +17,16 @@ import com.larsons.engine.evolution.Trait;
 import com.larsons.engine.fx.Particles;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.Perspective;
-import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.graphics.shader.Shaders;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.Menu;
 import com.larsons.engine.ui.MenuTheme;
 
+import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
+import java.awt.Composite;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
@@ -33,6 +34,7 @@ import java.awt.Polygon;
 import java.awt.RadialGradientPaint;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
+import java.awt.Stroke;
 import java.awt.event.KeyEvent;
 import java.awt.geom.Point2D;
 import java.util.ArrayList;
@@ -49,11 +51,13 @@ import java.util.List;
  * tool is held: drop food, drop a pillar, warm a corner, shine a light, spill
  * mutagen, or lift a single cell out on the spatula.
  *
- * <p>The mode runs with its own look through the engine's GLSL-first shader
- * chain — the lighting pass (so bioluminescence genuinely lights the slide),
- * then bloom and a vignette for the eyepiece. Light emission is therefore not
- * decoration: the same radius that feeds the shader is the radius the
- * simulation uses when deciding what a cell can see.
+ * <p>The slide's own light is drawn in world space — shadow pools, then a glow
+ * for every spotlight, warm source and bioluminescent cell over the top — so
+ * light emission is not decoration: the radius that lights the gel is the
+ * radius the simulation forages by. Doing it in the scene rather than through
+ * the engine's screen-space lighting pass is deliberate: that pass dims the
+ * finished frame, HUD and all, and the instrument panel has to stay readable.
+ * A gentle bloom from the shader chain is what makes the glow bloom.
  *
  * <p><b>Controls.</b> {@code 1}–{@code 9}/{@code 0} pick a tool, {@code `} or
  * {@code I} goes back to inspecting. Left-click uses the tool; right-drag (or
@@ -116,7 +120,9 @@ public class EvolutionScene extends AbstractScene {
     private boolean showShop;
     private boolean showHelp;
     private boolean showTemperature;
+    private boolean resetting;
     private Menu pauseMenu;
+    private Menu resetMenu;
 
     private double autosaveTimer;
     private String status = "";
@@ -129,6 +135,7 @@ public class EvolutionScene extends AbstractScene {
     private double panFromCamX, panFromCamY;
 
     private final List<Toast> toasts = new ArrayList<>();
+    private final List<Ripple> ripples = new ArrayList<>();
     private final List<Rectangle> toolRects = new ArrayList<>();
     private final List<Rectangle> shopRects = new ArrayList<>();
     private final int[] screen = new int[2];
@@ -137,6 +144,21 @@ public class EvolutionScene extends AbstractScene {
         String text;
         Color color;
         double age;
+    }
+
+    /**
+     * An expanding ring in the gel. Cell behaviour is otherwise invisible — an
+     * attack, a donation, a signal going out and a body handing energy back all
+     * look like nothing at all — so each one throws a ring the player can read
+     * at a glance, colour-coded to the ability doing it.
+     */
+    private static final class Ripple {
+        double x, y;
+        double radius;      // world units the ring grows to
+        double age;
+        double life;
+        Color color;
+        float width;
     }
 
     public EvolutionScene(GameContext ctx) {
@@ -159,10 +181,12 @@ public class EvolutionScene extends AbstractScene {
     @Override
     public void onEnter() {
         paused = false;
+        resetting = false;
         showShop = false;
         showHelp = false;
         autosaveTimer = 0;
         toasts.clear();
+        ripples.clear();
         particles.clear();
         if (game == null) game = EvolutionGame.newGame(com.larsons.engine.evolution.Nucleotide.G);
 
@@ -170,14 +194,20 @@ public class EvolutionScene extends AbstractScene {
         camera.zoom = Math.max(fitZoom(), 1.15);
         camera.centerOn(0, 0);
 
-        // Lighting first so bioluminescence lights the gel, then the eyepiece look.
-        ctx.overrideShaders(List.of(ctx.lighting(), Shaders.bloom(), Shaders.vignette()), 0.55);
+        // The dish's darkness is drawn in world space (see drawSlide), not through
+        // the engine's screen-space lighting pass: that pass dims the whole frame,
+        // which would take the tool tray, the read-outs and the shop down with the
+        // gel. The HUD has to stay at full brightness to be readable, so the only
+        // post-FX here is a gentle bloom that makes bioluminescence glow.
+        ctx.lighting().setDarkness(0);
+        ctx.overrideShaders(List.of(Shaders.bloom()), 0.32);
 
         pauseMenu = new Menu("Paused")
                 .subtitle("The dish keeps its state while you are away")
                 .theme(MenuTheme.dark())
                 .add("Resume", () -> paused = false)
                 .add("Save experiment", this::saveNow)
+                .add("Reset the lab (respend your credits)", this::startReset)
                 .add("Save and quit to menu", () -> {
                     saveNow();
                     scenes.transitionTo("evolutionlobby");
@@ -213,8 +243,14 @@ public class EvolutionScene extends AbstractScene {
         if (statusAge > 0) statusAge -= dt;
 
         if (paused) {
-            if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) paused = false;
-            else pauseMenu.update(dt, input);
+            if (resetting) {
+                if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) resetting = false;
+                else resetMenu.update(dt, input);
+            } else if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+                paused = false;
+            } else {
+                pauseMenu.update(dt, input);
+            }
             return;
         }
         if (showHelp) {
@@ -235,8 +271,8 @@ public class EvolutionScene extends AbstractScene {
         for (EvolutionGame.Notice n : game.drainNotices()) toast(n.text(), n.color());
         spawnEventParticles();
         particles.update(dt);
+        updateRipples(dt);
         refreshSelection();
-        feedLighting();
 
         autosaveTimer += dt;
         if (autosaveTimer >= 90) {
@@ -437,50 +473,117 @@ public class EvolutionScene extends AbstractScene {
         if (!selected.alive || !game.activeDish().organisms().contains(selected)) selected = null;
     }
 
+    /**
+     * Turn what the dish just did into something visible. Births, deaths and
+     * meals are ambient; hunting, sharing, signalling, tool pickups and
+     * decomposition each get a ring as well, because those are the behaviours a
+     * player is actually trying to watch for.
+     */
     private void spawnEventParticles() {
         for (Dish.Event e : game.drainPresentationEvents()) {
             switch (e.kind()) {
                 case BIRTH -> particles.burst(e.x(), e.y(), e.color(), 6, Particles.Style.MOTES);
-                case KILL -> particles.burst(e.x(), e.y(), new Color(235, 90, 80), 14,
-                        Particles.Style.BURST);
                 case DEATH -> particles.burst(e.x(), e.y(), e.color(), 5, Particles.Style.DRIP);
-                case BIND -> particles.burst(e.x(), e.y(), new Color(200, 235, 150), 12,
-                        Particles.Style.RING);
-                case TOOL -> particles.burst(e.x(), e.y(), e.color(), 10, Particles.Style.SPARKS);
+                case KILL -> {
+                    particles.burst(e.x(), e.y(), new Color(235, 90, 80), 16,
+                            Particles.Style.BURST);
+                    ripple(e.x(), e.y(), 46, 0.55, new Color(235, 90, 80), 3f);
+                }
+                case ATTACK -> {
+                    particles.burst(e.x(), e.y(), e.color(), 7, Particles.Style.SPARKS);
+                    ripple(e.x(), e.y(), 28, 0.35, e.color(), 2.5f);
+                }
+                case SHARE -> {
+                    particles.burst(e.x(), e.y(), e.color(), 5, Particles.Style.EMBERS);
+                    ripple(e.x(), e.y(), 30, 0.6, e.color(), 2f);
+                }
+                case BROADCAST -> ripple(e.x(), e.y(),
+                        Math.max(60, e.radius()), 1.1, e.color(), 2f);
+                case BIND -> {
+                    particles.burst(e.x(), e.y(), new Color(200, 235, 150), 12,
+                            Particles.Style.RING);
+                    ripple(e.x(), e.y(), 60, 0.8, new Color(200, 235, 150), 3f);
+                }
+                case TOOL -> {
+                    particles.burst(e.x(), e.y(), e.color(), 12, Particles.Style.SPARKS);
+                    ripple(e.x(), e.y(), 40, 0.7, e.color(), 2.5f);
+                }
+                case DECAY -> {
+                    // The orb that just appeared came from this body — say so.
+                    particles.burst(e.x(), e.y(), EnergyOrb.Kind.SIMPLE.color(), 5,
+                            Particles.Style.MOTES);
+                    ripple(e.x(), e.y(), 20, 0.45, EnergyOrb.Kind.SIMPLE.color(), 1.5f);
+                }
                 case EAT -> { /* far too frequent to draw */ }
             }
         }
     }
 
-    /**
-     * Feed the shared lighting pass: the slide is dim, bioluminescent cells and
-     * spotlights are what light it. These are the same radii the simulation
-     * uses for foraging, so what looks lit really is lit.
-     */
-    private void feedLighting() {
-        LightingPass lighting = ctx.lighting();
-        lighting.setDarkness(0.62);
-        lighting.setAmbient(0.42);
-        lighting.setNightTint(new Color(24, 40, 52));
-        lighting.clearLights();
+    private void ripple(double x, double y, double radius, double life, Color color, float width) {
+        if (ripples.size() > 80) return; // a busy dish must not drown in rings
+        Ripple r = new Ripple();
+        r.x = x;
+        r.y = y;
+        r.radius = radius;
+        r.life = life;
+        r.color = color;
+        r.width = width;
+        ripples.add(r);
+    }
 
-        Dish dish = game.activeDish();
-        for (Dish.Spotlight s : dish.spotlights()) {
-            camera.worldToScreen(s.x, s.y, screen);
-            lighting.addLight(screen[0], screen[1], s.radius * camera.zoom,
-                    new Color(255, 248, 214));
+    private void updateRipples(double dt) {
+        for (int i = ripples.size() - 1; i >= 0; i--) {
+            Ripple r = ripples.get(i);
+            r.age += dt;
+            if (r.age >= r.life) ripples.remove(i);
+        }
+    }
+
+    /** Draw the rings, each fading as it grows. */
+    private void drawRipples(Graphics2D g) {
+        Stroke old = g.getStroke();
+        for (Ripple r : ripples) {
+            double t = Math.min(1, r.age / r.life);
+            int rad = (int) Math.round(r.radius * (0.25 + 0.75 * t) * camera.zoom);
+            if (rad < 2) continue;
+            camera.worldToScreen(r.x, r.y, screen);
+            int alpha = (int) (200 * (1 - t));
+            g.setColor(new Color(r.color.getRed(), r.color.getGreen(), r.color.getBlue(), alpha));
+            g.setStroke(new BasicStroke(r.width));
+            g.drawOval(screen[0] - rad, screen[1] - rad, rad * 2, rad * 2);
+        }
+        g.setStroke(old);
+    }
+
+    /**
+     * Light the gel in world space: a soft glow for every spotlight, warm source
+     * and bioluminescent cell, drawn over the shadow patches so light visibly
+     * eats into them. These are the same radii the simulation forages by, so
+     * what looks lit is lit — and because it is drawn into the scene rather than
+     * applied to the finished frame, none of it touches the HUD.
+     */
+    private void drawLightField(Graphics2D g, Dish dish) {
+        Composite old = g.getComposite();
+        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.55f));
+        for (Dish.Spotlight sp : dish.spotlights()) {
+            camera.worldToScreen(sp.x, sp.y, screen);
+            paintRadial(g, screen[0], screen[1], (int) (sp.radius * camera.zoom),
+                    new Color(255, 250, 222, 150), new Color(255, 250, 222, 0));
         }
         for (Dish.HeatSource h : dish.heatSources()) {
             if (h.power <= 0) continue;
             camera.worldToScreen(h.x, h.y, screen);
-            lighting.addLight(screen[0], screen[1], h.radius * 0.7 * camera.zoom,
-                    new Color(255, 150, 90));
+            paintRadial(g, screen[0], screen[1], (int) (h.radius * 0.7 * camera.zoom),
+                    new Color(255, 150, 90, 90), new Color(255, 150, 90, 0));
         }
         for (Organism o : dish.luminousOrganisms()) {
             camera.worldToScreen(o.x, o.y, screen);
-            lighting.addLight(screen[0], screen[1], o.effectiveLightRadius() * camera.zoom,
-                    o.pheno.color());
+            Color c = o.pheno.color();
+            paintRadial(g, screen[0], screen[1], (int) (o.effectiveLightRadius() * camera.zoom),
+                    new Color(c.getRed(), c.getGreen(), c.getBlue(), 120),
+                    new Color(c.getRed(), c.getGreen(), c.getBlue(), 0));
         }
+        g.setComposite(old);
     }
 
     private void updateToasts(double dt) {
@@ -504,6 +607,33 @@ public class EvolutionScene extends AbstractScene {
         statusAge = 3.5;
     }
 
+    /**
+     * Ask before resetting. Everything in the lab goes, so "keep" is the first
+     * (and therefore default-selected) choice and a stray Enter backs out.
+     */
+    private void startReset() {
+        resetMenu = new Menu("Reset the lab?")
+                .subtitle("Your reference book is kept — the dishes and the bench are not")
+                .theme(MenuTheme.dark())
+                .add("Cancel — keep this experiment", () -> resetting = false);
+        for (com.larsons.engine.evolution.Nucleotide n
+                : com.larsons.engine.evolution.Nucleotide.values()) {
+            resetMenu.add("Reset and start over from " + n.displayName(), () -> {
+                game.resetExperiment(n);
+                for (EvolutionGame.Notice notice : game.drainNotices()) {
+                    toast(notice.text(), notice.color());
+                }
+                store.save(game);
+                selected = null;
+                resetting = false;
+                paused = false;
+                camera.zoom = Math.max(fitZoom(), 1.15);
+                camera.centerOn(0, 0);
+            });
+        }
+        resetting = true;
+    }
+
     private void saveNow() {
         store.save(game);
         setStatus("Saved to " + store.saveFile());
@@ -524,8 +654,10 @@ public class EvolutionScene extends AbstractScene {
         if (showTemperature && game.inventory().owns(ShopItem.THERMOMETER)) {
             drawTemperature(g, dish);
         }
+        drawLightField(g, dish);
         drawDishContents(g, dish);
         particles.render(g, camera);
+        drawRipples(g);
         drawToolGhost(g, dish);
 
         drawTopBar(g, dish);
@@ -543,7 +675,16 @@ public class EvolutionScene extends AbstractScene {
         if (showHelp) drawHelp(g);
         if (paused) {
             dim(g, 170);
-            pauseMenu.render(g, viewportWidth, viewportHeight);
+            if (resetting) {
+                resetMenu.render(g, viewportWidth, viewportHeight);
+                g.setFont(new Font("SansSerif", Font.PLAIN, 15));
+                g.setColor(CREDIT);
+                drawCentered(g, "You get all " + game.catalog().creditEarned()
+                                + " credits this book has ever earned back to spend again",
+                        viewportWidth / 2, viewportHeight / 4 + 96);
+            } else {
+                pauseMenu.render(g, viewportWidth, viewportHeight);
+            }
         }
     }
 
@@ -564,7 +705,7 @@ public class EvolutionScene extends AbstractScene {
             int pr = (int) Math.round(p[2] * camera.zoom);
             if (pr <= 2) continue;
             paintRadial(g, screen[0], screen[1], pr,
-                    new Color(0, 0, 0, 130), new Color(0, 0, 0, 0));
+                    new Color(0, 0, 0, 190), new Color(0, 0, 0, 0));
         }
 
         g.setStroke(new BasicStroke(3f));
@@ -636,12 +777,18 @@ public class EvolutionScene extends AbstractScene {
             g.fillOval(screen[0] - rr, screen[1] - rr, rr * 2, rr * 2);
         }
 
+        // Bodies are drawn as dimmed husks with a dashed halo, sized by how much
+        // is left to dissolve — so a corpse reads as "this is still turning into
+        // food" rather than as a speck of dirt.
         for (Dish.Corpse c : dish.corpses()) {
             camera.worldToScreen(c.x, c.y, screen);
-            int rr = Math.max(2, (int) (4 * camera.zoom));
+            double left = Math.max(0.15, Math.min(1, c.energy / 40.0));
+            int rr = Math.max(3, (int) ((4 + 5 * left) * camera.zoom));
             g.setColor(new Color(c.color.getRed() / 2, c.color.getGreen() / 2,
-                    c.color.getBlue() / 2, 170));
+                    c.color.getBlue() / 2, 190));
             g.fillOval(screen[0] - rr, screen[1] - rr, rr * 2, rr * 2);
+            g.setColor(new Color(c.color.getRed(), c.color.getGreen(), c.color.getBlue(), 90));
+            g.drawOval(screen[0] - rr - 3, screen[1] - rr - 3, (rr + 3) * 2, (rr + 3) * 2);
         }
 
         for (EnergyOrb orb : dish.orbs()) {
@@ -721,9 +868,21 @@ public class EvolutionScene extends AbstractScene {
             g.drawArc(cx - ring, cy - ring, ring * 2, ring * 2, 90,
                     -(int) (360 * o.fullness()));
         }
-        if (o.tool != null && r >= 4) {
+        // A cell carrying a tool wears it: a ring in the tool's colour plus a
+        // marker, so "that one found the scalpel" is readable across the dish.
+        if (o.tool != null) {
+            int ring = (int) r + 5;
             g.setColor(o.tool.kind.color());
-            g.fillRect(cx + (int) r - 1, cy - (int) r - 3, 4, 4);
+            g.setStroke(new BasicStroke(2f));
+            g.drawOval(cx - ring, cy - ring, ring * 2, ring * 2);
+            g.setStroke(new BasicStroke(1f));
+            g.fillRect(cx + ring - 3, cy - ring - 3, 6, 6);
+        }
+        // Hunters show a notch while their strike is off cooldown.
+        if (o.pheno.has(Ability.PREDATION) && o.attackCooldown <= 0 && r >= 5) {
+            g.setColor(new Color(255, 120, 110, 200));
+            g.drawLine(cx - (int) r, cy - (int) r - 4, cx, cy - (int) r - 8);
+            g.drawLine(cx, cy - (int) r - 8, cx + (int) r, cy - (int) r - 4);
         }
     }
 
@@ -1001,10 +1160,16 @@ public class EvolutionScene extends AbstractScene {
         }
     }
 
+    /**
+     * The shop. Rows carry the name and price only; the full description of
+     * whichever row the pointer is over is written out, wrapped, in a panel at
+     * the bottom. Squeezing every description into its row meant clipping them
+     * at any sensible window width — this way nothing is ever cut off.
+     */
     private void drawShop(Graphics2D g) {
         dim(g, 190);
-        int w = Math.min(760, viewportWidth - 80);
-        int h = Math.min(600, viewportHeight - 80);
+        int w = Math.min(820, viewportWidth - 60);
+        int h = Math.min(640, viewportHeight - 60);
         int x = (viewportWidth - w) / 2;
         int y = (viewportHeight - h) / 2;
         g.setColor(PANEL);
@@ -1020,46 +1185,65 @@ public class EvolutionScene extends AbstractScene {
         String bal = game.credits() + " credits";
         g.drawString(bal, x + w - g.getFontMetrics().stringWidth(bal) - 22, y + 34);
 
+        int detailH = 74;
+        int listBottom = y + h - detailH - 34;
         shopRects.clear();
         ShopItem[] items = ShopItem.values();
-        int rowH = Math.min(38, (h - 80) / items.length);
+        int rowH = Math.max(24, Math.min(34, (listBottom - y - 54) / items.length));
         int ry = y + 54;
-        // Fixed columns so a long description can never run into the price.
-        int nameW = 200;
-        int priceW = 150;
+        ShopItem hovered = null;
         for (ShopItem item : items) {
-            Rectangle r = new Rectangle(x + 14, ry, w - 28, rowH - 3);
+            Rectangle r = new Rectangle(x + 14, ry, w - 28, rowH - 2);
             shopRects.add(r);
             boolean owned = item.permanent() && game.inventory().owns(item);
             boolean afford = game.canAfford(item) && !owned;
             boolean hover = r.contains(mouseX, mouseY);
-            int baseline = r.y + rowH * 2 / 3 - 2;
+            if (hover) hovered = item;
+            int baseline = r.y + rowH * 2 / 3;
 
-            if (hover && afford) {
-                g.setColor(new Color(48, 60, 84));
+            if (hover) {
+                g.setColor(afford ? new Color(48, 60, 84) : new Color(38, 42, 56));
                 g.fillRoundRect(r.x, r.y, r.width, r.height, 6, 6);
             }
             g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-            g.setColor(owned ? new Color(120, 170, 130) : (afford ? TEXT : new Color(110, 116, 132)));
-            g.drawString(clip(g, item.displayName(), nameW - 12), r.x + 10, baseline);
+            g.setColor(owned ? new Color(120, 170, 130) : (afford ? TEXT : new Color(120, 126, 142)));
+            g.drawString(item.displayName(), r.x + 12, baseline);
 
             g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            g.setColor(new Color(126, 136, 158));
-            int descX = r.x + nameW;
-            g.drawString(clip(g, item.description(), r.width - nameW - priceW - 12), descX, baseline);
+            g.setColor(new Color(120, 130, 152));
+            g.drawString(item.category().name().toLowerCase(), r.x + 250, baseline);
 
             g.setFont(new Font("SansSerif", Font.BOLD, 13));
             String right = owned ? "owned"
-                    : (item.permanent() ? item.price() + "c" : item.price() + "c  (have "
-                    + game.inventory().count(item) + ")");
-            g.setColor(owned ? GOOD : (afford ? CREDIT : new Color(120, 104, 92)));
-            g.drawString(right, r.x + r.width - g.getFontMetrics().stringWidth(right) - 10, baseline);
+                    : (item.permanent() ? item.price() + "c" : item.price() + "c   have "
+                    + game.inventory().count(item));
+            g.setColor(owned ? GOOD : (afford ? CREDIT : new Color(126, 108, 96)));
+            g.drawString(right, r.x + r.width - g.getFontMetrics().stringWidth(right) - 12, baseline);
             ry += rowH;
+        }
+
+        // The description panel: full text, wrapped, never clipped.
+        int dy = y + h - detailH - 26;
+        g.setColor(new Color(14, 17, 25));
+        g.fillRoundRect(x + 14, dy, w - 28, detailH, 8, 8);
+        g.setColor(PANEL_EDGE);
+        g.drawRoundRect(x + 14, dy, w - 28, detailH, 8, 8);
+        g.setFont(new Font("SansSerif", Font.PLAIN, 13));
+        if (hovered == null) {
+            g.setColor(TEXT_DIM);
+            g.drawString("Point at an item to read what it does.", x + 28, dy + 26);
+        } else {
+            g.setColor(TEXT);
+            g.setFont(new Font("SansSerif", Font.BOLD, 13));
+            g.drawString(hovered.displayName(), x + 28, dy + 22);
+            g.setFont(new Font("SansSerif", Font.PLAIN, 13));
+            g.setColor(TEXT_DIM);
+            drawWrapped(g, hovered.description(), x + 28, dy + 42, w - 56, 17, 2);
         }
 
         g.setFont(new Font("SansSerif", Font.PLAIN, 13));
         g.setColor(TEXT_DIM);
-        drawCentered(g, "Click to buy · B or Esc to close", viewportWidth / 2, y + h - 14);
+        drawCentered(g, "Click to buy · B or Esc to close", viewportWidth / 2, y + h - 10);
     }
 
     private void drawHelp(Graphics2D g) {

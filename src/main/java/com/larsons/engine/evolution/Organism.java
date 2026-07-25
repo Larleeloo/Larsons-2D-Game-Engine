@@ -46,6 +46,8 @@ public final class Organism {
     public double attackCooldown;
     /** Brief flash after being hit, purely so the scene can draw it. */
     public double hitFlash;
+    /** Time since this cell last showed a visible donation pulse. */
+    double shareTimer;
     /** Remembered food locations, newest last, capped by the memory trait. */
     public final List<double[]> memory = new ArrayList<>(4);
 
