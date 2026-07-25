@@ -116,11 +116,18 @@ public final class Packed {
         /**
          * Append a word. Rows are split on whitespace, so any is replaced with
          * {@code _}; an empty word is written as {@code -} so it cannot swallow
-         * the fields after it.
+         * the fields after it. {@link Packed#phrase} reads one back.
          */
         public Row word(String s) {
-            if (s == null || s.isEmpty()) return required("-");
-            return required(s.trim().replaceAll("\\s+", "_"));
+            return required(field(s));
+        }
+
+        /** Append a word, droppable while it still reads as {@code dflt}. */
+        public Row word(String s, String dflt) {
+            String f = field(s);
+            fields.add(f);
+            if (!f.equals(field(dflt))) keep = fields.size();
+            return this;
         }
 
         /** Append an {@code x,y} point rounded to {@code decimals}. */
@@ -132,6 +139,11 @@ public final class Packed {
             fields.add(s);
             keep = fields.size();
             return this;
+        }
+
+        private static String field(String s) {
+            if (s == null || s.isBlank()) return "-";
+            return s.trim().replaceAll("\\s+", "_");
         }
 
         @Override
@@ -276,6 +288,27 @@ public final class Packed {
         }
     }
 
+    /**
+     * A word read back as the phrase it was written from: the {@code _} a
+     * {@link Row#word} put in place of each space becomes a space again, and a
+     * missing or empty field falls back to {@code dflt}.
+     */
+    public static String phrase(String field, String dflt) {
+        if (field == null || field.isEmpty() || "-".equals(field)) return dflt;
+        return field.replace('_', ' ');
+    }
+
+    /**
+     * A stored timestamp as epoch millis. Rows write whole seconds — nothing in
+     * the game shows a discovery to finer than a date — but a value already in
+     * millis is passed through, so records written by a build that stored millis
+     * still land on the right day rather than in 1970.
+     */
+    public static long epochMillis(long stored) {
+        if (stored <= 0) return 0;
+        return stored > 100_000_000_000L ? stored : stored * 1000L;
+    }
+
     /** An {@code x,y} point, or {@code null} if the field is not one. */
     public static double[] point(String field) {
         if (field == null) return null;
@@ -292,12 +325,15 @@ public final class Packed {
 
     // --- the colony-combination lists the catalog and the history both keep ------------
 
-    /** Combination signatures with the moment each was first seen, packed. */
+    /**
+     * Combination signatures with the moment each was first seen, packed.
+     * {@code at} is in whole seconds, as everywhere else in a save.
+     */
     public static Map<String, Object> signatures(Map<String, Long> stamped) {
         List<String> rows = new ArrayList<>(stamped.size());
         for (Map.Entry<String, Long> e : stamped.entrySet()) {
-            rows.add(new Row().word(e.getKey()).add(e.getValue() == null ? 0 : e.getValue())
-                    .toString());
+            long millis = e.getValue() == null ? 0 : e.getValue();
+            rows.add(new Row().word(e.getKey()).add(millis / 1000).toString());
         }
         return block("signature at", rows);
     }
@@ -312,7 +348,7 @@ public final class Packed {
                 Reader r = new Reader(row);
                 String signature = r.nextWord("");
                 if (signature.isEmpty() || "-".equals(signature)) continue;
-                into.put(signature, r.nextLong(0));
+                into.put(signature, epochMillis(r.nextLong(0)));
             }
             return;
         }
