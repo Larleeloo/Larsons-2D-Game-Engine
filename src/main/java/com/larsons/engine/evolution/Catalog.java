@@ -1,10 +1,8 @@
 package com.larsons.engine.evolution;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -107,18 +105,15 @@ public final class Catalog {
      * This game's book, as saved. Only the sequences are stored: the full record
      * for each already exists as its own file in the permanent history, so
      * writing it twice would just be a second copy to keep in step.
+     *
+     * <p>A long game finds thousands of strands, so the sequences are written as
+     * one whitespace-separated line rather than a JSON array — the same list,
+     * without a line of quotes, indent and comma wrapped around each entry.
      */
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("species", new ArrayList<>(species.keySet()));
-        List<Object> combos = new ArrayList<>();
-        for (Map.Entry<String, Long> e : combinations.entrySet()) {
-            Map<String, Object> c = new LinkedHashMap<>();
-            c.put("signature", e.getKey());
-            c.put("at", e.getValue());
-            combos.add(c);
-        }
-        m.put("combinations", combos);
+        m.put("species", Packed.joinWords(species.keySet()));
+        m.put("combinations", Packed.signatures(combinations));
         m.put("creditEarned", creditEarned);
         return m;
     }
@@ -131,27 +126,12 @@ public final class Catalog {
     public static Catalog fromMap(Map<String, Object> m, History history) {
         Catalog c = new Catalog();
         if (m == null) return c;
-        if (m.get("species") instanceof List<?> list) {
-            for (Object o : list) {
-                String dna = String.valueOf(o);
-                if (!Genome.isValid(dna)) continue;
-                SpeciesRecord known = history == null ? null : history.species(dna);
-                c.species.put(dna, known != null ? known
-                        : SpeciesRecord.of(Genome.of(dna), "", 0));
-            }
+        for (String dna : Packed.wordList(m.get("species"))) {
+            if (!Genome.isValid(dna)) continue;
+            SpeciesRecord known = history == null ? null : history.species(dna);
+            c.species.put(dna, known != null ? known : SpeciesRecord.of(Genome.of(dna), "", 0));
         }
-        if (m.get("combinations") instanceof List<?> list) {
-            for (Object o : list) {
-                if (o instanceof Map<?, ?> cm) {
-                    Object sig = cm.get("signature");
-                    Object at = cm.get("at");
-                    if (sig != null) {
-                        c.combinations.put(String.valueOf(sig),
-                                at instanceof Number n ? n.longValue() : 0L);
-                    }
-                }
-            }
-        }
+        Packed.readSignatures(m.get("combinations"), c.combinations);
         if (m.get("creditEarned") instanceof Number n) c.creditEarned = n.intValue();
         return c;
     }

@@ -31,6 +31,7 @@ import java.nio.file.Path;
 import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -258,6 +259,40 @@ class EvolutionSceneTest {
         assertTrue(game.history().speciesCount() >= discovered,
                 "while the permanent history kept every organism ("
                         + discovered + " -> " + game.history().speciesCount() + ")");
+    }
+
+    @Test
+    void theLobbyOffersOneWayToStartOverRatherThanTwo(@TempDir Path dir) {
+        // "New Experiment" and the old "Reset Game" did the same thing — a fresh
+        // lab with the history kept — so only the first survives here.
+        EvolutionStore store = new EvolutionStore(dir.toString());
+        GameContext ctx = context(dir);
+        store.save(EvolutionGame.newGame(Nucleotide.G, 60L)); // so a save exists to "reset"
+
+        SceneManager scenes = new SceneManager();
+        scenes.setViewport(W, H);
+        EvolutionLobbyScene lobby = new EvolutionLobbyScene(ctx, store);
+        scenes.register("evolutionlobby", lobby);
+        scenes.setScene("evolutionlobby");
+        InputManager input = new InputManager();
+        tick(scenes, input, 2);
+
+        MenuItem start = null;
+        for (MenuItem item : lobby.menu().items()) {
+            assertFalse(item.text().toLowerCase().contains("reset"),
+                    "the lobby no longer has a reset row: " + item.text());
+            if (item.text().startsWith("New Experiment")) start = item;
+        }
+        assertNotNull(start, "starting over is New Experiment, and it is still there");
+
+        // And it still leads to the colour choice a new lab begins from.
+        start.activate();
+        tick(scenes, input, 1);
+        boolean offersRed = false;
+        for (MenuItem item : lobby.menu().items()) {
+            if (item.text().contains(Genome.starter(Nucleotide.R).sequence())) offersRed = true;
+        }
+        assertTrue(offersRed, "which opens the colour choice, strands and all");
     }
 
     @Test
