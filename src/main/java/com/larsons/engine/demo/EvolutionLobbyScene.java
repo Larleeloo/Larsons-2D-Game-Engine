@@ -52,6 +52,8 @@ public class EvolutionLobbyScene extends AbstractScene {
     private Menu colorMenu;
     private boolean choosingColor;
     private String status = "";
+    /** Discoveries on the permanent record, read once when the menu is built. */
+    private int discovered;
 
     public EvolutionLobbyScene(GameContext ctx) {
         this(ctx, new EvolutionStore());
@@ -74,7 +76,7 @@ public class EvolutionLobbyScene extends AbstractScene {
 
     private void buildMenu() {
         boolean hasSave = store.hasSave();
-        int discovered = store.speciesFileCount();
+        discovered = store.speciesCount();
 
         menu = new Menu("Evolution")
                 .subtitle("An artificial life simulator — write nothing, discover everything")
@@ -100,7 +102,7 @@ public class EvolutionLobbyScene extends AbstractScene {
         choosingColor = true;
         String subtitle = store.hasSave()
                 ? "Replaces the saved experiment · your "
-                        + store.speciesFileCount() + " discovered organisms are kept"
+                        + discovered + " discovered organisms are kept"
                 : "One square cell, a hundred energy orbs, and whatever happens next";
         colorMenu = new Menu("Choose your first organism")
                 .subtitle(subtitle)

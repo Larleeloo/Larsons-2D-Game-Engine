@@ -101,9 +101,69 @@ public final class SpeciesRecord {
     // --- persistence ---------------------------------------------------------------
 
     /**
-     * The record as JSON. The decoded traits and abilities are written out
-     * alongside the raw strand so a catalog file is readable on its own,
-     * without having to run the decoder to know what it was looking at.
+     * The fields a packed row carries, in order.
+     *
+     * <p>What a discovery is <em>worth storing</em> is much less than what it
+     * contains: the shape, the colour, the traits, the abilities, the complexity
+     * — everything the reference book shows — are a pure function of the strand,
+     * recomputed by {@link Phenotype#of} the moment a record is built, and were
+     * never read back off disk even when they were written there. So a row keeps
+     * only what the decoder cannot work out for itself: the strand, when it was
+     * first seen, where, and how deep in a lineage it was.
+     *
+     * <p>{@code credit} and {@code name} are derived too ({@link #creditFor},
+     * {@link #nameFor}) and so are written only in the odd case where they
+     * disagree with what the rules produce — which is to say, essentially never,
+     * but a record that came from a hand-edited file keeps what it said.
+     */
+    public static final String ROW_FORMAT = "dna at dish generation credit name";
+
+    /**
+     * This discovery as one line of the permanent record. {@code dish} indexes
+     * the history's dish-name dictionary, {@code at} is in whole seconds (the
+     * book shows a date, not a stopwatch), and every field that agrees with what
+     * the strand itself implies is dropped off the end.
+     */
+    public String toRow(int dishIndex) {
+        Genome genome = genome();
+        return new Packed.Row()
+                .word(sequence)
+                .add(discoveredAt / 1000)
+                .add(dishIndex, 0)
+                .add(generation, 0)
+                .add(credit, creditFor(pheno))
+                .word(name, nameFor(genome))
+                .toString();
+    }
+
+    /**
+     * Read one back. Returns {@code null} for a row whose strand is missing or
+     * impossible — one bad line costs that discovery, never the collection.
+     */
+    public static SpeciesRecord fromRow(String row, List<String> dishes) {
+        Packed.Reader r = new Packed.Reader(row);
+        String dna = r.nextWord("");
+        if (!Genome.isValid(dna)) return null;
+        Genome genome = Genome.of(dna);
+
+        long at = Packed.epochMillis(r.nextLong(0));
+        int index = r.nextInt(0);
+        String dish = index >= 0 && index < dishes.size() ? dishes.get(index) : "";
+        int generation = r.nextInt(0);
+        int credit = r.nextInt(creditFor(Phenotype.of(genome)));
+        String name = Packed.phrase(r.nextWord(""), nameFor(genome));
+        return new SpeciesRecord(dna, name, at, dish, generation, credit);
+    }
+
+    /**
+     * The record as a JSON object, decoded traits and abilities and all.
+     *
+     * <p>The permanent record no longer stores discoveries this way — it keeps a
+     * table of {@link #ROW_FORMAT} rows, because the decoded half of this was
+     * only ever decoration that the loader threw away. It is still what
+     * {@link EvolutionStore#exportSpecies} writes when you want one organism as
+     * a standalone artefact, and what reads the per-organism files older builds
+     * left behind.
      */
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();

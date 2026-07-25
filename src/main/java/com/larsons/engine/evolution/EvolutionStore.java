@@ -6,7 +6,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -21,17 +20,24 @@ import java.util.stream.Stream;
  *       in them, the bench, the credit balance, and this game's
  *       {@link Catalog} (the sequences it has found). Resetting the game
  *       replaces all of it.</li>
- *   <li><b>The history</b> — {@code evolution/history/<DNA>.json}, <em>one file
- *       per organism ever discovered</em>, plus {@code evolution/history.json}
- *       for the achievements, colony combinations and lifetime totals. This is
- *       the player's permanent collection and <b>nothing ever removes anything
- *       from it</b> — not a reset, not a new game, not deleting the save.</li>
+ *   <li><b>The history</b> — {@code evolution/history.json}: every organism ever
+ *       discovered, with the achievements, colony combinations and lifetime
+ *       totals. This is the player's permanent collection and <b>nothing ever
+ *       removes anything from it</b> — not a reset, not a new game, not deleting
+ *       the save.</li>
  * </ul>
  *
- * <p>Storing each discovery as its own file, named after the DNA that produced
- * it, is what the design document asks for: catalogued organisms are unique
- * JSON artefacts rather than rows looked up in a reference table the game
- * shipped with.
+ * <p>Discoveries used to be one JSON file each, named after the DNA that
+ * produced it. That was the readable-artefact idea taken literally, and it did
+ * not scale: a real collection is thousands of organisms, each file was ~450
+ * bytes of which two thirds was decoded traits the loader recomputed and threw
+ * away, and every one of them still cost a whole 4 KB disk block — 410 finds
+ * came to 1.7 MB on disk to hold about 16 KB of facts. They are now rows in the
+ * history (see {@link SpeciesRecord#ROW_FORMAT}), and any organism can still be
+ * written out as a standalone decoded file on demand with
+ * {@link #exportSpecies}. A folder of per-organism files from an older build is
+ * folded into the history the first time it is read, and only then cleared
+ * away.
  */
 public final class EvolutionStore {
 
@@ -39,8 +45,9 @@ public final class EvolutionStore {
     public static final String DEFAULT_DIR = "src/main/resources/evolution";
     public static final String SAVE_FILE = "save.json";
     public static final String HISTORY_FILE = "history.json";
-    public static final String HISTORY_DIR = "history";
-    /** Where discoveries lived before the history tier existed; migrated on use. */
+    /** Where discoveries used to live, one file each; folded into the history on use. */
+    private static final String LEGACY_HISTORY_DIR = "history";
+    /** Older still, from before the history tier existed. Same treatment. */
     private static final String LEGACY_CATALOG_DIR = "catalog";
 
     private final Path dir;
@@ -58,8 +65,6 @@ public final class EvolutionStore {
     public Path saveFile() { return dir.resolve(SAVE_FILE); }
 
     public Path historyFile() { return dir.resolve(HISTORY_FILE); }
-
-    public Path historyDirectory() { return dir.resolve(HISTORY_DIR); }
 
     public boolean hasSave() { return Files.exists(saveFile()); }
 
@@ -94,11 +99,7 @@ public final class EvolutionStore {
         History history = loadHistory();
         try {
             Object parsed = Json.parse(Files.readString(saveFile()));
-            EvolutionGame game = EvolutionGame.fromMap(Json.asObject(parsed), history);
-            if (game == null) return null;
-            // The history was read from disk, so none of it is pending a write.
-            game.history().drainPendingWrites();
-            return game;
+            return EvolutionGame.fromMap(Json.asObject(parsed), history);
         } catch (IOException | RuntimeException e) {
             System.err.println("EvolutionStore: unreadable save " + saveFile()
                     + " (" + e.getMessage() + ")");
@@ -118,28 +119,26 @@ public final class EvolutionStore {
     // --- the permanent history ----------------------------------------------------------------
 
     /**
-     * The player's whole collection: the index (achievements, combinations,
-     * lifetime totals) with every discovered organism folded back in from its
-     * own file.
+     * The player's whole collection: every organism ever discovered, with the
+     * achievements, combinations and lifetime totals. Folders of per-organism
+     * files from older builds are folded in on the way past.
      */
     public History loadHistory() {
-        migrateLegacyCatalog();
         History history = new History();
         if (Files.exists(historyFile())) {
             try {
                 Map<String, Object> m = Json.asObject(Json.parse(Files.readString(historyFile())));
                 history = History.fromMap(m);
             } catch (IOException | RuntimeException e) {
-                System.err.println("EvolutionStore: unreadable history index " + historyFile()
+                System.err.println("EvolutionStore: unreadable history " + historyFile()
                         + " (" + e.getMessage() + ")");
             }
         }
-        for (SpeciesRecord rec : loadSpecies()) history.restore(rec);
-        history.drainPendingWrites(); // restored entries are already on disk
+        absorbLegacyFolders(history);
         return history;
     }
 
-    /** Write the history index and any organisms discovered since the last save. */
+    /** Write the permanent record. */
     public Path saveHistory(History history) {
         if (history == null) return historyFile();
         try {
@@ -148,40 +147,24 @@ public final class EvolutionStore {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-        writeNewSpecies(history);
         return historyFile();
     }
 
-    /** Write out every organism recorded since the last call. */
-    public void writeNewSpecies(History history) {
-        List<SpeciesRecord> pending = history.drainPendingWrites();
-        if (pending.isEmpty()) return;
-        try {
-            Files.createDirectories(historyDirectory());
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-        for (SpeciesRecord rec : pending) writeSpecies(rec);
-    }
-
     /**
-     * Write one discovery as its own file, named after its DNA. An organism is
-     * only ever discovered once, so an existing file is left untouched — the
-     * first sighting is the one that counts, and nothing overwrites it.
+     * Write one organism out as a standalone, fully decoded JSON file — traits,
+     * abilities, shape and all. This is the readable artefact the design asks
+     * for, produced on demand for the organism someone actually wants to look at
+     * or share, rather than for all several thousand of them on every save.
      */
-    public Path writeSpecies(SpeciesRecord rec) {
-        Path file = speciesFile(rec.sequence);
+    public Path exportSpecies(SpeciesRecord rec, Path file) {
         try {
-            Files.createDirectories(historyDirectory());
-            if (!Files.exists(file)) Files.writeString(file, Json.stringify(rec.toMap()));
+            Path parent = file.getParent();
+            if (parent != null) Files.createDirectories(parent);
+            Files.writeString(file, Json.stringify(rec.toMap()));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
         return file;
-    }
-
-    public Path speciesFile(String sequence) {
-        return historyDirectory().resolve(sequence + ".json");
     }
 
     /**
@@ -190,82 +173,95 @@ public final class EvolutionStore {
      * ever played, and nothing else.
      */
     public List<SpeciesRecord> loadSpecies() {
-        migrateLegacyCatalog();
-        List<SpeciesRecord> out = new ArrayList<>();
-        Path historyDir = historyDirectory();
-        if (!Files.isDirectory(historyDir)) return out;
-        try (Stream<Path> files = Files.list(historyDir)) {
-            files.filter(p -> p.toString().endsWith(".json")).sorted().forEach(p -> {
-                try {
-                    SpeciesRecord rec = SpeciesRecord.fromMap(
-                            Json.asObject(Json.parse(Files.readString(p))));
-                    if (rec != null) out.add(rec);
-                } catch (IOException | RuntimeException e) {
-                    System.err.println("EvolutionStore: skipping unreadable species file "
-                            + p + " (" + e.getMessage() + ")");
-                }
-            });
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
+        List<SpeciesRecord> out = new ArrayList<>(loadHistory().allSpecies());
         out.sort(Comparator.comparingLong((SpeciesRecord r) -> r.discoveredAt).reversed());
         return out;
     }
 
-    /** How many organisms the history holds, without parsing them all. */
-    public int speciesFileCount() {
-        migrateLegacyCatalog();
-        Path historyDir = historyDirectory();
-        if (!Files.isDirectory(historyDir)) return 0;
-        try (Stream<Path> files = Files.list(historyDir)) {
-            return (int) files.filter(p -> p.toString().endsWith(".json")).count();
-        } catch (IOException e) {
-            return 0;
+    /** How many organisms the history holds. */
+    public int speciesCount() {
+        return loadHistory().speciesCount();
+    }
+
+    /** Read one discovery off disk, or {@code null} if it was never found. */
+    public SpeciesRecord loadSpecies(String sequence) {
+        return loadHistory().species(sequence);
+    }
+
+    /**
+     * Fold a folder of per-organism files — {@code history/} from the builds
+     * that wrote one file per discovery, or {@code catalog/} from before the
+     * history tier existed — into the record, then clear it away.
+     *
+     * <p>Order matters: the files are read, merged and the whole history written
+     * back <em>before</em> anything is deleted, so an interrupted or failed
+     * migration leaves the collection where it was rather than half of it
+     * nowhere. Nothing is deleted that is not already in the file that replaced
+     * it.
+     */
+    private void absorbLegacyFolders(History history) {
+        List<Path> folders = new ArrayList<>();
+        for (String name : new String[]{LEGACY_HISTORY_DIR, LEGACY_CATALOG_DIR}) {
+            Path folder = dir.resolve(name);
+            if (Files.isDirectory(folder)) folders.add(folder);
+        }
+        if (folders.isEmpty()) return;
+
+        List<Path> absorbed = new ArrayList<>();
+        for (Path folder : folders) {
+            try (Stream<Path> files = Files.list(folder)) {
+                for (Path p : files.filter(p -> p.toString().endsWith(".json")).sorted().toList()) {
+                    SpeciesRecord rec = readSpeciesFile(p);
+                    if (rec == null) continue; // unreadable: it stays exactly where it is
+                    history.restore(rec);
+                    absorbed.add(p);
+                }
+            } catch (IOException e) {
+                System.err.println("EvolutionStore: could not read " + folder
+                        + " (" + e.getMessage() + ")");
+                return; // leave everything alone rather than half-migrate
+            }
+        }
+
+        if (!absorbed.isEmpty()) {
+            try {
+                saveHistory(history); // safely in one file before anything is removed
+            } catch (RuntimeException e) {
+                System.err.println("EvolutionStore: keeping the old organism files, the history"
+                        + " could not be written (" + e.getMessage() + ")");
+                return;
+            }
+            for (Path p : absorbed) deleteQuietly(p);
+            System.out.println("EvolutionStore: folded " + absorbed.size()
+                    + " per-organism files into " + historyFile());
+        }
+        // A folder is only removed once it is empty, so anything still in there
+        // — something unreadable, something the game did not write — is kept.
+        for (Path folder : folders) {
+            try (Stream<Path> left = Files.list(folder)) {
+                if (left.findAny().isEmpty()) deleteQuietly(folder);
+            } catch (IOException ignored) {
+                // cannot tell whether it is empty: leave it alone
+            }
         }
     }
 
-    /** Read one discovery straight off disk, or {@code null} if never found. */
-    public SpeciesRecord loadSpecies(String sequence) {
-        Path file = speciesFile(sequence);
-        if (!Files.exists(file)) return null;
+    private SpeciesRecord readSpeciesFile(Path p) {
         try {
-            Map<String, Object> m = Json.asObject(Json.parse(Files.readString(file)));
-            return SpeciesRecord.fromMap(m);
+            return SpeciesRecord.fromMap(Json.asObject(Json.parse(Files.readString(p))));
         } catch (IOException | RuntimeException e) {
+            System.err.println("EvolutionStore: skipping unreadable species file "
+                    + p + " (" + e.getMessage() + ")");
             return null;
         }
     }
 
-    /**
-     * Fold an older layout's {@code catalog/} folder into {@code history/}.
-     * Discoveries made before the permanent-history split are the same thing the
-     * history is for, so they are moved rather than left stranded — a player who
-     * already has a collection keeps it.
-     */
-    private void migrateLegacyCatalog() {
-        Path legacy = dir.resolve(LEGACY_CATALOG_DIR);
-        if (!Files.isDirectory(legacy)) return;
+    private static void deleteQuietly(Path p) {
         try {
-            Files.createDirectories(historyDirectory());
-            try (Stream<Path> files = Files.list(legacy)) {
-                files.filter(p -> p.toString().endsWith(".json")).forEach(p -> {
-                    Path target = historyDirectory().resolve(p.getFileName());
-                    try {
-                        if (Files.exists(target)) Files.delete(p);
-                        else Files.move(p, target, StandardCopyOption.ATOMIC_MOVE);
-                    } catch (IOException e) {
-                        System.err.println("EvolutionStore: could not migrate " + p
-                                + " (" + e.getMessage() + ")");
-                    }
-                });
-            }
-            // Only removed once it is empty, so nothing is ever lost in the move.
-            try (Stream<Path> left = Files.list(legacy)) {
-                if (left.findAny().isEmpty()) Files.delete(legacy);
-            }
+            Files.deleteIfExists(p);
         } catch (IOException e) {
-            System.err.println("EvolutionStore: could not migrate the old catalog folder ("
-                    + e.getMessage() + ")");
+            System.err.println("EvolutionStore: could not remove " + p
+                    + " (" + e.getMessage() + ")");
         }
     }
 }

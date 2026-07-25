@@ -692,7 +692,7 @@ class EvolutionGameTest {
     }
 
     @Test
-    void everyDiscoveryIsWrittenAsItsOwnJsonFile(@TempDir Path dir) throws Exception {
+    void everyDiscoveryIsKeptOnThePermanentRecord(@TempDir Path dir) throws Exception {
         EvolutionStore store = new EvolutionStore(dir.toString());
         EvolutionGame game = EvolutionGame.newGame(Nucleotide.G, 20L);
         feed(game, 80);
@@ -700,19 +700,60 @@ class EvolutionGameTest {
         store.save(game);
 
         int catalogued = game.catalog().speciesCount();
-        assertEquals(catalogued, store.speciesFileCount(),
-                "one file per catalogued strand, not one table of all of them");
+        assertEquals(catalogued, store.speciesCount(),
+                "every strand this game found is on the record");
+        assertEquals(1, Files.list(dir).filter(p -> p.getFileName().toString().endsWith(".json"))
+                        .filter(p -> p.getFileName().toString().startsWith("history")).count(),
+                "and the whole collection is one file, not one file each");
 
         List<SpeciesRecord> read = store.loadSpecies();
         assertEquals(catalogued, read.size());
         for (SpeciesRecord rec : read) {
             assertTrue(Genome.isValid(rec.sequence));
-            Path file = store.speciesFile(rec.sequence);
-            assertTrue(Files.exists(file), "named after the DNA that produced it");
-            String json = Files.readString(file);
-            assertTrue(json.contains("\"dna\""), "and readable on its own");
-            assertTrue(json.contains("\"traits\""));
-            assertTrue(json.contains("\"abilities\""));
+            SpeciesRecord one = store.loadSpecies(rec.sequence);
+            assertNotNull(one, "and each is still readable on its own terms");
+            assertEquals(rec.name, one.name);
+            assertEquals(rec.generation, one.generation);
+            // The decoded half was never stored and never needed to be: it comes
+            // straight back out of the strand.
+            assertEquals(rec.phenotype().shape(), one.phenotype().shape());
+            assertEquals(rec.phenotype().abilities(), one.phenotype().abilities());
+        }
+
+        // And any one of them can still be written out as a standalone artefact.
+        SpeciesRecord first = read.get(0);
+        Path exported = store.exportSpecies(first, dir.resolve("export/" + first.sequence + ".json"));
+        String json = Files.readString(exported);
+        assertTrue(json.contains("\"dna\""));
+        assertTrue(json.contains("\"traits\""));
+        assertTrue(json.contains("\"abilities\""));
+    }
+
+    @Test
+    void aCollectionOfThousandsStaysASmallFile(@TempDir Path dir) {
+        EvolutionStore store = new EvolutionStore(dir.toString());
+        History history = new History();
+        java.util.Random rng = new java.util.Random(77);
+        int wanted = 2000;
+        while (history.speciesCount() < wanted) {
+            Genome g = Genome.random(rng, 4 + rng.nextInt(20));
+            history.record(SpeciesRecord.of(g, "Dish " + (1 + rng.nextInt(4)), rng.nextInt(90)));
+        }
+        Path file = store.saveHistory(history);
+        long bytes = file.toFile().length();
+        assertTrue(bytes < 120_000,
+                wanted + " discoveries should be well under 120 KB (was " + bytes + ")");
+
+        History back = store.loadHistory();
+        assertEquals(history.speciesCount(), back.speciesCount(), "and all of it reads back");
+        for (SpeciesRecord rec : history.allSpecies()) {
+            SpeciesRecord got = back.species(rec.sequence);
+            assertNotNull(got, rec.sequence + " survived");
+            assertEquals(rec.name, got.name);
+            assertEquals(rec.dish, got.dish);
+            assertEquals(rec.generation, got.generation);
+            assertEquals(rec.credit, got.credit);
+            assertEquals(rec.discoveredAt / 1000, got.discoveredAt / 1000, "to the second");
         }
     }
 
@@ -724,14 +765,14 @@ class EvolutionGameTest {
         run(game, 400);
         store.save(game);
 
-        int discovered = store.speciesFileCount();
+        int discovered = store.speciesCount();
         assertTrue(discovered > 1, "the first game discovered several organisms");
 
         // Reset, play again, save again.
         game.resetExperiment(Nucleotide.R);
         store.save(game);
-        assertTrue(store.speciesFileCount() >= discovered,
-                "resetting never deletes a discovery file");
+        assertTrue(store.speciesCount() >= discovered,
+                "resetting never drops a discovery from the record");
         feed(game, 100);
         run(game, 300);
         store.save(game);
@@ -784,20 +825,53 @@ class EvolutionGameTest {
     }
 
     @Test
-    void discoveriesFromAnOlderLayoutAreMigratedIntoTheHistory(@TempDir Path dir) throws Exception {
-        // Builds before the history tier wrote discoveries to evolution/catalog/.
-        // Those are exactly what the history is for, so they are moved, not lost.
-        Path legacy = dir.resolve("catalog");
-        Files.createDirectories(legacy);
-        SpeciesRecord old = SpeciesRecord.of(Genome.of("RGBRGB"), "Dish 1", 4);
-        Files.writeString(legacy.resolve(old.sequence + ".json"),
-                com.larsons.engine.util.Json.stringify(old.toMap()));
+    void discoveriesFromOlderLayoutsAreFoldedIntoTheHistory(@TempDir Path dir) throws Exception {
+        // Two generations of layout: evolution/catalog/ from before the history
+        // tier existed, and evolution/history/ from when each discovery was its
+        // own file. Both are exactly what the history is for, so both are folded
+        // in rather than left stranded.
+        SpeciesRecord oldest = SpeciesRecord.of(Genome.of("RGBRGB"), "Dish 1", 4);
+        SpeciesRecord perFile = SpeciesRecord.of(Genome.of("GGBBRR"), "Dish 2", 9);
+        Path catalog = dir.resolve("catalog");
+        Path perFileDir = dir.resolve("history");
+        Files.createDirectories(catalog);
+        Files.createDirectories(perFileDir);
+        Files.writeString(catalog.resolve(oldest.sequence + ".json"),
+                com.larsons.engine.util.Json.stringify(oldest.toMap()));
+        Files.writeString(perFileDir.resolve(perFile.sequence + ".json"),
+                com.larsons.engine.util.Json.stringify(perFile.toMap()));
 
         EvolutionStore store = new EvolutionStore(dir.toString());
         History history = store.loadHistory();
-        assertTrue(history.knows("RGBRGB"), "the old discovery is on the record");
-        assertTrue(Files.exists(store.speciesFile("RGBRGB")), "and lives in history/ now");
-        assertFalse(Files.exists(legacy), "the old folder is cleared away once it is empty");
+        assertTrue(history.knows("RGBRGB"), "the oldest discovery is on the record");
+        assertTrue(history.knows("GGBBRR"), "and so is the per-file one");
+        assertEquals(4, history.species("RGBRGB").generation, "with what it knew about it");
+        assertEquals("Dish 2", history.species("GGBBRR").dish);
+
+        assertTrue(Files.exists(store.historyFile()), "the collection is in one file now");
+        assertFalse(Files.exists(catalog), "and the old folders are cleared away");
+        assertFalse(Files.exists(perFileDir));
+
+        // Reading again finds everything, with nothing left to migrate.
+        History again = store.loadHistory();
+        assertEquals(history.speciesCount(), again.speciesCount());
+        assertTrue(again.knows("RGBRGB"));
+        assertTrue(again.knows("GGBBRR"));
+    }
+
+    @Test
+    void aFailedMigrationLeavesTheOldFilesWhereTheyAre(@TempDir Path dir) throws Exception {
+        // Nothing is deleted before the collection is safely written somewhere
+        // else, so a folder of unreadable files is kept, not thrown away.
+        Path perFileDir = dir.resolve("history");
+        Files.createDirectories(perFileDir);
+        Files.writeString(perFileDir.resolve("BROKEN.json"), "{ not json at all");
+
+        EvolutionStore store = new EvolutionStore(dir.toString());
+        History history = store.loadHistory();
+        assertEquals(0, history.speciesCount(), "nothing readable was in there");
+        assertTrue(Files.exists(perFileDir.resolve("BROKEN.json")),
+                "and the file nobody could read is still on disk");
     }
 
     @Test
@@ -807,13 +881,13 @@ class EvolutionGameTest {
         feed(first, 80);
         run(first, 200);
         store.save(first);
-        int found = store.speciesFileCount();
+        int found = store.speciesCount();
         assertTrue(found >= 1);
 
         // A brand new experiment replaces the save but not the discoveries.
         EvolutionGame second = EvolutionGame.newGame(Nucleotide.R, 22L, store.loadHistory());
         store.save(second);
-        assertTrue(store.speciesFileCount() >= found,
+        assertTrue(store.speciesCount() >= found,
                 "starting over never deletes what earlier runs discovered");
     }
 

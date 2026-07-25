@@ -83,9 +83,8 @@ over in a generic, data-driven form and wired to the same toggles:
   red/green/blue DNA that replicate imperfectly, express traits and shapes from
   hard-coded genetic rules, and are pruned by hunger, crowding, temperature and
   each other. You seed one square cell, feed the dish, and earn shop credit for
-  every strand and colony combination that has never existed before — each one
-  written out as its own JSON file in a reference book that ships empty on
-  purpose. Discoveries are kept in two tiers, so the game can be **fully reset**
+  every strand and colony combination that has never existed before, recorded in
+  a reference book that ships empty on purpose. Discoveries are kept in two tiers, so the game can be **fully reset**
   whenever you like while your history of every organism ever found is kept
   forever. See [Evolution](#evolution-artificial-life-simulator).
 - **Skins (texture overrides)** — drop PNG sprite sheets in
@@ -1410,20 +1409,21 @@ rediscover and be paid again; the history still records each organism exactly
 once, and tells you at a glance whether the strand you are looking at is a
 first-ever find or a rediscovery.
 
-Nothing ships with the game. Each discovery is written as **its own JSON file**
-named after the DNA that produced it
-(`resources/evolution/history/<DNA>.json`), decoded traits and all, so an entry
-is a readable artefact on its own rather than a row in a table the game shipped
-with. There are **24 achievements** for the finds worth bragging about (first
-predator, bioluminescence, tool use, multicellularity, all eight body shapes, a
-strand at the 48-nucleotide maximum, …).
+Nothing ships with the game: the book contains exactly what your dishes have
+produced, and an entry decodes all the way back down to its traits and
+abilities — because a strand *is* its own description. There are **24
+achievements** for the finds worth bragging about (first predator,
+bioluminescence, tool use, multicellularity, all eight body shapes, a strand at
+the 48-nucleotide maximum, …).
 
-On disk: `evolution/save.json` is the current game (dishes and everything in
-them, the bench, the credit balance and the game catalog), written on exit,
-from the pause menu, and automatically every 90 seconds;
-`evolution/history.json` plus `evolution/history/` are the permanent record. An
-older layout's `evolution/catalog/` folder is migrated into the history on
-first use, so a collection from an earlier build carries over.
+On disk there are two files. `evolution/save.json` is the current game (dishes
+and everything in them, the bench, the credit balance and the game catalog),
+written on exit, from the pause menu, and automatically every 90 seconds.
+`evolution/history.json` is the permanent record: every organism ever
+discovered, the colony combinations, the achievements and the lifetime totals.
+Folders of per-organism files from older builds (`evolution/history/`, and
+`evolution/catalog/` from older still) are folded into it the first time it is
+read, so a collection from an earlier build carries over.
 
 **How the save stays small.** A dish holds up to 260 cells and 1500 orbs, and a
 lab holds a shelf of dishes, so the parts of the save there are thousands of are
@@ -1444,10 +1444,42 @@ JSON you can open and read:
 }
 ```
 
-Saves written before the packed format still load — every packed list also
-accepts the older array-of-objects form — and are rewritten packed the next time
-the game saves. The reference book is deliberately *not* packed: each discovery
-stays its own readable `history/<DNA>.json`.
+**How the collection stays small.** The history is the one thing here that only
+ever grows, and it used to be one JSON file per discovery — ~450 bytes each, of
+which two thirds was decoded traits, and each one still costing a whole 4 KB
+disk block. A collection of 410 organisms came to 1.7 MB on disk to hold about
+16 KB of facts, and opening the book meant reading 410 files.
+
+What a record actually has to keep is what the strand does not already say. The
+shape, the colour, the traits, the abilities and the complexity are a pure
+function of the DNA — recomputed on load, and never read back off disk even when
+they were written there — and so are the species name and the credit it paid. So
+a discovery is now one row of `dna at dish generation credit name` in
+`history.json`, with the dish names in a dictionary beside it and the derived
+fields written only in the odd case where they disagree with the rules:
+
+```json
+"species": {
+  "format": "dna at dish generation credit name",
+  "dishes": ["Dish 1", "Dish 2"],
+  "rows": ["BBBBRR 1785009893 0 9", "BBBR 1785009899 1"]
+}
+```
+
+Those same 410 organisms are **13.9 KB in one file** — 7% of the bytes and 1% of
+the disk — and opening the book reads one file instead of 411 (9 ms → 6 ms warm
+at this size, and the gap widens with every discovery). Nothing is lost: the
+entry still decodes to everything it ever showed. When you want one organism as
+a standalone artefact — to look at, to keep, to send someone — the store writes
+it out fully decoded on demand (`EvolutionStore.exportSpecies`), which is the
+readable-artefact idea aimed at the organism you care about rather than at all
+several thousand of them on every save.
+
+Saves and histories written by earlier builds still load: every packed list also
+accepts the older array-of-objects form, and both older history layouts are
+folded in and then cleared away — but only after the merged collection has been
+written safely to `history.json`, and only for the files that were read
+successfully.
 
 ### Controls
 

@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -321,8 +322,113 @@ class PackedSaveTest {
         assertEquals(history.combinations(), back.combinations());
 
         History old = History.fromMap(Json.asObject(Json.parse(
-                "{\"combinations\": [{\"signature\": \"RGRG+GGBB\", \"at\": 1}]}")));
+                "{\"combinations\": [{\"signature\": \"RGRG+GGBB\", \"at\": 1700000000000}]}")));
         assertEquals(history.combinations(), old.combinations());
+    }
+
+    @Test
+    void aTimestampIsReadAsWhatItIs() {
+        // Rows write whole seconds; a value from a build that wrote milliseconds
+        // has to land on the same day rather than in 1970.
+        assertEquals(1_700_000_000_000L, Packed.epochMillis(1_700_000_000L), "seconds");
+        assertEquals(1_700_000_000_000L, Packed.epochMillis(1_700_000_000_000L), "milliseconds");
+        assertEquals(0, Packed.epochMillis(0), "and nothing at all is still nothing");
+    }
+
+    // --- the permanent record --------------------------------------------------------
+
+    @Test
+    void aDiscoveryKeepsOnlyWhatTheStrandDoesNotAlreadySay() {
+        SpeciesRecord rec = SpeciesRecord.of(Genome.of("RGBRGB"), "Dish 3", 12);
+        String row = rec.toRow(2);
+        assertEquals("RGBRGB " + (rec.discoveredAt / 1000) + " 2 12", row,
+                "the name and the credit are what the rules say, so they are not written");
+
+        SpeciesRecord back = SpeciesRecord.fromRow(row, List.of("Dish 1", "Dish 2", "Dish 3"));
+        assertNotNull(back);
+        assertEquals("RGBRGB", back.sequence);
+        assertEquals(rec.name, back.name, "the name comes back out of the strand");
+        assertEquals(rec.credit, back.credit, "and so does what it paid");
+        assertEquals("Dish 3", back.dish, "the dish name comes out of the dictionary");
+        assertEquals(12, back.generation);
+        assertEquals(rec.discoveredAt / 1000, back.discoveredAt / 1000, "first seen, to the second");
+        // The whole decoded half is recomputed, which is why it need not be stored.
+        assertEquals(rec.phenotype().shape(), back.phenotype().shape());
+        assertEquals(rec.phenotype().abilities(), back.phenotype().abilities());
+        assertEquals(rec.phenotype().complexity(), back.phenotype().complexity());
+    }
+
+    @Test
+    void aRecordThatDisagreesWithTheRulesKeepsWhatItSaid() {
+        // Nothing in the game renames a species or reprices a discovery, but a
+        // hand-edited file from an older build might have, and migrating it
+        // should not quietly overwrite what it said.
+        SpeciesRecord odd = new SpeciesRecord("RGRG", "Nessie horribilis", 1_700_000_000_000L,
+                "Petri dish of doom", 3, 999);
+        SpeciesRecord back = SpeciesRecord.fromRow(odd.toRow(0), List.of("Petri dish of doom"));
+        assertNotNull(back);
+        assertEquals("Nessie horribilis", back.name, "the odd name survives the round trip");
+        assertEquals(999, back.credit);
+        assertEquals("Petri dish of doom", back.dish, "spaces and all");
+        assertEquals(1_700_000_000_000L, back.discoveredAt);
+    }
+
+    @Test
+    void theWholeCollectionRoundTripsThroughOneFile() {
+        History history = new History();
+        history.record(SpeciesRecord.of(Genome.of("GGGG"), "Dish 1", 0));
+        history.record(SpeciesRecord.of(Genome.of("RGBRGB"), "Dish 2", 7));
+        history.record(SpeciesRecord.of(Genome.of("BBRRGG"), "Dish 2", 21));
+        history.recordCombination("GGGG+RGBRGB");
+        history.unlock(Achievement.PREDATOR);
+        history.countGame();
+
+        History back = History.fromMap(Json.asObject(Json.parse(Json.stringify(history.toMap()))));
+        assertEquals(history.speciesCount(), back.speciesCount());
+        for (SpeciesRecord rec : history.allSpecies()) {
+            SpeciesRecord got = back.species(rec.sequence);
+            assertNotNull(got, rec.sequence + " is still on the record");
+            assertEquals(rec.dish, got.dish);
+            assertEquals(rec.generation, got.generation);
+            assertEquals(rec.name, got.name);
+        }
+        assertEquals(history.combinations(), back.combinations());
+        assertEquals(history.unlockedAchievements(), back.unlockedAchievements());
+        assertEquals(history.gamesPlayed(), back.gamesPlayed());
+        assertEquals(history.lifetimeCredit(), back.lifetimeCredit());
+    }
+
+    @Test
+    void aHistoryFromAnOlderBuildStillOpens() {
+        // The index a build wrote when discoveries lived in their own files:
+        // achievements as an array, combinations as objects, no species at all.
+        String legacy = """
+                {"version": 1,
+                 "combinations": [{"signature": "RGRG+GGBB", "at": 1700000000000}],
+                 "achievements": ["FIRST_LIFE", "PREDATOR", "NO_SUCH_ACHIEVEMENT"],
+                 "gamesPlayed": 3,
+                 "lifetimeCredit": 812}
+                """;
+        History old = History.fromMap(Json.asObject(Json.parse(legacy)));
+        assertEquals(0, old.speciesCount(), "its discoveries are in the folder beside it");
+        assertEquals(Set.of("RGRG+GGBB"), old.combinations());
+        assertTrue(old.isUnlocked(Achievement.FIRST_LIFE));
+        assertTrue(old.isUnlocked(Achievement.PREDATOR));
+        assertEquals(2, old.unlockedAchievements().size(), "an achievement that no longer exists is skipped");
+        assertEquals(3, old.gamesPlayed());
+        assertEquals(812, old.lifetimeCredit());
+    }
+
+    @Test
+    void anUnreadableDiscoveryRowCostsThatOneDiscovery() {
+        List<String> dishes = List.of("Dish 1");
+        assertNull(SpeciesRecord.fromRow("", dishes), "an empty row is not a discovery");
+        assertNull(SpeciesRecord.fromRow("NOPE 1700000000", dishes), "nor is an impossible strand");
+
+        SpeciesRecord rec = SpeciesRecord.fromRow("RGRG", dishes);
+        assertNotNull(rec, "a strand on its own is enough to be a discovery");
+        assertEquals(SpeciesRecord.nameFor(Genome.of("RGRG")), rec.name);
+        assertEquals(0, rec.generation);
     }
 
     // --- helpers ---------------------------------------------------------------------

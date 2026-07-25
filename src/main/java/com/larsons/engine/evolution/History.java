@@ -26,9 +26,11 @@ import java.util.Set;
  *       game that ever ran. Reset does not touch it.</li>
  * </ul>
  *
- * <p>Each entry is written to disk as its own JSON file (see
- * {@link EvolutionStore}); this class holds the in-memory index of them plus
- * the totals that are not derivable from the files themselves.
+ * <p>The whole record — every discovery, plus the totals, achievements and
+ * colony combinations — is one file on disk (see {@link EvolutionStore}), with
+ * the discoveries as a table of rows rather than a file each. A collection is
+ * the one thing in this game that only ever grows, so it is stored as the small
+ * amount that a strand does not already tell you.
  */
 public final class History {
 
@@ -42,7 +44,6 @@ public final class History {
     /** Credit earned across every game ever played, as a lifetime score. */
     private int lifetimeCredit;
 
-    private final List<SpeciesRecord> pendingWrites = new ArrayList<>();
     private final List<Achievement> announcements = new ArrayList<>();
 
     // --- recording ------------------------------------------------------------------
@@ -57,15 +58,11 @@ public final class History {
         lifetimeCredit += rec.credit;
         if (species.containsKey(rec.sequence)) return false;
         species.put(rec.sequence, rec);
-        pendingWrites.add(rec);
         checkSpeciesAchievements(rec);
         return true;
     }
 
-    /**
-     * Re-add an entry read back from disk: it is already recorded and already
-     * written, so it neither pays nor queues a write.
-     */
+    /** Re-add an entry read back from disk: it is already recorded, so it does not pay. */
     public void restore(SpeciesRecord rec) {
         if (rec == null || species.containsKey(rec.sequence)) return;
         species.put(rec.sequence, rec);
@@ -185,45 +182,71 @@ public final class History {
         return seen.size();
     }
 
-    /** Entries recorded since the last call, for the store to write to disk. */
-    public List<SpeciesRecord> drainPendingWrites() {
-        List<SpeciesRecord> out = new ArrayList<>(pendingWrites);
-        pendingWrites.clear();
-        return out;
-    }
-
     // --- persistence -----------------------------------------------------------------------
 
     /**
-     * The index. The discoveries themselves live in their own files, so this
-     * carries only what is not derivable from them: the combinations, the
-     * achievements, and the lifetime totals.
+     * The whole permanent record: every discovery, the combinations, the
+     * achievements and the lifetime totals, in one file.
+     *
+     * <p>Discoveries are a table of {@link SpeciesRecord#ROW_FORMAT} rows rather
+     * than a JSON object each, because all a record needs to keep is what the
+     * decoder cannot work out from the strand — a collection of thousands of
+     * organisms is then tens of kilobytes rather than thousands of files. The
+     * dish names go in a dictionary beside the rows, since a lab has half a
+     * dozen dishes and a history has thousands of finds made in them.
      */
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("version", 2);
-        m.put("combinations", Packed.signatures(combinations));
-        List<Object> ach = new ArrayList<>();
-        for (Achievement a : unlocked) ach.add(a.name());
-        m.put("achievements", ach);
+        m.put("version", 3);
         m.put("gamesPlayed", gamesPlayed);
         m.put("lifetimeCredit", lifetimeCredit);
+        m.put("achievements", achievementNames());
+        m.put("combinations", Packed.signatures(combinations));
+        m.put("species", speciesBlock());
         return m;
     }
 
+    private String achievementNames() {
+        List<String> names = new ArrayList<>(unlocked.size());
+        for (Achievement a : unlocked) names.add(a.name());
+        return Packed.joinWords(names);
+    }
+
+    private Map<String, Object> speciesBlock() {
+        Map<String, Integer> dishes = new LinkedHashMap<>();
+        List<String> rows = new ArrayList<>(species.size());
+        for (SpeciesRecord rec : species.values()) {
+            String dish = rec.dish == null ? "" : rec.dish;
+            Integer index = dishes.get(dish);
+            if (index == null) {
+                index = dishes.size();
+                dishes.put(dish, index);
+            }
+            rows.add(rec.toRow(index));
+        }
+        return Packed.block(SpeciesRecord.ROW_FORMAT, "dishes", dishes.keySet(), rows);
+    }
+
+    /**
+     * Read the record back. Everything here also accepts the shape an older
+     * build wrote — including a file with no discoveries in it at all, which is
+     * what the record looked like when each one lived in its own file; those are
+     * folded back in by {@link EvolutionStore#loadHistory}.
+     */
     public static History fromMap(Map<String, Object> m) {
         History h = new History();
         if (m == null) return h;
         Packed.readSignatures(m.get("combinations"), h.combinations);
-        if (m.get("achievements") instanceof List<?> list) {
-            for (Object o : list) {
-                try {
-                    h.unlocked.add(Achievement.valueOf(String.valueOf(o)));
-                } catch (IllegalArgumentException ignored) {
-                    // an achievement that no longer exists: skip it
-                }
+        for (String name : Packed.wordList(m.get("achievements"))) {
+            try {
+                h.unlocked.add(Achievement.valueOf(name));
+            } catch (IllegalArgumentException ignored) {
+                // an achievement that no longer exists: skip it
             }
         }
+        Object block = m.get("species");
+        List<String> dishes = Packed.words(block, "dishes");
+        for (String row : Packed.rows(block)) h.restore(SpeciesRecord.fromRow(row, dishes));
         if (m.get("gamesPlayed") instanceof Number n) h.gamesPlayed = Math.max(1, n.intValue());
         if (m.get("lifetimeCredit") instanceof Number n) h.lifetimeCredit = n.intValue();
         return h;

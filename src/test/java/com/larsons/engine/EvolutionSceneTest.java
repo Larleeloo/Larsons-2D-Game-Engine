@@ -164,7 +164,7 @@ class EvolutionSceneTest {
         render(scenes);
         press(scenes, input, KeyEvent.VK_TAB); // back around to the species list
         render(scenes);
-        assertTrue(store.speciesFileCount() >= 1, "the book had files to read");
+        assertTrue(store.speciesCount() >= 1, "the book had discoveries to read");
     }
 
     @Test
