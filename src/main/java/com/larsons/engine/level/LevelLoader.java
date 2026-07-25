@@ -1,6 +1,5 @@
 package com.larsons.engine.level;
 
-import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.util.Json;
 import com.larsons.engine.world.SurfaceDecor;
 
@@ -28,6 +27,7 @@ import java.util.Map;
  * <pre>
  * {
  *   "name": "Sample",
+ *   "format": "side_scroller" | "top_down" | "isometric",
  *   "perspective": "SIDE_SCROLL" | "TOP_DOWN" | "ISOMETRIC",
  *   "tileSize": 32,
  *   "width": 24, "height": 14,
@@ -54,8 +54,13 @@ public final class LevelLoader {
         Level lvl = new Level();
 
         if (root.get("name") instanceof String s) lvl.name = s;
+        // Format first, then the legacy "perspective" key — both name the same
+        // thing, and either alone is enough to load a level of any format.
+        if (root.get("format") instanceof String f) {
+            lvl.setFormat(LevelFormat.of(f, lvl.format()));
+        }
         if (root.get("perspective") instanceof String p) {
-            lvl.perspective = Perspective.valueOf(p.trim().toUpperCase());
+            lvl.setFormat(LevelFormat.of(p, lvl.format()));
         }
         if (root.containsKey("tileSize")) lvl.tileSize = intOf(root.get("tileSize"), 32);
         if (root.get("background") instanceof String bg) lvl.background = parseColor(bg, lvl.background);
@@ -245,6 +250,29 @@ public final class LevelLoader {
             // fall through to null
         }
         return null;
+    }
+
+    /**
+     * The {@link LevelFormat} a level file declares, read from its header
+     * without parsing the level. Both keys {@link Level#toMap()} writes are
+     * accepted, and they lead the file, so listing a folder of levels by
+     * format costs a short read per file instead of decoding every tile.
+     * Returns {@code def} when the text declares neither.
+     */
+    public static LevelFormat peekFormat(String header, LevelFormat def) {
+        if (header == null) return def;
+        LevelFormat found = valueAfter(header, "\"format\"", def);
+        return found != def ? found : valueAfter(header, "\"perspective\"", def);
+    }
+
+    /** The string value following {@code key} in a JSON header, parsed as a format. */
+    private static LevelFormat valueAfter(String text, String key, LevelFormat def) {
+        int at = text.indexOf(key);
+        if (at < 0) return def;
+        int open = text.indexOf('"', at + key.length());
+        int close = open < 0 ? -1 : text.indexOf('"', open + 1);
+        if (open < 0 || close < 0) return def;
+        return LevelFormat.of(text.substring(open + 1, close), def);
     }
 
     private static int intOf(Object o, int def) {

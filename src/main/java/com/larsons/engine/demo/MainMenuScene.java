@@ -5,6 +5,7 @@ import com.larsons.engine.config.GamePackage;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.config.GameTypeStore;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelStore;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
@@ -63,7 +64,7 @@ public class MainMenuScene extends AbstractScene {
     private void buildMenu() {
         GameProfile p = ctx.profile();
         menu = new Menu(p.name)
-                .subtitle("game type · " + p.perspective
+                .subtitle("game type · levels in any format"
                         + (p.finalized ? " · finalized (play-only)" : ""))
                 .theme(MenuTheme.dark())
                 .add("Play Level", () -> scenes.transitionTo("play"))
@@ -71,7 +72,7 @@ public class MainMenuScene extends AbstractScene {
         // A finalized (published) game type is play-only: no creative editing,
         // feature edits, renames, or re-exports — just play its levels.
         if (p.creativeEnabled && !p.finalized) {
-            menu.add("Creative Mode (paint a level)", () -> scenes.transitionTo("creative"));
+            menu.add("Creative Mode (pick a level format)", this::openCreativePicker);
         }
         menu.add("Multiplayer (Host / Join)", () -> scenes.transitionTo("multiplayer"));
         if (!p.finalized) {
@@ -84,6 +85,32 @@ public class MainMenuScene extends AbstractScene {
         menu.add("Delete Game Type", this::startDelete)
                 .add("Change Game Type", () -> scenes.transitionTo("startup"))
                 .add("Quit", () -> System.exit(0));
+    }
+
+    /**
+     * The creative-mode picker: one entry per {@link LevelFormat}, because the
+     * three formats are three creative modes. Each opens the editor building
+     * for that format — continuing this game type's last level when it was
+     * built in the same format, or starting a fresh canvas in it otherwise —
+     * and the counts show how many levels of each format the game type holds.
+     */
+    private void openCreativePicker() {
+        GameProfile p = ctx.profile();
+        LevelStore store = new LevelStore(p.name);
+        Menu picker = new Menu("Creative Mode")
+                .subtitle(p.name + " · which kind of level are you building?")
+                .theme(MenuTheme.dark());
+        for (LevelFormat format : LevelFormat.values()) {
+            int saved = store.list(format).size();
+            picker.add(format.displayName() + "  (" + saved
+                            + (saved == 1 ? " level)" : " levels)"),
+                    () -> {
+                        ctx.setCreativeFormat(format);
+                        scenes.transitionTo("creative");
+                    });
+        }
+        picker.add("Back", this::buildMenu);
+        menu = picker;
     }
 
     private void startRename() {

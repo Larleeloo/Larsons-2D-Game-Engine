@@ -292,6 +292,15 @@ public final class World {
         return v;
     }
 
+    /**
+     * Whether drops arc under gravity here, or scatter across the plane: it
+     * follows the level's format, so a mined block in a top-down or isometric
+     * level throws its drop sideways instead of "up".
+     */
+    private boolean tossGravity() {
+        return level.format().gravity();
+    }
+
     /** Remove a mob, dropped item, or vehicle by entity id (creative erase, online too). */
     public boolean removeEntity(int id) {
         return mobs.removeIf(m -> m.id == id) || items.removeIf(i -> i.id == id)
@@ -305,8 +314,9 @@ public final class World {
             timeOfDay -= Math.floor(timeOfDay);
         }
 
-        boolean gravityOn = profile.gravityEnabled
-                && level.perspective == com.larsons.engine.graphics.Perspective.SIDE_SCROLL;
+        // Gravity is a property of the level's format: only the
+        // side-scroller has a "down" for things to fall toward.
+        boolean gravityOn = profile.gravityEnabled && level.format().gravity();
 
         blockChanges.addAll(liquids.step(level, gravityOn, dt));
 
@@ -559,7 +569,7 @@ public final class World {
             spawnItem(best.def.sourceItem(), 1,
                     best.x + best.def.size() / 2 - DroppedItem.SIZE / 2,
                     best.y + best.def.size() / 2 - DroppedItem.SIZE / 2)
-                    .toss(0, -180);
+                    .toss(0, -180, tossGravity());
         }
         impacts.add(new Impact("summon", best.x + best.def.size() / 2,
                 best.y + best.def.size() / 2, false));
@@ -721,7 +731,7 @@ public final class World {
                     // throwable-recovery behaviour).
                     spawnItem(p.def.dropItem(), 1,
                             p.x - DroppedItem.SIZE / 2, p.y - DroppedItem.SIZE / 2)
-                            .toss(-p.vx * 0.1, -160);
+                            .toss(-p.vx * 0.1, -160, tossGravity());
                 }
                 resolveImpactEffects(p, players, profile);
                 it.remove();
@@ -1034,8 +1044,7 @@ public final class World {
      */
     public void driveVehicle(Vehicle v, PlayerState rider, PlayerInput in,
                              GameProfile profile, double dt) {
-        boolean gravityOn = profile.gravityEnabled
-                && level.perspective == com.larsons.engine.graphics.Perspective.SIDE_SCROLL;
+        boolean gravityOn = profile.gravityEnabled && level.format().gravity();
         if (v.def.kind() == VehicleDef.Kind.DRILL && profile.blockEditingEnabled) {
             drillTerrain(v, in, profile, dt);
         }
@@ -1183,7 +1192,7 @@ public final class World {
             spawnItem(b.drops(), 1,
                     col * ts + ts / 2 - DroppedItem.SIZE / 2,
                     row * ts + ts / 2 - DroppedItem.SIZE / 2)
-                    .toss(((col + row) % 2 == 0 ? 60 : -60), -260);
+                    .toss(((col + row) % 2 == 0 ? 60 : -60), -260, tossGravity());
         }
         if (stored != null && withDrops) {
             int i = 0;
@@ -1191,7 +1200,7 @@ public final class World {
                 DroppedItem drop = spawnItem(s.key, s.count,
                         col * ts + ts / 2 - DroppedItem.SIZE / 2,
                         row * ts + ts / 2 - DroppedItem.SIZE / 2);
-                if (drop != null) drop.toss((i++ % 3 - 1) * 90, -220);
+                if (drop != null) drop.toss((i++ % 3 - 1) * 90, -220, tossGravity());
             }
         }
         return b;
@@ -1249,7 +1258,7 @@ public final class World {
         }
         if (itemTypes.get(loot) != null) {
             spawnItem(loot, count, m.x + m.def.size() / 2, m.y + m.def.size() / 2)
-                    .toss(0, -200);
+                    .toss(0, -200, tossGravity());
         }
     }
 
@@ -1310,7 +1319,7 @@ public final class World {
                 if (itemTypes.get(drop) == null) continue;
                 DroppedItem item = spawnItem(drop, 1,
                         best.x - DroppedItem.SIZE / 2, best.y - h * 0.5);
-                if (item != null) item.toss((i++ % 3 - 1) * 80, -220);
+                if (item != null) item.toss((i++ % 3 - 1) * 80, -220, tossGravity());
             }
         }
         return ChopResult.BROKEN;

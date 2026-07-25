@@ -27,6 +27,11 @@ import java.util.Random;
  *
  * <p><b>Navigation intelligence</b> layered onto the ported state machine:
  * <ul>
+ *   <li><b>Level format</b> — in a side-scrolling level a mob is a platform
+ *       walker steering one axis under gravity (fliers hold an altitude); in
+ *       the plan-view formats (top-down, isometric) every species walks the
+ *       whole plane instead, wandering to 2D destinations and chasing, fleeing
+ *       and bursting along both axes.</li>
  *   <li><b>Jumping</b> — a grounded walker blocked by a low wall (or facing a
  *       gap while chasing) hops it, so terrain no longer strands pursuit.</li>
  *   <li><b>Liquids</b> — submerged mobs swim: buoyancy replaces gravity and
@@ -305,11 +310,12 @@ public final class Mob {
         }
 
         // --- behaviour ---
-        // Perspective-specific AI: side-scroll mobs (gravityOn) are platform
-        // walkers that only steer horizontally; top-down / isometric mobs
-        // (planar) navigate the whole plane, so they wander to 2D targets and
-        // chase / flee along both axes.
-        boolean planar = !gravityOn && !def.flying();
+        // Format-specific AI: side-scroll mobs (gravityOn) are platform
+        // walkers that only steer horizontally; plan-view mobs (planar)
+        // navigate the whole plane, so they wander to 2D targets and chase /
+        // flee along both axes. A plan view has no altitude to fly at, so
+        // flying species navigate the plane there like everything else.
+        boolean planar = !gravityOn;
         double ts = level.tileSize;
         double cx = x + def.size() / 2, cy = y + def.size() / 2;
         double pcx = nearest == null ? cx : nearest.x + ts / 2;
@@ -400,11 +406,21 @@ public final class Mob {
         if (dodgeTime > 0) dx = dodgeDx * def.speed() * 1.4 * speedFactor;
 
         // --- hazard sense: don't walk into lava/acid/spikes (unless fleeing) ---
-        if (dx != 0 && state != AIState.FLEE && dodgeTime <= 0
-                && hazardous(level, x + size / 2 + Math.signum(dx) * (size / 2 + ts * 0.6),
-                y + size * 0.5)) {
-            if (state == AIState.WANDER) pickWanderTarget(level);
-            dx = 0;
+        // Each axis is checked where it is actually steering: a platform
+        // walker only steps sideways, but a plan-view mob can walk into a lava
+        // pool going "up" the screen just as easily.
+        if (state != AIState.FLEE && dodgeTime <= 0) {
+            double probe = size / 2 + ts * 0.6;
+            if (dx != 0 && hazardous(level, x + size / 2 + Math.signum(dx) * probe,
+                    y + size * 0.5)) {
+                if (state == AIState.WANDER) pickWanderTarget(level);
+                dx = 0;
+            }
+            if (dyPlanar != 0 && hazardous(level, x + size / 2,
+                    y + size / 2 + Math.signum(dyPlanar) * probe)) {
+                if (state == AIState.WANDER) pickWanderTarget(level);
+                dyPlanar = 0;
+            }
         }
 
         if (dx != 0) facingLeft = dx < 0;
@@ -418,7 +434,18 @@ public final class Mob {
         boolean movedShort = dx != 0 && Math.abs(nx - x) < Math.abs(dx * dt) - 0.0001;
         x = nx;
 
-        if (def.flying()) {
+        if (planar) {
+            // Plan view (top-down / isometric): walk the second axis too, with
+            // the same wall collision the first axis gets. This is where every
+            // species ends up in these formats — there is no height to fly at
+            // and no floor to fall to when the screen shows the ground.
+            double ny = PlayerPhysics.slideY(level, x, y, size, size, dyPlanar * dt);
+            boolean blockedY = dyPlanar != 0 && ny == y;
+            y = ny;
+            if ((blockedSideways || blockedY) && state == AIState.WANDER) {
+                pickWanderTarget(level); // walled in: pick somewhere else
+            }
+        } else if (def.flying()) {
             // Fliers bob toward their target's height (or hover), still
             // respecting ceilings/floors.
             double targetY = nearest != null && (state == AIState.CHASE || state == AIState.ATTACK)
@@ -437,7 +464,8 @@ public final class Mob {
             double ny = PlayerPhysics.slideY(level, x, y, size, size, vy * dt);
             if (ny != y + vy * dt) vy = 0;
             y = ny;
-        } else if (gravityOn) {
+        } else {
+            // Side-scroll ground walker: gravity, landings, and jump smarts.
             boolean grounded = PlayerPhysics.onGround(level, x, y, size, size);
             if (grounded && vy >= 0) vy = 0;
 
@@ -460,15 +488,6 @@ public final class Mob {
             double ny = PlayerPhysics.slideY(level, x, y, size, size, dy);
             if (ny != y + dy) vy = 0; // landed / hit a ceiling
             y = ny;
-        } else {
-            // Planar (top-down / isometric): walk the second axis too, with
-            // the same wall collision the first axis gets.
-            double ny = PlayerPhysics.slideY(level, x, y, size, size, dyPlanar * dt);
-            boolean blockedY = dyPlanar != 0 && ny == y;
-            y = ny;
-            if ((blockedSideways || blockedY) && state == AIState.WANDER) {
-                pickWanderTarget(level); // walled in: pick somewhere else
-            }
         }
 
         // Clamp to level bounds.

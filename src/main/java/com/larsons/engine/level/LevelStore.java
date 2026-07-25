@@ -19,6 +19,10 @@ import java.util.stream.Stream;
  * <p>Levels live under {@code src/main/resources/levels/<game-type>/} so they
  * sit beside the bundled sample and are managed together with their game
  * type: switching types switches which levels you see.
+ *
+ * <p>A game type holds levels of every {@link LevelFormat} side by side —
+ * {@link #formatOf} and {@link #list(LevelFormat)} report which format each
+ * saved level was built in, so menus can group them without loading them.
  */
 public final class LevelStore {
 
@@ -63,6 +67,41 @@ public final class LevelStore {
     public boolean exists(String levelName) {
         return Files.exists(fileFor(levelName));
     }
+
+    /**
+     * The {@link LevelFormat} a saved level was built in, read from the start
+     * of its file — listing a folder by format doesn't decode any tiles.
+     * Missing or unreadable files report {@link LevelFormat#SIDE_SCROLLER},
+     * the format levels that predate the field were built in.
+     */
+    public LevelFormat formatOf(String levelName) {
+        Path file = fileFor(levelName);
+        if (!Files.exists(file)) return LevelFormat.SIDE_SCROLLER;
+        try (java.io.Reader in = Files.newBufferedReader(file)) {
+            char[] head = new char[HEADER_CHARS];
+            int read = in.read(head);
+            if (read <= 0) return LevelFormat.SIDE_SCROLLER;
+            return LevelLoader.peekFormat(new String(head, 0, read),
+                    LevelFormat.SIDE_SCROLLER);
+        } catch (IOException e) {
+            return LevelFormat.SIDE_SCROLLER;
+        }
+    }
+
+    /** This game type's level names that were built in {@code format}, sorted. */
+    public List<String> list(LevelFormat format) {
+        List<String> names = new ArrayList<>();
+        for (String name : list()) {
+            if (formatOf(name) == format) names.add(name);
+        }
+        return names;
+    }
+
+    /**
+     * Characters of a level file read to find its format. The format keys lead
+     * the JSON object, so this is generous even for the pretty-printed form.
+     */
+    private static final int HEADER_CHARS = 512;
 
     public Level load(String levelName) {
         return LevelLoader.load(fileFor(levelName).toString());
