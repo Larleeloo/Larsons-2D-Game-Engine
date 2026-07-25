@@ -286,6 +286,80 @@ class ConfigFeatureTest {
         assertTrue(form.options().get(29).rowBounds().height > 0, "bottom row scrolled into view");
     }
 
+    // --- typed characters belong to the tick they were typed in ------------------
+
+    /**
+     * Keystrokes aimed at the game must never turn up in a text field opened
+     * later: panning a level with {@code WASD} used to pile characters into a
+     * shared buffer, and the next name field to open swallowed the lot
+     * ("wasawdsds") on its first frame.
+     */
+    @Test
+    void keystrokesTypedBeforeAFieldOpenedDoNotLandInIt() {
+        InputManager input = new InputManager();
+        Component src = new Canvas();
+
+        // Several ticks of moving around the level: no form, nothing consuming.
+        for (char c : "wasawdsds".toCharArray()) {
+            input.keyTyped(new KeyEvent(src, KeyEvent.KEY_TYPED, 0L, 0,
+                    KeyEvent.VK_UNDEFINED, c));
+            input.newFrame();
+        }
+
+        // Now a name field opens and gets its first update.
+        String[] name = {""};
+        ConfigForm form = new ConfigForm("New Block");
+        form.addText("Name", () -> name[0], v -> name[0] = v, 32);
+        renderOnce(form);
+        input.newFrame();
+        form.update(1.0 / 120.0, input);
+
+        assertEquals("", name[0], "the field must open empty");
+    }
+
+    /** The fix must not stop a focused field from receiving real typing. */
+    @Test
+    void typingIntoTheSelectedFieldStillWorks() {
+        InputManager input = new InputManager();
+        Component src = new Canvas();
+        String[] name = {""};
+        ConfigForm form = new ConfigForm("New Block");
+        form.addText("Name", () -> name[0], v -> name[0] = v, 32);
+        renderOnce(form);
+
+        for (char c : "Slate".toCharArray()) {
+            input.keyTyped(new KeyEvent(src, KeyEvent.KEY_TYPED, 0L, 0,
+                    KeyEvent.VK_UNDEFINED, c));
+            input.newFrame();
+            form.update(1.0 / 120.0, input);
+        }
+        assertEquals("Slate", name[0]);
+
+        input.keyPressed(new KeyEvent(src, KeyEvent.KEY_PRESSED, 0L, 0,
+                KeyEvent.VK_BACK_SPACE, '\b'));
+        input.newFrame();
+        form.update(1.0 / 120.0, input);
+        assertEquals("Slat", name[0], "backspace still edits the field");
+    }
+
+    /** The underlying rule: unread typing expires at the next tick boundary. */
+    @Test
+    void typedCharactersExpireAfterTheirTick() {
+        InputManager input = new InputManager();
+        Component src = new Canvas();
+
+        input.keyTyped(new KeyEvent(src, KeyEvent.KEY_TYPED, 0L, 0,
+                KeyEvent.VK_UNDEFINED, 'x'));
+        input.newFrame();
+        assertEquals("x", input.consumeTypedChars(), "readable during its own tick");
+
+        input.keyTyped(new KeyEvent(src, KeyEvent.KEY_TYPED, 0L, 0,
+                KeyEvent.VK_UNDEFINED, 'y'));
+        input.newFrame(); // 'y' becomes readable here…
+        input.newFrame(); // …and is dropped here, unread
+        assertEquals("", input.consumeTypedChars());
+    }
+
     private static ConfigForm longForm(int n) {
         ConfigForm form = new ConfigForm("T");
         int[] vals = new int[n];
