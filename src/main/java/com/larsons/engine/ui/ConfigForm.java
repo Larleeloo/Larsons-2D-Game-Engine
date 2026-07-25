@@ -257,14 +257,14 @@ public class ConfigForm {
             }
         }
 
-        // Text editing for the selected text field; otherwise drain the buffer
-        // so stray keystrokes don't accumulate.
+        // Text editing for the selected text field. Keystrokes aimed anywhere
+        // else need no draining here: InputManager scopes typed characters to
+        // the tick they arrived in, so a field only ever receives what was
+        // typed while it was the one selected.
         if (selText) {
             String typed = input.consumeTypedChars();
             if (!typed.isEmpty()) sel.typeChars(typed);
             if (input.isKeyJustPressed(KeyEvent.VK_BACK_SPACE)) sel.backspace();
-        } else {
-            input.consumeTypedChars();
         }
 
         // Mouse: hover selects, click hits sub-controls.

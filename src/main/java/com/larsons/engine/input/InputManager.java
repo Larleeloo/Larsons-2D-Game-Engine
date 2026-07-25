@@ -25,6 +25,12 @@ import java.awt.event.MouseWheelListener;
  * "just pressed" for exactly the next tick. This way no press is ever lost,
  * regardless of when the event arrives relative to the loop — and even a press
  * released within a single frame (a fast tap) is still reported.
+ *
+ * <p>Typed characters ({@link #consumeTypedChars()}) work the same way: they
+ * belong to the tick they were typed in and expire at the next one. A buffer
+ * that instead held every keystroke until something read it would let unrelated
+ * typing — walking a level with {@code WASD} — reappear inside the next text
+ * field to be opened.
  */
 public class InputManager
         implements KeyListener, MouseListener, MouseMotionListener, MouseWheelListener {
@@ -53,7 +59,11 @@ public class InputManager
     private int wheel;
     private int wheelLatch;
 
-    // Buffer of printable characters typed since last consumed (for text fields).
+    // Printable characters typed since the last newFrame() (for text fields),
+    // and the buffer promoted for the current tick. Typing is edge state like
+    // a press: it belongs to the tick it happened in, not to whenever someone
+    // next asks for it.
+    private final StringBuilder typedLatch = new StringBuilder();
     private final StringBuilder typed = new StringBuilder();
     private static final int MAX_TYPED_BUFFER = 256;
 
@@ -74,6 +84,12 @@ public class InputManager
         middleMousePressedLatch = false;
         wheel = wheelLatch;
         wheelLatch = 0;
+        // Characters typed since the previous tick become readable this tick;
+        // anything the previous tick left unread expires here rather than
+        // waiting in line for the next text field that happens to open.
+        typed.setLength(0);
+        typed.append(typedLatch);
+        typedLatch.setLength(0);
     }
 
     public boolean isKeyDown(int keyCode) {
@@ -101,9 +117,15 @@ public class InputManager
     public int getWheelRotation() { return wheel; }
 
     /**
-     * Return and clear printable characters typed since the last call (for text
-     * input fields). Control characters (Enter, Backspace, etc.) are excluded;
-     * handle those via {@link #isKeyJustPressed}.
+     * Return and clear the printable characters typed during <em>this</em> tick
+     * (for text input fields). Control characters (Enter, Backspace, etc.) are
+     * excluded; handle those via {@link #isKeyJustPressed}.
+     *
+     * <p>Characters no one consumes are dropped by the next {@link #newFrame()}
+     * rather than accumulating. That is what keeps keystrokes from turning up
+     * where they were never aimed: panning a level with {@code WASD} used to
+     * pile "wasawdsds" into a shared buffer that the next text field to open —
+     * a new block's name, say — would swallow whole on its first frame.
      */
     public synchronized String consumeTypedChars() {
         if (typed.length() == 0) return "";
@@ -129,8 +151,8 @@ public class InputManager
     @Override public synchronized void keyTyped(KeyEvent e) {
         char c = e.getKeyChar();
         // Keep only printable characters; drop control chars (Enter/Backspace/etc).
-        if (c >= 0x20 && c != 0x7f && typed.length() < MAX_TYPED_BUFFER) {
-            typed.append(c);
+        if (c >= 0x20 && c != 0x7f && typedLatch.length() < MAX_TYPED_BUFFER) {
+            typedLatch.append(c);
         }
     }
 
