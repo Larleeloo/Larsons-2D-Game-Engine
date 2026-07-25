@@ -157,7 +157,11 @@ class EvolutionSceneTest {
         scenes.setScene("evolutioncatalog");
         tick(scenes, input, 3);
         render(scenes);
+        press(scenes, input, KeyEvent.VK_TAB); // lifetime
+        render(scenes);
         press(scenes, input, KeyEvent.VK_TAB); // achievements
+        render(scenes);
+        press(scenes, input, KeyEvent.VK_TAB); // back around to the species list
         render(scenes);
         assertTrue(store.speciesFileCount() >= 1, "the book had files to read");
     }
@@ -215,6 +219,42 @@ class EvolutionSceneTest {
         click(scenes, input, W / 2, H / 2);
         render(scenes);
         assertEquals(1, game.activeDish().population(), "the click inspected rather than killed");
+    }
+
+    @Test
+    void resettingFromThePauseMenuRebuildsTheLabAndKeepsTheBook(@TempDir Path dir) {
+        EvolutionStore store = new EvolutionStore(dir.toString());
+        GameContext ctx = context(dir);
+
+        SceneManager scenes = new SceneManager();
+        scenes.setViewport(W, H);
+        EvolutionScene dish = new EvolutionScene(ctx, store);
+        scenes.register("evolution", dish);
+
+        EvolutionGame game = livingExperiment(34L);
+        int species = game.catalog().speciesCount();
+        int lifetime = game.catalog().creditEarned();
+        dish.adopt(game);
+        scenes.setScene("evolution");
+        InputManager input = new InputManager();
+        tick(scenes, input, 3);
+
+        press(scenes, input, KeyEvent.VK_ESCAPE);   // pause
+        render(scenes);
+        // Walk down to "Reset the lab" and open its confirmation.
+        for (int i = 0; i < 2; i++) press(scenes, input, KeyEvent.VK_DOWN);
+        press(scenes, input, KeyEvent.VK_ENTER);
+        render(scenes);                              // the confirmation draws
+        // "Cancel" is first, so step past it and take the red restart.
+        press(scenes, input, KeyEvent.VK_DOWN);
+        press(scenes, input, KeyEvent.VK_ENTER);
+        tick(scenes, input, 3);
+        render(scenes);
+
+        assertEquals(1, game.dishes().size(), "the lab is back to one dish");
+        assertEquals(1, game.activeDish().population(), "with one starting organism");
+        assertTrue(game.credits() >= lifetime, "and the lifetime credit is back to spend");
+        assertTrue(game.catalog().speciesCount() >= species, "the book survived");
     }
 
     @Test

@@ -1249,11 +1249,24 @@ scripted:
 - **Predation**, with **pattern recognition** as the counter — prey that can
   read a hunter's colours run from it.
 - **Light.** The slide has unlit patches, and sight range scales with how well
-  lit a spot is. Bioluminescence is fed to the engine's
-  [`LightingPass`](src/main/java/com/larsons/engine/graphics/shader/LightingPass.java)
-  through the same GLSL-first shader chain everything else uses — the radius
-  that lights the screen *is* the radius the simulation forages with.
+  lit a spot is, so bioluminescence and the spotlight genuinely change what the
+  cells around them can find — the radius that lights the gel *is* the radius
+  the simulation forages with. The light field is drawn in **world space**
+  rather than through the engine's screen-space
+  [`LightingPass`](src/main/java/com/larsons/engine/graphics/shader/LightingPass.java):
+  that pass dims the finished frame, HUD and all, and the instrument panel has
+  to stay readable. A gentle bloom from the shader chain is what makes the glow
+  bloom.
 - **Death**, from starvation or old age, so nothing stagnates.
+
+**You can see what cells are doing.** Hunting, sharing, signalling, tool
+pickups and decomposition are otherwise silent, so each throws a colour-coded
+ring into the gel: a strike flashes red, a donation pulses blue at whoever
+received it, a broadcast expands to its real earshot, a body handing energy
+back rings the orb it just produced — which is what makes the recycling loop
+legible instead of orbs appearing next to a corpse from nowhere. Cells carrying
+a tool wear it as a ring in the tool's colour, and a hunter shows a notch while
+its strike is off cooldown.
 
 Neighbour lookups go through a uniform spatial grid rebuilt each tick, so a
 full dish (260 organisms, 1500 orbs) costs about **1.2 ms per tick** — well
@@ -1263,6 +1276,15 @@ inside the 8.3 ms budget at 120 Hz.
 
 You start exactly as the design calls for: **one dish, one square organism** of
 whichever colour you pick, and **100 energy orbs** to place by hand.
+
+**The colour is a difficulty choice.** Green's wild cards give it speed,
+appetite and light from the first second and it is the easy opening; blue runs
+frugally and shares, which keeps a colony alive; red pays the upkeep of a
+predation it has nothing to hunt yet, and its only early edge is that hostility
+feeds aggressively. Averaged over 40 seeded runs of a kept-fed dish, a red lab
+catalogues roughly a fifth of what a green one does over the same fifteen
+minutes and about three quarters of what blue does — hardest to use, but not a
+dead end.
 
 - **Credit for novelty.** Every strand that has never existed before is
   catalogued and paid for, scaled to its complexity — as is every new **colony
@@ -1280,6 +1302,13 @@ whichever colour you pick, and **100 energy orbs** to place by hand.
   dies.
 - **The run ends** when every dish has run out of life and there is no way left
   to reseed one.
+- **The lab can be reset** at any time, from the pause menu or the front menu.
+  Everything you built goes — dishes, bench, instruments, the organisms — and
+  your balance becomes the **entire credit this reference book has ever
+  earned**, to spend differently. That is what makes a reset a
+  *redistribution* rather than a fresh start: the discoveries are the permanent
+  score, and resetting only lets you re-allocate them. It is not an exploit
+  either, because re-seeding a strand the book already knows pays nothing.
 
 ### The reference book
 
@@ -1293,6 +1322,13 @@ replaces the save but never deletes what earlier runs found — and there are
 bioluminescence, tool use, multicellularity, all eight body shapes, a strand at
 the 48-nucleotide maximum, …).
 
+The book has three pages. **Species** lists every discovery with its decoded
+traits and abilities; **Lifetime** is the running total across every experiment
+ever run against this book — strands catalogued, colony combinations, credits
+ever earned (the number a reset hands back), experiments run, shapes and
+abilities seen, the deepest lineage, and the record holders for longest and most
+complex strand; **Achievements** is the wall of 24.
+
 Saves are JSON too (`resources/evolution/save.json`): dishes and everything in
 them, the bench, the credit balance and the book's index, written on exit, from
 the pause menu, and automatically every 90 seconds.
@@ -1305,7 +1341,7 @@ goes back to inspecting. **Left-click** uses the held tool, **right-drag** (or
 WASD/arrows) pans the stage, the **wheel** zooms around the cursor. **B** opens
 the shop, **K** the reference book, **Tab** switches dish, **T** toggles the
 thermometer overlay, **[** and **]** work the time warp, **H** explains the
-genetics, **Esc** pauses.
+genetics, **Esc** pauses (and offers the lab reset).
 
 ---
 
@@ -1839,7 +1875,9 @@ predators actually killing, barriers and dish walls holding, heat diffusing,
 shadows and spotlights, the shop, the spatula spending only on a real
 transfer, catalog uniqueness and colony combinations) and the JSON layer (save
 round-trips, one file per discovery, the book outliving a new experiment, and
-corrupt or junk-bearing saves being reported rather than thrown); and
+corrupt or junk-bearing saves being reported rather than thrown, a lab reset
+returning exactly the lifetime balance and never more however many times it is
+run, and the tuning invariants that keep red the hardest opening); and
 [`EvolutionSceneTest`](src/test/java/com/larsons/engine/EvolutionSceneTest.java)
 renders every screen off-screen against a live dish — lobby, microscope, shop,
 help, pause, and both pages of the reference book — and drives the tool tray

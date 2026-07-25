@@ -40,11 +40,24 @@ public final class SpeciesRecord {
         this.pheno = Phenotype.of(Genome.of(sequence));
     }
 
+    /**
+     * How much a discovery pays, as a fraction of the strand's complexity. The
+     * ratio between a plain strand and an elaborate one is what the design asks
+     * for; the scale is set so the lab's instruments stay a genuine goal for a
+     * session rather than an afterthought ten minutes in.
+     */
+    public static final double CREDIT_PER_COMPLEXITY = 0.55;
+
     /** Catalogue a strand seen right now, naming it and pricing the discovery. */
     public static SpeciesRecord of(Genome genome, String dish, int generation) {
         Phenotype p = Phenotype.of(genome);
         return new SpeciesRecord(genome.sequence(), nameFor(genome), System.currentTimeMillis(),
-                dish, generation, p.complexity());
+                dish, generation, creditFor(p));
+    }
+
+    /** The credit a decoded strand is worth as a first-time discovery. */
+    public static int creditFor(Phenotype p) {
+        return Math.max(1, (int) Math.round(p.complexity() * CREDIT_PER_COMPLEXITY));
     }
 
     public Genome genome() { return Genome.of(sequence); }

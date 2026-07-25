@@ -59,6 +59,15 @@ public final class Dish {
     private static final double SHARE_RANGE = 46;
     private static final double ATTACK_COOLDOWN = 1.1;
     private static final double BROADCAST_INTERVAL = 1.5;
+    /** Seconds between visible "I am feeding a neighbour" pulses. */
+    private static final double SHARE_PULSE = 0.7;
+    /**
+     * How fast a body dissolves back into food, before the strand's own
+     * decomposition multiplier. Brisk on purpose: a corpse that takes half a
+     * minute to give anything back breaks the visible link between a death and
+     * the orbs it produces.
+     */
+    private static final double DECAY_RATE = 9.0;
 
     // --- passive dish contents ----------------------------------------------------
 
@@ -240,17 +249,40 @@ public final class Dish {
 
     // --- events the scene turns into particles, floaters and toasts -----------------
 
-    /** Something worth showing or scoring happened. */
-    public enum EventKind { BIRTH, DEATH, KILL, EAT, BIND, TOOL }
+    /**
+     * Something worth showing or scoring happened. Most of these exist purely so
+     * the microscope can make cell behaviour legible: without them, hunting,
+     * sharing, signalling and decomposition all happen silently and the player
+     * has no way to tell what their organisms are actually doing.
+     */
+    public enum EventKind {
+        BIRTH, DEATH, KILL, EAT, BIND, TOOL,
+        /** An attack that landed but did not kill. */
+        ATTACK,
+        /** Energy donated to a starving cell of the same strand. */
+        SHARE,
+        /** Remembered food locations signalled to everything in earshot. */
+        BROADCAST,
+        /** A body released a piece of itself back into the dish as food. */
+        DECAY
+    }
 
     /**
      * A single notable moment, drained by the scene (for particles and toasts)
      * and by {@link EvolutionGame} (which catalogues the births and bindings).
-     * {@code generation} is only meaningful on a {@link EventKind#BIRTH}, and
-     * {@code detail} carries a colony signature or a tool name where relevant.
+     * {@code radius} is the reach of an effect that has one (a broadcast's
+     * earshot), {@code generation} is only meaningful on a
+     * {@link EventKind#BIRTH}, and {@code detail} carries a colony signature or
+     * a tool name where relevant.
      */
-    public record Event(EventKind kind, double x, double y, Color color,
-                        Genome genome, int generation, String detail) {}
+    public record Event(EventKind kind, double x, double y, double radius, Color color,
+                        Genome genome, int generation, String detail) {
+
+        /** A plain point event: something happened here, in this colour. */
+        public Event(EventKind kind, double x, double y, Color color) {
+            this(kind, x, y, 0, color, null, 0, null);
+        }
+    }
 
     // --- state -----------------------------------------------------------------------
 
@@ -586,7 +618,7 @@ public final class Dish {
             child.x = p[0];
             child.y = p[1];
             newborns.add(child);
-            events.add(new Event(EventKind.BIRTH, child.x, child.y, child.pheno.color(),
+            events.add(new Event(EventKind.BIRTH, child.x, child.y, 0, child.pheno.color(),
                     child.genome, child.generation, null));
         }
 
@@ -733,7 +765,7 @@ public final class Dish {
         double waste = gained[0] * (1 - eff);
         if (waste > 0.4) addWaste(o.x, o.y, waste);
         if (gained[0] > 2) {
-            events.add(new Event(EventKind.EAT, o.x, o.y, o.pheno.color(), null, 0, null));
+            events.add(new Event(EventKind.EAT, o.x, o.y, o.pheno.color()));
         }
     }
 
@@ -766,13 +798,15 @@ public final class Dish {
         if (o.effectiveAttack() * swing > defence) {
             double spoils = (victim.energy + victim.pheno.size() * 2.2) * o.effectiveEfficiency();
             o.energy += spoils;
-            events.add(new Event(EventKind.KILL, victim.x, victim.y, o.pheno.color(),
+            events.add(new Event(EventKind.KILL, victim.x, victim.y, 0, o.pheno.color(),
                     victim.genome, victim.generation, null));
             die(victim, null); // the kill event already covers it
         } else {
             victim.energy -= 5;
             victim.hitFlash = 0.35;
             if (o.pheno.has(Ability.VENOM)) victim.venom = 6;
+            events.add(new Event(EventKind.ATTACK, victim.x, victim.y,
+                    o.pheno.has(Ability.VENOM) ? Ability.VENOM.color() : o.pheno.color()));
             // Kin defence: anything of the victim's strand nearby hits back.
             organismIndex.query(victim.x, victim.y, SHARE_RANGE, i -> {
                 Organism ally = organisms.get(i);
@@ -785,9 +819,16 @@ public final class Dish {
         }
     }
 
-    /** Donate energy to a starving cell of the same strand. */
+    /**
+     * Donate energy to a starving cell of the same strand. Sharing is a steady
+     * trickle rather than a lump, so the event that announces it is throttled —
+     * one visible pulse every {@link #SHARE_PULSE} seconds per donor, instead of
+     * one per tick.
+     */
     private void share(Organism o, double dt) {
         if (o.energy < Organism.REPLICATE_AT * 0.35) return;
+        o.shareTimer += dt;
+        boolean pulse = o.shareTimer >= SHARE_PULSE;
         organismIndex.query(o.x, o.y, SHARE_RANGE, i -> {
             Organism other = organisms.get(i);
             if (other == o || !other.alive || !other.starving()) return;
@@ -795,18 +836,29 @@ public final class Dish {
             double give = Math.min(7 * dt, o.energy * 0.2);
             o.energy -= give;
             other.energy += give;
+            if (pulse) {
+                o.shareTimer = 0;
+                events.add(new Event(EventKind.SHARE, other.x, other.y,
+                        Ability.SHARING.color()));
+            }
         });
     }
 
-    /** Tell everyone in earshot where the food is. */
+    /** Tell everyone in earshot where the food is, and show the signal going out. */
     private void broadcast(Organism o) {
         if (o.memory.isEmpty()) return;
         double range = o.pheno.senseRadius() * 2.5;
+        int[] heard = {0};
         organismIndex.query(o.x, o.y, range, i -> {
             Organism other = organisms.get(i);
             if (other == o || !other.alive || other.pheno.memorySlots() <= 0) return;
             for (double[] m : o.memory) other.remember(m[0], m[1]);
+            heard[0]++;
         });
+        if (heard[0] > 0) {
+            events.add(new Event(EventKind.BROADCAST, o.x, o.y, range,
+                    Ability.BROADCAST.color(), null, 0, null));
+        }
     }
 
     private void pickUpTool(Organism o) {
@@ -815,7 +867,7 @@ public final class Dish {
             if (dist(o.x, o.y, t.x, t.y) > o.pheno.size() + 10) continue;
             t.carrierId = o.id;
             o.tool = t;
-            events.add(new Event(EventKind.TOOL, o.x, o.y, t.kind.color(), o.genome,
+            events.add(new Event(EventKind.TOOL, o.x, o.y, 0, t.kind.color(), o.genome,
                     o.generation, t.kind.displayName()));
             return;
         }
@@ -849,7 +901,7 @@ public final class Dish {
                 for (Organism m : organisms) if (m.colonyId == drop) m.colonyId = keep;
                 colonySignatures.remove(drop);
             }
-            events.add(new Event(EventKind.BIND, o.x, o.y, o.pheno.color(), o.genome,
+            events.add(new Event(EventKind.BIND, o.x, o.y, 0, o.pheno.color(), o.genome,
                     o.generation, null));
         });
     }
@@ -904,7 +956,7 @@ public final class Dish {
             String signature = String.join("+", strands);
             if (strands.size() >= 2 && !signature.equals(colonySignatures.get(e.getKey()))) {
                 colonySignatures.put(e.getKey(), signature);
-                events.add(new Event(EventKind.BIND, cx, cy,
+                events.add(new Event(EventKind.BIND, cx, cy, 0,
                         members.get(0).pheno.color(), null, 0, signature));
             }
         }
@@ -921,9 +973,14 @@ public final class Dish {
             o.tool = null;
         }
         double body = Math.max(4, o.pheno.size() * 2.4 + Math.max(0, o.energy));
-        corpses.add(new Corpse(o.x, o.y, body, o.pheno.decomposition(), o.pheno.color()));
+        Corpse corpse = new Corpse(o.x, o.y, body, o.pheno.decomposition(), o.pheno.color());
+        // Start part-dissolved so the first orb drops within a second of the
+        // death rather than long after the player has looked away.
+        corpse.pending = Math.min(body, 6);
+        corpse.energy -= corpse.pending;
+        corpses.add(corpse);
         if (event != null) {
-            events.add(new Event(event, o.x, o.y, o.pheno.color(), o.genome,
+            events.add(new Event(event, o.x, o.y, 0, o.pheno.color(), o.genome,
                     o.generation, null));
         }
     }
@@ -946,11 +1003,11 @@ public final class Dish {
      * the recycling loop is exactly as generous as the bodies feeding it.
      */
     private void decayCorpses(double dt) {
-        final double orbSize = 6;
+        final double orbSize = 8;
         for (int i = corpses.size() - 1; i >= 0; i--) {
             Corpse c = corpses.get(i);
             c.age += dt;
-            double release = Math.min(c.energy, 4.0 * c.rate * dt);
+            double release = Math.min(c.energy, DECAY_RATE * c.rate * dt);
             c.energy -= release;
             c.pending += release;
             while (c.pending >= orbSize && orbs.size() < MAX_ORBS) {
@@ -964,11 +1021,17 @@ public final class Dish {
         }
     }
 
+    /**
+     * Hand a piece of a dissolving body back to the dish as food, and say so —
+     * without the event, orbs appear next to a corpse seconds after the death
+     * that produced them and look like they came from nowhere.
+     */
     private void spawnDecayOrb(Corpse c, double energy) {
         double a = rng.nextDouble() * Math.PI * 2;
-        double r = rng.nextDouble() * 14;
+        double r = rng.nextDouble() * 10;
         double[] p = clampInside(c.x + Math.cos(a) * r, c.y + Math.sin(a) * r, 3);
         orbs.add(new EnergyOrb(EnergyOrb.Kind.SIMPLE, p[0], p[1], energy));
+        events.add(new Event(EventKind.DECAY, p[0], p[1], c.color));
     }
 
     /** Waste re-mineralises far more slowly than a body does. */

@@ -35,10 +35,16 @@ class EvolutionGameTest {
         for (double t = 0; t < seconds; t += 0.25) game.step(0.25);
     }
 
-    private static void feed(EvolutionGame game, int orbs) {
+    /** Shared feeding RNG, so successive top-ups do not land on the same spots. */
+    private final Random feedRng = new Random(11);
+
+    private void feed(EvolutionGame game, int orbs) {
+        feed(game, orbs, feedRng);
+    }
+
+    private static void feed(EvolutionGame game, int orbs, Random rng) {
         Dish dish = game.activeDish();
         game.inventory().add(ShopItem.ENERGY_SIMPLE, orbs);
-        Random rng = new Random(11);
         for (int i = 0; i < orbs; i++) {
             double a = rng.nextDouble() * Math.PI * 2;
             double r = dish.radius * 0.9 * Math.sqrt(rng.nextDouble());
@@ -342,6 +348,246 @@ class EvolutionGameTest {
         assertEquals(1, catalog.combinationCount());
         assertTrue(catalog.isUnlocked(Achievement.SYMBIOSIS));
         assertTrue(catalog.combinationCredit("BBBRRRRRRRRRRRR+BBBRRRRRRRRRRRG") > 0);
+    }
+
+    // --- resetting the lab -------------------------------------------------------------------------
+
+    @Test
+    void resettingTheLabHandsBackEveryCreditTheBookHasEverEarned() {
+        EvolutionGame game = EvolutionGame.newGame(Nucleotide.G, 40L);
+        feed(game, 100);
+        run(game, 300);
+
+        int lifetime = game.catalog().creditEarned();
+        int species = game.catalog().speciesCount();
+        assertTrue(lifetime > 0, "the run earned something to redistribute");
+
+        // Spend down, and build a lab worth losing.
+        game.inventory().add(ShopItem.BARRIER, 5);
+        game.placeBarrier(30, 30);
+        game.dishes().add(new Dish("Dish 2", Dish.DEFAULT_RADIUS, 3L));
+
+        game.resetExperiment(Nucleotide.B);
+
+        assertEquals(game.catalog().creditEarned(), game.credits(),
+                "the balance after a reset is exactly the lifetime total");
+        assertTrue(game.credits() >= lifetime,
+                "which is at least everything earned before it (" + game.credits()
+                        + " vs " + lifetime + ")");
+        assertEquals(1, game.dishes().size(), "back to a single dish");
+        assertEquals(1, game.activeDish().population(), "with one starting organism");
+        assertTrue(game.activeDish().barriers().isEmpty(), "the old lab is gone");
+        assertEquals(Inventory.STARTING_ENERGY,
+                game.inventory().count(ShopItem.ENERGY_SIMPLE), "and a fresh bench");
+        assertEquals(0, game.inventory().count(ShopItem.BARRIER));
+        assertEquals(Nucleotide.B, game.startingColor(), "started over from the chosen colour");
+        // The book is never cleared by a reset — and it may pick up one more
+        // entry, since a starter strand in a colour this book has not seen is
+        // itself a first-time discovery.
+        assertTrue(game.catalog().speciesCount() >= species,
+                "nothing is lost from the book (" + species + " -> "
+                        + game.catalog().speciesCount() + ")");
+        assertEquals(2, game.catalog().runs(), "and the run is counted");
+    }
+
+    @Test
+    void resettingRepeatedlyIsNotAnExploit() {
+        EvolutionGame game = EvolutionGame.newGame(Nucleotide.G, 41L);
+        feed(game, 100);
+        run(game, 300);
+        int lifetime = game.catalog().creditEarned();
+
+        game.resetExperiment(Nucleotide.G);
+        int afterFirst = game.credits();
+        for (int i = 0; i < 5; i++) game.resetExperiment(Nucleotide.G);
+        assertEquals(afterFirst, game.credits(),
+                "resetting again and again returns the same balance, never more");
+        assertEquals(afterFirst, game.catalog().creditEarned(),
+                "because re-seeding a strand the book already knows pays nothing");
+    }
+
+    @Test
+    void aResetLabIsPlayableAndStillEarnsForGenuinelyNewStrands() {
+        EvolutionGame game = EvolutionGame.newGame(Nucleotide.G, 42L);
+        feed(game, 100);
+        run(game, 300);
+        game.resetExperiment(Nucleotide.G);
+        int before = game.catalog().speciesCount();
+
+        feed(game, 100);
+        run(game, 400);
+        assertTrue(game.activeDish().clock() > 0, "the new dish is running");
+        assertTrue(game.catalog().speciesCount() >= before,
+                "the book only ever grows (was " + before + ", now "
+                        + game.catalog().speciesCount() + ")");
+    }
+
+    @Test
+    void theBookTracksLifetimeTotalsAcrossRuns() {
+        EvolutionGame game = EvolutionGame.newGame(Nucleotide.G, 43L);
+        feed(game, 100);
+        run(game, 400);
+        Catalog book = game.catalog();
+
+        assertEquals(1, book.runs());
+        assertTrue(book.creditEarned() > 0);
+        if (book.speciesCount() > 0) {
+            assertNotNull(book.longestStrand());
+            assertNotNull(book.mostComplex());
+            assertTrue(book.shapesSeen().size() >= 1, "at least the square has been seen");
+            assertTrue(book.mostComplex().phenotype().complexity()
+                    >= book.longestStrand().phenotype().complexity() - 20);
+        }
+        game.resetExperiment(Nucleotide.R);
+        assertEquals(2, book.runs(), "lifetime totals survive the reset");
+        assertTrue(book.creditEarned() > 0);
+    }
+
+    // --- making behaviour visible ---------------------------------------------------------------
+
+    @Test
+    void aBodyStartsHandingEnergyBackAlmostImmediately() {
+        Dish dish = new Dish("Decay", 200, 44L);
+        dish.spawn(Genome.of("RRRR"), 0, 0);
+        dish.organisms().get(0).energy = 0.01;
+        for (int i = 0; i < 20; i++) dish.step(0.05); // die
+        assertEquals(0, dish.population());
+
+        boolean decayed = false;
+        for (int i = 0; i < 40 && !decayed; i++) { // within ~2 seconds of the death
+            dish.step(0.05);
+            for (Dish.Event e : dish.drainEvents()) {
+                if (e.kind() == Dish.EventKind.DECAY) decayed = true;
+            }
+        }
+        assertTrue(decayed, "the first orb off a body arrives while the player is still looking");
+        assertFalse(dish.orbs().isEmpty(), "and it really is food in the dish");
+    }
+
+    @Test
+    void huntingSharingAndSignallingAllAnnounceThemselves() {
+        // A predator that mostly misses, so both outcomes are exercised.
+        Dish hunt = new Dish("Hunt", 120, 45L);
+        hunt.spawn(Genome.of("RRRRRRRR"), 0, 0);
+        for (int i = 0; i < 8; i++) hunt.spawn(Genome.of("BBBBBBBB"), 6 + i, 0);
+        boolean attacked = false;
+        for (int i = 0; i < 600 && !attacked; i++) {
+            hunt.step(0.05);
+            for (Dish.Event e : hunt.drainEvents()) {
+                if (e.kind() == Dish.EventKind.ATTACK || e.kind() == Dish.EventKind.KILL) {
+                    attacked = true;
+                }
+            }
+        }
+        assertTrue(attacked, "a strike is reported whether or not it kills");
+
+        // Sharing: a well-fed donor beside a starving cell of the same strand.
+        Dish share = new Dish("Share", 120, 46L);
+        Organism donor = share.spawn(Genome.of("BBBB"), 0, 0);
+        Organism starving = share.spawn(Genome.of("BBBB"), 12, 0);
+        assertNotNull(donor);
+        assertNotNull(starving);
+        donor.energy = Organism.REPLICATE_AT * 0.9;
+        starving.energy = 4;
+        boolean shared = false;
+        for (int i = 0; i < 200 && !shared; i++) {
+            share.step(0.05);
+            for (Dish.Event e : share.drainEvents()) {
+                if (e.kind() == Dish.EventKind.SHARE) shared = true;
+            }
+        }
+        assertTrue(shared, "a donation is visible");
+
+        // Broadcasting: a signaller that knows where food is, with an audience.
+        Dish signal = new Dish("Signal", 200, 47L);
+        Organism crier = signal.spawn(Genome.of("BGGGGGBG"), 0, 0);
+        assertNotNull(crier);
+        assertTrue(crier.pheno.has(Ability.BROADCAST), "BG makes a broadcaster");
+        for (int i = 0; i < 4; i++) signal.spawn(Genome.of("BGGGGGBG"), 20 + i * 10, 10);
+        for (int i = 0; i < 60; i++) signal.dropOrb(EnergyOrb.Kind.SIMPLE, 0, 0);
+        boolean broadcast = false;
+        for (int i = 0; i < 400 && !broadcast; i++) {
+            signal.step(0.05);
+            for (Dish.Event e : signal.drainEvents()) {
+                if (e.kind() == Dish.EventKind.BROADCAST) {
+                    broadcast = true;
+                    assertTrue(e.radius() > 0, "the signal carries its earshot for the scene");
+                }
+            }
+        }
+        assertTrue(broadcast, "a signal going out is visible");
+    }
+
+    // --- the starting colours ----------------------------------------------------------------------
+
+    @Test
+    void redPaysTheHighestUpkeepWithNoForagingEdgeToShowForIt() {
+        Phenotype red = Phenotype.of(Genome.starter(Nucleotide.R));
+        Phenotype green = Phenotype.of(Genome.starter(Nucleotide.G));
+        Phenotype blue = Phenotype.of(Genome.starter(Nucleotide.B));
+
+        // Red carries the upkeep of predation it has nothing to hunt yet, and
+        // blue runs frugally, so red is the most expensive opening to keep alive.
+        assertTrue(red.metabolism() > blue.metabolism(),
+                "red costs more to run than blue (" + red.metabolism()
+                        + " vs " + blue.metabolism() + ")");
+        // And it buys nothing in the field: red finds food no faster than blue.
+        assertEquals(blue.speed(), red.speed(), 1e-9, "no speed advantage");
+        assertEquals(blue.senseRadius(), red.senseRadius(), 1e-9, "no sight advantage");
+        // Green's wild cards give it the outright best opening.
+        assertTrue(green.speed() > red.speed());
+        assertTrue(green.eatRate() > red.eatRate());
+        // Red is still given something of its own, or it cannot establish at all
+        // before its first prey exists.
+        assertTrue(red.eatRate() > blue.eatRate(),
+                "hostility feeds aggressively, which is red's only early edge");
+    }
+
+    @Test
+    void aFedRedDishUsuallySurvivesItsFirstFiveMinutes() {
+        int seeds = 8;
+        int survived = 0;
+        for (int s = 0; s < seeds; s++) {
+            EvolutionGame game = EvolutionGame.newGame(Nucleotide.R, 500L + s * 7919L);
+            Random rng = new Random(s);
+            feed(game, 100, rng);
+            for (double t = 0; t < 300; t += 0.5) {
+                game.step(0.5);
+                if (t % 60 == 0) feed(game, 25, rng);
+            }
+            if (game.activeDish().population() > 0) survived++;
+        }
+        assertTrue(survived >= seeds * 3 / 4,
+                "a red lab that is kept fed stays alive (" + survived + " of " + seeds + ")");
+    }
+
+    @Test
+    void greenOutDiscoversRedByAWideMargin() {
+        // The colours are meant to be a difficulty choice, and green's wild-card
+        // machinery is the easy end of it. One dish is far too noisy to say
+        // anything, so this averages several — and only asserts the gap that is
+        // structural (speed plus consumption plus light) rather than the much
+        // narrower red-versus-blue one.
+        int seeds = 8;
+        int red = 0, green = 0;
+        for (int s = 0; s < seeds; s++) {
+            long seed = 500L + s * 7919L;
+            red += discoveriesFrom(Nucleotide.R, seed);
+            green += discoveriesFrom(Nucleotide.G, seed);
+        }
+        assertTrue(green > red * 3 / 2,
+                "green discovers far more than red (" + green + " vs " + red + ")");
+    }
+
+    private int discoveriesFrom(Nucleotide color, long seed) {
+        EvolutionGame game = EvolutionGame.newGame(color, seed);
+        Random rng = new Random(seed);
+        feed(game, 100, rng);
+        for (double t = 0; t < 300; t += 0.5) {
+            game.step(0.5);
+            if (t % 60 == 0) feed(game, 25, rng);
+        }
+        return game.catalog().speciesCount();
     }
 
     // --- persistence ------------------------------------------------------------------------------

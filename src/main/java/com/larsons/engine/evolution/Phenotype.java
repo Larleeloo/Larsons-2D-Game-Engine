@@ -163,7 +163,12 @@ public final class Phenotype {
         this.size = Math.min(16.0, 6.0 + len * 0.35);
         this.speed = (26 + 54 * saturate(speedT, 10)) * shape.speedMultiplier();
         this.senseRadius = (95 + 150 * saturate(visionT, 10)) * shape.visionMultiplier();
-        this.eatRate = 14 + 30 * saturate(eatT, 10);
+        // Hostility feeds as well as it fights: an aggressive strand tears into
+        // whatever it finds. Without some edge of its own a pure-red start has
+        // nothing but the upkeep of predation and cannot get established before
+        // its first prey exists — but the edge stays small, because red is meant
+        // to be the hard opening.
+        this.eatRate = (14 + 30 * saturate(eatT, 10)) * (1 + 0.15 * hostility);
         this.efficiency = Math.min(0.97,
                 (0.55 + 0.40 * saturate(effT, 10)) * shape.efficiencyMultiplier());
         this.lightRadius = lightT <= 0 ? 0
@@ -180,12 +185,16 @@ public final class Phenotype {
         this.defense = (0.45 + 0.6 * altruism + len * 0.012) * shape.defenseMultiplier();
         // Upkeep: bigger, faster, brighter bodies all cost more to run, which is
         // what stops every trait from being free to pile on.
-        this.metabolism = 0.40
+        // Cooperative cells run frugally — altruism's payoff is partly just
+        // being cheap to keep alive, which is what keeps a blue opening ahead of
+        // a red one even though red eats faster.
+        this.metabolism = (0.40
                 + 0.018 * len
                 + 0.005 * speed
                 + 0.0022 * lightRadius
                 + 0.008 * eatRate
-                + (unlocked.contains(Ability.PREDATION) ? 0.12 : 0);
+                + (unlocked.contains(Ability.PREDATION) ? 0.06 : 0))
+                * (1 - 0.18 * altruism);
         this.lifespan = 150 + 90 * saturate(heatT + effT, 14);
     }
 

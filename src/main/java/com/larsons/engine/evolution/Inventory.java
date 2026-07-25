@@ -22,8 +22,18 @@ public final class Inventory {
     /** A fresh bench: 100 simple energy orbs, no tools, no instruments. */
     public static Inventory starting() {
         Inventory inv = new Inventory();
-        inv.counts.put(ShopItem.ENERGY_SIMPLE, STARTING_ENERGY);
+        inv.grantStartingEnergy();
         return inv;
+    }
+
+    /** Strip the bench back to nothing (a lab reset). */
+    public void clear() {
+        counts.clear();
+    }
+
+    /** Put the opening hundred energy orbs on the bench. */
+    public void grantStartingEnergy() {
+        counts.put(ShopItem.ENERGY_SIMPLE, STARTING_ENERGY);
     }
 
     public int count(ShopItem item) {

@@ -265,6 +265,48 @@ public final class EvolutionGame {
         }
     }
 
+    // --- resetting the lab ----------------------------------------------------------------
+
+    /**
+     * Wipe the lab back to its opening state and hand the player's whole
+     * lifetime credit back to spend differently.
+     *
+     * <p>Everything bought or built is gone — dishes, food, pressures,
+     * instruments, the organisms themselves — and the balance becomes the total
+     * credit this reference book has <em>ever</em> earned. That is what makes a
+     * reset a redistribution rather than a fresh start or an exploit: your
+     * discoveries are the score, they are permanent, and resetting only lets you
+     * re-spend them. Re-catalogued strands pay nothing, because the book already
+     * knows them.
+     *
+     * @param startingColor the colour of the single organism the new dish begins with
+     */
+    public void resetExperiment(Nucleotide startingColor) {
+        cancelCarry();
+        this.startingColor = startingColor;
+        dishes.clear();
+        Dish dish = new Dish("Dish 1", Dish.DEFAULT_RADIUS, rng.nextLong());
+        dishes.add(dish);
+        activeDish = 0;
+
+        inventory.clear();
+        inventory.grantStartingEnergy();
+        credits = catalog.creditEarned();
+        timeScale = 1;
+        playTime = 0;
+        gameOver = false;
+        notices.clear();
+        presentation.clear();
+        catalog.countRun();
+
+        Organism first = dish.spawn(Genome.starter(startingColor), 0, 0);
+        // The starter strand is almost certainly already in the book, in which
+        // case it is not a discovery and pays nothing — as it should not.
+        if (first != null) catalogue(dish, first.genome, first.generation);
+        notices.add(new Notice("Lab reset — " + credits + " lifetime credits to redistribute",
+                new Color(255, 214, 120)));
+    }
+
     // --- the shop ---------------------------------------------------------------------
 
     public boolean canAfford(ShopItem item) {
