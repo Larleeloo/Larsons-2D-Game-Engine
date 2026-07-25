@@ -612,13 +612,13 @@ public class EvolutionScene extends AbstractScene {
      * (and therefore default-selected) choice and a stray Enter backs out.
      */
     private void startReset() {
-        resetMenu = new Menu("Reset the lab?")
-                .subtitle("Your reference book is kept — the dishes and the bench are not")
+        resetMenu = new Menu("Reset the game?")
+                .subtitle("Everything starts over — your discovery history is kept")
                 .theme(MenuTheme.dark())
-                .add("Cancel — keep this experiment", () -> resetting = false);
+                .add("Cancel — keep this game", () -> resetting = false);
         for (com.larsons.engine.evolution.Nucleotide n
                 : com.larsons.engine.evolution.Nucleotide.values()) {
-            resetMenu.add("Reset and start over from " + n.displayName(), () -> {
+            resetMenu.add("Start over from " + n.displayName(), () -> {
                 game.resetExperiment(n);
                 for (EvolutionGame.Notice notice : game.drainNotices()) {
                     toast(notice.text(), notice.color());
@@ -678,10 +678,15 @@ public class EvolutionScene extends AbstractScene {
             if (resetting) {
                 resetMenu.render(g, viewportWidth, viewportHeight);
                 g.setFont(new Font("SansSerif", Font.PLAIN, 15));
-                g.setColor(CREDIT);
-                drawCentered(g, "You get all " + game.catalog().creditEarned()
-                                + " credits this book has ever earned back to spend again",
-                        viewportWidth / 2, viewportHeight / 4 + 96);
+                g.setColor(WARN);
+                drawCentered(g, "Dishes, bench, instruments, credits and this game's catalog: all gone",
+                        viewportWidth / 2, viewportHeight / 4 + 90);
+                g.setColor(GOOD);
+                drawCentered(g, "Your history of " + game.history().speciesCount()
+                                + " discovered organisms and "
+                                + game.history().unlockedAchievements().size()
+                                + " achievements is kept",
+                        viewportWidth / 2, viewportHeight / 4 + 114);
             } else {
                 pauseMenu.render(g, viewportWidth, viewportHeight);
             }
@@ -1000,11 +1005,13 @@ public class EvolutionScene extends AbstractScene {
         g.drawString("pop " + dish.population() + " · " + dish.speciesCount() + " strands",
                 310, 26);
         g.setColor(TEXT_DIM);
-        g.drawString("book: " + game.catalog().speciesCount() + " species · "
+        g.drawString("this game: " + game.catalog().speciesCount() + " species · "
                 + game.catalog().combinationCount() + " colonies", 470, 26);
+        g.setColor(new Color(150, 170, 210));
+        g.drawString("history: " + game.history().speciesCount(), 700, 26);
         if (Math.abs(game.timeScale() - 1) > 0.001) {
             g.setColor(GOOD);
-            g.drawString(String.format("%.2f×", game.timeScale()), 720, 26);
+            g.drawString(String.format("%.2f×", game.timeScale()), 810, 26);
         }
 
         String hint = "B shop · K book · Tab dish · H help · Esc pause";
@@ -1077,7 +1084,9 @@ public class EvolutionScene extends AbstractScene {
         int ty = y + 26;
         g.setFont(new Font("SansSerif", Font.BOLD, 15));
         g.setColor(TEXT);
-        SpeciesRecord known = game.catalog().species(o.genome.sequence());
+        // Named from the permanent history: if you have ever seen this strand,
+        // in any game, the scanner knows what it is.
+        SpeciesRecord known = game.history().species(o.genome.sequence());
         g.drawString(scanned && known != null ? known.name : "Unidentified organism", x + 14, ty);
         ty += 22;
 
@@ -1304,10 +1313,14 @@ public class EvolutionScene extends AbstractScene {
         g.setFont(new Font("SansSerif", Font.PLAIN, 16));
         g.setColor(TEXT_DIM);
         drawCentered(g, game.catalog().speciesCount() + " species and "
-                        + game.catalog().combinationCount() + " colony combinations catalogued",
+                        + game.catalog().combinationCount()
+                        + " colony combinations found in this game",
                 viewportWidth / 2, viewportHeight / 2 + 8);
-        drawCentered(g, "Esc to save and leave — the reference book keeps everything you found",
+        drawCentered(g, "Your history keeps all " + game.history().speciesCount()
+                        + " organisms you have ever discovered",
                 viewportWidth / 2, viewportHeight / 2 + 34);
+        drawCentered(g, "Esc to pause — \"Reset the game\" starts a fresh lab whenever you like",
+                viewportWidth / 2, viewportHeight / 2 + 60);
     }
 
     // --- small drawing helpers ------------------------------------------------------------
