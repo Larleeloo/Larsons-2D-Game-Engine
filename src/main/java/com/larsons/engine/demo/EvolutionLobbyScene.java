@@ -4,6 +4,7 @@ import com.larsons.engine.config.GameContext;
 import com.larsons.engine.evolution.EvolutionGame;
 import com.larsons.engine.evolution.EvolutionStore;
 import com.larsons.engine.evolution.Genome;
+import com.larsons.engine.evolution.History;
 import com.larsons.engine.evolution.Nucleotide;
 import com.larsons.engine.evolution.Phenotype;
 import com.larsons.engine.input.InputManager;
@@ -66,7 +67,7 @@ public class EvolutionLobbyScene extends AbstractScene {
 
     private void buildMenu() {
         boolean hasSave = store.hasSave();
-        int catalogued = store.speciesFileCount();
+        int discovered = store.speciesFileCount();
 
         menu = new Menu("Evolution")
                 .subtitle("An artificial life simulator — write nothing, discover everything")
@@ -75,10 +76,10 @@ public class EvolutionLobbyScene extends AbstractScene {
         if (hasSave) {
             menu.add("Continue Experiment", this::continueGame);
         }
-        menu.add("Reference Book (" + catalogued + " catalogued)",
+        menu.add("Reference Book (" + discovered + " organisms in your history)",
                 () -> scenes.transitionTo("evolutioncatalog"));
         if (hasSave) {
-            menu.add("Reset the Lab (respend your credits)", this::startReset);
+            menu.add("Reset Game (your history is kept)", this::startReset);
         }
         menu.add("Back to Game Types", () -> scenes.transitionTo("startup"));
     }
@@ -101,34 +102,35 @@ public class EvolutionLobbyScene extends AbstractScene {
     }
 
     /**
-     * Begin a new run. The previous save is replaced, but the reference book on
-     * disk is left alone — discoveries from earlier experiments stay discovered.
+     * Begin a new run: an empty game catalog and a fresh lab, carrying the
+     * player's permanent history forward. Everything earlier games discovered
+     * stays on the record; this game simply has not found any of it yet.
      */
     private void startNewGame(Nucleotide color) {
-        EvolutionGame game = EvolutionGame.newGame(color);
-        for (com.larsons.engine.evolution.SpeciesRecord rec : store.loadSpecies()) {
-            game.catalog().restore(rec);
-        }
-        game.catalog().drainPendingWrites(); // restored records are already on disk
+        History history = store.loadHistory();
+        boolean firstEver = history.speciesCount() == 0;
+        if (!firstEver) history.countGame();
+        EvolutionGame game = EvolutionGame.newGame(color, new java.util.Random().nextLong(), history);
         store.save(game);
         handOff(game);
     }
 
     /**
-     * Reset from the menu: the same redistribution the pause menu offers, for a
-     * player who wants to start the lab over without loading into it first.
+     * Reset from the menu: the same full restart the pause menu offers, for a
+     * player who wants to start over without loading into the game first.
      */
     private void startReset() {
         EvolutionGame game = store.load();
         if (game == null) {
-            status = "There is no experiment to reset";
+            status = "There is no game to reset";
             buildMenu();
             return;
         }
         choosingColor = true;
-        colorMenu = new Menu("Reset the lab")
-                .subtitle("Keeps your reference book · returns all "
-                        + game.catalog().creditEarned() + " credits it has ever earned")
+        colorMenu = new Menu("Reset the game")
+                .subtitle("Everything starts over · your history of "
+                        + game.history().speciesCount()
+                        + " discovered organisms is kept")
                 .theme(MenuTheme.dark());
         for (Nucleotide n : new Nucleotide[]{Nucleotide.R, Nucleotide.G, Nucleotide.B}) {
             Phenotype p = Phenotype.of(Genome.starter(n));
@@ -205,7 +207,7 @@ public class EvolutionLobbyScene extends AbstractScene {
             g.drawString(status, 24, viewportHeight - 44);
         }
         g.setColor(TEXT_DIM);
-        g.drawString("Saves and the catalog live under " + store.directory(),
+        g.drawString("Saves and your discovery history live under " + store.directory(),
                 24, viewportHeight - 24);
     }
 

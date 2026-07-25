@@ -80,7 +80,9 @@ over in a generic, data-driven form and wired to the same toggles:
   each other. You seed one square cell, feed the dish, and earn shop credit for
   every strand and colony combination that has never existed before — each one
   written out as its own JSON file in a reference book that ships empty on
-  purpose. See [Evolution](#evolution-artificial-life-simulator).
+  purpose. Discoveries are kept in two tiers, so the game can be **fully reset**
+  whenever you like while your history of every organism ever found is kept
+  forever. See [Evolution](#evolution-artificial-life-simulator).
 - **Skins (texture overrides)** — drop PNG sprite sheets in
   `resources/skins/` and assign them in the lobby's **Customize Skins** menu:
   frame pixel width/height + frame count + a 0-120 fps playback rate, per
@@ -1302,36 +1304,46 @@ dead end.
   dies.
 - **The run ends** when every dish has run out of life and there is no way left
   to reseed one.
-- **The lab can be reset** at any time, from the pause menu or the front menu.
-  Everything you built goes — dishes, bench, instruments, the organisms — and
-  your balance becomes the **entire credit this reference book has ever
-  earned**, to spend differently. That is what makes a reset a
-  *redistribution* rather than a fresh start: the discoveries are the permanent
-  score, and resetting only lets you re-allocate them. It is not an exploit
-  either, because re-seeding a strand the book already knows pays nothing.
+- **The game can be fully reset** at any time, from the pause menu or the front
+  menu. Everything goes — dishes, bench, instruments, credits, and the game
+  catalog itself — leaving the opening state with every strand to find again and
+  every credit to re-earn. What a reset never touches is your **history**: every
+  organism you have ever discovered stays on the permanent record, along with
+  your achievements and lifetime totals. Resetting costs you the lab, never the
+  collection.
 
-### The reference book
+### The reference book: this game, and everything you have ever found
 
-Nothing in the catalog ships with the game. Each discovery is written as **its
-own JSON file** named after the DNA that produced it
-(`resources/evolution/catalog/<DNA>.json`), decoded traits and all, so a
-catalog entry is a readable artefact on its own rather than a row in a table
-the game shipped with. The book outlives any single experiment — starting over
-replaces the save but never deletes what earlier runs found — and there are
-**24 achievements** for the discoveries worth bragging about (first predator,
-bioluminescence, tool use, multicellularity, all eight body shapes, a strand at
-the 48-nucleotide maximum, …).
+Discoveries are kept in **two tiers**, which is what makes a full reset safe:
 
-The book has three pages. **Species** lists every discovery with its decoded
-traits and abilities; **Lifetime** is the running total across every experiment
-ever run against this book — strands catalogued, colony combinations, credits
-ever earned (the number a reset hands back), experiments run, shapes and
-abilities seen, the deepest lineage, and the record holders for longest and most
-complex strand; **Achievements** is the wall of 24.
+- **Game Catalog** — what the *current* game has discovered, and what it has
+  been paid for. A reset empties this, because a reset is a real restart.
+- **History** — every organism you have **ever** discovered, in any game, with
+  the lifetime totals above it: organisms, colony combinations, games played,
+  credits ever earned, shapes and abilities seen, the deepest lineage, and the
+  longest and most complex strands you have produced. **Nothing is ever removed
+  from here** — not by a reset, not by a new game, not by deleting the save.
+  Achievements live at this tier too, so a reset never takes one back.
 
-Saves are JSON too (`resources/evolution/save.json`): dishes and everything in
-them, the bench, the credit balance and the book's index, written on exit, from
-the pause menu, and automatically every 90 seconds.
+A strand pays when it is new *to the current game*, so a fresh game can
+rediscover and be paid again; the history still records each organism exactly
+once, and tells you at a glance whether the strand you are looking at is a
+first-ever find or a rediscovery.
+
+Nothing ships with the game. Each discovery is written as **its own JSON file**
+named after the DNA that produced it
+(`resources/evolution/history/<DNA>.json`), decoded traits and all, so an entry
+is a readable artefact on its own rather than a row in a table the game shipped
+with. There are **24 achievements** for the finds worth bragging about (first
+predator, bioluminescence, tool use, multicellularity, all eight body shapes, a
+strand at the 48-nucleotide maximum, …).
+
+On disk: `evolution/save.json` is the current game (dishes and everything in
+them, the bench, the credit balance and the game catalog), written on exit,
+from the pause menu, and automatically every 90 seconds;
+`evolution/history.json` plus `evolution/history/` are the permanent record. An
+older layout's `evolution/catalog/` folder is migrated into the history on
+first use, so a collection from an earlier build carries over.
 
 ### Controls
 
@@ -1341,7 +1353,7 @@ goes back to inspecting. **Left-click** uses the held tool, **right-drag** (or
 WASD/arrows) pans the stage, the **wheel** zooms around the cursor. **B** opens
 the shop, **K** the reference book, **Tab** switches dish, **T** toggles the
 thermometer overlay, **[** and **]** work the time warp, **H** explains the
-genetics, **Esc** pauses (and offers the lab reset).
+genetics, **Esc** pauses (and offers the full game reset).
 
 ---
 
@@ -1875,9 +1887,12 @@ predators actually killing, barriers and dish walls holding, heat diffusing,
 shadows and spotlights, the shop, the spatula spending only on a real
 transfer, catalog uniqueness and colony combinations) and the JSON layer (save
 round-trips, one file per discovery, the book outliving a new experiment, and
-corrupt or junk-bearing saves being reported rather than thrown, a lab reset
-returning exactly the lifetime balance and never more however many times it is
-run, and the tuning invariants that keep red the hardest opening); and
+corrupt or junk-bearing saves being reported rather than thrown, the two
+discovery tiers round-tripping separately, a full reset clearing the game
+catalog and the balance while the history keeps every organism, achievement and
+lifetime total across repeated resets, an older layout's discoveries being
+migrated rather than stranded, and the tuning invariants that keep red the
+hardest opening); and
 [`EvolutionSceneTest`](src/test/java/com/larsons/engine/EvolutionSceneTest.java)
 renders every screen off-screen against a live dish — lobby, microscope, shop,
 help, pause, and both pages of the reference book — and drives the tool tray

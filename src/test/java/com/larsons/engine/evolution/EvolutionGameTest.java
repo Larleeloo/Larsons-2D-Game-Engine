@@ -328,7 +328,7 @@ class EvolutionGameTest {
     }
 
     @Test
-    void theCatalogOnlyPaysForStrandsItHasNeverSeen() {
+    void aGameCatalogOnlyPaysForStrandsThatGameHasNotSeen() {
         Catalog catalog = new Catalog();
         Genome g = Genome.of("RGBRGB");
         SpeciesRecord first = catalog.record(g, "Dish 1", 3);
@@ -336,7 +336,25 @@ class EvolutionGameTest {
         assertNull(catalog.record(g, "Dish 1", 4), "the same strand is not a second discovery");
         assertEquals(1, catalog.speciesCount());
         assertTrue(first.credit > 0);
-        assertTrue(catalog.isUnlocked(Achievement.FIRST_LIFE));
+
+        catalog.clear();
+        assertEquals(0, catalog.speciesCount(), "a reset empties this game's book");
+        assertEquals(0, catalog.creditEarned());
+        assertNotNull(catalog.record(g, "Dish 1", 0),
+                "so the same strand is worth finding again in the next game");
+    }
+
+    @Test
+    void theHistoryRecordsEachOrganismExactlyOnceForever() {
+        History history = new History();
+        SpeciesRecord rec = SpeciesRecord.of(Genome.of("RGBRGB"), "Dish 1", 3);
+        assertTrue(history.record(rec), "first time ever");
+        assertFalse(history.record(rec), "and never again, however many games find it");
+        assertEquals(1, history.speciesCount());
+        assertTrue(history.knows("RGBRGB"));
+        assertTrue(history.isUnlocked(Achievement.FIRST_LIFE));
+        // Rediscovery still counts toward the lifetime score.
+        assertTrue(history.lifetimeCredit() >= rec.credit * 2);
     }
 
     @Test
@@ -346,101 +364,134 @@ class EvolutionGameTest {
         assertTrue(catalog.recordCombination("BBBRRRRRRRRRRRR+BBBRRRRRRRRRRRG"));
         assertFalse(catalog.recordCombination("BBBRRRRRRRRRRRR+BBBRRRRRRRRRRRG"), "only once");
         assertEquals(1, catalog.combinationCount());
-        assertTrue(catalog.isUnlocked(Achievement.SYMBIOSIS));
         assertTrue(catalog.combinationCredit("BBBRRRRRRRRRRRR+BBBRRRRRRRRRRRG") > 0);
+
+        History history = new History();
+        assertTrue(history.recordCombination("BBBRRRRRRRRRRRR+BBBRRRRRRRRRRRG"));
+        assertFalse(history.recordCombination("BBBRRRRRRRRRRRR+BBBRRRRRRRRRRRG"));
+        assertTrue(history.isUnlocked(Achievement.SYMBIOSIS));
     }
 
     // --- resetting the lab -------------------------------------------------------------------------
 
     @Test
-    void resettingTheLabHandsBackEveryCreditTheBookHasEverEarned() {
+    void resettingStartsTheGameOverCompletely() {
         EvolutionGame game = EvolutionGame.newGame(Nucleotide.G, 40L);
         feed(game, 100);
         run(game, 300);
 
-        int lifetime = game.catalog().creditEarned();
-        int species = game.catalog().speciesCount();
-        assertTrue(lifetime > 0, "the run earned something to redistribute");
+        int discovered = game.history().speciesCount();
+        assertTrue(discovered > 0, "the game found something first");
+        assertTrue(game.credits() > 0);
 
-        // Spend down, and build a lab worth losing.
+        // Build a lab worth losing.
         game.inventory().add(ShopItem.BARRIER, 5);
         game.placeBarrier(30, 30);
+        game.inventory().grant(ShopItem.DNA_SCANNER);
         game.dishes().add(new Dish("Dish 2", Dish.DEFAULT_RADIUS, 3L));
 
         game.resetExperiment(Nucleotide.B);
 
-        assertEquals(game.catalog().creditEarned(), game.credits(),
-                "the balance after a reset is exactly the lifetime total");
-        assertTrue(game.credits() >= lifetime,
-                "which is at least everything earned before it (" + game.credits()
-                        + " vs " + lifetime + ")");
+        // Everything the game held is gone.
         assertEquals(1, game.dishes().size(), "back to a single dish");
         assertEquals(1, game.activeDish().population(), "with one starting organism");
         assertTrue(game.activeDish().barriers().isEmpty(), "the old lab is gone");
         assertEquals(Inventory.STARTING_ENERGY,
-                game.inventory().count(ShopItem.ENERGY_SIMPLE), "and a fresh bench");
+                game.inventory().count(ShopItem.ENERGY_SIMPLE), "a fresh bench");
         assertEquals(0, game.inventory().count(ShopItem.BARRIER));
-        assertEquals(Nucleotide.B, game.startingColor(), "started over from the chosen colour");
-        // The book is never cleared by a reset — and it may pick up one more
-        // entry, since a starter strand in a colour this book has not seen is
-        // itself a first-time discovery.
-        assertTrue(game.catalog().speciesCount() >= species,
-                "nothing is lost from the book (" + species + " -> "
-                        + game.catalog().speciesCount() + ")");
-        assertEquals(2, game.catalog().runs(), "and the run is counted");
+        assertFalse(game.inventory().owns(ShopItem.DNA_SCANNER), "instruments too");
+        assertEquals(Nucleotide.B, game.startingColor());
+        // Only the strand it just seeded is in the new game's book, and the
+        // balance is only what that paid — a real restart, not a soft one.
+        assertEquals(1, game.catalog().speciesCount(), "this game's catalog starts over");
+        assertEquals(game.catalog().creditEarned(), game.credits(),
+                "and so does the balance");
+        assertTrue(game.credits() < 30, "which is just the starter's own discovery credit");
     }
 
     @Test
-    void resettingRepeatedlyIsNotAnExploit() {
+    void aResetNeverTakesAnythingOutOfTheHistory() {
         EvolutionGame game = EvolutionGame.newGame(Nucleotide.G, 41L);
         feed(game, 100);
-        run(game, 300);
-        int lifetime = game.catalog().creditEarned();
+        run(game, 400);
 
-        game.resetExperiment(Nucleotide.G);
-        int afterFirst = game.credits();
-        for (int i = 0; i < 5; i++) game.resetExperiment(Nucleotide.G);
-        assertEquals(afterFirst, game.credits(),
-                "resetting again and again returns the same balance, never more");
-        assertEquals(afterFirst, game.catalog().creditEarned(),
-                "because re-seeding a strand the book already knows pays nothing");
+        int discovered = game.history().speciesCount();
+        int achievements = game.history().unlockedAchievements().size();
+        int lifetime = game.history().lifetimeCredit();
+        Set<String> before = new HashSet<>();
+        for (SpeciesRecord rec : game.history().allSpecies()) before.add(rec.sequence);
+        assertTrue(discovered > 1);
+
+        for (int i = 0; i < 3; i++) game.resetExperiment(Nucleotide.R);
+
+        assertTrue(game.history().speciesCount() >= discovered,
+                "the history only ever grows (" + discovered + " -> "
+                        + game.history().speciesCount() + ")");
+        for (String dna : before) {
+            assertNotNull(game.history().species(dna), dna + " is still on the record");
+        }
+        assertTrue(game.history().unlockedAchievements().size() >= achievements,
+                "achievements are permanent progress");
+        assertTrue(game.history().lifetimeCredit() >= lifetime, "as is the lifetime total");
+        assertEquals(4, game.history().gamesPlayed(), "and every game is counted");
     }
 
     @Test
-    void aResetLabIsPlayableAndStillEarnsForGenuinelyNewStrands() {
+    void aResetGameCanRediscoverAndBePaidAgain() {
         EvolutionGame game = EvolutionGame.newGame(Nucleotide.G, 42L);
         feed(game, 100);
         run(game, 300);
-        game.resetExperiment(Nucleotide.G);
-        int before = game.catalog().speciesCount();
+        int firstRunEarnings = game.catalog().creditEarned();
+        assertTrue(firstRunEarnings > 0);
 
+        game.resetExperiment(Nucleotide.G);
         feed(game, 100);
-        run(game, 400);
-        assertTrue(game.activeDish().clock() > 0, "the new dish is running");
-        assertTrue(game.catalog().speciesCount() >= before,
-                "the book only ever grows (was " + before + ", now "
-                        + game.catalog().speciesCount() + ")");
+        run(game, 300);
+
+        assertTrue(game.catalog().creditEarned() > 0,
+                "a fresh game earns from its own discoveries, even familiar ones");
+        assertTrue(game.catalog().speciesCount() > 1, "and fills its own book");
+        // Everything found twice is in the history exactly once.
+        for (SpeciesRecord rec : game.catalog().allSpecies()) {
+            assertNotNull(game.history().species(rec.sequence),
+                    "everything this game found is on the permanent record");
+        }
+        assertTrue(game.history().speciesCount() >= game.catalog().speciesCount());
     }
 
     @Test
-    void theBookTracksLifetimeTotalsAcrossRuns() {
+    void theHistoryTracksLifetimeTotalsAcrossGames() {
         EvolutionGame game = EvolutionGame.newGame(Nucleotide.G, 43L);
         feed(game, 100);
         run(game, 400);
-        Catalog book = game.catalog();
+        History history = game.history();
 
-        assertEquals(1, book.runs());
-        assertTrue(book.creditEarned() > 0);
-        if (book.speciesCount() > 0) {
-            assertNotNull(book.longestStrand());
-            assertNotNull(book.mostComplex());
-            assertTrue(book.shapesSeen().size() >= 1, "at least the square has been seen");
-            assertTrue(book.mostComplex().phenotype().complexity()
-                    >= book.longestStrand().phenotype().complexity() - 20);
+        assertEquals(1, history.gamesPlayed());
+        assertTrue(history.lifetimeCredit() > 0);
+        if (history.speciesCount() > 0) {
+            assertNotNull(history.longestStrand());
+            assertNotNull(history.mostComplex());
+            assertTrue(history.shapesSeen().size() >= 1, "at least the square has been seen");
         }
         game.resetExperiment(Nucleotide.R);
-        assertEquals(2, book.runs(), "lifetime totals survive the reset");
-        assertTrue(book.creditEarned() > 0);
+        assertEquals(2, history.gamesPlayed(), "lifetime totals survive the reset");
+        assertTrue(history.lifetimeCredit() > 0);
+    }
+
+    @Test
+    void aNewGameOverAnExistingHistoryStartsWithAnEmptyCatalog() {
+        // What the lobby does: keep the record, empty the book.
+        EvolutionGame first = EvolutionGame.newGame(Nucleotide.G, 44L);
+        feed(first, 100);
+        run(first, 300);
+        History history = first.history();
+        int discovered = history.speciesCount();
+        assertTrue(discovered > 1);
+
+        EvolutionGame second = EvolutionGame.newGame(Nucleotide.B, 45L, history);
+        assertSame(history, second.history(), "the record carries over");
+        assertEquals(1, second.catalog().speciesCount(), "but the new game's book is its own");
+        assertTrue(second.history().speciesCount() >= discovered, "nothing was lost");
     }
 
     // --- making behaviour visible ---------------------------------------------------------------
@@ -666,6 +717,90 @@ class EvolutionGameTest {
     }
 
     @Test
+    void theHistoryOnDiskSurvivesEveryResetAndEveryNewGame(@TempDir Path dir) {
+        EvolutionStore store = new EvolutionStore(dir.toString());
+        EvolutionGame game = EvolutionGame.newGame(Nucleotide.G, 50L);
+        feed(game, 100);
+        run(game, 400);
+        store.save(game);
+
+        int discovered = store.speciesFileCount();
+        assertTrue(discovered > 1, "the first game discovered several organisms");
+
+        // Reset, play again, save again.
+        game.resetExperiment(Nucleotide.R);
+        store.save(game);
+        assertTrue(store.speciesFileCount() >= discovered,
+                "resetting never deletes a discovery file");
+        feed(game, 100);
+        run(game, 300);
+        store.save(game);
+
+        // And a brand new game over the same store keeps all of it.
+        History carried = store.loadHistory();
+        int all = carried.speciesCount();
+        assertTrue(all >= discovered);
+        Set<String> knownBefore = new HashSet<>();
+        for (SpeciesRecord rec : carried.allSpecies()) knownBefore.add(rec.sequence);
+
+        EvolutionGame fresh = EvolutionGame.newGame(Nucleotide.B, 51L, carried);
+        store.save(fresh);
+
+        History reloaded = store.loadHistory();
+        assertTrue(reloaded.speciesCount() >= all,
+                "a new game never shrinks the history (" + all + " -> "
+                        + reloaded.speciesCount() + ")");
+        for (String dna : knownBefore) {
+            assertNotNull(reloaded.species(dna), dna + " is still on disk");
+        }
+        assertEquals(1, fresh.catalog().speciesCount(),
+                "though the new game's own book starts empty");
+        assertTrue(store.hasSave());
+    }
+
+    @Test
+    void theGameCatalogAndTheHistoryRoundTripSeparately(@TempDir Path dir) {
+        EvolutionStore store = new EvolutionStore(dir.toString());
+        EvolutionGame game = EvolutionGame.newGame(Nucleotide.G, 52L);
+        feed(game, 100);
+        run(game, 400);
+        store.save(game);
+
+        int gameFound = game.catalog().speciesCount();
+        int everFound = game.history().speciesCount();
+        Set<String> gameSequences = game.catalog().sequences();
+
+        EvolutionGame loaded = store.load();
+        assertNotNull(loaded);
+        assertEquals(gameFound, loaded.catalog().speciesCount(),
+                "this game's book comes back exactly");
+        assertEquals(gameSequences, loaded.catalog().sequences());
+        assertEquals(everFound, loaded.history().speciesCount(),
+                "and so does the permanent history");
+        for (String dna : gameSequences) {
+            assertNotNull(loaded.history().species(dna),
+                    "every entry resolves against the history's own record");
+        }
+    }
+
+    @Test
+    void discoveriesFromAnOlderLayoutAreMigratedIntoTheHistory(@TempDir Path dir) throws Exception {
+        // Builds before the history tier wrote discoveries to evolution/catalog/.
+        // Those are exactly what the history is for, so they are moved, not lost.
+        Path legacy = dir.resolve("catalog");
+        Files.createDirectories(legacy);
+        SpeciesRecord old = SpeciesRecord.of(Genome.of("RGBRGB"), "Dish 1", 4);
+        Files.writeString(legacy.resolve(old.sequence + ".json"),
+                com.larsons.engine.util.Json.stringify(old.toMap()));
+
+        EvolutionStore store = new EvolutionStore(dir.toString());
+        History history = store.loadHistory();
+        assertTrue(history.knows("RGBRGB"), "the old discovery is on the record");
+        assertTrue(Files.exists(store.speciesFile("RGBRGB")), "and lives in history/ now");
+        assertFalse(Files.exists(legacy), "the old folder is cleared away once it is empty");
+    }
+
+    @Test
     void theBookOutlivesAnyOneExperiment(@TempDir Path dir) {
         EvolutionStore store = new EvolutionStore(dir.toString());
         EvolutionGame first = EvolutionGame.newGame(Nucleotide.G, 21L);
@@ -676,7 +811,7 @@ class EvolutionGameTest {
         assertTrue(found >= 1);
 
         // A brand new experiment replaces the save but not the discoveries.
-        EvolutionGame second = EvolutionGame.newGame(Nucleotide.R, 22L);
+        EvolutionGame second = EvolutionGame.newGame(Nucleotide.R, 22L, store.loadHistory());
         store.save(second);
         assertTrue(store.speciesFileCount() >= found,
                 "starting over never deletes what earlier runs discovered");

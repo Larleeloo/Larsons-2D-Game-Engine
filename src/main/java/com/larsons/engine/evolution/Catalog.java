@@ -2,7 +2,6 @@ package com.larsons.engine.evolution;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -10,68 +9,51 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * The reference book: every strand the player's dishes have ever produced,
- * every colony combination that has ever formed, and the achievements those
- * discoveries unlocked.
+ * The <b>current game's</b> book: the strands and colony combinations this
+ * experiment has turned up, and the credit they paid.
  *
- * <p>Nothing is pre-populated. A brand new game has an empty book, and it fills
- * only with what the simulation actually produces — the design document is
- * explicit that discoveries are stored as they happen rather than looked up in
- * a table shipped with the game.
+ * <p>Nothing here is pre-populated, and nothing here is permanent. Resetting
+ * the game empties this completely — that is what makes a reset a real restart,
+ * with everything to find again and every credit to re-earn. The permanent
+ * record of every organism ever discovered lives in {@link History}, which a
+ * reset never touches.
  *
- * <p>Newly catalogued strands queue up in {@link #drainPendingWrites()} so
- * {@link EvolutionStore} can write each one out as its own JSON file, and newly
- * unlocked achievements queue up in {@link #drainAnnouncements()} for the HUD
- * to pop.
+ * <p>A strand pays when it is new <em>to this game</em>. Rediscovering
+ * something a previous game found still pays, because this game has not found
+ * it yet; what it does not do is add to the permanent record twice.
  */
 public final class Catalog {
 
     private final Map<String, SpeciesRecord> species = new LinkedHashMap<>();
-    /** Colony signature ("DNA+DNA+…") -> epoch millis it first formed. */
+    /** Colony signature ("DNA+DNA+…") -> epoch millis it formed in this game. */
     private final Map<String, Long> combinations = new LinkedHashMap<>();
-    private final Set<Achievement> unlocked = EnumSet.noneOf(Achievement.class);
-    private final Set<BodyShape> shapesSeen = EnumSet.noneOf(BodyShape.class);
-
-    private final List<SpeciesRecord> pendingWrites = new ArrayList<>();
-    private final List<Achievement> announcements = new ArrayList<>();
-
-    /**
-     * Total credit this book has ever paid out, across every experiment. This is
-     * the player's lifetime score, and it is what a reset hands back so the same
-     * discoveries can be spent on a different lab — see
-     * {@link EvolutionGame#resetExperiment()}.
-     */
+    /** Credit this game has been paid for discoveries. */
     private int creditEarned;
-    /** How many experiments have been started against this book. */
-    private int runs = 1;
 
     // --- discovery ------------------------------------------------------------------
 
     /**
-     * Catalogue a strand. Returns the new record, or {@code null} if this exact
-     * sequence has been seen before — a species is unique exactly when its DNA
-     * reads differently from everything already in the book.
+     * Catalogue a strand for this game. Returns the new record, or {@code null}
+     * if this game has already found this exact sequence — a species is unique
+     * exactly when its DNA reads differently from everything already found.
      */
     public SpeciesRecord record(Genome genome, String dish, int generation) {
         String key = genome.sequence();
         if (species.containsKey(key)) return null;
         SpeciesRecord rec = SpeciesRecord.of(genome, dish, generation);
         species.put(key, rec);
-        pendingWrites.add(rec);
         creditEarned += rec.credit;
-        checkSpeciesAchievements(rec);
         return rec;
     }
 
     /**
      * Catalogue a colony combination — two or more <em>different</em> strands
-     * bound into one body. Returns true the first time each combination forms.
+     * bound into one body. Returns true the first time each forms in this game.
      */
     public boolean recordCombination(String signature) {
         if (signature == null || !signature.contains("+")) return false;
         if (combinations.containsKey(signature)) return false;
         combinations.put(signature, System.currentTimeMillis());
-        unlock(Achievement.SYMBIOSIS);
         return true;
     }
 
@@ -84,49 +66,17 @@ public final class Catalog {
         return Math.max(5, sum / 2);
     }
 
-    // --- achievements ------------------------------------------------------------------
-
-    /** Unlock one; returns true only the first time, and queues an announcement. */
-    public boolean unlock(Achievement a) {
-        if (!unlocked.add(a)) return false;
-        announcements.add(a);
-        return true;
+    /** Empty the book for a fresh game. */
+    public void clear() {
+        species.clear();
+        combinations.clear();
+        creditEarned = 0;
     }
 
-    public boolean isUnlocked(Achievement a) { return unlocked.contains(a); }
-
-    public Set<Achievement> unlockedAchievements() { return unlocked; }
-
-    /** Everything a single discovery can unlock on its own. */
-    private void checkSpeciesAchievements(SpeciesRecord rec) {
-        Phenotype p = rec.phenotype();
-        Genome g = rec.genome();
-
-        unlock(Achievement.FIRST_LIFE);
-        if (species.size() >= 10) unlock(Achievement.TEN_SPECIES);
-        if (species.size() >= 50) unlock(Achievement.FIFTY_SPECIES);
-        if (species.size() >= 100) unlock(Achievement.HUNDRED_SPECIES);
-
-        for (Ability a : p.abilities()) unlock(Achievement.forAbility(a));
-
-        if (p.trait(Trait.LIGHT_EMISSION) >= 6) unlock(Achievement.GLOWWORM);
-        if (g.length() >= 24) unlock(Achievement.LONG_STRAND);
-        if (g.length() >= Genome.MAX_LENGTH) unlock(Achievement.MAXIMAL);
-        if (rec.generation >= 50) unlock(Achievement.DEEP_LINEAGE);
-        if (g.fraction(Nucleotide.R) >= 0.3 && g.fraction(Nucleotide.G) >= 0.3
-                && g.fraction(Nucleotide.B) >= 0.3) {
-            unlock(Achievement.FULL_SPECTRUM);
-        }
-
-        shapesSeen.add(p.shape());
-        if (shapesSeen.size() >= BodyShape.values().length) unlock(Achievement.POLYMORPH);
-    }
-
-    /** Take the achievements unlocked since the last call (for HUD pop-ups). */
-    public List<Achievement> drainAnnouncements() {
-        List<Achievement> out = new ArrayList<>(announcements);
-        announcements.clear();
-        return out;
+    /** Re-add a record loaded from disk without re-paying its credit. */
+    public void restore(SpeciesRecord rec) {
+        if (rec == null || species.containsKey(rec.sequence)) return;
+        species.put(rec.sequence, rec);
     }
 
     // --- reading the book ---------------------------------------------------------------
@@ -143,73 +93,24 @@ public final class Catalog {
 
     public int combinationCount() { return combinations.size(); }
 
-    /** Credit this book has paid out across every experiment ever run. */
+    /** Credit this game has earned from discoveries. */
     public int creditEarned() { return creditEarned; }
 
-    /** How many experiments have been started against this book. */
-    public int runs() { return runs; }
-
-    /** Count another experiment started (a reset, or a fresh game over this book). */
-    public void countRun() { runs++; }
-
-    /** The longest strand in the book, or {@code null} while it is empty. */
-    public SpeciesRecord longestStrand() {
-        SpeciesRecord best = null;
-        for (SpeciesRecord r : species.values()) {
-            if (best == null || r.sequence.length() > best.sequence.length()) best = r;
-        }
-        return best;
-    }
-
-    /** The most elaborate strand in the book, or {@code null} while it is empty. */
-    public SpeciesRecord mostComplex() {
-        SpeciesRecord best = null;
-        for (SpeciesRecord r : species.values()) {
-            if (best == null || r.phenotype().complexity() > best.phenotype().complexity()) best = r;
-        }
-        return best;
-    }
-
-    /** The deepest lineage the book has recorded. */
-    public int deepestGeneration() {
-        int best = 0;
-        for (SpeciesRecord r : species.values()) best = Math.max(best, r.generation);
-        return best;
-    }
-
-    /** How many distinct abilities have ever been seen, out of all of them. */
-    public int abilitiesSeen() {
-        Set<Ability> seen = EnumSet.noneOf(Ability.class);
-        for (SpeciesRecord r : species.values()) seen.addAll(r.phenotype().abilities());
-        return seen.size();
-    }
-
-    public Set<BodyShape> shapesSeen() { return shapesSeen; }
-
-    /** Records catalogued since the last call, for the store to write to disk. */
-    public List<SpeciesRecord> drainPendingWrites() {
-        List<SpeciesRecord> out = new ArrayList<>(pendingWrites);
-        pendingWrites.clear();
-        return out;
-    }
-
-    /** Re-add a record loaded from its JSON file without re-paying its credit. */
-    public void restore(SpeciesRecord rec) {
-        if (rec == null || species.containsKey(rec.sequence)) return;
-        species.put(rec.sequence, rec);
-        shapesSeen.add(rec.phenotype().shape());
+    /** Distinct sequences found in this game. */
+    public Set<String> sequences() {
+        return new LinkedHashSet<>(species.keySet());
     }
 
     // --- persistence -----------------------------------------------------------------------
 
     /**
-     * The book's index. The species themselves live in their own files (see
-     * {@link EvolutionStore}), so this only carries what is not derivable from
-     * them: which combinations have formed, which achievements are unlocked and
-     * the running credit total.
+     * This game's book, as saved. Only the sequences are stored: the full record
+     * for each already exists as its own file in the permanent history, so
+     * writing it twice would just be a second copy to keep in step.
      */
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
+        m.put("species", new ArrayList<>(species.keySet()));
         List<Object> combos = new ArrayList<>();
         for (Map.Entry<String, Long> e : combinations.entrySet()) {
             Map<String, Object> c = new LinkedHashMap<>();
@@ -218,17 +119,27 @@ public final class Catalog {
             combos.add(c);
         }
         m.put("combinations", combos);
-        List<Object> ach = new ArrayList<>();
-        for (Achievement a : unlocked) ach.add(a.name());
-        m.put("achievements", ach);
         m.put("creditEarned", creditEarned);
-        m.put("runs", runs);
         return m;
     }
 
-    public static Catalog fromMap(Map<String, Object> m) {
+    /**
+     * Read this game's book back. Sequences are resolved against {@code history}
+     * so each entry keeps its original discovery date and name; anything the
+     * history has somehow lost is decoded fresh rather than dropped.
+     */
+    public static Catalog fromMap(Map<String, Object> m, History history) {
         Catalog c = new Catalog();
         if (m == null) return c;
+        if (m.get("species") instanceof List<?> list) {
+            for (Object o : list) {
+                String dna = String.valueOf(o);
+                if (!Genome.isValid(dna)) continue;
+                SpeciesRecord known = history == null ? null : history.species(dna);
+                c.species.put(dna, known != null ? known
+                        : SpeciesRecord.of(Genome.of(dna), "", 0));
+            }
+        }
         if (m.get("combinations") instanceof List<?> list) {
             for (Object o : list) {
                 if (o instanceof Map<?, ?> cm) {
@@ -241,22 +152,7 @@ public final class Catalog {
                 }
             }
         }
-        if (m.get("achievements") instanceof List<?> list) {
-            for (Object o : list) {
-                try {
-                    c.unlocked.add(Achievement.valueOf(String.valueOf(o)));
-                } catch (IllegalArgumentException ignored) {
-                    // an achievement that no longer exists: skip it
-                }
-            }
-        }
         if (m.get("creditEarned") instanceof Number n) c.creditEarned = n.intValue();
-        if (m.get("runs") instanceof Number n) c.runs = Math.max(1, n.intValue());
         return c;
-    }
-
-    /** Distinct sequences currently in the book (used by tests and the UI). */
-    public Set<String> sequences() {
-        return new LinkedHashSet<>(species.keySet());
     }
 }

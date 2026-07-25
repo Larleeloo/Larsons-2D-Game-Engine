@@ -44,7 +44,10 @@ public final class EvolutionGame {
 
     private final List<Dish> dishes = new ArrayList<>();
     private final Inventory inventory;
+    /** This game's book. A reset empties it. */
     private final Catalog catalog;
+    /** The player's permanent record. A reset never touches it. */
+    private final History history;
     private final Random rng;
     private final long seed;
 
@@ -68,11 +71,12 @@ public final class EvolutionGame {
     private final List<Dish.Event> presentation = new ArrayList<>();
     private static final int MAX_PRESENTATION_EVENTS = 400;
 
-    private EvolutionGame(long seed, Inventory inventory, Catalog catalog) {
+    private EvolutionGame(long seed, Inventory inventory, Catalog catalog, History history) {
         this.seed = seed;
         this.rng = new Random(seed);
         this.inventory = inventory;
         this.catalog = catalog;
+        this.history = history;
     }
 
     /**
@@ -86,7 +90,17 @@ public final class EvolutionGame {
 
     /** As {@link #newGame(Nucleotide)}, with a fixed seed (tests use this). */
     public static EvolutionGame newGame(Nucleotide startingColor, long seed) {
-        EvolutionGame g = new EvolutionGame(seed, Inventory.starting(), new Catalog());
+        return newGame(startingColor, seed, new History());
+    }
+
+    /**
+     * Begin a new game against an existing permanent record — what the lobby
+     * does, so a new experiment starts with an empty book of its own but keeps
+     * everything the player has ever discovered.
+     */
+    public static EvolutionGame newGame(Nucleotide startingColor, long seed, History history) {
+        EvolutionGame g = new EvolutionGame(seed, Inventory.starting(), new Catalog(),
+                history == null ? new History() : history);
         g.startingColor = startingColor;
         Dish dish = new Dish("Dish 1", Dish.DEFAULT_RADIUS, seed);
         g.dishes.add(dish);
@@ -115,7 +129,11 @@ public final class EvolutionGame {
 
     public Inventory inventory() { return inventory; }
 
+    /** This game's book of discoveries. Emptied by a reset. */
     public Catalog catalog() { return catalog; }
+
+    /** Every organism this player has ever discovered, in any game. */
+    public History history() { return history; }
 
     public int credits() { return credits; }
 
@@ -212,8 +230,11 @@ public final class EvolutionGame {
         SpeciesRecord rec = catalog.record(genome, dish.name, generation);
         if (rec == null) return;
         credits += rec.credit;
-        notices.add(new Notice("New species: " + rec.name + "  +" + rec.credit + "c",
-                rec.phenotype().color()));
+        // New to this game either way; the history says whether the player has
+        // ever seen it before, which is a genuinely different thing to be told.
+        boolean firstEver = history.record(rec);
+        notices.add(new Notice((firstEver ? "New species: " : "Rediscovered: ")
+                + rec.name + "  +" + rec.credit + "c", rec.phenotype().color()));
         drainAchievementNotices();
     }
 
@@ -221,6 +242,7 @@ public final class EvolutionGame {
         if (!catalog.recordCombination(signature)) return;
         int credit = catalog.combinationCredit(signature);
         credits += credit;
+        history.recordCombination(signature);
         int parts = signature.split("\\+").length;
         notices.add(new Notice("New colony combination (" + parts + " strands)  +" + credit + "c",
                 new Color(200, 235, 150)));
@@ -228,18 +250,18 @@ public final class EvolutionGame {
     }
 
     private void drainAchievementNotices() {
-        for (Achievement a : catalog.drainAnnouncements()) {
+        for (Achievement a : history.drainAnnouncements()) {
             notices.add(new Notice("Achievement: " + a.title(), new Color(255, 214, 120)));
         }
     }
 
     /** Achievements that depend on the state of the lab rather than one strand. */
     private void checkStandingAchievements() {
-        if (credits >= 500) catalog.unlock(Achievement.WEALTHY);
-        if (dishes.size() >= 6) catalog.unlock(Achievement.LABORATORY);
+        if (credits >= 500) history.unlock(Achievement.WEALTHY);
+        if (dishes.size() >= 6) history.unlock(Achievement.LABORATORY);
         for (Dish d : dishes) {
             if (d.population() >= 200) {
-                catalog.unlock(Achievement.TEEMING);
+                history.unlock(Achievement.TEEMING);
                 break;
             }
         }
@@ -268,16 +290,19 @@ public final class EvolutionGame {
     // --- resetting the lab ----------------------------------------------------------------
 
     /**
-     * Wipe the lab back to its opening state and hand the player's whole
-     * lifetime credit back to spend differently.
+     * Start the game completely over.
      *
-     * <p>Everything bought or built is gone — dishes, food, pressures,
-     * instruments, the organisms themselves — and the balance becomes the total
-     * credit this reference book has <em>ever</em> earned. That is what makes a
-     * reset a redistribution rather than a fresh start or an exploit: your
-     * discoveries are the score, they are permanent, and resetting only lets you
-     * re-spend them. Re-catalogued strands pay nothing, because the book already
-     * knows them.
+     * <p>Everything the current game holds is discarded — dishes, food,
+     * pressures, instruments, the organisms, the credit balance and this game's
+     * {@link Catalog} — leaving exactly the opening state: one dish, one square
+     * organism of the chosen colour, a hundred energy orbs, and nothing found
+     * yet. Every strand is therefore worth discovering (and being paid for)
+     * again, which is the point of starting over.
+     *
+     * <p>What is <b>not</b> touched is {@link History}: every organism the
+     * player has ever discovered stays on the permanent record, along with their
+     * achievements and lifetime totals. Resetting costs you your lab, never your
+     * collection.
      *
      * @param startingColor the colour of the single organism the new dish begins with
      */
@@ -289,22 +314,21 @@ public final class EvolutionGame {
         dishes.add(dish);
         activeDish = 0;
 
+        catalog.clear();
         inventory.clear();
         inventory.grantStartingEnergy();
-        credits = catalog.creditEarned();
+        credits = 0;
         timeScale = 1;
         playTime = 0;
         gameOver = false;
         notices.clear();
         presentation.clear();
-        catalog.countRun();
+        history.countGame();
 
         Organism first = dish.spawn(Genome.starter(startingColor), 0, 0);
-        // The starter strand is almost certainly already in the book, in which
-        // case it is not a discovery and pays nothing — as it should not.
         if (first != null) catalogue(dish, first.genome, first.generation);
-        notices.add(new Notice("Lab reset — " + credits + " lifetime credits to redistribute",
-                new Color(255, 214, 120)));
+        notices.add(new Notice("Game reset — " + history.speciesCount()
+                + " organisms kept in your history", new Color(255, 214, 120)));
     }
 
     // --- the shop ---------------------------------------------------------------------
@@ -490,20 +514,26 @@ public final class EvolutionGame {
     }
 
     /**
-     * Rebuild a saved experiment. The catalog's species files are loaded
-     * separately (see {@link EvolutionStore}) and restored into the returned
-     * game, so the reference book survives even if the save itself is replaced.
+    public static EvolutionGame fromMap(Map<String, Object> m) {
+        return fromMap(m, new History());
+    }
+
+    /**
+     * Rebuild a saved game against the player's permanent record, which is
+     * loaded separately (see {@link EvolutionStore}) because it outlives any
+     * one save file.
      */
     @SuppressWarnings("unchecked")
-    public static EvolutionGame fromMap(Map<String, Object> m) {
+    public static EvolutionGame fromMap(Map<String, Object> m, History history) {
         if (m == null) return null;
+        History hist = history == null ? new History() : history;
         long seed = m.get("seed") instanceof Number n ? n.longValue() : new Random().nextLong();
         Inventory inv = m.get("inventory") instanceof Map<?, ?> im
                 ? Inventory.fromMap((Map<String, Object>) im) : new Inventory();
         Catalog cat = m.get("catalog") instanceof Map<?, ?> cm
-                ? Catalog.fromMap((Map<String, Object>) cm) : new Catalog();
+                ? Catalog.fromMap((Map<String, Object>) cm, hist) : new Catalog();
 
-        EvolutionGame g = new EvolutionGame(seed, inv, cat);
+        EvolutionGame g = new EvolutionGame(seed, inv, cat, hist);
         g.credits = (int) num(m.get("credits"));
         g.playTime = num(m.get("playTime"));
         g.timeScale = m.containsKey("timeScale") ? Math.max(0.25, num(m.get("timeScale"))) : 1;

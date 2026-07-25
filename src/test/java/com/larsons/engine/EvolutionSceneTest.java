@@ -222,7 +222,7 @@ class EvolutionSceneTest {
     }
 
     @Test
-    void resettingFromThePauseMenuRebuildsTheLabAndKeepsTheBook(@TempDir Path dir) {
+    void resettingFromThePauseMenuStartsOverAndKeepsTheHistory(@TempDir Path dir) {
         EvolutionStore store = new EvolutionStore(dir.toString());
         GameContext ctx = context(dir);
 
@@ -232,8 +232,8 @@ class EvolutionSceneTest {
         scenes.register("evolution", dish);
 
         EvolutionGame game = livingExperiment(34L);
-        int species = game.catalog().speciesCount();
-        int lifetime = game.catalog().creditEarned();
+        int discovered = game.history().speciesCount();
+        assertTrue(discovered > 1, "the game found several strands to keep");
         dish.adopt(game);
         scenes.setScene("evolution");
         InputManager input = new InputManager();
@@ -253,8 +253,11 @@ class EvolutionSceneTest {
 
         assertEquals(1, game.dishes().size(), "the lab is back to one dish");
         assertEquals(1, game.activeDish().population(), "with one starting organism");
-        assertTrue(game.credits() >= lifetime, "and the lifetime credit is back to spend");
-        assertTrue(game.catalog().speciesCount() >= species, "the book survived");
+        assertEquals(1, game.catalog().speciesCount(),
+                "this game's catalog started over from nothing");
+        assertTrue(game.history().speciesCount() >= discovered,
+                "while the permanent history kept every organism ("
+                        + discovered + " -> " + game.history().speciesCount() + ")");
     }
 
     @Test
