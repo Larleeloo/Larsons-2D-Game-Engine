@@ -6,6 +6,7 @@ import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.graphics.shader.ShaderChain;
 import com.larsons.engine.graphics.shader.ShaderPass;
 import com.larsons.engine.graphics.shader.Shaders;
+import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.net.NetSession;
 
 import java.util.ArrayList;
@@ -75,6 +76,29 @@ public class GameContext {
         if (levelSettings == null) return;
         profile().applyFeaturesFrom(levelSettings);
         applyLiveSettings();
+    }
+
+    // --- creative mode selection ------------------------------------------------
+
+    /**
+     * The level format the next creative session should build in, set by the
+     * main menu's per-format creative entries and consumed by the creative
+     * scene. {@code null} means "carry on with the level already being
+     * edited" — which is what re-entering creative mode from a paused game
+     * does, so it doesn't restart the format the creator is in.
+     */
+    private LevelFormat creativeFormat;
+
+    /** Ask for the next creative session to open in {@code format}. */
+    public void setCreativeFormat(LevelFormat format) {
+        this.creativeFormat = format;
+    }
+
+    /** The requested creative format, cleared as it is read (may be {@code null}). */
+    public LevelFormat takeCreativeFormat() {
+        LevelFormat requested = creativeFormat;
+        creativeFormat = null;
+        return requested;
     }
 
     /** The active multiplayer session, or {@code null} when playing offline. */

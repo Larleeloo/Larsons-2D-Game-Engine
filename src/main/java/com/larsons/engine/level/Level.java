@@ -49,6 +49,13 @@ public class Level {
     public static final int MAX_GIANT_SIZE = 65536;
 
     public String name = "Untitled";
+    /**
+     * The camera projection this level is drawn through. It is the storage
+     * form of the level's {@link LevelFormat} — use {@link #format()} /
+     * {@link #setFormat} to talk about the level's kind (which creative mode
+     * builds it, whether it simulates gravity, which blocks its palette
+     * offers) and this field when a {@code Camera} is what needs feeding.
+     */
     public Perspective perspective = Perspective.SIDE_SCROLL;
     /**
      * This level's own feature settings (the toggles that used to live on the
@@ -138,6 +145,47 @@ public class Level {
     /** True when this level uses sparse chunked storage (giant maps). */
     public boolean isChunked() {
         return chunked != null;
+    }
+
+    // --- level format ----------------------------------------------------------
+
+    /**
+     * Which of the three level formats this is (side-scroller, top-down,
+     * isometric) — the level's kind, as opposed to the raw camera projection
+     * {@link #perspective} stores it as.
+     */
+    public LevelFormat format() {
+        return LevelFormat.of(perspective);
+    }
+
+    /** Retarget this level at another format (also sets {@link #perspective}). */
+    public void setFormat(LevelFormat format) {
+        if (format != null) perspective = format.perspective();
+    }
+
+    /**
+     * Whether this level simulates on a plane (top-down / isometric) rather
+     * than under gravity. Entity simulation reads this to decide between the
+     * platformer model and the plan-view one.
+     */
+    public boolean planar() {
+        return format().planar();
+    }
+
+    /**
+     * Snapshot {@code profile}'s feature toggles as this level's own
+     * {@link #settings} — what saving a level does.
+     *
+     * <p>The saved copy's perspective is forced to this level's, because the
+     * profile only carries the format <em>new</em> levels start in: without
+     * this, saving an isometric level from a game type whose default is
+     * side-scroll would bury a contradicting format inside it and re-open it
+     * flat.
+     */
+    public void captureSettings(GameProfile profile) {
+        if (profile == null) return;
+        settings = profile.copy();
+        settings.perspective = perspective;
     }
 
     /** Colour used to draw the given tile id, or {@code null} for empty tiles. */
@@ -356,6 +404,10 @@ public class Level {
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("name", name);
+        // The level's format is what decides which creative mode builds it and
+        // how it simulates; "perspective" stays alongside it so levels written
+        // here still load in engine versions that only knew the projection.
+        m.put("format", format().id());
         m.put("perspective", perspective.name());
         m.put("tileSize", tileSize);
         m.put("width", width);

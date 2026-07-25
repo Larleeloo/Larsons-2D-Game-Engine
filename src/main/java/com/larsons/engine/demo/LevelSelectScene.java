@@ -4,6 +4,7 @@ import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.level.Level;
+import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelStore;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
@@ -58,15 +59,22 @@ public class LevelSelectScene extends AbstractScene {
 
     private LevelStore store() { return new LevelStore(ctx.profile().name); }
 
-    /** The list of levels in the active game type. */
+    /**
+     * The list of levels in the active game type, each tagged with the format
+     * it was built in — a game type holds side-scrolling, top-down and
+     * isometric levels side by side, and playing one just loads it in its own
+     * format.
+     */
     private void buildListMenu() {
         GameProfile p = ctx.profile();
         menu = new Menu("Load Level")
                 .subtitle(p.name + " · pick a level")
                 .theme(MenuTheme.dark());
-        List<String> names = store().list();
+        LevelStore store = store();
+        List<String> names = store.list();
         for (String name : names) {
-            menu.add(name, () -> openActions(name));
+            LevelFormat format = store.formatOf(name);
+            menu.add(name + "  ·  " + format.displayName(), () -> openActions(name));
         }
         if (names.isEmpty()) {
             String empty = p.finalized || !p.creativeEnabled
@@ -83,9 +91,11 @@ public class LevelSelectScene extends AbstractScene {
         GameProfile p = ctx.profile();
         selectedLevel = name;
         view = View.ACTIONS;
+        LevelFormat format = store().formatOf(name);
         // A finalized (published) game type is play-only — no settings editing.
         menu = new Menu(name)
-                .subtitle(p.name + (p.finalized ? " · play this level" : " · play or edit this level"))
+                .subtitle(format.displayName() + " · "
+                        + (p.finalized ? "play this level" : "play or edit this level"))
                 .theme(MenuTheme.dark())
                 .add("Play Level", this::playSelected);
         if (!p.finalized) {
@@ -121,6 +131,11 @@ public class LevelSelectScene extends AbstractScene {
     private void buildEditForm() {
         form = new ConfigForm("Settings — " + editLevel.name).theme(MenuTheme.dark());
         form.addText("Level name", () -> editLevel.name, v -> editLevel.name = v, 32);
+        // The level's own format: which creative mode edits it and how it
+        // plays. (The feature list below carries a "default level format" too
+        // — that one only seeds levels created later.)
+        form.addEnum("Level format", LevelFormat.values(),
+                () -> editLevel.format(), v -> editLevel.setFormat(v));
         ProfileForms.addFeatureOptions(form, editLevel.settings);
         form.addAction("Save", this::saveEdited);
         form.addAction("Back", () -> openActions(selectedLevel));
@@ -132,6 +147,9 @@ public class LevelSelectScene extends AbstractScene {
         Path oldFile = store.fileFor(selectedLevel);
         editLevel.name = editLevel.name == null || editLevel.name.isBlank()
                 ? "Untitled" : editLevel.name.trim();
+        // The level's format is the level's, so its saved settings must not
+        // claim a different one when they are applied on load.
+        editLevel.settings.perspective = editLevel.perspective;
         editLevel.settings.normalize();
         Path newFile = store.save(editLevel);
         if (!newFile.equals(oldFile)) {
@@ -187,7 +205,7 @@ public class LevelSelectScene extends AbstractScene {
 
     private String hint() {
         return switch (view) {
-            case LIST -> "Each level loads with its own toggles · Esc to go back";
+            case LIST -> "Each level loads in its own format, with its own toggles · Esc to go back";
             case ACTIONS -> "Play the level, or edit the settings it plays with · Esc to go back";
             case EDIT -> "Rename the level or change its toggles · type to edit the name · Save to keep · Esc to go back";
         };

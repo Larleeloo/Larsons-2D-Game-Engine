@@ -18,6 +18,12 @@ import com.larsons.engine.level.Level;
  * players pass through walls. Mobs share the same helpers so both simulations
  * obey identical rules.
  *
+ * <p><b>Perspective.</b> The side-scrolling format runs the platformer model
+ * (gravity, jumps, swimming); the plan-view formats (top-down, isometric) walk
+ * the whole plane instead — both axes are steering, diagonals are normalized
+ * so they aren't faster than the axes, and sprinting applies in every
+ * direction.
+ *
  * <p><b>Stamina.</b> Sprinting (Shift) multiplies ground speed while stamina
  * lasts and jumping takes a bite; standing or walking restores it. Mana
  * regenerates here too (spent by magic weapons in {@code World.playerShoot}).
@@ -84,18 +90,27 @@ public final class PlayerPhysics {
                 (int) Math.floor((s.x + size / 2.0) / ts),
                 (int) Math.floor((s.y + size / 2.0) / ts)) != null;
 
-        boolean wantsMove = in.left || in.right;
+        boolean sideScroll = perspective == Perspective.SIDE_SCROLL && profile.gravityEnabled;
+        // On a plane every direction is walking, so up/down count as movement
+        // for sprinting too — sprinting north in a top-down level is the same
+        // act as sprinting east.
+        boolean wantsMove = in.left || in.right || (!sideScroll && (in.up || in.down));
         boolean sprinting = in.sprint && wantsMove && !inLiquid && s.stamina > 0;
         double speed = SPEED * s.speedFactor;
         if (inLiquid) speed *= SWIM_SPEED_FACTOR;
         if (sprinting) speed *= SPRINT_FACTOR;
+        // Diagonals on a plane would otherwise travel √2 times as fast as the
+        // axes; normalizing the step keeps top-down/isometric speed uniform in
+        // every direction.
+        if (!sideScroll && (in.left ^ in.right) && (in.up ^ in.down)) {
+            speed *= Math.sqrt(0.5);
+        }
 
         double dx = 0;
         if (in.left) { dx -= speed * dt; s.facingLeft = true; }
         if (in.right) { dx += speed * dt; s.facingLeft = false; }
         boolean moving = dx != 0;
 
-        boolean sideScroll = perspective == Perspective.SIDE_SCROLL && profile.gravityEnabled;
         if (sideScroll && inLiquid) {
             s.airJumpsUsed = 0; // water resets the double jump
             boolean headClear = level.liquidAt(

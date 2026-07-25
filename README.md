@@ -8,10 +8,12 @@ Minecraft-style), and a **shader system** (GLSL-first post-processing with a
 CPU fallback that runs anywhere) — without committing to a single genre.
 
 The engine is built to be **a giant custom level loader**: you group levels
-under a **game type** (a folder), and each **level** enables only the features
-it needs (perspective, zoom, framerate bounds, entity sizes, gravity, HUD, …).
-The toggles live on the level, so one game type can hold a diverse mix of
-levels; the game type just supplies the default template new levels start from.
+under a **game type** (a folder), and each **level** carries its own **format**
+— side-scroller, top-down or isometric, each built in its own creative mode —
+plus only the features it needs (zoom, framerate bounds, entity sizes, gravity,
+HUD, …). The format and the toggles live on the level, so one game type can
+hold a diverse mix of levels of all three kinds and they all play as one game;
+the game type just supplies the default template new levels start from.
 One engine drives many different games.
 
 This engine is a **merge**: the minimal outline above, plus the feature
@@ -21,8 +23,11 @@ over in a generic, data-driven form and wired to the same toggles:
 - **Creative Mode** — a level editor for *painting objects into the world*
   (blocks, lights, mobs, items) with palette categories, drag-painting,
   erasing, pick-block, pan/zoom, play-testing, and per-game-type level
-  saving. Works offline **and inside a multiplayer session**, where strokes
-  replicate to every player. See [Creative mode](#creative-mode-paint-objects).
+  saving — in **three modes, one per level format** (side-scroller, top-down,
+  isometric), each with its own palette, starter canvas and movement model.
+  Works offline **and inside a multiplayer session**, where strokes replicate
+  to every player. See [Creative mode](#creative-mode-paint-objects) and
+  [The three level formats](#the-three-level-formats).
 - **Blocks** — a data-driven [`BlockRegistry`](src/main/java/com/larsons/engine/world/BlockRegistry.java)
   (terrain, ores, decorations, light sources) with solidity, drops, and light
   emission; mining/placing in play mode with drops and particles.
@@ -174,7 +179,7 @@ This engine was built against six explicit requirements:
 | # | Requirement | How it's addressed |
 |---|-------------|--------------------|
 | 1 | **120 FPS** | A fixed-timestep [`GameLoop`](src/main/java/com/larsons/engine/core/GameLoop.java) renders with a configurable cap (default **120**). The limiter schedules frames on an absolute timeline and uses a hybrid coarse-sleep / fine-park wait, so the cap is hit precisely without pegging a CPU. |
-| 2 | **Multiple 2D perspectives** | [`Camera`](src/main/java/com/larsons/engine/graphics/Camera.java) + [`Perspective`](src/main/java/com/larsons/engine/graphics/Perspective.java) support `SIDE_SCROLL`, `TOP_DOWN`, and `ISOMETRIC`, switchable at runtime. |
+| 2 | **Multiple 2D perspectives** | Three **distinct level formats** ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)) — side-scroller, top-down, isometric — each with its own creative mode, palette and movement model, all loading and playing through the same code. [`Camera`](src/main/java/com/larsons/engine/graphics/Camera.java) + [`Perspective`](src/main/java/com/larsons/engine/graphics/Perspective.java) supply the projections (`SIDE_SCROLL`, `TOP_DOWN`, `ISOMETRIC`), switchable at runtime. |
 | 3 | **Online play** | ✅ Implemented — see [Online play](#online-play). An authoritative [`GameServer`](src/main/java/com/larsons/engine/net/GameServer.java) ticks the same deterministic [`PlayerPhysics`](src/main/java/com/larsons/engine/sim/PlayerPhysics.java) clients predict with; host in-game or run a headless dedicated server; friends join by IP + port like Minecraft Java edition. |
 | 4 | **Out of the box on any Java machine** | The engine uses **only the JDK** (Java2D / AWT / Swing / sockets). No third-party runtime dependencies — JSON parsing, networking, and shader execution are all in-engine. |
 | 5 | **Shader support** | ✅ Implemented — see [Shaders](#shaders). Every [`ShaderPass`](src/main/java/com/larsons/engine/graphics/shader/ShaderPass.java) is defined **GLSL-first** (real GPU fragment-shader source, exportable as `.frag` files) with a semantically identical multithreaded CPU fallback, so effects run everywhere today and on a GPU backend without porting. |
@@ -312,8 +317,9 @@ com.larsons.engine
 │   └── SceneManager.java  Named scenes + fade transitions
 ├── level
 │   ├── Level.java         Tile grid (palette or block-registry mode) + spawns
+│   ├── LevelFormat.java   The 3 level formats: side-scroller | top-down | isometric
 │   ├── LevelLoader.java   Load a Level from JSON (or raw text, for the server)
-│   ├── LevelStore.java    Per-game-type level saving (creative mode's home)
+│   ├── LevelStore.java    Per-game-type level saving + listing levels by format
 │   ├── Cutscene.java      Cutscene data: trigger + actors (animation states) + steps
 │   ├── CutscenePlayer.java Runs one cutscene's step script (headless)
 │   └── CutsceneDirector.java Watches triggers per run, owns the active playback
@@ -394,14 +400,63 @@ before the deadline, then short `parkNanos` slices — because a bare
 `Thread.sleep` oversleeps by a scheduler quantum, which at 120 FPS (8.3 ms
 frames) costs real frames.
 
-### Perspectives
+### The three level formats
+
+A level belongs to one of three **formats**
+([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)) — and
+the format, not the game type, is what decides how it is built and how it
+plays:
+
+| Format | Projection | Movement | Palette |
+|--------|-----------|----------|---------|
+| **Side-Scroller** | orthographic | gravity: run, jump, swim, fall | everything except paths/walls |
+| **Top-Down** | orthographic | walks the plane on both axes | everything, **plus paths & walls** |
+| **Isometric** | diamond | walks the plane on both axes | everything, **plus paths & walls** |
+
+Each format has its **own creative mode** — the main menu's *Creative Mode*
+entry picks which one to open, and the editor then paints, play-tests and
+generates for that format. Playing is the opposite: a level simply loads in the
+format it was built in, so a game type can hold side-scrolling caves, a
+top-down overworld and an isometric town at once, and a **door between two
+formats swaps the camera and the movement model mid-play** with no reload.
+
+The format is saved in the level file (`"format": "isometric"`), so
+[`LevelStore`](src/main/java/com/larsons/engine/level/LevelStore.java) can list
+a game type's levels by format without loading them, and levels written before
+formats existed load as side-scrollers.
+
+**What actually differs.** Only the *path* and *wall* block families are
+format-specific — they read as plan-view geometry, so they appear in the
+top-down and isometric palettes only (a side-scrolling level that already
+contains them still renders and collides with them). Everything else — blocks,
+liquids, lights, mobs, items, decorations, block details, doors, cutscenes,
+vehicles, mini games — is offered in all three and behaves in all three:
+
+- **Gravity** is a side-scroller property. In the plan-view formats sand and
+  gravel stay where they are placed, liquids pool outward in all four
+  directions instead of pouring down, dropped items skid across the floor and
+  settle (with a hover + shadow) instead of arcing, and vehicles steer both
+  axes.
+- **Mobs** run a platform-walker AI in side-scroll (jump smarts, swimming,
+  fliers holding altitude) and a plan-view AI in top-down/isometric — every
+  species, fliers included, wanders to 2D destinations and chases, flees and
+  bursts along both axes, refusing to walk into hazards on *either* axis.
+- **The player** walks the whole plane in top-down/isometric, with diagonals
+  normalized (a diagonal isn't √2 faster than an axis) and sprint applying in
+  every direction.
+- **Online**, the server simulates the *served level's* format, so hosting an
+  isometric level moves everyone isometrically and client prediction agrees.
+
+### Perspectives (the projection)
 
 `Camera` maps world coordinates to the screen via a per-perspective projection,
 then applies zoom and centering. Orthographic perspectives (`SIDE_SCROLL`,
 `TOP_DOWN`) use an identity projection; `ISOMETRIC` projects a square grid into a
 diamond. Because the projection is the only thing that changes, the *same*
 tile/sprite drawing code renders correctly in every perspective — see
-`PlayScene`, which simply projects each tile's four world corners.
+`PlayScene`, which simply projects each tile's four world corners. The editor
+grid goes through the same projection, so isometric levels get a diamond
+lattice to line blocks up against.
 
 Rendering cost scales with the screen, not the level: `PlayScene` computes the
 visible tile range by inverse-projecting the viewport corners
@@ -601,9 +656,27 @@ rarity…). Creations are registered live, persist to the game type's
 | Ctrl+S / L / N | save / load / new level |
 | Esc | back (with a save prompt offline) |
 
-Painting works in **every perspective** — the palette paints through the
-same `Camera` projection the game renders with, so you can build in
-isometric view if your game type uses it.
+**One creative mode per level format.** The main menu's *Creative Mode*
+entry asks which format you are building — Side-Scroller, Top-Down or
+Isometric (with how many levels of each the game type already holds) — and
+the editor opens as that format's creative mode: its camera projection, its
+starter canvas (a ground floor to land on, or a walled plan-view arena), its
+palette, its generator default, and a play-test that moves under that
+format's rules. Picking a format continues the game type's last level when
+that level is in the same format, and starts a fresh canvas otherwise. The
+*New Level* and *Generate* dialogs carry a **Format** row, so you can switch
+modes in place without leaving the editor.
+
+Painting itself works in **every format** — the palette paints through the
+same `Camera` projection the game renders with, so building in isometric is
+the same act as building flat, and the grid becomes a diamond lattice to line
+blocks up against.
+
+The **path** and **wall** block families are the one part of the palette that
+is format-specific: they are plan-view geometry, so they appear while building
+top-down and isometric levels and not while building side-scrollers. (A level
+that already contains them keeps them — hiding a family from a palette never
+changes a tile.) Everything else in the palette is shared by all three modes.
 
 **Level size sliders.** The sidebar's bottom panel has live width/height
 sliders: drag to resize the level in place — existing tiles are preserved,
@@ -665,8 +738,9 @@ maps, and surface details (grass tufts, wildflowers, hanging moss,
 dripstone) generate with the terrain automatically.
 
 The Generate dialog also has a **Mode** switch: *Perlin terrain*, or
-**Maze** — the automatic generator for top-down / isometric levels (it
-defaults to Maze for those perspectives). A seeded recursive-backtracker
+**Maze** — the automatic generator for the plan-view formats (it defaults to
+Maze while building a top-down or isometric level, and to terrain for a
+side-scroller). A seeded recursive-backtracker
 maze is built from solid walls and walkable path floors, dressed with
 torches at junctions, loot chests and mobs in the dead ends, multiplayer
 spawns in the corners, and the gold key waiting in a chest at the cell
@@ -802,16 +876,20 @@ A batch of gameplay and editor refinements layered onto the systems above:
   locked movement before).
 - **The player is exactly 1×1 blocks** — `playerSize` locks to `tileSize`,
   so the player fits perfectly through one-tile gaps in every game type.
-- **Perspective-aware worlds** — every level remembers whether it's a
-  side-scroller, top-down, or isometric world; the creative editor, its
-  play-test, and Play all follow the level (the *New Level* dialog picks the
-  perspective). Blocks paint the same everywhere but obstruct per
-  perspective; top-down/iso get **path** and **wall** block families; mobs
-  run perspective-specific AI (platform walkers with jump smarts in
-  side-scroll, full-plane wander/chase/flee in top-down/iso); dropped items
-  arc-and-bounce under gravity or scatter-and-hover with a shadow on the
-  plane; and sprite-sheet block textures now warp correctly into the
-  isometric diamond instead of falling back to flat colours.
+- **Three level formats, one game** — every level *is* a side-scroller, a
+  top-down map, or an isometric one ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)),
+  each with its own creative mode, and every level plays in the format it was
+  built in — including through a door from one format straight into another,
+  which swaps the camera and the movement model mid-play. The **path** and
+  **wall** families paint only in the plan-view modes; everything else — mobs,
+  items, blocks, decorations, lights, liquids, vehicles, cutscenes, mini games
+  — is offered in all three and behaves in all three: mobs run format-specific
+  AI (platform walkers with jump smarts in side-scroll, full-plane
+  wander/chase/flee in top-down/iso), liquids pour down or pool outward,
+  sand/gravel fall only under gravity, dropped items arc-and-bounce or
+  scatter-and-hover with a shadow, the player's diagonals are normalized on the
+  plane, and sprite-sheet block textures warp correctly into the isometric
+  diamond instead of falling back to flat colours.
 - **Chests & barrels are real storage** — stand next to one and press `E`:
   its second inventory opens ([`ContainerPanel`](src/main/java/com/larsons/engine/ui/ContainerPanel.java)),
   and the contents **save inside the level data** (`containers` in the level
@@ -1561,7 +1639,7 @@ toggles into the level on every save, and are stored under
 
 | Feature | Type | Notes |
 |---------|------|-------|
-| Perspective | cycler | `SIDE_SCROLL` / `TOP_DOWN` / `ISOMETRIC` |
+| Default level format | cycler | Side-Scroller / Top-Down / Isometric — the format **new** levels start in (each level then carries its own) |
 | Switch perspective in-game | toggle | allow the **P** key to cycle |
 | Zoom enabled | toggle | gates the zoom controls + range |
 | Min / Max / Default zoom | steppers | enabled only when zoom is on |
@@ -1596,7 +1674,7 @@ honouring it where it matters (e.g. in `PlayScene`).
 // Programmatic use:
 GameTypeStore store = new GameTypeStore();        // resources/gametypes/
 GameProfile profile = new GameProfile("My Platformer");
-profile.perspective = Perspective.SIDE_SCROLL;
+profile.perspective = Perspective.SIDE_SCROLL;   // the format new levels start in
 profile.zoomEnabled = false;
 store.save(profile);                              // -> my_platformer.json
 // later:
@@ -1687,7 +1765,8 @@ ConfigForm form = new ConfigForm("Settings");
 form.addToggle("Zoom", () -> p.zoomEnabled, v -> p.zoomEnabled = v);
 form.addDouble("Max zoom", () -> p.maxZoom, v -> p.maxZoom = v, 0.1, 8.0, 0.1)
     .enabledWhen(() -> p.zoomEnabled);            // greyed out + skipped when off
-form.addEnum("Perspective", Perspective.values(), () -> p.perspective, v -> p.perspective = v);
+form.addEnum("Format", LevelFormat.values(), () -> LevelFormat.of(p.perspective),
+        v -> p.perspective = v.perspective());
 form.addText("Name", () -> p.name, v -> p.name = v, 40);
 form.addAction("Save", () -> store.save(p));
 // in the scene: form.update(dt, input); form.render(g, w, h);
@@ -1718,6 +1797,7 @@ the filesystem. Only `tiles` is required:
 ```json
 {
   "name": "Sample Level",
+  "format": "side_scroller",
   "perspective": "SIDE_SCROLL",
   "tileSize": 32,
   "width": 24, "height": 14,
@@ -1732,6 +1812,11 @@ the filesystem. Only `tiles` is required:
 ```java
 Level level = LevelLoader.load("levels/sample_level.json");
 ```
+
+`"format"` names the level's [`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)
+(`side_scroller` / `top_down` / `isometric`) — which creative mode builds it
+and how it plays. `"perspective"` is the same choice in the older spelling;
+either key alone is enough, and a level with neither loads as a side-scroller.
 
 Levels come in two modes. **Palette mode** (above, the original format):
 tile ids index the colour palette and every tile is solid. **Registry mode**

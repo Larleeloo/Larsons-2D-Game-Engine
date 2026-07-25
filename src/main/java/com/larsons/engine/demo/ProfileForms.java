@@ -2,8 +2,8 @@ package com.larsons.engine.demo;
 
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
-import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.shader.Shaders;
+import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.ui.ConfigForm;
 
 import java.nio.file.Path;
@@ -18,8 +18,12 @@ final class ProfileForms {
     private ProfileForms() {}
 
     static void addFeatureOptions(ConfigForm form, GameProfile p) {
-        form.addEnum("Perspective", Perspective.values(),
-                () -> p.perspective, v -> p.perspective = v);
+        // A level's own format decides how it is built and played; this is the
+        // format new levels start in (see LevelFormat and the creative-mode
+        // picker), which is why it reads as a default rather than a switch.
+        form.addEnum("Default level format", LevelFormat.values(),
+                () -> LevelFormat.of(p.perspective),
+                v -> p.perspective = v.perspective());
         form.addToggle("Switch perspective in-game",
                 () -> p.perspectiveSwitchingEnabled, v -> p.perspectiveSwitchingEnabled = v);
 

@@ -53,12 +53,18 @@ public final class LevelGenerator {
     }
 
     /**
-     * "Maze mode": the automatic generator for top-down / isometric levels —
+     * "Maze mode": the automatic generator for the plan-view level formats —
      * a perfect maze (recursive backtracker) with solid walls, walkable path
      * floors, torches at junctions, treasure chests in dead ends, mobs in the
      * far reaches, and the exit chest (with the gold key) at the cell farthest
      * from the spawn. Same seed, same maze.
      */
+    public static Level generateMaze(String name, int width, int height, int tileSize,
+                                     long seed, LevelFormat format) {
+        return generateMaze(name, width, height, tileSize, seed, format.perspective());
+    }
+
+    /** {@link #generateMaze(String, int, int, int, long, LevelFormat)} by projection. */
     public static Level generateMaze(String name, int width, int height, int tileSize,
                                      long seed, com.larsons.engine.graphics.Perspective perspective) {
         // Mazes carve every cell, so they stay dense (no giant chunked mazes).

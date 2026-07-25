@@ -35,6 +35,7 @@ import com.larsons.engine.level.CutscenePlayer;
 import com.larsons.engine.level.DoorDirectory;
 import com.larsons.engine.level.DoorLink;
 import com.larsons.engine.level.Level;
+import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelGenerator;
 import com.larsons.engine.level.LevelLoader;
 import com.larsons.engine.level.LevelStore;
@@ -88,6 +89,17 @@ import java.util.Map;
  * blocks), right-click over the canvas erases, middle-click picks the hovered
  * block. Levels are saved per game type ({@link LevelStore}) and played back
  * with exactly the features the game type enables.
+ *
+ * <p><b>Three creative modes, one editor:</b> a level belongs to one of the
+ * engine's three {@link LevelFormat}s — side-scroller, top-down, isometric —
+ * and this scene <em>is</em> that format's creative mode: it opens the level's
+ * camera projection, paints and play-tests under that format's movement model,
+ * defaults its generator accordingly, and offers the path/wall block families
+ * only while building the plan-view formats. Everything else — mobs, items,
+ * decorations, block details, lights, liquids, doors, cutscenes, mini-game
+ * markers — is shared by all three and behaves in each. The main menu picks
+ * which mode to open; the <em>New Level</em> and <em>Generate</em> dialogs'
+ * Format row switches modes in place.
  *
  * <p><b>Level size sliders &amp; giant maps:</b> the sidebar's bottom panel
  * has live width / height sliders — drag to resize the level in place
@@ -311,7 +323,8 @@ public class CreativeScene extends AbstractScene {
     private boolean dialogRebuild;
     private String pendingName = "";
     private int pendingWidth = 60, pendingHeight = 24;
-    private Perspective pendingPerspective = Perspective.SIDE_SCROLL;
+    /** Format picked in the New Level / Generate dialogs (the mode they build for). */
+    private LevelFormat pendingFormat = LevelFormat.SIDE_SCROLLER;
     private int genWidth = 240, genHeight = 140, genSeed = 1;
     /** Generate dialog mode: Perlin terrain, or the top-down/iso maze. */
     private boolean genMaze;
@@ -359,6 +372,15 @@ public class CreativeScene extends AbstractScene {
 
     private GameProfile profile() { return ctx.profile(); }
 
+    /**
+     * The level format this creative session is building in — the editor
+     * <em>is</em> that format's creative mode: its palette, its starter
+     * canvas, its generator default, and the camera projection all follow it.
+     */
+    private LevelFormat format() {
+        return level != null ? level.format() : LevelFormat.of(profile().perspective);
+    }
+
     @Override
     public void onEnter() {
         net = ctx.session();
@@ -374,88 +396,83 @@ public class CreativeScene extends AbstractScene {
             level = net.client().level(); // paint straight into the shared world
         } else {
             net = null;
-            level = loadInitialLevel();
+            // The main menu opens creative mode for one format; that choice is
+            // consumed here so re-entering (from the pause menu, say) returns
+            // to the level being edited instead of restarting the format.
+            level = loadInitialLevel(ctx.takeCreativeFormat());
             // Edit (and play-test) with the level's own saved feature toggles.
             ctx.applyLevelSettings(level.settings);
         }
-        // After the level: the CUTSCENES palette lists the level's cutscenes.
+        // After the level: the palette is format-specific (see buildPalette)
+        // and the CUTSCENES category lists this level's cutscenes.
         buildPalette();
         pendingLevelW = level.width;
         pendingLevelH = level.height;
-        pendingPerspective = profile().perspective;
+        pendingFormat = level.format();
 
-        // Each level carries its own perspective, so the editor becomes a
+        // Each level carries its own format, so the editor becomes a
         // side-scroll / top-down / isometric creative mode to match — the
-        // blocks paint the same, but obstruct the player per the perspective.
-        camera = new Camera(net != null ? profile().perspective : level.perspective,
-                viewportWidth, viewportHeight);
+        // shared objects paint the same, but obstruct the player per format.
+        camera = new Camera(level.perspective, viewportWidth, viewportHeight);
         camera.tileSize = level.tileSize;
         camera.zoom = 1.0;
         camera.centerOn(level.spawnX, level.spawnY);
         setStatus(net == null
-                ? "Creative Mode — left-click paints; right-click a palette icon to retexture it"
-                : "Creative Mode (online) — painting edits the server's world for everyone");
-    }
-
-    private Level loadInitialLevel() {
-        String last = profile().lastLevelPath;
-        if (last != null && !last.isEmpty() && Files.exists(Path.of(last))) {
-            try {
-                return LevelLoader.load(last);
-            } catch (RuntimeException e) {
-                System.err.println("CreativeScene: failed to load " + last + ": " + e.getMessage());
-            }
-        }
-        return starterLevel("New Level", 60, 24);
-    }
-
-    /** A fresh canvas with a ground floor, so play-testing has somewhere to stand. */
-    private Level starterLevel(String name, int widthTiles, int heightTiles) {
-        return starterLevel(name, widthTiles, heightTiles, profile().perspective);
+                ? format().displayName() + " Creative Mode — " + format().description()
+                : format().displayName() + " Creative Mode (online) — painting edits"
+                + " the server's world for everyone");
     }
 
     /**
-     * A fresh canvas in an explicit perspective. Side-scroll gets a ground
-     * floor to stand on; top-down / isometric canvases get a wall border
-     * instead (there is no gravity to fall by, and walls read as the level's
-     * edge in those creative modes).
+     * The level this creative session opens with. Entering creative mode for a
+     * particular format (the main menu's per-format entries) continues the
+     * last level when it was built in that format and starts a fresh canvas
+     * otherwise, so each format's creative mode picks up where <em>it</em> left
+     * off instead of dropping the creator into another format's level.
      */
-    private Level starterLevel(String name, int widthTiles, int heightTiles,
-                               Perspective perspective) {
-        Level lvl = Level.empty(name, widthTiles, heightTiles, profile().tileSize);
-        lvl.perspective = perspective;
-        if (perspective == Perspective.SIDE_SCROLL) {
-            int dirt = lvl.blocks.get("dirt").id();
-            int grass = lvl.blocks.get("grass").id();
-            // Giant canvases only floor the first 2048 columns eagerly; painting
-            // further out is up to the creator (a 65536-wide floor loop would
-            // materialize every chunk up front).
-            int floored = Math.min(lvl.width, 2048);
-            for (int c = 0; c < floored; c++) {
-                lvl.setTile(c, lvl.height - 1, dirt);
-                lvl.setTile(c, lvl.height - 2, grass);
-            }
-            lvl.spawnX = lvl.tileSize * 3;
-            lvl.spawnY = (lvl.height - 4) * (double) lvl.tileSize;
-        } else {
-            int wall = lvl.blocks.get("stone_wall").id();
-            int bw = Math.min(lvl.width, 2048), bh = Math.min(lvl.height, 2048);
-            for (int c = 0; c < bw; c++) {
-                lvl.setTile(c, 0, wall);
-                lvl.setTile(c, bh - 1, wall);
-            }
-            for (int r = 0; r < bh; r++) {
-                lvl.setTile(0, r, wall);
-                lvl.setTile(bw - 1, r, wall);
-            }
-            lvl.spawnX = lvl.tileSize * 2;
-            lvl.spawnY = lvl.tileSize * 2;
-        }
-        return lvl;
+    private Level loadInitialLevel(LevelFormat requested) {
+        Level last = loadLastLevel();
+        if (last != null && (requested == null || last.format() == requested)) return last;
+        LevelFormat format = requested != null ? requested
+                : LevelFormat.of(profile().perspective);
+        return starterLevel("New " + format.displayName() + " Level", 60, 24, format);
     }
 
+    /** The game type's last saved level, or {@code null} when there isn't one. */
+    private Level loadLastLevel() {
+        String last = profile().lastLevelPath;
+        if (last == null || last.isEmpty() || !Files.exists(Path.of(last))) return null;
+        try {
+            return LevelLoader.load(last);
+        } catch (RuntimeException e) {
+            System.err.println("CreativeScene: failed to load " + last + ": " + e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * A fresh canvas in an explicit format: the side-scroller gets a ground
+     * floor to stand on, the plan-view formats a wall border (see
+     * {@link LevelFormat#starterLevel}).
+     */
+    private Level starterLevel(String name, int widthTiles, int heightTiles,
+                               LevelFormat format) {
+        return format.starterLevel(name, widthTiles, heightTiles, profile().tileSize);
+    }
+
+    /**
+     * Fill the palette for this creative mode. Everything the engine can paint
+     * — mobs, items, decorations, block details, lights, liquids, doors,
+     * cutscenes, mini-game markers, tools — is offered in all three formats and
+     * works in all three. The one format-specific part is the block list: the
+     * path and wall families read as plan-view geometry, so they appear only
+     * while building a top-down or isometric level
+     * ({@link LevelFormat#allowsBlock}). A level that already contains them
+     * keeps rendering and colliding with them either way.
+     */
     private void buildPalette() {
         palette.clear();
+        LevelFormat format = format();
         // Every creatable category leads with its "+" entry: click it to add a
         // fully customizable object of that kind to the game engine.
         List<Entry> blocks = newList("+ New Block");
@@ -463,6 +480,7 @@ public class CreativeScene extends AbstractScene {
         List<Entry> lights = newList("+ New Light");
         for (Block b : com.larsons.engine.world.BlockRegistry.standard().all()) {
             if (b.isFlow()) continue; // the sim's hidden flow twins
+            if (!format.allowsBlock(b.key())) continue; // format-specific family
             Entry e = new Entry("block", b.key(), b.displayName(),
                     EntitySprites.block(b, 40), customContent.isCustom("block", b.key()));
             if (b.liquid()) {
@@ -559,7 +577,12 @@ public class CreativeScene extends AbstractScene {
             palette.putIfAbsent(c, new ArrayList<>());
             selected.putIfAbsent(c, 0);
             scroll.putIfAbsent(c, 0);
+            // Switching format can shorten a category (the plan-view block
+            // families leave the list), so pull the selection back inside it.
+            int size = palette.get(c).size();
+            selected.computeIfPresent(c, (k, i) -> Math.max(0, Math.min(i, size - 1)));
         }
+        clampScroll();
     }
 
     /** A fresh palette list starting with the "+" creator entry. */
@@ -1532,8 +1555,14 @@ public class CreativeScene extends AbstractScene {
             level.containers.putAll(savedContainers);
             savedContainers = null;
         }
+        // A play-test that travelled through a door may have left the camera
+        // (and the profile) on another level's format — put the editor back in
+        // the one it is actually editing.
+        ctx.applyLevelSettings(level.settings);
         camera.tileSize = level.tileSize;
-        setStatus("Back to editing");
+        camera.setPerspective(level.perspective);
+        buildPalette();
+        setStatus("Back to editing — " + format().displayName() + " creative mode");
     }
 
     /** Deep copy of the level's container contents (test-mode snapshot). */
@@ -1851,7 +1880,8 @@ public class CreativeScene extends AbstractScene {
         if (removed <= 0) return;
         DroppedItem drop = testWorld.spawnItem(key, removed, testMe.x, testMe.y);
         if (drop != null) {
-            drop.toss(testMe.facingLeft ? -170 : 170, -180);
+            drop.toss(testMe.facingLeft ? -170 : 170,
+                    level.format().gravity() ? -180 : 0);
             drop.pickupDelay = 1.0;
         }
         ctx.sfx(Sfx.CLICK);
@@ -1985,13 +2015,19 @@ public class CreativeScene extends AbstractScene {
             return true;
         }
         level = store.load(link.targetLevel());
+        // The destination brings its own format and settings: a door from a
+        // side-scrolling level into an isometric one switches the play-test's
+        // camera and movement model on the spot, exactly as it does in Play.
+        ctx.applyLevelSettings(level.settings);
         camera.tileSize = level.tileSize;
+        camera.setPerspective(level.perspective);
         startTestWorld();
         bindTestPickups(); // inventory carries through the door
         ruleEngine = new StatRuleEngine(List.copyOf(level.statRules));
         cutsceneDirector = new CutsceneDirector(level.cutscenes);
         ctx.sfx(Sfx.CLICK);
-        setStatus("Entered \"" + link.label() + "\" → " + level.name);
+        setStatus("Entered \"" + link.label() + "\" → " + level.name
+                + " (" + level.format().displayName() + ")");
         return true;
     }
 
@@ -2023,14 +2059,15 @@ public class CreativeScene extends AbstractScene {
                     pendingName = "New Level";
                     pendingWidth = 60;
                     pendingHeight = 24;
-                    pendingPerspective = profile().perspective;
+                    pendingFormat = format();
                 }
                 dialogRebuild = false;
                 dialogForm.addText("Name", () -> pendingName, v -> pendingName = v, 32);
-                // Each level keeps its own perspective — the creative mode
-                // (and how blocks obstruct the player) follows it.
-                dialogForm.addEnum("Perspective", Perspective.values(),
-                        () -> pendingPerspective, v -> pendingPerspective = v);
+                // Each level keeps its own format — creating one in another
+                // format switches the editor into that creative mode (palette,
+                // starter canvas, camera and movement model all follow).
+                dialogForm.addEnum("Format", LevelFormat.values(),
+                        () -> pendingFormat, v -> pendingFormat = v);
                 dialogForm.addToggle("Override map size (up to "
                                 + Level.MAX_GIANT_SIZE + ")",
                         () -> overrideMapSize, v -> {
@@ -2051,11 +2088,12 @@ public class CreativeScene extends AbstractScene {
                 }
                 dialogForm.addAction("Create", () -> {
                     level = starterLevel(pendingName, pendingWidth, pendingHeight,
-                            pendingPerspective);
+                            pendingFormat);
                     afterLevelSwap();
                     setStatus("Created \"" + level.name + "\" (" + level.width + "x"
-                            + level.height + ", " + level.perspective
-                            + (level.isChunked() ? ", chunked" : "") + ")");
+                            + level.height + ") — " + format().displayName()
+                            + " creative mode"
+                            + (level.isChunked() ? ", chunked" : ""));
                 });
                 dialogForm.addAction("Cancel", this::closeDialog);
             }
@@ -2284,7 +2322,7 @@ public class CreativeScene extends AbstractScene {
      * online, where the server (not a saved file) owns the world.
      */
     private void captureLevelSettings() {
-        if (net == null) level.settings = profile().copy();
+        if (net == null) level.captureSettings(profile());
     }
 
     /** Camera/slider bookkeeping after replacing the edited level. */
@@ -2307,17 +2345,17 @@ public class CreativeScene extends AbstractScene {
         if (!dialogRebuild) {
             pendingName = "Generated " + (1 + (int) (Math.random() * 8999));
             genSeed = 1 + (int) (Math.random() * 99998);
-            pendingPerspective = profile().perspective;
-            // Maze mode fits top-down / isometric themes; terrain fits
-            // side-scrollers — default the mode to match the perspective.
-            genMaze = pendingPerspective != Perspective.SIDE_SCROLL;
+            pendingFormat = format();
+            // Maze mode fits the plan-view formats; Perlin terrain fits the
+            // side-scroller — default the mode to match the format.
+            genMaze = pendingFormat.defaultsToMaze();
         }
         dialogRebuild = false;
         dialogForm.addText("Name", () -> pendingName, v -> pendingName = v, 32);
-        dialogForm.addEnum("Perspective", Perspective.values(),
-                () -> pendingPerspective, v -> {
-                    pendingPerspective = v;
-                    genMaze = v != Perspective.SIDE_SCROLL;
+        dialogForm.addEnum("Format", LevelFormat.values(),
+                () -> pendingFormat, v -> {
+                    pendingFormat = v;
+                    genMaze = v.defaultsToMaze();
                 });
         dialogForm.addEnum("Mode", new String[]{"Perlin terrain", "Maze"},
                 () -> genMaze ? "Maze" : "Perlin terrain",
@@ -2345,7 +2383,7 @@ public class CreativeScene extends AbstractScene {
             String name = pendingName.isBlank() ? "Generated" : pendingName.trim();
             if (genMaze) {
                 level = LevelGenerator.generateMaze(name, genWidth, genHeight,
-                        profile().tileSize, genSeed, pendingPerspective);
+                        profile().tileSize, genSeed, pendingFormat);
                 afterLevelSwap();
                 setStatus("Generated maze \"" + level.name + "\" (" + level.width + "x"
                         + level.height + ", seed " + genSeed
@@ -2354,7 +2392,7 @@ public class CreativeScene extends AbstractScene {
             }
             Level generated = LevelGenerator.generate(name,
                     genWidth, genHeight, profile().tileSize, genSeed);
-            generated.perspective = pendingPerspective;
+            generated.setFormat(pendingFormat);
             level = generated;
             afterLevelSwap();
             setStatus(level.isChunked()
@@ -3416,7 +3454,10 @@ public class CreativeScene extends AbstractScene {
         SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), false, animClock);
         drawTiles(g);
         if (testing) drawMiningCracks(g);
-        if (showGrid && !testing && camera.getPerspective() != Perspective.ISOMETRIC) drawGrid(g);
+        // The grid is drawn through the camera, so it lands as a diamond
+        // lattice in isometric view — which is exactly where lining blocks
+        // up by eye is hardest, so it is worth having there too.
+        if (showGrid && !testing) drawGrid(g);
         drawWorldBounds(g);
         drawEntities(g);
         drawSpawnMarker(g);
@@ -4523,15 +4564,18 @@ public class CreativeScene extends AbstractScene {
                 + level.chunked.dirtyCount() + " edited"
                 : "";
         String bar;
+        // The editor is one creative mode per level format, so the bar leads
+        // with which one is open.
+        String mode = format().displayName().toUpperCase();
         if (testing) {
-            bar = "PLAY-TEST — " + level.name + chunkInfo
+            bar = "PLAY-TEST (" + mode + ") — " + level.name + chunkInfo
                     + "   ·   WASD move · Shift sprint · hold click to mine · right-click place"
                     + " · 1-5 hotbar · [I] inventory · [E] doors/stations · [P]/[Esc] editor";
         } else if (net != null) {
-            bar = "CREATIVE (ONLINE) — painting the server's world   ·   [Tab] category · right-click erase"
-                    + " · [G] grid · [Esc] back to game";
+            bar = mode + " CREATIVE (ONLINE) — painting the server's world   ·   [Tab] category"
+                    + " · right-click erase · [G] grid · [Esc] back to game";
         } else {
-            bar = "CREATIVE — " + level.name + " (" + level.width + "x" + level.height + ")"
+            bar = mode + " CREATIVE — " + level.name + " (" + level.width + "x" + level.height + ")"
                     + chunkInfo
                     + "   ·   [Tab] category · right-click erase · middle pick · [B] layer"
                     + " · [ ] brush · [G] grid · [P] test · [Ctrl+S] save · [L] load · [N] new · [Esc] menu";

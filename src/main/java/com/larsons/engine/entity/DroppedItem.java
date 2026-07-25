@@ -45,6 +45,30 @@ public final class DroppedItem {
         return this;
     }
 
+    /**
+     * Toss appropriately for the level's format: a gravity world keeps the
+     * kick as given (drops arc up and bounce), while on a plane the same
+     * energy becomes a skid in some direction across the floor. Callers pass
+     * the side-scrolling kick they always did; without this, an upward kick in
+     * a top-down level sent every drop sliding north.
+     *
+     * <p>The scatter direction comes from the entity id (the golden angle, so
+     * consecutive drops fan out) rather than a random draw — the multiplayer
+     * server and its clients must agree on where a drop landed.
+     */
+    public DroppedItem toss(double kickX, double kickY, boolean gravityOn) {
+        if (gravityOn) return toss(kickX, kickY);
+        double speed = Math.hypot(kickX, kickY) * PLANE_KICK_FACTOR;
+        double angle = id * GOLDEN_ANGLE;
+        return toss(Math.cos(angle) * speed, Math.sin(angle) * speed);
+    }
+
+    /** Plan-view scatter keeps part of the arc's energy (no fall to add to it). */
+    private static final double PLANE_KICK_FACTOR = 0.5;
+
+    /** Golden angle in radians: successive ids scatter without clustering. */
+    private static final double GOLDEN_ANGLE = 2.39996322972865332;
+
     public void step(Level level, boolean gravityOn, double dt) {
         if (pickupDelay > 0) pickupDelay -= dt;
         age += dt;

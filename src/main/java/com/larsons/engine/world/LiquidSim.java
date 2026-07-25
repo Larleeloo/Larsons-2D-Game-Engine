@@ -16,7 +16,10 @@ import java.util.Set;
  * <ul>
  *   <li>Liquid falls freely down open cells, and spreads sideways along a
  *       floor up to a per-liquid range from the nearest source (water flows
- *       farther than lava).</li>
+ *       farther than lava). In the plan-view level formats (top-down,
+ *       isometric) there is no "down" to pour along, so the same range
+ *       spreads outward in all four directions and a source pools into a
+ *       diamond instead.</li>
  *   <li>Reachability is recomputed every tick, so removing a source (or
  *       cutting the stream with a block) drains everything downstream, and
  *       mining a hole under a pool sends it pouring through.</li>
@@ -57,8 +60,11 @@ public final class LiquidSim {
     }
 
     /**
-     * Advance with an explicit gravity flag: falling blocks (sand, gravel)
-     * only drop in side-scroll gravity worlds, while liquids always flow.
+     * Advance with an explicit gravity flag. Gravity worlds (side-scroll) drop
+     * falling blocks and pour liquids downward; without it — the plan-view
+     * formats, where the screen shows a floor rather than a wall — sand and
+     * gravel stay where they are placed and liquids spread outward across the
+     * plane instead, pooling around their source like water on a table.
      */
     public List<Change> step(Level level, boolean gravityOn, double dt) {
         if (!level.registryTiles || level.tiles == null) return List.of();
@@ -99,7 +105,7 @@ public final class LiquidSim {
             if (b.liquid() && !b.isFlow() && blocks.flowFor(b) != null
                     && (present.contains(b.id())
                     || present.contains(blocks.flowFor(b).id()))) {
-                flowFamily(level, b, changes);
+                flowFamily(level, b, gravityOn, changes);
             }
         }
     }
@@ -158,15 +164,66 @@ public final class LiquidSim {
         };
     }
 
-    private void flowFamily(Level level, Block source, List<Change> changes) {
+    private void flowFamily(Level level, Block source, boolean gravityOn, List<Change> changes) {
         BlockRegistry blocks = level.blocks;
         Block flow = blocks.flowFor(source);
         int w = level.width, h = level.height;
         int srcId = source.id(), flowId = flow.id();
         int range = spreadRange(source);
 
-        // BFS from every source: down resets the budget, sideways costs 1.
-        // "Passable" means air or this family's own liquid.
+        int[] best = reachable(level, srcId, flowId, range, gravityOn);
+
+        // Drain: flow cells no longer fed by a source disappear at once.
+        for (int r = 0; r < h; r++) {
+            for (int c = 0; c < w; c++) {
+                if (level.tiles[r][c] == flowId && best[r * w + c] < 0) {
+                    setCell(level, c, r, 0, changes);
+                }
+            }
+        }
+
+        // Grow: in a gravity world falls advance a few cells per tick and the
+        // sideways spread advances one; on a plane the pool grows by one ring
+        // in every direction, so a source visibly spreads outward.
+        int rounds = gravityOn ? FALL_ROUNDS : 1;
+        for (int round = 0; round < rounds; round++) {
+            List<int[]> adds = new ArrayList<>();
+            for (int r = 0; r < h; r++) {
+                for (int c = 0; c < w; c++) {
+                    if (level.tiles[r][c] != 0 || best[r * w + c] < 0) continue;
+                    boolean fed;
+                    if (gravityOn) {
+                        // Each round fills air under a liquid cell; the first
+                        // round also fills cells beside one.
+                        fed = (r > 0 && isFamily(level, c, r - 1, srcId, flowId))
+                                || (round == 0
+                                && ((c > 0 && isFamily(level, c - 1, r, srcId, flowId))
+                                || (c + 1 < w && isFamily(level, c + 1, r, srcId, flowId))));
+                    } else {
+                        fed = (r > 0 && isFamily(level, c, r - 1, srcId, flowId))
+                                || (r + 1 < h && isFamily(level, c, r + 1, srcId, flowId))
+                                || (c > 0 && isFamily(level, c - 1, r, srcId, flowId))
+                                || (c + 1 < w && isFamily(level, c + 1, r, srcId, flowId));
+                    }
+                    if (fed) adds.add(new int[]{c, r});
+                }
+            }
+            for (int[] a : adds) setCell(level, a[0], a[1], flowId, changes);
+            if (adds.isEmpty()) break;
+        }
+    }
+
+    /**
+     * Spread budget left at every cell a source can reach, or {@code -1} where
+     * none can. In a gravity world falling down resets the budget and moving
+     * sideways along a floor costs one; on a plane there is no "down", so
+     * every step across the floor costs one and the reachable set is a
+     * diamond around each source. Cells are "passable" when they are air or
+     * already hold this liquid family.
+     */
+    private static int[] reachable(Level level, int srcId, int flowId, int range,
+                                   boolean gravityOn) {
+        int w = level.width, h = level.height;
         int[] best = new int[w * h];
         java.util.Arrays.fill(best, -1);
         ArrayDeque<int[]> queue = new ArrayDeque<>();
@@ -181,12 +238,13 @@ public final class LiquidSim {
         while (!queue.isEmpty()) {
             int[] cur = queue.poll();
             int c = cur[0], r = cur[1], b = cur[2];
-            boolean belowOpen = r + 1 < h && passable(level, c, r + 1, srcId, flowId);
-            if (belowOpen && best[(r + 1) * w + c] < range) {
-                best[(r + 1) * w + c] = range;
-                queue.add(new int[]{c, r + 1, range});
-            }
-            if (!belowOpen && b > 0) {
+            if (gravityOn) {
+                boolean belowOpen = r + 1 < h && passable(level, c, r + 1, srcId, flowId);
+                if (belowOpen && best[(r + 1) * w + c] < range) {
+                    best[(r + 1) * w + c] = range;
+                    queue.add(new int[]{c, r + 1, range});
+                }
+                if (belowOpen || b <= 0) continue;
                 for (int dc = -1; dc <= 1; dc += 2) {
                     int nc = c + dc;
                     if (nc < 0 || nc >= w) continue;
@@ -195,37 +253,23 @@ public final class LiquidSim {
                         queue.add(new int[]{nc, r, b - 1});
                     }
                 }
-            }
-        }
-
-        // Drain: flow cells no longer fed by a source disappear at once.
-        for (int r = 0; r < h; r++) {
-            for (int c = 0; c < w; c++) {
-                if (level.tiles[r][c] == flowId && best[r * w + c] < 0) {
-                    setCell(level, c, r, 0, changes);
+            } else {
+                if (b <= 0) continue;
+                for (int[] d : PLANE_NEIGHBOURS) {
+                    int nc = c + d[0], nr = r + d[1];
+                    if (nc < 0 || nc >= w || nr < 0 || nr >= h) continue;
+                    if (passable(level, nc, nr, srcId, flowId) && best[nr * w + nc] < b - 1) {
+                        best[nr * w + nc] = b - 1;
+                        queue.add(new int[]{nc, nr, b - 1});
+                    }
                 }
             }
         }
-
-        // Grow: falls advance a few cells per tick, spread one. Each round
-        // only fills air cells directly under a liquid cell; the first round
-        // also fills cells beside one.
-        for (int round = 0; round < FALL_ROUNDS; round++) {
-            List<int[]> adds = new ArrayList<>();
-            for (int r = 0; r < h; r++) {
-                for (int c = 0; c < w; c++) {
-                    if (level.tiles[r][c] != 0 || best[r * w + c] < 0) continue;
-                    boolean above = r > 0 && isFamily(level, c, r - 1, srcId, flowId);
-                    boolean beside = round == 0
-                            && ((c > 0 && isFamily(level, c - 1, r, srcId, flowId))
-                            || (c + 1 < w && isFamily(level, c + 1, r, srcId, flowId)));
-                    if (above || beside) adds.add(new int[]{c, r});
-                }
-            }
-            for (int[] a : adds) setCell(level, a[0], a[1], flowId, changes);
-            if (adds.isEmpty()) break;
-        }
+        return best;
     }
+
+    /** The four plan-view spread directions (no "down" to pour along). */
+    private static final int[][] PLANE_NEIGHBOURS = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
 
     private static boolean passable(Level level, int c, int r, int srcId, int flowId) {
         int id = level.tiles[r][c];

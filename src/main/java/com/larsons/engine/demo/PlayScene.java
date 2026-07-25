@@ -499,9 +499,9 @@ public class PlayScene extends AbstractScene {
         }
 
         // Online, physics must not depend on the local camera view — the server
-        // simulates with the profile's perspective, so prediction does too.
+        // simulates the level's own format, so prediction does too.
         // A mounted player drives their vehicle instead of walking.
-        Perspective simPerspective = net != null ? p.perspective : camera.getPerspective();
+        Perspective simPerspective = net != null ? level.perspective : camera.getPerspective();
         prevVy = me.vy;
         double preX = me.x, preY = me.y;
         boolean riding = stepRiding(in, p, dt);
@@ -616,6 +616,12 @@ public class PlayScene extends AbstractScene {
      * type's external door directory) names another saved level, which loads
      * in place — inventory and health carry through, so a set of levels wired
      * with doors plays like one continuous world.
+     *
+     * <p>The destination brings its own format and settings with it: stepping
+     * from a side-scrolling cave through a door into an isometric town swaps
+     * the camera projection and the movement model on the spot, with no
+     * reload and no menu — the three formats are authored apart and play as
+     * one game.
      */
     private boolean tryDoorTravel(GameProfile p) {
         double half = p.playerSize / 2.0;
@@ -626,6 +632,9 @@ public class PlayScene extends AbstractScene {
         LevelStore store = new LevelStore(p.name);
         if (!store.exists(link.targetLevel())) return true;
         level = store.load(link.targetLevel());
+        // The destination's own toggles (and so its tile/player sizes) apply
+        // before anything is built against them.
+        ctx.applyLevelSettings(level.settings);
         world = new World(level);
         world.populateFromLevel(p);
         world.setPickupListener((player, key, count) -> {
@@ -639,7 +648,13 @@ public class PlayScene extends AbstractScene {
         me.y = level.spawnY;
         me.vy = 0;
         setupLocalMinigame(); // the destination level may run its own mini game
-        camera.tileSize = level.tileSize;
+        // Camera projection, zoom bounds and the player sprite all follow the
+        // level that just loaded — this is what makes the format switch
+        // seamless rather than a scene change. The projection is set outright
+        // (not only when switching is locked) because arriving in an isometric
+        // level with the previous level's flat camera is not that level.
+        camera.setPerspective(basePerspective());
+        syncCameraFromProfile();
         parallax = null;
         particles.clear();
         ctx.sfx(Sfx.CLICK);
@@ -861,7 +876,8 @@ public class PlayScene extends AbstractScene {
         if (removed <= 0) return;
         DroppedItem drop = world.spawnItem(key, removed, me.x, me.y);
         if (drop != null) {
-            drop.toss(me.facingLeft ? -170 : 170, -180);
+            drop.toss(me.facingLeft ? -170 : 170,
+                    level.format().gravity() ? -180 : 0);
             drop.pickupDelay = 1.0; // don't instantly vacuum it back up
         }
         ctx.sfx(Sfx.CLICK);
@@ -1300,8 +1316,7 @@ public class PlayScene extends AbstractScene {
         }
         predictedVehicle.riderId = me.id;
         // Same gravity rule the server's world uses for vehicle physics.
-        boolean gravityOn = p.gravityEnabled
-                && level.perspective == Perspective.SIDE_SCROLL;
+        boolean gravityOn = p.gravityEnabled && level.format().gravity();
         predictedVehicle.stepDriven(level, in, gravityOn, dt);
         double ex = rv.x - predictedVehicle.x;
         double ey = rv.y - predictedVehicle.y;
@@ -1431,7 +1446,7 @@ public class PlayScene extends AbstractScene {
         SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), false, animClock);
         drawTiles(g);
         drawMiningCracks(g);
-        if (p.gridVisible && camera.getPerspective() != Perspective.ISOMETRIC) drawGrid(g);
+        if (p.gridVisible) drawGrid(g); // projects to a diamond lattice in isometric
         drawDoors(g);
         drawWorldEntities(g, p);
         if (mgView != null) MiniGameHud.drawWorld(g, camera, level, mgView, animClock);
@@ -1709,7 +1724,7 @@ public class PlayScene extends AbstractScene {
     private void saveLevel() {
         GameProfile p = profile();
         p.normalize();
-        level.settings = p.copy();
+        level.captureSettings(p);
         LevelStore store = new LevelStore(p.name);
         Path file = store.save(level);
         p.lastLevelPath = file.toString();
@@ -1764,12 +1779,14 @@ public class PlayScene extends AbstractScene {
     // --- profile-driven constraints ---
 
     /**
-     * The perspective this session simulates and renders in by default:
-     * offline it's the loaded level's own perspective, online the profile's
-     * (physics must match the server's view of the world).
+     * The perspective this session simulates and renders in by default: the
+     * loaded level's own, in every case. The level carries its format, so
+     * playing a side-scroller, a top-down map, or an isometric one is the same
+     * act — and online the server simulates that same level's format, so
+     * client prediction and the authoritative step agree.
      */
     private Perspective basePerspective() {
-        return net == null ? level.perspective : profile().perspective;
+        return level.perspective;
     }
 
     private void enforceProfileConstraints(GameProfile p) {

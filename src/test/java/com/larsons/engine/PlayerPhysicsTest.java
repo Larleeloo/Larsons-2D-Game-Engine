@@ -104,11 +104,55 @@ class PlayerPhysicsTest {
         GameProfile p = profile();
         PlayerState s = new PlayerState(1, "t", 64, 64);
 
+        PlayerInput right = new PlayerInput(false, true, false, false, 1);
+        PlayerPhysics.step(s, right, level, p, Perspective.TOP_DOWN, DT);
+        assertEquals(64 + PlayerPhysics.SPEED * DT, s.x, 1e-9);
+        assertEquals(64, s.y, 1e-9);
+
+        PlayerInput up = new PlayerInput(false, false, true, false, 2);
+        PlayerPhysics.step(s, up, level, p, Perspective.TOP_DOWN, DT);
+        assertEquals(64 - PlayerPhysics.SPEED * DT, s.y, 1e-9, "up walks on the plane");
+        assertEquals(0, s.vy, 1e-9, "no gravity in top-down");
+    }
+
+    /**
+     * A diagonal on the plane covers the same distance per second as an axis
+     * does: without normalizing, moving up-right in a top-down or isometric
+     * level travelled √2 times as fast as moving right.
+     */
+    @Test
+    void topDownDiagonalsAreNotFasterThanTheAxes() {
+        Level level = floorLevel();
+        GameProfile p = profile();
+        PlayerState s = new PlayerState(1, "t", 64, 64);
+
         PlayerInput upRight = new PlayerInput(false, true, true, false, 1);
         PlayerPhysics.step(s, upRight, level, p, Perspective.TOP_DOWN, DT);
-        assertEquals(64 + PlayerPhysics.SPEED * DT, s.x, 1e-9);
-        assertEquals(64 - PlayerPhysics.SPEED * DT, s.y, 1e-9);
-        assertEquals(0, s.vy, 1e-9, "no gravity in top-down");
+
+        double dx = s.x - 64, dy = s.y - 64;
+        assertEquals(PlayerPhysics.SPEED * DT, Math.hypot(dx, dy), 1e-9,
+                "diagonal step covers one step's distance");
+        assertEquals(dx, -dy, 1e-9, "and splits it evenly between the axes");
+    }
+
+    /**
+     * Sprinting is a plan-view act in every direction: holding shift while
+     * walking "north" (which a side-scroller has no equivalent of) both speeds
+     * the player up and spends stamina.
+     */
+    @Test
+    void topDownSprintAppliesToVerticalMovement() {
+        Level level = floorLevel();
+        GameProfile p = profile();
+        PlayerState s = new PlayerState(1, "t", 64, 64);
+        double stamina = s.stamina;
+
+        PlayerInput sprintUp = new PlayerInput(false, false, true, false, 1);
+        sprintUp.sprint = true;
+        PlayerPhysics.step(s, sprintUp, level, p, Perspective.TOP_DOWN, DT);
+
+        assertEquals(64 - PlayerPhysics.SPEED * PlayerPhysics.SPRINT_FACTOR * DT, s.y, 1e-9);
+        assertTrue(s.stamina < stamina, "sprinting north spends stamina");
     }
 
     @Test

@@ -375,10 +375,11 @@ public final class GameServer {
             if (riding != null) {
                 world.driveVehicle(riding, c.state, in, profile, dt);
             } else {
-                // Physics always uses the profile's perspective: a client
-                // switching its local camera view must not change how it
-                // moves on the server.
-                PlayerPhysics.step(c.state, in, level, profile, profile.perspective, dt);
+                // Physics always uses the served level's own format: a client
+                // switching its local camera view must not change how it moves
+                // on the server, and hosting an isometric level must not walk
+                // everyone around as if it were the game type's side-scroller.
+                PlayerPhysics.step(c.state, in, level, profile, level.perspective, dt);
             }
             in.jump = false; // consumed; must not re-fire while the input is held
             c.state.lastSeq = in.seq;
@@ -608,7 +609,10 @@ public final class GameServer {
         if (removed <= 0) return;
         DroppedItem drop = world.spawnItem(key, removed, conn.state.x, conn.state.y);
         if (drop != null) {
-            drop.toss(conn.state.facingLeft ? -170 : 170, -180);
+            // Thrown out in front of the player; the upward lob only exists
+            // where gravity can bring it back down.
+            drop.toss(conn.state.facingLeft ? -170 : 170,
+                    level.format().gravity() ? -180 : 0);
             drop.pickupDelay = 1.0; // don't instantly vacuum it back up
         }
         sendInventory(conn);
