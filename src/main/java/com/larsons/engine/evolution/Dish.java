@@ -89,16 +89,29 @@ public final class Dish {
             this.color = color;
         }
 
-        Map<String, Object> toMap() {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("x", x);
-            m.put("y", y);
-            m.put("energy", energy);
-            m.put("rate", rate);
-            m.put("rgb", color.getRGB());
-            return m;
+        static final String ROW_FORMAT = "x y energy rate rgb";
+
+        String toRow() {
+            return new Packed.Row()
+                    .num(x, Packed.SPACE)
+                    .num(y, Packed.SPACE)
+                    .num(energy, Packed.AMOUNT)
+                    .num(rate, Packed.AMOUNT)
+                    .add(color.getRGB())
+                    .toString();
         }
 
+        static Corpse fromRow(String row) {
+            Packed.Reader r = new Packed.Reader(row);
+            double x = r.nextDouble(0);
+            double y = r.nextDouble(0);
+            double energy = r.nextDouble(0);
+            double rate = Math.max(0.05, r.nextDouble(1));
+            int rgb = r.nextInt(Color.WHITE.getRGB()); // a body with no colour reads pale
+            return new Corpse(x, y, energy, rate, new Color(rgb));
+        }
+
+        /** From the one-object-per-body shape older saves wrote. Still read. */
         static Corpse fromMap(Map<String, Object> m) {
             return new Corpse(num(m.get("x")), num(m.get("y")), num(m.get("energy")),
                     Math.max(0.05, num(m.get("rate"))), new Color((int) num(m.get("rgb"))));
@@ -117,15 +130,25 @@ public final class Dish {
             this.amount = amount;
         }
 
-        Map<String, Object> toMap() {
-            Map<String, Object> m = new LinkedHashMap<>();
-            m.put("x", x);
-            m.put("y", y);
-            m.put("amount", amount);
-            m.put("age", age);
-            return m;
+        static final String ROW_FORMAT = "x y amount age";
+
+        String toRow() {
+            return new Packed.Row()
+                    .num(x, Packed.SPACE)
+                    .num(y, Packed.SPACE)
+                    .num(amount, Packed.AMOUNT)
+                    .num(age, Packed.AMOUNT, 0)
+                    .toString();
         }
 
+        static Waste fromRow(String row) {
+            Packed.Reader r = new Packed.Reader(row);
+            Waste w = new Waste(r.nextDouble(0), r.nextDouble(0), r.nextDouble(0));
+            w.age = r.nextDouble(0);
+            return w;
+        }
+
+        /** From the one-object-per-drop shape older saves wrote. Still read. */
         static Waste fromMap(Map<String, Object> m) {
             Waste w = new Waste(num(m.get("x")), num(m.get("y")), num(m.get("amount")));
             w.age = num(m.get("age"));
@@ -1270,6 +1293,13 @@ public final class Dish {
 
     // --- persistence ------------------------------------------------------------------------
 
+    /**
+     * The dish as JSON. The four lists that scale with the population — cells,
+     * food, bodies and waste — are written as {@link Packed} blocks, since those
+     * are the only ones that can run to hundreds of items; the handful of
+     * instruments and pressures the player has placed stay plain objects, where
+     * the field names cost nothing and are worth having.
+     */
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("name", name);
@@ -1279,10 +1309,10 @@ public final class Dish {
         m.put("clock", clock);
         m.put("nextOrganismId", nextOrganismId);
         m.put("nextColonyId", nextColonyId);
-        m.put("organisms", mapAll(organisms, Organism::toMap));
-        m.put("orbs", mapAll(orbs, EnergyOrb::toMap));
-        m.put("corpses", mapAll(corpses, Corpse::toMap));
-        m.put("waste", mapAll(wastes, Waste::toMap));
+        m.put("organisms", packOrganisms());
+        m.put("orbs", packOrbs());
+        m.put("corpses", Packed.block(Corpse.ROW_FORMAT, rowsOf(corpses, Corpse::toRow)));
+        m.put("waste", Packed.block(Waste.ROW_FORMAT, rowsOf(wastes, Waste::toRow)));
         m.put("barriers", mapAll(barriers, Barrier::toMap));
         m.put("heat", mapAll(heatSources, HeatSource::toMap));
         m.put("spotlights", mapAll(spotlights, Spotlight::toMap));
@@ -1291,11 +1321,89 @@ public final class Dish {
         return m;
     }
 
+    /**
+     * The cells, with their DNA hoisted into a dictionary. A dish is usually a
+     * bloom of a few strands wearing many bodies, so writing each sequence once
+     * and pointing at it is where most of the saving in a crowded dish comes
+     * from — and the dictionary doubles as a readable census of what is alive.
+     */
+    private Map<String, Object> packOrganisms() {
+        Map<String, Integer> strands = new LinkedHashMap<>();
+        List<String> rows = new ArrayList<>(organisms.size());
+        for (Organism o : organisms) {
+            String dna = o.genome.sequence();
+            Integer index = strands.get(dna);
+            if (index == null) {
+                index = strands.size();
+                strands.put(dna, index);
+            }
+            rows.add(o.toRow(index));
+        }
+        return Packed.block(Organism.ROW_FORMAT, "strands", strands.keySet(), rows);
+    }
+
+    /** The food, with the orb kinds named once rather than on every drop. */
+    private Map<String, Object> packOrbs() {
+        EnergyOrb.Kind[] kinds = EnergyOrb.Kind.values();
+        List<String> names = new ArrayList<>(kinds.length);
+        for (EnergyOrb.Kind k : kinds) names.add(k.name());
+        List<String> rows = new ArrayList<>(orbs.size());
+        for (EnergyOrb orb : orbs) rows.add(orb.toRow(orb.kind.ordinal()));
+        return Packed.block(EnergyOrb.ROW_FORMAT, "kinds", names, rows);
+    }
+
+    private static <T> List<String> rowsOf(List<T> items,
+                                           java.util.function.Function<T, String> f) {
+        List<String> out = new ArrayList<>(items.size());
+        for (T t : items) out.add(f.apply(t));
+        return out;
+    }
+
     private static <T> List<Object> mapAll(List<T> items,
                                            java.util.function.Function<T, Map<String, Object>> f) {
         List<Object> out = new ArrayList<>(items.size());
         for (T t : items) out.add(f.apply(t));
         return out;
+    }
+
+    /**
+     * Read a packed list, or the array of objects an older save wrote in its
+     * place. Every list the game packs is loaded through one of these, so a save
+     * from a build before the packed format still opens — and is written back
+     * packed the next time the game saves.
+     */
+    private static <T> void readRows(Object saved, List<T> into,
+                                     java.util.function.Function<String, T> fromRow,
+                                     java.util.function.Function<Map<String, Object>, T> fromMap) {
+        if (Packed.isBlock(saved)) {
+            for (String row : Packed.rows(saved)) into.add(fromRow.apply(row));
+            return;
+        }
+        for (Map<String, Object> om : listOf(saved)) into.add(fromMap.apply(om));
+    }
+
+    private static void readOrganisms(Object saved, Dish d) {
+        if (Packed.isBlock(saved)) {
+            List<String> strands = Packed.words(saved, "strands");
+            for (String row : Packed.rows(saved)) {
+                Organism o = Organism.fromRow(row, strands);
+                if (o != null) d.organisms.add(o);
+            }
+            return;
+        }
+        for (Map<String, Object> om : listOf(saved)) {
+            Organism o = Organism.fromMap(om);
+            if (o != null) d.organisms.add(o);
+        }
+    }
+
+    private static void readOrbs(Object saved, Dish d) {
+        if (Packed.isBlock(saved)) {
+            List<String> kinds = Packed.words(saved, "kinds");
+            for (String row : Packed.rows(saved)) d.orbs.add(EnergyOrb.fromRow(row, kinds));
+            return;
+        }
+        for (Map<String, Object> om : listOf(saved)) d.orbs.add(EnergyOrb.fromMap(om));
     }
 
     @SuppressWarnings("unchecked")
@@ -1320,13 +1428,10 @@ public final class Dish {
         d.ambientTemp = m.containsKey("ambient") ? num(m.get("ambient")) : AMBIENT_TEMP;
         d.clock = num(m.get("clock"));
 
-        for (Map<String, Object> om : listOf(m.get("organisms"))) {
-            Organism o = Organism.fromMap(om);
-            if (o != null) d.organisms.add(o);
-        }
-        for (Map<String, Object> om : listOf(m.get("orbs"))) d.orbs.add(EnergyOrb.fromMap(om));
-        for (Map<String, Object> om : listOf(m.get("corpses"))) d.corpses.add(Corpse.fromMap(om));
-        for (Map<String, Object> om : listOf(m.get("waste"))) d.wastes.add(Waste.fromMap(om));
+        readOrganisms(m.get("organisms"), d);
+        readOrbs(m.get("orbs"), d);
+        readRows(m.get("corpses"), d.corpses, Corpse::fromRow, Corpse::fromMap);
+        readRows(m.get("waste"), d.wastes, Waste::fromRow, Waste::fromMap);
         for (Map<String, Object> om : listOf(m.get("barriers"))) d.barriers.add(Barrier.fromMap(om));
         for (Map<String, Object> om : listOf(m.get("heat"))) d.heatSources.add(HeatSource.fromMap(om));
         for (Map<String, Object> om : listOf(m.get("spotlights"))) {

@@ -1319,7 +1319,7 @@ public class EvolutionScene extends AbstractScene {
         drawCentered(g, "Your history keeps all " + game.history().speciesCount()
                         + " organisms you have ever discovered",
                 viewportWidth / 2, viewportHeight / 2 + 34);
-        drawCentered(g, "Esc to pause — \"Reset the game\" starts a fresh lab whenever you like",
+        drawCentered(g, "Esc to pause — \"Reset the lab\" starts a fresh one whenever you like",
                 viewportWidth / 2, viewportHeight / 2 + 60);
     }
 

@@ -31,6 +31,13 @@ import java.util.List;
  * green begins with the wild-card machinery. Each is shown with the strand it
  * actually starts as and what that strand decodes to, so the choice is
  * informed rather than cosmetic.
+ *
+ * <p>Starting over is <b>New Experiment</b> and nothing else. It replaces the
+ * saved lab with the opening state and keeps every organism in your history,
+ * which is exactly what a reset did — so there is one way to do it here rather
+ * than two rows that read differently and behave identically. (The pause menu
+ * still offers the same restart mid-game, where there is no new-experiment row
+ * beside it to be confused with.)
  */
 public class EvolutionLobbyScene extends AbstractScene {
 
@@ -78,16 +85,25 @@ public class EvolutionLobbyScene extends AbstractScene {
         }
         menu.add("Reference Book (" + discovered + " organisms in your history)",
                 () -> scenes.transitionTo("evolutioncatalog"));
-        if (hasSave) {
-            menu.add("Reset Game (your history is kept)", this::startReset);
-        }
         menu.add("Back to Game Types", () -> scenes.transitionTo("startup"));
     }
 
+    /** The menu on screen, so the scene can be walked in tests. */
+    public Menu menu() { return choosingColor ? colorMenu : menu; }
+
+    /**
+     * Pick the colour to start from. When there is already a saved experiment
+     * this is also how a player starts over, so the subtitle says plainly what
+     * it costs them — the lab, never the collection.
+     */
     private void startColorChoice() {
         choosingColor = true;
+        String subtitle = store.hasSave()
+                ? "Replaces the saved experiment · your "
+                        + store.speciesFileCount() + " discovered organisms are kept"
+                : "One square cell, a hundred energy orbs, and whatever happens next";
         colorMenu = new Menu("Choose your first organism")
-                .subtitle("One square cell, a hundred energy orbs, and whatever happens next")
+                .subtitle(subtitle)
                 .theme(MenuTheme.dark());
         for (Nucleotide n : new Nucleotide[]{Nucleotide.R, Nucleotide.G, Nucleotide.B}) {
             Phenotype p = Phenotype.of(Genome.starter(n));
@@ -113,38 +129,6 @@ public class EvolutionLobbyScene extends AbstractScene {
         EvolutionGame game = EvolutionGame.newGame(color, new java.util.Random().nextLong(), history);
         store.save(game);
         handOff(game);
-    }
-
-    /**
-     * Reset from the menu: the same full restart the pause menu offers, for a
-     * player who wants to start over without loading into the game first.
-     */
-    private void startReset() {
-        EvolutionGame game = store.load();
-        if (game == null) {
-            status = "There is no game to reset";
-            buildMenu();
-            return;
-        }
-        choosingColor = true;
-        colorMenu = new Menu("Reset the game")
-                .subtitle("Everything starts over · your history of "
-                        + game.history().speciesCount()
-                        + " discovered organisms is kept")
-                .theme(MenuTheme.dark());
-        for (Nucleotide n : new Nucleotide[]{Nucleotide.R, Nucleotide.G, Nucleotide.B}) {
-            Phenotype p = Phenotype.of(Genome.starter(n));
-            colorMenu.add(capitalize(n.displayName()) + "  ·  " + Genome.starter(n).sequence()
-                    + "  ·  " + p.summary().toLowerCase(), () -> {
-                game.resetExperiment(n);
-                store.save(game);
-                handOff(game);
-            });
-        }
-        colorMenu.add("Cancel", () -> {
-            choosingColor = false;
-            buildMenu();
-        });
     }
 
     private void continueGame() {

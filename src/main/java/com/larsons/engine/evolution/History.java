@@ -201,15 +201,8 @@ public final class History {
      */
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("version", 1);
-        List<Object> combos = new ArrayList<>();
-        for (Map.Entry<String, Long> e : combinations.entrySet()) {
-            Map<String, Object> c = new LinkedHashMap<>();
-            c.put("signature", e.getKey());
-            c.put("at", e.getValue());
-            combos.add(c);
-        }
-        m.put("combinations", combos);
+        m.put("version", 2);
+        m.put("combinations", Packed.signatures(combinations));
         List<Object> ach = new ArrayList<>();
         for (Achievement a : unlocked) ach.add(a.name());
         m.put("achievements", ach);
@@ -221,18 +214,7 @@ public final class History {
     public static History fromMap(Map<String, Object> m) {
         History h = new History();
         if (m == null) return h;
-        if (m.get("combinations") instanceof List<?> list) {
-            for (Object o : list) {
-                if (o instanceof Map<?, ?> cm) {
-                    Object sig = cm.get("signature");
-                    Object at = cm.get("at");
-                    if (sig != null) {
-                        h.combinations.put(String.valueOf(sig),
-                                at instanceof Number n ? n.longValue() : 0L);
-                    }
-                }
-            }
-        }
+        Packed.readSignatures(m.get("combinations"), h.combinations);
         if (m.get("achievements") instanceof List<?> list) {
             for (Object o : list) {
                 try {

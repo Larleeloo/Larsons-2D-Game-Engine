@@ -1,7 +1,6 @@
 package com.larsons.engine.evolution;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -164,27 +163,66 @@ public final class Organism {
 
     // --- persistence ---------------------------------------------------------------
 
-    public Map<String, Object> toMap() {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id", id);
-        m.put("dna", genome.sequence());
-        m.put("x", x);
-        m.put("y", y);
-        m.put("vx", vx);
-        m.put("vy", vy);
-        m.put("energy", energy);
-        m.put("age", age);
-        m.put("generation", generation);
-        m.put("colony", colonyId);
-        if (venom > 0) m.put("venom", venom);
-        if (!memory.isEmpty()) {
-            List<Object> mem = new ArrayList<>(memory.size());
-            for (double[] p : memory) mem.add(List.of(p[0], p[1]));
-            m.put("memory", mem);
-        }
-        return m;
+    /** The fields a packed row carries, in order. See {@link Packed}. */
+    public static final String ROW_FORMAT =
+            "id strand x y vx vy energy age generation colony venom memory(x,y)...";
+
+    /**
+     * This cell as one line of a packed save: {@link #ROW_FORMAT}, where
+     * {@code strand} indexes the dish's strand dictionary rather than spelling
+     * the DNA out again, and the fields after {@code generation} are left off
+     * while they carry their defaults — which, for most cells, is all of them.
+     */
+    public String toRow(int strandIndex) {
+        Packed.Row row = new Packed.Row()
+                .add(id)
+                .add(strandIndex)
+                .num(x, Packed.SPACE)
+                .num(y, Packed.SPACE)
+                .num(vx, Packed.SPACE)
+                .num(vy, Packed.SPACE)
+                .num(energy, Packed.AMOUNT)
+                .num(age, Packed.AMOUNT)
+                .add(generation)
+                .add(colonyId, -1)
+                .num(venom, Packed.AMOUNT, 0);
+        for (double[] p : memory) row.point(p[0], p[1], Packed.COARSE);
+        return row.toString();
     }
 
+    /**
+     * Rebuild a cell from a packed row. Returns {@code null} for a row whose
+     * strand is missing or impossible, the same way {@link #fromMap} does — one
+     * unreadable line costs that cell, never the dish.
+     */
+    public static Organism fromRow(String row, List<String> strands) {
+        Packed.Reader r = new Packed.Reader(row);
+        int id = r.nextInt(0);
+        int strand = r.nextInt(-1);
+        if (strand < 0 || strand >= strands.size()) return null;
+        String dna = strands.get(strand);
+        if (!Genome.isValid(dna)) return null;
+
+        Organism o = new Organism(id, Genome.of(dna), r.nextDouble(0), r.nextDouble(0));
+        o.vx = r.nextDouble(0);
+        o.vy = r.nextDouble(0);
+        o.energy = r.nextDouble(START_ENERGY);
+        o.age = r.nextDouble(0);
+        o.generation = r.nextInt(0);
+        o.colonyId = r.nextInt(-1);
+        o.venom = r.nextDouble(0);
+        while (r.hasNext()) {
+            double[] p = Packed.point(r.nextWord(""));
+            if (p != null) o.memory.add(p);
+        }
+        return o;
+    }
+
+    /**
+     * Read a cell from the one-object-per-cell shape older builds wrote.
+     * Nothing writes it any more — {@link #toRow} does — but every save that
+     * contains it still opens.
+     */
     public static Organism fromMap(Map<String, Object> m) {
         String dna = String.valueOf(m.get("dna"));
         if (!Genome.isValid(dna)) return null;

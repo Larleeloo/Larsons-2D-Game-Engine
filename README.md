@@ -1382,13 +1382,15 @@ dead end.
   dies.
 - **The run ends** when every dish has run out of life and there is no way left
   to reseed one.
-- **The game can be fully reset** at any time, from the pause menu or the front
-  menu. Everything goes — dishes, bench, instruments, credits, and the game
-  catalog itself — leaving the opening state with every strand to find again and
-  every credit to re-earn. What a reset never touches is your **history**: every
-  organism you have ever discovered stays on the permanent record, along with
-  your achievements and lifetime totals. Resetting costs you the lab, never the
-  collection.
+- **The game can be fully reset** at any time: **Reset the lab** in the pause
+  menu, or simply **New Experiment** from the front menu, which are the same
+  thing — the front menu offers it once rather than as two rows that read
+  differently and behave identically. Everything goes — dishes, bench,
+  instruments, credits, and the game catalog itself — leaving the opening state
+  with every strand to find again and every credit to re-earn. What a reset
+  never touches is your **history**: every organism you have ever discovered
+  stays on the permanent record, along with your achievements and lifetime
+  totals. Resetting costs you the lab, never the collection.
 
 ### The reference book: this game, and everything you have ever found
 
@@ -1422,6 +1424,30 @@ from the pause menu, and automatically every 90 seconds;
 `evolution/history.json` plus `evolution/history/` are the permanent record. An
 older layout's `evolution/catalog/` folder is migrated into the history on
 first use, so a collection from an earlier build carries over.
+
+**How the save stays small.** A dish holds up to 260 cells and 1500 orbs, and a
+lab holds a shelf of dishes, so the parts of the save there are thousands of are
+written as *packed blocks* rather than a JSON object per item: the field names
+are written once for the whole list in a `format` line, each item is one line of
+values, every cell's DNA is hoisted into a per-dish `strands` dictionary (a
+bloom of clones therefore writes its sequence once, not once per body), numbers
+are rounded to what the simulation can actually tell apart — a hundredth of a
+dish unit — and fields still carrying their default are dropped off the end of
+the row. A full dish drops from **299 KB to 59 KB**, and the file is still plain
+JSON you can open and read:
+
+```json
+"organisms": {
+  "format": "id strand x y vx vy energy age generation colony venom memory(x,y)...",
+  "strands": ["GGGG", "GRGGGRRGB"],
+  "rows": ["17 0 13.34 12.16 1.59 -25.74 26.92 94.97 2"]
+}
+```
+
+Saves written before the packed format still load — every packed list also
+accepts the older array-of-objects form — and are rewritten packed the next time
+the game saves. The reference book is deliberately *not* packed: each discovery
+stays its own readable `history/<DNA>.json`.
 
 ### Controls
 

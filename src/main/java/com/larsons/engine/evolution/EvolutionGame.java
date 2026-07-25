@@ -495,9 +495,14 @@ public final class EvolutionGame {
 
     // --- persistence ----------------------------------------------------------------------
 
+    /**
+     * The whole game as JSON. Version 2 writes the dense per-cell lists as
+     * {@link Packed} blocks; version 1 saves (an object per cell, per orb, per
+     * body) still load, so upgrading costs the player nothing.
+     */
     public Map<String, Object> toMap() {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("version", 1);
+        m.put("version", 2);
         m.put("seed", seed);
         m.put("startingColor", startingColor.name());
         m.put("credits", credits);
