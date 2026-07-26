@@ -70,7 +70,17 @@ public final class ShareJar {
      * launch, and does nothing at all outside IntelliJ.
      */
     public static void writeAsync() {
-        if (!insideIntelliJ()) return;
+        if (!insideIntelliJ()) {
+            if (runningJar() == null) {
+                // Running from class files means a developer, not a player —
+                // so say why nothing was built rather than leaving them to
+                // wonder at an empty share folder.
+                System.out.println("[share] Not an IntelliJ launch — skipping the '"
+                        + DEFAULT_DIR + "' folder. Run it with -D" + FORCE_PROPERTY
+                        + "=true to build one anyway.");
+            }
+            return;
+        }
         Thread t = new Thread(() -> {
             try {
                 Path jar = write(Path.of(DEFAULT_DIR));
@@ -95,22 +105,25 @@ public final class ShareJar {
         } catch (RuntimeException | LinkageError e) {
             jvmArgs = List.of(); // no management layer: fall back to the other signals
         }
-        return insideIntelliJ(System.getProperties(), jvmArgs, System.getenv());
+        String forced = System.getProperty(FORCE_PROPERTY);
+        if (forced != null && !forced.isBlank()) return Boolean.parseBoolean(forced.trim());
+        return launchedByIntelliJ(System.getProperties(), jvmArgs, System.getenv())
+                || ideaProjectCheckout(Path.of(""), runningJar() != null);
     }
 
     /**
-     * {@link #insideIntelliJ()} against a given environment, so the signals
-     * are testable. IntelliJ gives itself away several ways depending on the
-     * run configuration: its own {@code idea.*} system properties, the
+     * The direct launch markers, against a given environment so they're
+     * testable. IntelliJ gives itself away several ways depending on the run
+     * configuration: its own {@code idea.*} system properties, the
      * {@code idea_rt.jar} helper on the classpath or attached as an agent,
-     * its {@code com.intellij.rt} launcher, and the {@code IDEA_*}
-     * environment it exports.
+     * its {@code com.intellij.rt} launcher, and the environment it exports
+     * ({@code IDEA_*}, or its built-in JediTerm terminal).
+     *
+     * <p>{@link #FORCE_PROPERTY} is <em>not</em> read here — that override
+     * belongs to {@link #insideIntelliJ()}, which is the whole question.
      */
-    public static boolean insideIntelliJ(Properties props, Collection<String> jvmArgs,
-                                         Map<String, String> env) {
-        String forced = props == null ? null : props.getProperty(FORCE_PROPERTY);
-        if (forced != null && !forced.isBlank()) return Boolean.parseBoolean(forced.trim());
-
+    public static boolean launchedByIntelliJ(Properties props, Collection<String> jvmArgs,
+                                             Map<String, String> env) {
         if (props != null) {
             for (String name : props.stringPropertyNames()) {
                 if (name.startsWith("idea.")) return true;
@@ -124,11 +137,30 @@ public final class ShareJar {
             }
         }
         if (env != null) {
-            for (String name : env.keySet()) {
-                if (name.startsWith("IDEA_") || name.contains("INTELLIJ")) return true;
+            for (Map.Entry<String, String> e : env.entrySet()) {
+                if (e.getKey().startsWith("IDEA_") || e.getKey().contains("INTELLIJ")) return true;
+                if (contains(e.getValue(), "JediTerm")) return true; // its terminal
             }
         }
         return false;
+    }
+
+    /**
+     * The signal that survives a fork: an IntelliJ project ({@code .idea/})
+     * being run <em>from its compiled classes</em> rather than from a jar.
+     *
+     * <p>IntelliJ's default for a Gradle project is "build and run using
+     * Gradle", so the game is started by the Gradle daemon in a fresh JVM
+     * that inherits none of {@link #launchedByIntelliJ}'s markers — which
+     * would otherwise mean the share folder never gets built by the very
+     * setup this repository ships with. Both halves matter: a player runs a
+     * jar (never class files) and has no {@code .idea/} beside it, so their
+     * install is still never written to. A {@code ./gradlew run} from a
+     * terminal in the same checkout does qualify — it is the same developer
+     * on the same project.
+     */
+    public static boolean ideaProjectCheckout(Path workingDir, boolean runningFromJar) {
+        return !runningFromJar && Files.isDirectory(workingDir.resolve(".idea"));
     }
 
     private static boolean contains(String haystack, String needle) {

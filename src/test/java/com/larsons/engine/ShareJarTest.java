@@ -76,33 +76,66 @@ class ShareJarTest {
         Properties plain = new Properties();
         plain.setProperty("java.class.path", "larsons-2d-game-engine.jar");
         plain.setProperty("sun.java.command", "com.larsons.engine.core.Main");
-        assertFalse(ShareJar.insideIntelliJ(plain, List.of(), Map.of()),
+        assertFalse(ShareJar.launchedByIntelliJ(plain, List.of(), Map.of()),
                 "a shipped game builds nothing");
 
         // IntelliJ gives itself away several ways, depending on the run config.
         Properties ideaProps = new Properties();
         ideaProps.setProperty("idea.paths.selector", "IntelliJIdea2024.1");
-        assertTrue(ShareJar.insideIntelliJ(ideaProps, List.of(), Map.of()),
+        assertTrue(ShareJar.launchedByIntelliJ(ideaProps, List.of(), Map.of()),
                 "its own system properties");
+        Properties viaGradle = new Properties();
+        viaGradle.setProperty("idea.active", "true");
+        assertTrue(ShareJar.launchedByIntelliJ(viaGradle, List.of(), Map.of()),
+                "the flag the build script hands down through a Gradle fork");
         Properties onClasspath = new Properties();
         onClasspath.setProperty("java.class.path",
                 "out/production/classes:/opt/idea/lib/idea_rt.jar");
-        assertTrue(ShareJar.insideIntelliJ(onClasspath, List.of(), Map.of()),
+        assertTrue(ShareJar.launchedByIntelliJ(onClasspath, List.of(), Map.of()),
                 "its helper jar on the classpath");
-        assertTrue(ShareJar.insideIntelliJ(plain,
+        assertTrue(ShareJar.launchedByIntelliJ(plain,
                         List.of("-javaagent:/opt/idea/lib/idea_rt.jar=41337"), Map.of()),
                 "its helper attached as an agent");
-        assertTrue(ShareJar.insideIntelliJ(plain, List.of(),
+        assertTrue(ShareJar.launchedByIntelliJ(plain, List.of(),
                         Map.of("IDEA_INITIAL_DIRECTORY", "/home/dev/project")),
                 "the environment it exports");
+        assertTrue(ShareJar.launchedByIntelliJ(plain, List.of(),
+                        Map.of("TERMINAL_EMULATOR", "JetBrains-JediTerm")),
+                "its built-in terminal");
+    }
 
-        // The escape hatch wins either way.
-        Properties forcedOff = new Properties();
-        forcedOff.setProperty("idea.paths.selector", "IntelliJIdea2024.1");
-        forcedOff.setProperty(ShareJar.FORCE_PROPERTY, "false");
-        assertFalse(ShareJar.insideIntelliJ(forcedOff, List.of(), Map.of()));
-        Properties forcedOn = new Properties();
-        forcedOn.setProperty(ShareJar.FORCE_PROPERTY, "true");
-        assertTrue(ShareJar.insideIntelliJ(forcedOn, List.of(), Map.of()));
+    /**
+     * IntelliJ's default for a Gradle project forks the game into a JVM that
+     * carries none of the IDE's markers, so the project checkout itself is
+     * the signal that survives — without ever matching a player's install.
+     */
+    @Test
+    void aGradleForkStillCountsAsRunningFromTheProject(@TempDir Path tmp) throws Exception {
+        Files.createDirectories(tmp.resolve(".idea"));
+        assertTrue(ShareJar.ideaProjectCheckout(tmp, false),
+                "an IntelliJ project run from its class files");
+        assertFalse(ShareJar.ideaProjectCheckout(tmp, true),
+                "…but a jar sitting in that folder is a build artifact, not the IDE");
+
+        Path elsewhere = tmp.resolve("player-install");
+        Files.createDirectories(elsewhere);
+        assertFalse(ShareJar.ideaProjectCheckout(elsewhere, true),
+                "a player's folder: a jar and no project");
+        assertFalse(ShareJar.ideaProjectCheckout(elsewhere, false),
+                "no .idea/ means no IntelliJ project either way");
+    }
+
+    @Test
+    void theForcePropertyOverridesTheCheckEitherWay() {
+        String previous = System.getProperty(ShareJar.FORCE_PROPERTY);
+        try {
+            System.setProperty(ShareJar.FORCE_PROPERTY, "false");
+            assertFalse(ShareJar.insideIntelliJ(), "forced off even inside the IDE");
+            System.setProperty(ShareJar.FORCE_PROPERTY, "true");
+            assertTrue(ShareJar.insideIntelliJ(), "forced on even outside it");
+        } finally {
+            if (previous == null) System.clearProperty(ShareJar.FORCE_PROPERTY);
+            else System.setProperty(ShareJar.FORCE_PROPERTY, previous);
+        }
     }
 }

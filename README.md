@@ -1613,12 +1613,25 @@ share/
 
 **This only happens inside IntelliJ.** The share folder is a development
 convenience, so a shipped game never writes a copy of itself beside wherever
-the player put it: `ShareJar` checks for IntelliJ's own launch signals (its
-`idea.*` system properties, the `idea_rt` helper on the classpath or attached
-as an agent, the `IDEA_*` environment it exports) and does nothing anywhere
-else — a plain `java -jar`, `./gradlew run` from a terminal, or a friend's
-machine all leave the folder alone. `-Dlarsons.share=true` (or `false`)
-overrides the check when you want the other answer.
+the player put it. `ShareJar` looks for two kinds of evidence:
+
+- **Direct launch markers** — IntelliJ's own `idea.*` system properties, the
+  `idea_rt` helper on the classpath or attached as an agent, its
+  `com.intellij.rt` launcher, the `IDEA_*` environment and its built-in
+  terminal. These cover an *Application* run configuration.
+- **The project checkout** — a `.idea/` folder in the working directory
+  *and* the game running from **class files rather than a jar**. This one
+  matters because IntelliJ's default for a Gradle project is "build and run
+  using Gradle": the game is forked into a fresh JVM by the Gradle daemon,
+  which inherits none of the markers above. (`build.gradle.kts` also hands
+  `idea.active` down through that fork, so both signals agree.)
+
+A player is excluded by either half — they run a jar, and have no `.idea/`
+beside it. A `./gradlew run` from a terminal *in the same checkout* does
+build the folder; it's the same developer on the same project.
+`-Dlarsons.share=true` (or `false`) overrides the whole check. When a launch
+from class files is skipped, the console says so rather than leaving you
+wondering.
 
 Send a friend the `share/` folder (or just the jar) and they can play — and
 because the jar packages your `resources/`, your game types and skins travel
@@ -2137,7 +2150,8 @@ fallbacks), [`AutoHudTest`](src/test/java/com/larsons/engine/demo/AutoHudTest.ja
 (HUD text regions stay pairwise disjoint across window sizes and fill
 levels), [`ShareJarTest`](src/test/java/com/larsons/engine/ShareJarTest.java)
 (the auto-built share jar is runnable, scripted, documented, carries a
-texture pack, isn't rebuilt needlessly — and is only built inside IntelliJ),
+texture pack, isn't rebuilt needlessly — and is only built inside IntelliJ,
+including when its Gradle fork strips the IDE's markers),
 and [`TexturePackTest`](src/test/java/com/larsons/engine/TexturePackTest.java)
 (the drop-in folder scaffolds itself, finds sheets by palette-category file
 name, plays them at one universal spec that any single texture can override,
