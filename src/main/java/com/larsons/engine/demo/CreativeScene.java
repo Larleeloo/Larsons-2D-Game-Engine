@@ -1,6 +1,12 @@
 package com.larsons.engine.demo;
 
 import com.larsons.engine.audio.AudioManager.Sfx;
+import com.larsons.engine.audio.SceneSounds;
+import com.larsons.engine.audio.SoundDef;
+import com.larsons.engine.audio.SoundKeys;
+import com.larsons.engine.audio.SoundPack;
+import com.larsons.engine.audio.SoundSynth;
+import com.larsons.engine.audio.Sounds;
 import com.larsons.engine.character.CharacterPicker;
 import com.larsons.engine.character.CharacterProfile;
 import com.larsons.engine.character.CharacterStore;
@@ -84,6 +90,7 @@ import java.awt.RadialGradientPaint;
 import java.awt.Rectangle;
 import java.awt.event.KeyEvent;
 import java.awt.image.BufferedImage;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -227,11 +234,11 @@ public class CreativeScene extends AbstractScene {
 
     /** What the palette can paint (and, for the last few, configure). */
     private enum Category { BLOCKS, LIQUIDS, LIGHTS, MOBS, ITEMS, DECOR, SURFACE, DOORS,
-        CHARACTERS, EFFECTS, CUTSCENES, MINIGAME, TOOLS }
+        CHARACTERS, EFFECTS, SOUNDS, CUTSCENES, MINIGAME, TOOLS }
 
     private enum Dialog { NONE, NEW_LEVEL, SAVE, LOAD, CONFIRM_EXIT, GENERATE, DOORS, TEXTURE,
         CUSTOM, RULES, BRUSH, CUTSCENES, CUTSCENE_ACTORS, CUTSCENE_STEPS, MINIGAME,
-        ROSTER }
+        ROSTER, SOUNDS, SOUND, SOUND_OPTIONS, LEVEL_MUSIC }
 
     /** {@code custom} marks user-created objects (badged, deletable). */
     private record Entry(String kind, String key, String name, BufferedImage icon,
@@ -376,6 +383,21 @@ public class CreativeScene extends AbstractScene {
     /** Per-object texture pack switch; on by default (built-in art falls back). */
     private boolean texUsePack = true;
 
+    // --- sound editor state -----------------------------------------------------
+    /** Which family of sounds the list shows ("" = every sound in the game). */
+    private String soundCategory = "Player";
+    /** 0 = every sound, 1 = only the silent ones, 2 = only the supplied ones. */
+    private int soundFilter;
+    /** The rows the list is showing, rebuilt when the filter changes. */
+    private List<SoundKeys.Entry> soundRows = new ArrayList<>();
+    /** The sound key the per-sound dialog is editing. */
+    private String soundKey = "";
+    private String soundLabel = "";
+    private String sndFile = "", sndVolume = "1.0", sndPitch = "1.0";
+    private boolean sndUsePack = true, sndLoop, sndVary = true, sndBuiltin = true;
+    /** The level-music dialog's track name. */
+    private String musicTrack = "";
+
     // Play-test state (offline only).
     private boolean testing;
     private World testWorld;
@@ -391,6 +413,14 @@ public class CreativeScene extends AbstractScene {
     private double swingTime;
     private double prevHealth = PlayerState.MAX_HEALTH;
     private final Particles particles = new Particles();
+    /**
+     * The play-test's frame-to-frame sounds — footsteps, the swim loop, a
+     * sustained ultimate, shots still in the air, the level's music — so
+     * testing a level sounds exactly like playing it.
+     */
+    private final SceneSounds testSounds = new SceneSounds();
+    /** Time until the next mining scrape in play-test (see the play scene). */
+    private double mineSoundTimer;
     // Play-test stat tracking + programmable rules + crafting.
     private PlayerStats testStats;
     private StatRuleEngine ruleEngine;
@@ -464,6 +494,9 @@ public class CreativeScene extends AbstractScene {
         camera.tileSize = level.tileSize;
         camera.zoom = 1.0;
         camera.centerOn(level.spawnX, level.spawnY);
+        // Creative mode has music of its own, so building a level doesn't
+        // have to happen in silence — drop music/creative.mp3 in the pack.
+        ctx.music(SoundKeys.music("creative"));
         setStatus(net == null
                 ? format().displayName() + " Creative Mode — " + format().description()
                 : format().displayName() + " Creative Mode (online) — painting edits"
@@ -603,6 +636,21 @@ public class CreativeScene extends AbstractScene {
         }
         palette.put(Category.EFFECTS, effectEntries);
 
+        // Sounds: every place the game makes a noise, grouped the way the
+        // sound editor lists them. Nothing here is painted — clicking an
+        // entry opens the list of that family's action states, and each of
+        // those opens the sound the creator can override.
+        List<Entry> soundEntries = new ArrayList<>();
+        soundEntries.add(new Entry("soundeditor", "", "Sound Editor…", soundEditorIcon()));
+        soundEntries.add(new Entry("soundoptions", "soundoptions", "Sound Options…",
+                soundOptionsIcon()));
+        soundEntries.add(new Entry("levelmusic", "levelmusic", "Level Music…",
+                levelMusicIcon()));
+        for (String c : SoundKeys.categories()) {
+            soundEntries.add(new Entry("soundgroup", c, c + " Sounds…", soundGroupIcon(c)));
+        }
+        palette.put(Category.SOUNDS, soundEntries);
+
         List<Entry> doorEntries = newList("+ New Door");
         for (DoorLink link : doors.all()) {
             doorEntries.add(new Entry("door", link.key(), link.label(), doorIcon(link.color())));
@@ -651,6 +699,7 @@ public class CreativeScene extends AbstractScene {
         tools.add(new Entry("brush", "brush", "Brush Settings…", brushIcon()));
         tools.add(new Entry("generate", "generate", "Generate Level…", generateIcon()));
         tools.add(new Entry("rules", "rules", "Stat Rules…", rulesIcon()));
+        tools.add(new Entry("soundeditor", "", "Sound Editor…", soundEditorIcon()));
         palette.put(Category.TOOLS, tools);
 
         for (Category c : Category.values()) {
@@ -980,7 +1029,8 @@ public class CreativeScene extends AbstractScene {
                     }
                 }
                 if (painted && net == null) {
-                    ctx.sfx(Sfx.PLACE);
+                    Sounds.playFirst(1.0, SoundKeys.block(b.key(), "place"),
+                            SoundKeys.ui("paint"), SoundKeys.player("place"));
                     if (profile().particlesEnabled) {
                         particles.burst((col + 0.5) * level.tileSize,
                                 (row + 0.5) * level.tileSize, b.color(), 4);
@@ -1249,7 +1299,7 @@ public class CreativeScene extends AbstractScene {
         level.surfaceDecor.removeIf(sd -> sd.col() == col && sd.row() == row && sd.face() == f);
         level.surfaceDecor.add(new SurfaceDecor.Placement(col, row, face, def.key(),
                 surfaceForeground, surfaceVisibility));
-        ctx.sfx(Sfx.CLICK);
+        Sounds.playFirst(1.0, SoundKeys.surface(def.key(), "step"), SoundKeys.ui("paint"));
         setStatus(def.name() + " on " + face.name().toLowerCase() + " face ("
                 + surfaceVisibility.name().toLowerCase().replace('_', ' ') + ", "
                 + (surfaceForeground ? "foreground" : "background") + ")");
@@ -1305,7 +1355,7 @@ public class CreativeScene extends AbstractScene {
                     broke = true;
                 }
             }
-            if (broke) ctx.sfx(Sfx.BREAK);
+            if (broke) ctx.sound(SoundKeys.ui("erase"));
         } else {
             EntityView near = nearestNetEntity(wx, wy);
             if (near != null) {
@@ -1459,6 +1509,13 @@ public class CreativeScene extends AbstractScene {
                     else setStatus("The mini game is configured before hosting, offline");
                 }
                 case "playerskin" -> openPlayerSkinDialog();
+                case "soundeditor" -> openSoundList(e.key);
+                case "soundgroup" -> openSoundList(e.key);
+                case "soundoptions" -> openDialog(Dialog.SOUND_OPTIONS);
+                case "levelmusic" -> {
+                    musicTrack = level.music == null ? "" : level.music;
+                    openDialog(Dialog.LEVEL_MUSIC);
+                }
                 case "roster" -> {
                     if (net == null) openDialog(Dialog.ROSTER);
                     else setStatus("The character roster is edited offline");
@@ -1551,6 +1608,11 @@ public class CreativeScene extends AbstractScene {
             openDialog(Dialog.CUTSCENES);
             return;
         }
+        if (isSoundEntry(e.kind)) {
+            // The SOUNDS palette has no textures; both buttons open its list.
+            handlePaletteClick(mx, my);
+            return;
+        }
         if (!skinnable(e.kind)) {
             setStatus("No texture override for " + e.name);
             return;
@@ -1578,6 +1640,14 @@ public class CreativeScene extends AbstractScene {
         texDirIndex = 0;
         loadTextureFields();
         openDialog(Dialog.TEXTURE);
+    }
+
+    /** Palette entries that belong to the sound editor rather than the canvas. */
+    private static boolean isSoundEntry(String kind) {
+        return switch (kind) {
+            case "soundeditor", "soundgroup", "soundoptions", "levelmusic" -> true;
+            default -> false;
+        };
     }
 
     private static boolean skinnable(String kind) {
@@ -1663,6 +1733,13 @@ public class CreativeScene extends AbstractScene {
 
     // --- play-test ----------------------------------------------------------------
 
+    /** Leaving creative mode stops its music and every loop it started. */
+    @Override
+    public void onExit() {
+        testSounds.reset();
+        ctx.stopSounds();
+    }
+
     private void enterTest() {
         // Snapshot terrain so test-mode mining/liquid flow doesn't eat the
         // level (works for dense and giant chunked storage alike). Container
@@ -1681,6 +1758,11 @@ public class CreativeScene extends AbstractScene {
         testing = true;
         showInventory = false;
         cursorSlot = -1;
+        // The test starts from silence and picks up the level's own music,
+        // so a play-test is heard exactly as the level will be played.
+        testSounds.reset();
+        testSounds.setCharacter(testCharacter.key);
+        ctx.sound(SoundKeys.world("level_load"));
         camera.zoom = Math.max(profile().minZoom, Math.min(profile().maxZoom, 1.0));
         setStatus("Play-test — [Shift] sprint · hold click to mine · [E] doors/stations"
                 + " · P/Esc returns to editing");
@@ -1723,7 +1805,9 @@ public class CreativeScene extends AbstractScene {
         }
         double[] aim = camera.screenToWorld(mouseX, mouseY);
         if (testWorld.useUltimate(testMe, aim[0], aim[1], p)) {
-            ctx.sfx(Sfx.BOOM);
+            Sounds.playFirst(1.0, SoundKeys.ultimate(u.key(), "activate"),
+                    SoundKeys.character(testCharacter.key, "ult_activate"),
+                    SoundKeys.player("ult_activate"));
             setStatus(u.name() + "!");
         } else {
             setStatus(u.name() + " can't fire here");
@@ -1742,12 +1826,15 @@ public class CreativeScene extends AbstractScene {
         testWorld.setPickupListener((p, key, n) -> {
             if (profile().itemsEnabled) testInv.add(key, n);
             if (testStats != null) testStats.add("items_picked_up", n);
-            ctx.sfx(Sfx.PICKUP);
+            Sounds.playFirst(1.0, SoundKeys.item(key, "pickup"), SoundKeys.player("pickup"));
         });
     }
 
     private void exitTest() {
         testing = false;
+        // Stop the level's music and every loop the test started before the
+        // editor's own music takes over.
+        testSounds.reset();
         testWorld = null;
         testInv = null;
         testStats = null;
@@ -1892,6 +1979,10 @@ public class CreativeScene extends AbstractScene {
         // the hop's upward vz on a plane.
         if ((prevTestVy >= 0 && testMe.vy < 0) || (prevTestVz <= 0 && testMe.vz > 1)) {
             testStats.add("jumps", 1);
+            Sounds.playFirst(1.0,
+                    SoundKeys.character(testCharacter.key,
+                            testMe.airJumpsUsed > 0 ? "double_jump" : "jump"),
+                    SoundKeys.player(testMe.airJumpsUsed > 0 ? "double_jump" : "jump"));
         }
         prevTestVy = testMe.vy;
         prevTestVz = testMe.vz;
@@ -1906,11 +1997,24 @@ public class CreativeScene extends AbstractScene {
             testAnimClock += dt;
         }
 
+        // Everything the play scene tracks frame to frame, tracked the same
+        // way here — so a level under test sounds like the level being played.
+        testSounds.setEnabled(p.audioEnabled);
+        testSounds.setCharacter(testCharacter.key);
+        testSounds.update(dt, testMe, level, p, state, testWorld.projectiles(),
+                testWorld.mobs(),
+                camera.viewportWidth / 2.0 / Math.max(0.01, camera.zoom));
+        testSounds.ambience(level,
+                World.darknessFor(testWorld.timeOfDay(), p) > 0.25, false);
+
         testWorld.step(dt, List.of(testMe), p);
         testStats.add("mobs_killed", testWorld.pollKills());
         testStats.add("deaths", testWorld.pollDeaths());
         for (World.Impact im : testWorld.pollImpacts()) {
-            ctx.sfx(im.explosion() ? Sfx.BOOM : Sfx.HIT);
+            Sounds.playFirst(1.0,
+                    SoundKeys.projectile(im.key(), im.explosion() ? "explode" : "impact"),
+                    im.explosion() ? SoundKeys.world("explosion")
+                            : SoundKeys.player("attack_hit"));
             if (p.particlesEnabled) {
                 particles.burst(im.x(), im.y(), new Color(255, 200, 120),
                         im.explosion() ? 18 : 6);
@@ -1918,13 +2022,13 @@ public class CreativeScene extends AbstractScene {
         }
         if (testMe.health < prevHealth - 0.01) {
             testStats.add("damage_taken", prevHealth - testMe.health);
-            ctx.sfx(Sfx.HURT);
+            // The cry itself comes from the tracker, which knows the character.
         }
         prevHealth = testMe.health;
 
         // Programmable map-maker rules ("mined 50 blocks → reward…").
         for (StatRuleEngine.Fired fired : ruleEngine.update(testStats, testInv)) {
-            ctx.sfx(Sfx.PICKUP);
+            ctx.sound(SoundKeys.world("stat_rule"));
             setStatus(ruleFiredMessage(fired.rule()));
         }
 
@@ -1945,6 +2049,7 @@ public class CreativeScene extends AbstractScene {
             if (input.isKeyJustPressed(KeyEvent.VK_R)) tryTestUltimate(p);
         } else {
             testWorld.cancelMining();
+            mineSoundTimer = 0;
         }
 
         if (swingTime > 0) swingTime -= dt;
@@ -1987,7 +2092,8 @@ public class CreativeScene extends AbstractScene {
                 craftingPanel.update(input, testInv, viewportWidth, viewportHeight);
         if (crafted != null) {
             testStats.add("crafts", 1);
-            ctx.sfx(Sfx.PICKUP);
+            Sounds.playFirst(1.0, SoundKeys.item(crafted.recipe().output(), "craft"),
+                    SoundKeys.player("craft"));
             if (crafted.leftover() > 0) {
                 DroppedItem drop = testWorld.spawnItem(crafted.recipe().output(),
                         crafted.leftover(), testMe.x, testMe.y);
@@ -2060,14 +2166,16 @@ public class CreativeScene extends AbstractScene {
             if (def != null && "mana_potion".equals(def.key())
                     && testMe.mana < PlayerState.MAX_MANA && testInv.consumeSelected()) {
                 testMe.mana = Math.min(PlayerState.MAX_MANA, testMe.mana + 50);
-                ctx.sfx(Sfx.EAT);
+                Sounds.playFirst(1.0, SoundKeys.item(def.key(), "use"),
+                        SoundKeys.player("drink"));
             } else if (def != null && def.heal() > 0 && testMe.health < PlayerState.MAX_HEALTH
                     && testInv.consumeSelected()) {
                 // Food heals directly and restores stamina (and mana for
                 // rare delicacies) — World.applyFood.
                 World.applyFood(testMe, def);
                 prevHealth = testMe.health;
-                ctx.sfx(Sfx.EAT);
+                Sounds.playFirst(1.0, SoundKeys.item(def.key(), "use"),
+                        SoundKeys.player("eat"));
             }
         }
         if (showInventory) handleTestInventoryMouse(input);
@@ -2137,16 +2245,25 @@ public class CreativeScene extends AbstractScene {
                 && inReach && level.tileAt(col, row) > 0;
         if (miningNow) {
             swingTime = Math.max(swingTime, 0.1);
+            Block digging = level.blockAt(col, row);
+            mineSoundTimer -= dt;
+            if (digging != null && mineSoundTimer <= 0) {
+                mineSoundTimer = 0.33;
+                Sounds.playFirst(0.5, SoundKeys.block(digging.key(), "mine"),
+                        SoundKeys.player("mine"));
+            }
             Block mined = testWorld.continueMining(col, row, held, p.itemsEnabled, dt);
             if (mined != null) {
                 testStats.add("blocks_mined", 1);
-                ctx.sfx(Sfx.BREAK);
+                Sounds.playFirst(1.0, SoundKeys.block(mined.key(), "break"),
+                        SoundKeys.player("mine_break"));
                 if (p.particlesEnabled) {
                     particles.burst((col + 0.5) * ts, (row + 0.5) * ts, mined.color(), 10);
                 }
                 if (p.itemsEnabled && held != null && held.toolClass() != null
                         && testInv.damageSelected(1)) {
-                    ctx.sfx(Sfx.BREAK);
+                    Sounds.playFirst(1.0, SoundKeys.item(held.key(), "break"),
+                            SoundKeys.player("mine_break"));
                     setStatus(held.name() + " broke!");
                 }
             }
@@ -2157,9 +2274,11 @@ public class CreativeScene extends AbstractScene {
         if (!input.isMouseJustPressed()) return;
         if (shoots) {
             swingTime = 0.1;
-            if (testWorld.playerShoot(testMe, testInv, aim[0], aim[1]) != null) {
+            Projectile fired = testWorld.playerShoot(testMe, testInv, aim[0], aim[1]);
+            if (fired != null) {
                 testStats.add("shots_fired", 1);
-                ctx.sfx(Sfx.SHOOT);
+                Sounds.playFirst(1.0, SoundKeys.projectile(fired.def.key(), "fire"),
+                        SoundKeys.player("shoot"));
             }
             return;
         }
@@ -2167,10 +2286,14 @@ public class CreativeScene extends AbstractScene {
         // Destructible decorations (trees → logs + leaves…) before mob swings.
         if (inReach) {
             boolean axe = held != null && "axe".equals(held.toolClass());
+            Decor chopped = testWorld.decorNear(aim[0], aim[1]);
             World.ChopResult res = testWorld.chopDecor(aim[0], aim[1], axe, p.itemsEnabled);
             if (res != World.ChopResult.NONE) {
                 swingTime = 0.2;
-                ctx.sfx(res == World.ChopResult.BROKEN ? Sfx.BREAK : Sfx.HIT);
+                Sounds.playFirst(1.0, chopped == null ? ""
+                                : SoundKeys.decor(chopped.key(),
+                                res == World.ChopResult.BROKEN ? "break" : "hit"),
+                        SoundKeys.player("chop"));
                 if (p.particlesEnabled) {
                     particles.burst(aim[0], aim[1], new Color(110, 85, 50),
                             res == World.ChopResult.BROKEN ? 14 : 5);
@@ -2181,9 +2304,13 @@ public class CreativeScene extends AbstractScene {
         if (p.combatEnabled) {
             swingTime = 0.2;
             double damage = World.FIST_DAMAGE + (held != null ? held.damage() : 0);
+            Sounds.playFirst(1.0, SoundKeys.character(testCharacter.key, "attack"),
+                    SoundKeys.player("attack"));
             Mob hit = testWorld.playerAttack(testMe, aim[0], aim[1], damage);
             if (hit != null) {
-                ctx.sfx(Sfx.HIT);
+                Sounds.playFirst(1.0,
+                        SoundKeys.mob(hit.def.key(), hit.dead() ? "death" : "hurt"),
+                        SoundKeys.player("attack_hit"));
                 if (p.particlesEnabled) {
                     particles.burst(hit.x + hit.def.size() / 2,
                             hit.y + hit.def.size() / 2, hit.def.body(), 8);
@@ -2217,7 +2344,8 @@ public class CreativeScene extends AbstractScene {
         if (testWorld.placeBlock(col, row, b.id())) {
             if (p.itemsEnabled) testInv.consumeSelected();
             testStats.add("blocks_placed", 1);
-            ctx.sfx(Sfx.PLACE);
+            Sounds.playFirst(1.0, SoundKeys.block(b.key(), "place"),
+                    SoundKeys.player("place"));
         }
     }
 
@@ -2252,7 +2380,9 @@ public class CreativeScene extends AbstractScene {
         bindTestPickups(); // inventory carries through the door
         ruleEngine = new StatRuleEngine(List.copyOf(level.statRules));
         cutsceneDirector = new CutsceneDirector(level.cutscenes);
-        ctx.sfx(Sfx.CLICK);
+        testSounds.reset();
+        ctx.sound(SoundKeys.door("travel"));
+        ctx.sound(SoundKeys.player("door_enter"));
         setStatus("Entered \"" + link.label() + "\" → " + level.name
                 + " (" + level.format().displayName() + ")");
         return true;
@@ -2278,6 +2408,11 @@ public class CreativeScene extends AbstractScene {
             case CUTSCENE_STEPS -> "Steps — " + editingCutsceneName();
             case MINIGAME -> "Mini Game — " + level.name;
             case ROSTER -> "Character Roster — " + level.name;
+            case SOUNDS -> "Sounds — " + (soundCategory.isEmpty()
+                    ? "every sound in the game" : soundCategory);
+            case SOUND -> "Sound — " + soundLabel;
+            case SOUND_OPTIONS -> "Sound Options";
+            case LEVEL_MUSIC -> "Level Music — " + level.name;
             default -> "";
         }).theme(MenuTheme.dark());
 
@@ -2336,6 +2471,7 @@ public class CreativeScene extends AbstractScene {
                     profile().lastLevelPath = file.toString();
                     ctx.save();
                     closeDialog();
+                    ctx.sound(SoundKeys.world("level_save"));
                     setStatus("Saved to " + file + " — Play/Load now loads this level with its settings");
                 });
                 dialogForm.addAction("Cancel", this::closeDialog);
@@ -2381,6 +2517,10 @@ public class CreativeScene extends AbstractScene {
             case CUTSCENE_STEPS -> buildCutsceneStepsForm();
             case MINIGAME -> buildMiniGameForm();
             case ROSTER -> buildRosterForm();
+            case SOUNDS -> buildSoundListForm();
+            case SOUND -> buildSoundForm();
+            case SOUND_OPTIONS -> buildSoundOptionsForm();
+            case LEVEL_MUSIC -> buildLevelMusicForm();
             default -> { /* NONE */ }
         }
     }
@@ -2568,6 +2708,7 @@ public class CreativeScene extends AbstractScene {
         pendingLevelH = level.height;
         buildPalette(); // the CUTSCENES palette lists this level's cutscenes
         csEditIndex = 0;
+        ctx.sound(SoundKeys.world("level_load"));
         closeDialog();
     }
 
@@ -2615,6 +2756,7 @@ public class CreativeScene extends AbstractScene {
                 level = LevelGenerator.generateMaze(name, genWidth, genHeight,
                         profile().tileSize, genSeed, pendingFormat);
                 afterLevelSwap();
+                ctx.sound(SoundKeys.world("level_generate"));
                 setStatus("Generated maze \"" + level.name + "\" (" + level.width + "x"
                         + level.height + ", seed " + genSeed
                         + ") — chests, torches, mobs; the gold key waits at the far end");
@@ -2927,6 +3069,436 @@ public class CreativeScene extends AbstractScene {
                         + " — see " + TexturePack.KEYS_FILE + " for every file name");
     }
 
+    // --- sound editor ---------------------------------------------------------------
+
+    /**
+     * The Sound Editor: <em>every place the game makes a noise</em>, as one
+     * long list. A row per object and action state — the player jumping, Dirt
+     * breaking, a Slime's death cry, a meteor's flight, the level's music —
+     * saying where that sound currently comes from, and opening the dialog
+     * that lets a creator supply it.
+     *
+     * <p>The list is driven by {@link SoundKeys}, which reads the live
+     * registries, so blocks, mobs, items, decorations and characters made
+     * with a "+ New …" button are in here the moment they exist, with the
+     * same full set of action states as the built-ins.
+     *
+     * @param category one of {@link SoundKeys#categories()}, or {@code ""}
+     *                 for every sound in the game at once
+     */
+    private void openSoundList(String category) {
+        soundCategory = category == null ? "" : category;
+        refreshSoundRows();
+        openDialog(Dialog.SOUNDS);
+    }
+
+    /**
+     * Re-read the catalogue for the current group and filter. "No audio yet"
+     * means <em>nothing the creator supplied</em> — a key still riding the
+     * engine's built-in voice counts, because that is exactly the list of
+     * sounds a pack has left to fill.
+     */
+    private void refreshSoundRows() {
+        List<SoundKeys.Entry> rows = new ArrayList<>();
+        for (SoundKeys.Entry e : SoundKeys.inCategory(soundCategory)) {
+            Sounds.Source source = Sounds.sourceOf(e.key());
+            boolean supplied = source == Sounds.Source.PACK || source == Sounds.Source.FILE;
+            if (soundFilter == 1 && supplied) continue;
+            if (soundFilter == 2 && source == Sounds.Source.SILENT) continue;
+            rows.add(e);
+        }
+        soundRows = rows;
+    }
+
+    private static final String[] SOUND_FILTERS =
+            {"all of them", "only the ones with no audio yet", "only the ones that sound"};
+
+    /** The one-line status a list row shows: where its audio comes from. */
+    private static String soundSourceLabel(String key) {
+        return switch (Sounds.sourceOf(key)) {
+            case PACK -> "pack: " + SoundPack.fileNameFor(key);
+            case FILE -> "file: " + Sounds.definition(key).file();
+            case BUILT_IN -> "built-in";
+            case SILENT -> "silent";
+        };
+    }
+
+    private void buildSoundListForm() {
+        // The group and filter rows sit at the top, so a creator can walk the
+        // whole game or narrow to what is still silent without leaving.
+        List<String> groups = new ArrayList<>();
+        groups.add("(every sound in the game)");
+        groups.addAll(SoundKeys.categories());
+        String[] groupNames = groups.toArray(new String[0]);
+        dialogForm.addEnum("Show group", groupNames,
+                () -> soundCategory.isEmpty() ? groupNames[0] : soundCategory,
+                v -> {
+                    soundCategory = v.equals(groupNames[0]) ? "" : v;
+                    refreshSoundRows();
+                    openDialog(Dialog.SOUNDS);
+                });
+        dialogForm.addEnum("Show sounds", SOUND_FILTERS,
+                () -> SOUND_FILTERS[soundFilter],
+                v -> {
+                    soundFilter = Math.max(0, List.of(SOUND_FILTERS).indexOf(v));
+                    refreshSoundRows();
+                    openDialog(Dialog.SOUNDS);
+                });
+        // The pitch option lives here as well as in Sound Options, because it
+        // is the setting a creator most often wants while auditioning sounds.
+        dialogForm.addToggle("Fresh pitch each time (subtle drift)",
+                () -> profile().soundPitchVariation,
+                v -> {
+                    profile().soundPitchVariation = v;
+                    Sounds.setPitchVariation(v);
+                    ctx.save();
+                });
+        dialogForm.addAction("Sound pack folder: " + SoundPack.root()
+                        + (SoundPack.exists() ? "  ✓" : "  (not there yet — click to create)"),
+                this::createSoundPackFolder);
+        dialogForm.addAction("Rescan sound pack folder", this::rescanSoundPack);
+        dialogForm.addAction("Sound Options…", () -> openDialog(Dialog.SOUND_OPTIONS));
+
+        if (soundRows.isEmpty()) {
+            dialogForm.addAction("(no sounds match this filter)", () -> {
+                soundFilter = 0;
+                refreshSoundRows();
+                openDialog(Dialog.SOUNDS);
+            });
+        }
+        // A breakdown by where the audio comes from, because "has a sound"
+        // and "you supplied a sound" are different questions: the built-in
+        // ones are the engine's, and the pack ones are the creator's.
+        int fromPack = 0;
+        int fromFile = 0;
+        int builtIn = 0;
+        for (SoundKeys.Entry e : soundRows) {
+            switch (Sounds.sourceOf(e.key())) {
+                case PACK -> fromPack++;
+                case FILE -> fromFile++;
+                case BUILT_IN -> builtIn++;
+                case SILENT -> { /* counted by subtraction below */ }
+            }
+        }
+        int silent = soundRows.size() - fromPack - fromFile - builtIn;
+        dialogForm.addAction(soundRows.size() + " sounds · " + (fromPack + fromFile)
+                        + " yours · " + builtIn + " built-in · " + silent + " silent",
+                () -> {}).enabledWhen(() -> false);
+        for (SoundKeys.Entry e : soundRows) {
+            String key = e.key();
+            String label = e.name() + (e.state().isEmpty() ? "" : " — " + e.state())
+                    + "   ·   " + soundSourceLabel(key);
+            dialogForm.addAction(label, () -> openSoundDialog(key, e.name()
+                    + (e.state().isEmpty() ? "" : " — " + e.state())));
+        }
+        dialogForm.addAction("Close", this::closeDialog);
+    }
+
+    /** Open the per-sound dialog for one key, loading its current settings. */
+    private void openSoundDialog(String key, String label) {
+        soundKey = key;
+        soundLabel = label;
+        SoundDef def = Sounds.definition(key);
+        sndUsePack = def.usePack();
+        sndFile = def.file();
+        sndVolume = trimNumber(def.volume());
+        sndPitch = trimNumber(def.pitch());
+        sndLoop = def.loop();
+        sndVary = def.varyPitch();
+        sndBuiltin = def.builtin();
+        openDialog(Dialog.SOUND);
+    }
+
+    /**
+     * Give one action state its audio. Same two routes as a texture, and the
+     * first is the default:
+     * <ul>
+     *   <li><b>Sound pack folder</b> (on unless switched off) — the audio is
+     *       whatever sits at this sound's file name inside the drop-in
+     *       {@link SoundPack} folder. Nothing there? Silence, or the engine's
+     *       built-in voice for the few actions that have one — so the switch
+     *       is safe to leave on for everything.</li>
+     *   <li><b>A file elsewhere</b> — switch the pack off (or just fill in a
+     *       path, used as the pack's fallback) to point this one sound at any
+     *       WAV or MP3 on disk.</li>
+     * </ul>
+     *
+     * <p>Volume, pitch and looping are saved into the pack's own
+     * {@code soundpack.json}, so those exceptions travel with the folder; the
+     * switch and any explicit path go to {@code sounds.json}.
+     */
+    private void buildSoundForm() {
+        String key = soundKey;
+        dialogForm.addAction("Sound key: " + key, () -> {}).enabledWhen(() -> false);
+        dialogForm.addToggle("Use sound pack folder", () -> sndUsePack, v -> {
+            sndUsePack = v;
+            openDialog(Dialog.SOUND);
+        });
+        Path packFile = SoundPack.fileFor(key);
+        dialogForm.addAction("Pack file: " + SoundPack.fileNameFor(key)
+                        + (packFile != null ? "  ✓ found"
+                        : "  (not there yet — click to rescan)"),
+                this::rescanSoundPack).enabledWhen(() -> sndUsePack);
+        dialogForm.addText("Sound pack folder (blank = beside the jar)",
+                () -> profile().soundPackDir,
+                v -> {
+                    profile().soundPackDir = v;
+                    SoundPack.useDir(v);
+                }, 96);
+        dialogForm.addText("Sound file elsewhere (WAV/MP3 path)",
+                () -> sndFile, v -> sndFile = v, 96);
+        dialogForm.addAction("Browse…", this::browseForSound);
+        dialogForm.addText("Volume (1 = as recorded)", () -> sndVolume, v -> sndVolume = v, 5);
+        dialogForm.addText("Pitch (1 = as recorded)", () -> sndPitch, v -> sndPitch = v, 5);
+        dialogForm.addToggle("Loop while the state holds", () -> sndLoop, v -> sndLoop = v);
+        dialogForm.addToggle("Fresh pitch each time", () -> sndVary, v -> sndVary = v);
+        if (SoundSynth.hasFallback(key)) {
+            dialogForm.addToggle("Built-in fallback when the pack has nothing",
+                    () -> sndBuiltin, v -> sndBuiltin = v);
+        }
+        dialogForm.addAction("▶ Preview", this::previewSound);
+        dialogForm.addAction("Apply", this::applySound);
+        if (Sounds.get(key) != null || SoundPack.hasOverride(key)) {
+            dialogForm.addAction("Reset to default", () -> {
+                Sounds.remove(key);
+                SoundPack.clearOverride(key);
+                Sounds.save();
+                refreshSoundRows();
+                closeDialog();
+                setStatus(soundLabel + " reset — sound pack on, "
+                        + (SoundSynth.hasFallback(key) ? "built-in voice" : "silence")
+                        + " as the fallback");
+            });
+        }
+        dialogForm.addAction("Back to the list", () -> openDialog(Dialog.SOUNDS));
+        dialogForm.addAction("Close", this::closeDialog);
+    }
+
+    /** Save the per-sound dialog and say what the sound now resolves to. */
+    private void applySound() {
+        String key = soundKey;
+        double volume = parseDouble(sndVolume);
+        double pitch = parseDouble(sndPitch);
+        if (pitch <= 0) pitch = 1;
+        String file = sndFile.isBlank() ? "" : sndFile.trim();
+        if (!sndUsePack && file.isEmpty()) {
+            setStatus("Turn the sound pack back on, or pick a file (path or Browse…)");
+            return;
+        }
+        ctx.save(); // the sound pack folder persists with the game type
+        try {
+            SoundPack.setOverride(key, volume, pitch, sndLoop, sndVary);
+        } catch (RuntimeException e) {
+            setStatus("Couldn't write the sound pack settings: " + e.getMessage());
+            return;
+        }
+        Sounds.put(new SoundDef(key, file, volume, pitch, sndLoop, sndVary,
+                sndUsePack, sndBuiltin));
+        Sounds.save();
+        refreshSoundRows();
+        closeDialog();
+        setStatus(switch (Sounds.sourceOf(key)) {
+            case PACK -> soundLabel + " now plays " + SoundPack.fileFor(key);
+            case FILE -> soundLabel + " now plays " + Sounds.resolvePath(file);
+            case BUILT_IN -> soundLabel + " keeps its built-in voice — drop "
+                    + SoundPack.fileNameFor(key) + " in " + SoundPack.root() + " to replace it";
+            case SILENT -> soundLabel + " is silent — drop "
+                    + SoundPack.fileNameFor(key) + " in " + SoundPack.root() + " to give it a sound";
+        });
+    }
+
+    /** Play the sound as it stands, so a creator can hear the change. */
+    private void previewSound() {
+        String key = soundKey;
+        // Preview what the dialog says right now, not what was last applied.
+        SoundDef preview = new SoundDef(key, sndFile.trim(), parseDouble(sndVolume),
+                Math.max(0.25, parseDouble(sndPitch)), false, sndVary, sndUsePack, sndBuiltin);
+        SoundDef saved = Sounds.get(key);
+        Sounds.put(preview);
+        boolean audible = !Sounds.resolve(key).isEmpty();
+        if (audible) Sounds.play(key);
+        if (saved != null) Sounds.put(saved);
+        else Sounds.remove(key);
+        setStatus(audible ? "Playing " + soundLabel
+                : soundLabel + " is silent — no " + SoundPack.fileNameFor(key)
+                        + " in " + SoundPack.root());
+    }
+
+    /** Pick up audio added to the sound pack folder since the last look. */
+    private void rescanSoundPack() {
+        Dialog from = dialog;
+        SoundPack.reload();
+        refreshSoundRows();
+        buildPalette();
+        openDialog(from == Dialog.NONE ? Dialog.SOUNDS : from);
+        if (from == Dialog.SOUND) {
+            boolean found = SoundPack.fileFor(soundKey) != null;
+            setStatus(found
+                    ? "Found " + SoundPack.fileNameFor(soundKey) + " in " + SoundPack.root()
+                    : "No " + SoundPack.fileNameFor(soundKey) + " in " + SoundPack.root()
+                            + " — see " + SoundPack.KEYS_FILE + " for every file name");
+        } else {
+            int fromPack = 0;
+            for (SoundKeys.Entry e : soundRows) {
+                if (Sounds.sourceOf(e.key()) == Sounds.Source.PACK) fromPack++;
+            }
+            setStatus("Rescanned " + SoundPack.root() + " — " + fromPack + " of "
+                    + soundRows.size() + " listed sounds have a file there");
+        }
+    }
+
+    /**
+     * Create the sound pack folder (with its subfolders, README and generated
+     * key list) wherever the game is currently looking for it — the one-click
+     * way to get from "no sounds" to "somewhere to put them".
+     */
+    private void createSoundPackFolder() {
+        try {
+            Path root = SoundPack.scaffold(SoundPack.root());
+            SoundPack.reload();
+            refreshSoundRows();
+            openDialog(dialog);
+            setStatus("Sound pack ready at " + root + " — see " + SoundPack.KEYS_FILE
+                    + " for every file name, then drop WAVs or MP3s in");
+        } catch (IOException | RuntimeException e) {
+            setStatus("Couldn't create " + SoundPack.root() + ": " + e.getMessage());
+        }
+    }
+
+    /** Rewrite SOUND_KEYS.txt so it lists the creator's newest objects too. */
+    private void refreshSoundKeyList() {
+        try {
+            Path file = SoundPack.refreshKeyList();
+            setStatus("Wrote " + file + " — " + SoundKeys.all().size()
+                    + " sounds, including everything you have created");
+        } catch (IOException | RuntimeException e) {
+            setStatus("Couldn't write the key list: " + e.getMessage());
+        }
+    }
+
+    /** A file chooser for a sound, starting in the sound pack folder. */
+    private void browseForSound() {
+        String picked = chooseFile("Choose a sound (WAV or MP3)",
+                SoundPack.root().toString(), "Audio files", "wav", "mp3", "aiff", "aif", "au");
+        if (picked != null) {
+            sndFile = picked;
+            openDialog(Dialog.SOUND);
+            setStatus("Selected " + picked + " — press Apply to use it");
+        }
+    }
+
+    /**
+     * The global sound settings: the master switches, the three volumes, and
+     * the fresh-pitch option with the spread it drifts by.
+     */
+    private void buildSoundOptionsForm() {
+        dialogForm.addToggle("Sound", () -> profile().audioEnabled, v -> {
+            profile().audioEnabled = v;
+            ctx.applyLiveSettings();
+            ctx.save();
+        });
+        dialogForm.addToggle("Music", () -> profile().musicEnabled, v -> {
+            profile().musicEnabled = v;
+            ctx.applyLiveSettings();
+            ctx.save();
+        });
+        dialogForm.addSlider("Master volume %", () -> percent(profile().masterVolume),
+                v -> {
+                    profile().masterVolume = v / 100.0;
+                    Sounds.setMasterVolume(profile().masterVolume);
+                }, 0, 100);
+        dialogForm.addSlider("Effects volume %", () -> percent(profile().sfxVolume),
+                v -> {
+                    profile().sfxVolume = v / 100.0;
+                    Sounds.setSfxVolume(profile().sfxVolume);
+                }, 0, 100);
+        dialogForm.addSlider("Music volume %", () -> percent(profile().musicVolume),
+                v -> {
+                    profile().musicVolume = v / 100.0;
+                    Sounds.setMusicVolume(profile().musicVolume);
+                }, 0, 100);
+        // The pitch toggle the whole system hangs off: on, every sound plays
+        // a touch higher or lower each time, so repeated sounds stay fresh
+        // instead of turning into a stuck record.
+        dialogForm.addToggle("Fresh pitch each time (subtle drift)",
+                () -> profile().soundPitchVariation,
+                v -> {
+                    profile().soundPitchVariation = v;
+                    Sounds.setPitchVariation(v);
+                });
+        dialogForm.addSlider("Pitch drift ± %",
+                () -> (int) Math.round(SoundPack.pitchVariation() * 100),
+                v -> Sounds.setPitchVariationAmount(v / 100.0),
+                0, (int) Math.round(SoundPack.MAX_PITCH_VARIATION * 100))
+                .enabledWhen(() -> profile().soundPitchVariation);
+        dialogForm.addText("Sound pack folder (blank = beside the jar)",
+                () -> profile().soundPackDir,
+                v -> {
+                    profile().soundPackDir = v;
+                    SoundPack.useDir(v);
+                }, 96);
+        dialogForm.addAction("Sound pack folder: " + SoundPack.root()
+                        + (SoundPack.exists() ? "  ✓" : "  (not there yet — click to create)"),
+                this::createSoundPackFolder);
+        dialogForm.addAction("Rescan sound pack folder", this::rescanSoundPack);
+        dialogForm.addAction("Rewrite " + SoundPack.KEYS_FILE
+                + " (lists your custom objects too)", this::refreshSoundKeyList);
+        dialogForm.addAction("Sound Editor… (" + SoundKeys.all().size()
+                + " sounds in this game)", () -> openSoundList(soundCategory));
+        dialogForm.addAction("Save & close", () -> {
+            ctx.applyLiveSettings();
+            ctx.save();
+            closeDialog();
+            setStatus("Sound settings saved with the game type");
+        });
+    }
+
+    private static int percent(double v) {
+        return (int) Math.round(Math.max(0, Math.min(1, v)) * 100);
+    }
+
+    /**
+     * The level's music track. Music is a sound state like any other, so this
+     * just picks which {@code music/…} key this level asks for; the pack
+     * supplies the file.
+     */
+    private void buildLevelMusicForm() {
+        List<String> tracks = new ArrayList<>();
+        tracks.add("(the generic level track)");
+        tracks.addAll(SoundKeys.MUSIC_TRACKS);
+        String[] names = tracks.toArray(new String[0]);
+        dialogForm.addEnum("Track", names,
+                () -> musicTrack.isBlank() ? names[0] : musicTrack,
+                v -> musicTrack = v.equals(names[0]) ? "" : v);
+        dialogForm.addText("…or a track name of your own", () -> musicTrack,
+                v -> musicTrack = v, 32);
+        String key = musicTrack.isBlank() ? "music/level" : "music/" + musicTrack.trim();
+        dialogForm.addAction("Pack file: " + SoundPack.fileNameFor(key)
+                        + (SoundPack.fileFor(key) != null ? "  ✓ found"
+                        : "  (not there yet — click to rescan)"),
+                this::rescanSoundPack);
+        dialogForm.addAction("▶ Preview", () -> {
+            Sounds.music(key);
+            setStatus(Sounds.resolve(key).isEmpty()
+                    ? "No " + SoundPack.fileNameFor(key) + " in " + SoundPack.root()
+                    : "Playing " + key);
+        });
+        dialogForm.addAction("■ Stop", () -> {
+            Sounds.stopMusic();
+            setStatus("Music stopped");
+        });
+        dialogForm.addAction("Edit this track's volume and looping…",
+                () -> openSoundDialog(key, "Music — "
+                        + (musicTrack.isBlank() ? "level" : musicTrack)));
+        dialogForm.addAction("Apply to this level", () -> {
+            level.music = musicTrack.trim();
+            closeDialog();
+            setStatus("\"" + level.name + "\" plays " + level.musicKey()
+                    + " — save the level to keep it");
+        });
+        dialogForm.addAction("Cancel", this::closeDialog);
+    }
+
     /** Delete the right-clicked user-created object (custom.json + registries). */
     private void deleteCustomEntry() {
         if ("character".equals(texEntry.kind)) {
@@ -2971,18 +3543,33 @@ public class CreativeScene extends AbstractScene {
 
     /** Swing image chooser (texture pack folder first), or {@code null}. */
     private String chooseSheetFile() {
+        Path pack = TexturePack.root();
+        Path start = Files.isDirectory(pack) ? pack : Path.of(SkinStore.DEFAULT_DIR);
+        return chooseFile("Choose a sprite sheet", start.toString(), "Images",
+                "png", "gif", "jpg", "jpeg");
+    }
+
+    /**
+     * A file chooser opening in {@code startDir}, filtered to
+     * {@code extensions}. Returns the chosen path, or {@code null} when the
+     * creator cancelled — or when no chooser is available at all, in which
+     * case the dialog's text field is still there to type into.
+     */
+    private String chooseFile(String title, String startDir, String filterName,
+                              String... extensions) {
         try {
-            Path pack = TexturePack.root();
-            Path start = Files.isDirectory(pack) ? pack : Path.of(SkinStore.DEFAULT_DIR);
+            Path start = Path.of(startDir);
             javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(
-                    start.toAbsolutePath().toFile());
+                    (Files.isDirectory(start) ? start : Path.of("."))
+                            .toAbsolutePath().toFile());
+            chooser.setDialogTitle(title);
             chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
-                    "Images", "png", "gif", "jpg", "jpeg"));
+                    filterName, extensions));
             if (chooser.showOpenDialog(null) == javax.swing.JFileChooser.APPROVE_OPTION) {
                 return chooser.getSelectedFile().getAbsolutePath();
             }
         } catch (RuntimeException | Error e) {
-            setStatus("File chooser unavailable — type the sheet path instead");
+            setStatus("File chooser unavailable — type the path instead");
         }
         return null;
     }
@@ -5374,6 +5961,7 @@ public class CreativeScene extends AbstractScene {
             case DOORS -> "Doors";
             case CHARACTERS -> "Characters";
             case EFFECTS -> "Effects";
+            case SOUNDS -> "Sounds";
             case CUTSCENES -> "Cutscenes";
             case MINIGAME -> "Mini Game";
             case TOOLS -> "Tools";
@@ -5601,6 +6189,111 @@ public class CreativeScene extends AbstractScene {
     }
 
     /** A tiny bar chart for the Stat Rules tool. */
+
+    /** Sound Editor… icon: a speaker throwing waves. */
+    private static BufferedImage soundEditorIcon() {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(new Color(235, 215, 150));
+        g.fillRect(6, 16, 6, 8);                        // the speaker's throat
+        g.fillPolygon(new int[]{12, 20, 20, 12}, new int[]{16, 8, 32, 24}, 4);
+        g.setColor(new Color(120, 210, 255));
+        g.setStroke(new BasicStroke(2f));
+        for (int i = 0; i < 3; i++) {                   // three widening waves
+            int r = 8 + i * 7;
+            g.drawArc(16 - r / 2, 20 - r, r, r * 2, -60, 120);
+        }
+        g.dispose();
+        return img;
+    }
+
+    /** Sound Options… icon: the speaker with a level slider under it. */
+    private static BufferedImage soundOptionsIcon() {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(new Color(235, 215, 150));
+        g.fillRect(6, 12, 5, 7);
+        g.fillPolygon(new int[]{11, 18, 18, 11}, new int[]{12, 6, 25, 19}, 4);
+        g.setColor(new Color(120, 210, 255));
+        g.setStroke(new BasicStroke(2f));
+        g.drawArc(18, 8, 10, 15, -70, 140);
+        g.setColor(new Color(150, 150, 170));           // the slider track
+        g.fillRoundRect(5, 30, 30, 4, 4, 4);
+        g.setColor(new Color(255, 220, 120));           // and its thumb
+        g.fillOval(21, 27, 10, 10);
+        g.dispose();
+        return img;
+    }
+
+    /** Level Music… icon: a pair of beamed notes. */
+    private static BufferedImage levelMusicIcon() {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(new Color(180, 160, 255));
+        g.setStroke(new BasicStroke(3f));
+        g.drawLine(14, 8, 14, 28);
+        g.drawLine(29, 5, 29, 25);
+        g.drawLine(14, 8, 29, 5);                       // the beam joining them
+        g.fillOval(7, 25, 11, 8);
+        g.fillOval(22, 22, 11, 8);
+        g.dispose();
+        return img;
+    }
+
+    /**
+     * A group's icon: the speaker, tinted per family so the sound palette
+     * reads at a glance rather than showing twenty identical speakers.
+     */
+    private static BufferedImage soundGroupIcon(String category) {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+        Color tint = soundGroupColor(category);
+        g.setColor(tint);
+        g.fillRect(7, 16, 6, 8);
+        g.fillPolygon(new int[]{13, 21, 21, 13}, new int[]{16, 9, 31, 24}, 4);
+        g.setColor(new Color(tint.getRed(), tint.getGreen(), tint.getBlue(), 150));
+        g.setStroke(new BasicStroke(2f));
+        g.drawArc(20, 12, 10, 16, -70, 140);
+        g.drawArc(24, 7, 12, 26, -70, 140);
+        g.dispose();
+        return img;
+    }
+
+    /** The colour a sound family is drawn in — the palette's own hues. */
+    private static Color soundGroupColor(String category) {
+        return switch (category) {
+            case "Player" -> new Color(110, 190, 255);
+            case "Characters" -> new Color(150, 200, 255);
+            case "Ultimate abilities" -> new Color(255, 150, 90);
+            case "Blocks" -> new Color(190, 170, 140);
+            case "Liquids" -> new Color(110, 180, 235);
+            case "Lights" -> new Color(255, 220, 130);
+            case "Mobs" -> new Color(150, 220, 140);
+            case "Items" -> new Color(230, 200, 120);
+            case "Projectiles" -> new Color(255, 190, 110);
+            case "Decorations" -> new Color(120, 190, 120);
+            case "Block decorations" -> new Color(170, 210, 150);
+            case "Vehicles" -> new Color(200, 160, 220);
+            case "Particles" -> new Color(255, 245, 150);
+            case "Music" -> new Color(180, 160, 255);
+            case "Ambience" -> new Color(140, 200, 200);
+            case "World" -> new Color(200, 200, 215);
+            case "Doors" -> new Color(200, 170, 130);
+            case "Cutscenes" -> new Color(230, 170, 200);
+            case "Mini games" -> new Color(255, 170, 170);
+            default -> new Color(210, 210, 225);
+        };
+    }
+
+    /** Stat Rules… icon: bars rising over a baseline. */
     private static BufferedImage rulesIcon() {
         BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();

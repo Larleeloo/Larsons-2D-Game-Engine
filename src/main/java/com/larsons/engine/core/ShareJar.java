@@ -1,5 +1,6 @@
 package com.larsons.engine.core;
 
+import com.larsons.engine.audio.SoundPack;
 import com.larsons.engine.graphics.TexturePack;
 import com.larsons.engine.net.Lan;
 
@@ -40,7 +41,10 @@ import java.util.stream.Stream;
  *       including this machine's LAN address for same-network play;</li>
  *   <li>{@code textures/} — an empty {@link TexturePack} to drop sprite
  *       sheets into, with a folder per palette category and a generated list
- *       of every object's file name.</li>
+ *       of every object's file name;</li>
+ *   <li>{@code sounds/} — an empty {@link SoundPack} to drop WAVs and MP3s
+ *       into, with a folder per family of sounds and a generated list of
+ *       every action state the game can make a noise for.</li>
  * </ul>
  *
  * <p><b>This only happens inside IntelliJ</b> ({@link #insideIntelliJ}). The
@@ -189,9 +193,11 @@ public final class ShareJar {
 
         writeScripts(outDir);
         writeInstructions(outDir);
-        // The drop-in texture pack sits beside the jar, so whoever receives
-        // the folder reskins the game by dropping PNGs into it.
+        // The drop-in packs sit beside the jar, so whoever receives the
+        // folder reskins the game by dropping PNGs into one and gives it a
+        // voice by dropping WAVs or MP3s into the other.
         TexturePack.scaffold(outDir.resolve(TexturePack.DIR_NAME));
+        SoundPack.scaffold(outDir.resolve(SoundPack.DIR_NAME));
         return jar;
     }
 
@@ -305,6 +311,17 @@ public final class ShareJar {
                   run.bat (Windows) / run.sh (Mac & Linux), or run:
                       java -jar %s
 
+                YOUR OWN SOUNDS
+                  The sounds/ folder next to the jar is a drop-in sound pack:
+                  put a WAV or MP3 in the subfolder for what it belongs to,
+                  named after the object and the action (player/jump.wav,
+                  blocks/dirt_break.wav, mobs/slime_attack.wav, music/level.mp3),
+                  and the game plays it. Every sound in the game is SILENT until
+                  you supply one, so add as many or as few as you like.
+                  sounds/%s lists the name for every sound the game can
+                  make; sounds/%s sets the volume, pitch and the subtle
+                  per-play pitch drift the whole pack uses.
+
                 YOUR OWN TEXTURES
                   The textures/ folder next to the jar is a drop-in texture pack:
                   put a sprite sheet in the subfolder for its palette category,
@@ -332,7 +349,7 @@ public final class ShareJar {
                     forwarded on their router (exactly like hosting Minecraft).
 
                 The world game hosts the same way from Multiplayer (default port 7777).
-                """.formatted(JAR_NAME, TexturePack.KEYS_FILE, TexturePack.CONFIG_FILE,
-                lanLine));
+                """.formatted(JAR_NAME, SoundPack.KEYS_FILE, SoundPack.CONFIG_FILE,
+                TexturePack.KEYS_FILE, TexturePack.CONFIG_FILE, lanLine));
     }
 }

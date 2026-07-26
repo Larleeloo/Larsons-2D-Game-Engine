@@ -65,7 +65,22 @@ public class GameProfile {
     // Atmosphere & feedback.
     public boolean parallaxEnabled = false;   // procedural side-scroll backdrop
     public boolean particlesEnabled = true;   // block-break / hit particles
-    public boolean audioEnabled = true;       // synthesized sound effects
+    public boolean audioEnabled = true;       // sound effects (the master switch)
+
+    // Sound. Every action state in the game can be given a WAV or MP3 from the
+    // drop-in sound pack; these are the settings that apply to all of them at
+    // once (see com.larsons.engine.audio.Sounds).
+    public boolean musicEnabled = true;       // level music, separate from effects
+    public double masterVolume = 1.0;         // everything, 0..1
+    public double sfxVolume = 1.0;            // sound effects, 0..1
+    public double musicVolume = 0.6;          // music, 0..1
+    /**
+     * Whether every sound plays at a slightly different pitch each time — the
+     * trick that keeps a run of footsteps or block breaks from sounding like a
+     * stuck record. On by default; the spread itself lives with the sound pack
+     * so it travels with the folder.
+     */
+    public boolean soundPitchVariation = true;
 
     // The level last saved/played in this game type ("" = bundled sample).
     public String lastLevelPath = "";
@@ -90,6 +105,15 @@ public class GameProfile {
      * {@link com.larsons.engine.graphics.TexturePack}).
      */
     public String texturePackDir = "";
+
+    /**
+     * The creator's sound pack folder. Blank — the normal case — means the
+     * {@code sounds/} folder beside the game's jar, so a pack travels with the
+     * shared game and needs no setting at all. Point it elsewhere to keep a
+     * game type's sounds in its own place (see
+     * {@link com.larsons.engine.audio.SoundPack}).
+     */
+    public String soundPackDir = "";
 
     // Sizes of various entities (world pixels). The player's hitbox is kept
     // slightly smaller than one block (see PLAYER_TILE_FRACTION) so it slips
@@ -146,9 +170,15 @@ public class GameProfile {
         m.put("parallaxEnabled", parallaxEnabled);
         m.put("particlesEnabled", particlesEnabled);
         m.put("audioEnabled", audioEnabled);
+        m.put("musicEnabled", musicEnabled);
+        m.put("masterVolume", masterVolume);
+        m.put("sfxVolume", sfxVolume);
+        m.put("musicVolume", musicVolume);
+        m.put("soundPitchVariation", soundPitchVariation);
         m.put("lastLevelPath", lastLevelPath);
         m.put("finalized", finalized);
         m.put("texturePackDir", texturePackDir);
+        m.put("soundPackDir", soundPackDir);
         m.put("tileSize", tileSize);
         m.put("playerSize", playerSize);
         m.put("defaultEntitySize", defaultEntitySize);
@@ -182,7 +212,8 @@ public class GameProfile {
     /**
      * Copy the feature toggles/values from {@code src} into this profile while
      * keeping this profile's game-type identity — its {@link #name}, its shared
-     * {@link #texturePackDir}, the {@link #lastLevelPath} pointer, and its
+     * {@link #texturePackDir} and {@link #soundPackDir}, the
+     * {@link #lastLevelPath} pointer, and its
      * {@link #finalized} (published) status. This is how a level's own saved
      * settings become the active configuration without losing which game type
      * (folder of levels) is in play, or whether it is play-only.
@@ -191,6 +222,7 @@ public class GameProfile {
         if (src == null) return;
         String keepName = name;
         String keepTexture = texturePackDir;
+        String keepSounds = soundPackDir;
         String keepLast = lastLevelPath;
         GameProfile s = src.copy();
         perspective = s.perspective;
@@ -218,6 +250,11 @@ public class GameProfile {
         parallaxEnabled = s.parallaxEnabled;
         particlesEnabled = s.particlesEnabled;
         audioEnabled = s.audioEnabled;
+        musicEnabled = s.musicEnabled;
+        masterVolume = s.masterVolume;
+        sfxVolume = s.sfxVolume;
+        musicVolume = s.musicVolume;
+        soundPitchVariation = s.soundPitchVariation;
         tileSize = s.tileSize;
         playerSize = s.playerSize;
         defaultEntitySize = s.defaultEntitySize;
@@ -233,6 +270,7 @@ public class GameProfile {
         shaderVignette = s.shaderVignette;
         name = keepName;
         texturePackDir = keepTexture;
+        soundPackDir = keepSounds;
         lastLevelPath = keepLast;
         normalize();
     }
@@ -269,9 +307,15 @@ public class GameProfile {
         p.parallaxEnabled = bool(m, "parallaxEnabled", p.parallaxEnabled);
         p.particlesEnabled = bool(m, "particlesEnabled", p.particlesEnabled);
         p.audioEnabled = bool(m, "audioEnabled", p.audioEnabled);
+        p.musicEnabled = bool(m, "musicEnabled", p.musicEnabled);
+        p.masterVolume = dbl(m, "masterVolume", p.masterVolume);
+        p.sfxVolume = dbl(m, "sfxVolume", p.sfxVolume);
+        p.musicVolume = dbl(m, "musicVolume", p.musicVolume);
+        p.soundPitchVariation = bool(m, "soundPitchVariation", p.soundPitchVariation);
         p.lastLevelPath = str(m, "lastLevelPath", p.lastLevelPath);
         p.finalized = bool(m, "finalized", p.finalized);
         p.texturePackDir = str(m, "texturePackDir", p.texturePackDir);
+        p.soundPackDir = str(m, "soundPackDir", p.soundPackDir);
         p.tileSize = intg(m, "tileSize", p.tileSize);
         p.playerSize = intg(m, "playerSize", p.playerSize);
         p.defaultEntitySize = intg(m, "defaultEntitySize", p.defaultEntitySize);
@@ -302,8 +346,12 @@ public class GameProfile {
         shaderPixelSize = Math.max(1, Math.min(64, shaderPixelSize));
         nightDarkness = Math.max(0.0, Math.min(1.0, nightDarkness));
         ambientLight = Math.max(0.0, Math.min(1.0, ambientLight));
+        masterVolume = Math.max(0.0, Math.min(1.0, masterVolume));
+        sfxVolume = Math.max(0.0, Math.min(1.0, sfxVolume));
+        musicVolume = Math.max(0.0, Math.min(1.0, musicVolume));
         if (lastLevelPath == null) lastLevelPath = "";
         if (texturePackDir == null) texturePackDir = "";
+        if (soundPackDir == null) soundPackDir = "";
     }
 
     /** The player hitbox for a tile size: {@link #PLAYER_TILE_FRACTION} of it. */

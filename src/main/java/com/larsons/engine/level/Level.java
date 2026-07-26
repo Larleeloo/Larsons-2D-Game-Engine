@@ -66,6 +66,14 @@ public class Level {
      * sample), in which case the active game type's profile is used as-is.
      */
     public GameProfile settings;
+    /**
+     * The music track this level plays, as a {@link com.larsons.engine.audio.SoundKeys}
+     * music key ({@code "level"}, {@code "boss"}, a name of the creator's own).
+     * Blank means the generic {@code music/level} track, so a level that was
+     * never given one still plays whatever the sound pack has for levels.
+     * Set in creative mode's sound editor and saved with the level.
+     */
+    public String music = "";
     public int tileSize = 32;
     public int width;          // in tiles
     public int height;         // in tiles
@@ -197,6 +205,14 @@ public class Level {
     }
 
     /** Colour used to draw the given tile id, or {@code null} for empty tiles. */
+    /**
+     * The full sound key of this level's music — its own track when it names
+     * one, else the generic level track.
+     */
+    public String musicKey() {
+        return music == null || music.isBlank() ? "music/level" : "music/" + music.trim();
+    }
+
     public Color colorFor(int tileId) {
         if (tileId <= 0) return null;
         if (registryTiles) {
@@ -417,6 +433,7 @@ public class Level {
         // here still load in engine versions that only knew the projection.
         m.put("format", format().id());
         m.put("perspective", perspective.name());
+        if (music != null && !music.isBlank()) m.put("music", music);
         m.put("tileSize", tileSize);
         m.put("width", width);
         m.put("height", height);

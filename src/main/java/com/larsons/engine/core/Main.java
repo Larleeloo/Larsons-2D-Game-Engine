@@ -1,5 +1,6 @@
 package com.larsons.engine.core;
 
+import com.larsons.engine.audio.Sounds;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GamePackage;
 import com.larsons.engine.config.GameTypeStore;
@@ -44,8 +45,8 @@ public class Main {
 
     public static void main(String[] args) {
         // Development convenience only: launching from IntelliJ leaves a
-        // ready-to-send copy of the game (plus an empty texture pack to fill)
-        // in share/, built in the background. A shipped jar builds nothing —
+        // ready-to-send copy of the game (plus empty texture and sound packs
+        // to fill) in share/, built in the background. A shipped jar builds nothing —
         // it must not write a copy of itself wherever the player put it.
         ShareJar.writeAsync();
 
@@ -54,8 +55,10 @@ public class Main {
         // type shows up on the chooser this launch.
         GamePackage.importDropIns();
 
-        // The player's saved texture overrides apply from the first frame.
+        // The player's saved texture and sound overrides apply from the first
+        // frame, so a pack that is already in place is heard and seen at once.
         Skins.install(new SkinStore().load());
+        Sounds.load();
 
         EngineConfig config = new EngineConfig()
                 .title("Larson's 2D Game Engine")

@@ -1599,23 +1599,9 @@ public final class World {
      */
     public ChopResult chopDecor(double aimX, double aimY, boolean axe, boolean withDrops) {
         DecorRegistry registry = DecorRegistry.standard();
-        Level.EntitySpawn best = null;
-        Decor bestDef = null;
-        double bestD = Double.MAX_VALUE;
-        for (Level.EntitySpawn e : level.entities) {
-            if (!"decor_bg".equals(e.kind) && !"decor_fg".equals(e.kind)) continue;
-            Decor def = registry.get(e.type);
-            if (def == null || harvestDrops(def.shape()) == null) continue;
-            double h = def.sizeTiles() * level.tileSize;
-            // Decor sprites anchor at their bottom-centre.
-            double d = Math.hypot(aimX - e.x, aimY - (e.y - h / 2));
-            if (d <= h / 2 + 10 && d < bestD) {
-                bestD = d;
-                best = e;
-                bestDef = def;
-            }
-        }
-        if (best == null) return ChopResult.NONE;
+        Level.EntitySpawn best = harvestableAt(aimX, aimY);
+        Decor bestDef = best == null ? null : registry.get(best.type);
+        if (best == null || bestDef == null) return ChopResult.NONE;
         int needed = 2 + (int) bestDef.sizeTiles();
         int hits = decorHits.merge(best, axe ? 2 : 1, Integer::sum);
         if (hits < needed) return ChopResult.HIT;
@@ -1632,6 +1618,37 @@ public final class World {
             }
         }
         return ChopResult.BROKEN;
+    }
+
+    /**
+     * The harvestable decoration under an aim point, or {@code null} when
+     * there is none. Split out of {@link #chopDecor} so callers that only
+     * want to <em>know</em> what is there — the play scene, to play that
+     * tree's own chopping sound — don't have to swing at it.
+     */
+    private Level.EntitySpawn harvestableAt(double aimX, double aimY) {
+        DecorRegistry registry = DecorRegistry.standard();
+        Level.EntitySpawn best = null;
+        double bestD = Double.MAX_VALUE;
+        for (Level.EntitySpawn e : level.entities) {
+            if (!"decor_bg".equals(e.kind) && !"decor_fg".equals(e.kind)) continue;
+            Decor def = registry.get(e.type);
+            if (def == null || harvestDrops(def.shape()) == null) continue;
+            double h = def.sizeTiles() * level.tileSize;
+            // Decor sprites anchor at their bottom-centre.
+            double d = Math.hypot(aimX - e.x, aimY - (e.y - h / 2));
+            if (d <= h / 2 + 10 && d < bestD) {
+                bestD = d;
+                best = e;
+            }
+        }
+        return best;
+    }
+
+    /** The definition of the harvestable decoration under an aim point. */
+    public Decor decorNear(double aimX, double aimY) {
+        Level.EntitySpawn hit = harvestableAt(aimX, aimY);
+        return hit == null ? null : DecorRegistry.standard().get(hit.type);
     }
 
     /** What a decoration shape breaks down into, or {@code null} = not harvestable. */

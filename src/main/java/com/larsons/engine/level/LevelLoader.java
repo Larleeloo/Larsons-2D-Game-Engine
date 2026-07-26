@@ -32,6 +32,7 @@ import java.util.Map;
  *   "tileSize": 32,
  *   "width": 24, "height": 14,
  *   "background": "#10141e",
+ *   "music": "boss",
  *   "palette": ["#785a3c", "#5aa050", "#6e6e78"],
  *   "spawn": { "x": 64, "y": 96 },
  *   "tiles": [[0,0,1,...], ...],
@@ -62,6 +63,7 @@ public final class LevelLoader {
         if (root.get("perspective") instanceof String p) {
             lvl.setFormat(LevelFormat.of(p, lvl.format()));
         }
+        if (root.get("music") instanceof String track) lvl.music = track;
         if (root.containsKey("tileSize")) lvl.tileSize = intOf(root.get("tileSize"), 32);
         if (root.get("background") instanceof String bg) lvl.background = parseColor(bg, lvl.background);
 

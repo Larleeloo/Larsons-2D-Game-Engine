@@ -10,6 +10,9 @@ import com.larsons.engine.config.CustomContentStore;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.audio.AudioManager.Sfx;
+import com.larsons.engine.audio.SceneSounds;
+import com.larsons.engine.audio.SoundKeys;
+import com.larsons.engine.audio.Sounds;
 import com.larsons.engine.crafting.Recipe;
 import com.larsons.engine.crafting.RecipeRegistry;
 import com.larsons.engine.entity.DroppedItem;
@@ -216,6 +219,20 @@ public class PlayScene extends AbstractScene {
     private ParallaxBackground parallax;
     private final Particles particles = new Particles();
     /**
+     * The sounds that come from watching the world rather than from a single
+     * event — footsteps, the swim loop, a sustained ultimate, a meteor's
+     * descent, the level's music and its ambience.
+     */
+    private final SceneSounds sounds = new SceneSounds();
+    /** Night last frame, so daybreak and nightfall are heard as they turn. */
+    private boolean wasNight;
+    /** Time until the next mining scrape, so holding a pick isn't a buzz. */
+    private double mineSoundTimer;
+    /** Time until the next liquid trickle, so a draining lake is a stream. */
+    private double flowTimer;
+    /** Seconds between the trickles of flowing liquid. */
+    private static final double FLOW_SOUND_INTERVAL = 0.5;
+    /**
      * Online only: the locally-predicted copy of the vehicle this player is
      * riding, stepped with the same deterministic physics the server runs and
      * blended toward its snapshot state — the mounted twin of the player's
@@ -300,7 +317,7 @@ public class PlayScene extends AbstractScene {
             world.setPickupListener((player, key, count) -> {
                 inventory.add(key, count);
                 stats.add("items_picked_up", count);
-                ctx.sfx(Sfx.PICKUP);
+                itemSound(key, "pickup", "pickup");
             });
         }
         ruleEngine = new StatRuleEngine(List.copyOf(level.statRules));
@@ -325,6 +342,19 @@ public class PlayScene extends AbstractScene {
 
         parallax = null; // rebuilt lazily against the level's background
         syncCameraFromProfile();
+
+        // A fresh level starts from silence: no landing or hurt carried over
+        // from the last one, and its own music from the first frame.
+        sounds.reset();
+        sounds.setCharacter(character.key);
+        wasNight = false;
+        ctx.sound(SoundKeys.world("level_load"));
+    }
+
+    /** Leaving the scene stops the music and every loop it started. */
+    @Override
+    public void onExit() {
+        sounds.reset();
     }
 
     /**
@@ -441,6 +471,7 @@ public class PlayScene extends AbstractScene {
                 craftingPanel = null;
             } else if (containerPanel != null) {
                 containerPanel.beginClose();
+                ctx.sound(SoundKeys.world("chest_close"));
             } else if (showInventory) {
                 showInventory = false;
             } else {
@@ -469,27 +500,32 @@ public class PlayScene extends AbstractScene {
                 craftingPanel = null;
             } else if (containerPanel != null) {
                 containerPanel.beginClose();
+                ctx.sound(SoundKeys.world("chest_close"));
             } else if (me.riding >= 0) {
+                Vehicle left = world.vehicle(me.riding);
                 world.dismount(me);
-                ctx.sfx(Sfx.CLICK);
+                vehicleSound(left, "dismount");
             } else if (!tryDoorTravel(p) && !tryOpenStation(p)) {
                 Vehicle mountable = world.mountableNear(me.x + ps() / 2, me.y + ps() / 2);
                 if (mountable != null && world.mount(me, mountable.id, p)) {
-                    ctx.sfx(Sfx.CLICK);
+                    vehicleSound(mountable, "mount");
                 }
             }
         }
         if (net != null && !showInventory && input.isKeyJustPressed(KeyEvent.VK_E)) {
             Snapshot snap = net.client().latest();
             if (snap != null) {
-                if (snap.vehicleRiddenBy(me.id) != null) {
+                EntityView riding = snap.vehicleRiddenBy(me.id);
+                if (riding != null) {
                     net.client().sendDismount();
-                    ctx.sfx(Sfx.CLICK);
+                    Sounds.playFirst(1.0, SoundKeys.vehicle(riding.key, "dismount"),
+                            SoundKeys.player("dismount"));
                 } else {
                     EntityView near = nearestSnapshotVehicle(snap);
                     if (near != null) {
                         net.client().sendMount(near.id);
-                        ctx.sfx(Sfx.CLICK);
+                        Sounds.playFirst(1.0, SoundKeys.vehicle(near.key, "mount"),
+                                SoundKeys.player("mount"));
                     }
                 }
             }
@@ -591,7 +627,7 @@ public class PlayScene extends AbstractScene {
         // the hop's upward vz on a plane (see PlayerPhysics.stepHop).
         if ((me.vy < -1 && prevVy >= 0) || (me.vz > 1 && prevVz <= 0)) {
             stats.add("jumps", 1);
-            ctx.sfx(Sfx.JUMP);
+            playerSound(me.airJumpsUsed > 0 ? "double_jump" : "jump");
         }
         prevVz = me.vz;
         stats.add("distance_traveled", Math.abs(me.x - preX) + Math.abs(me.y - preY));
@@ -620,7 +656,7 @@ public class PlayScene extends AbstractScene {
                 for (String event : localMinigame.pollEvents()) {
                     ruleStatus = event;
                     ruleStatusTime = 3.5;
-                    ctx.sfx(Sfx.PICKUP);
+                    ctx.sound(SoundKeys.minigame("score"));
                 }
                 localMinigame.pollInventoryChanges(); // local inventory is already live
                 mgView = MiniGameView.fromMap(localMinigame.toWireMap());
@@ -636,7 +672,16 @@ public class PlayScene extends AbstractScene {
                             (change.row() + 0.5) * ts(),
                             new Color(150, 130, 100), 5);
                 }
+                // Water finding its way into a new cell: the liquid's own
+                // trickle, rate-limited so a draining lake is a stream and
+                // not a hundred overlapping splashes.
+                Block flowed = change.id() == 0 ? null : level.blocks.get(change.id());
+                if (flowed != null && flowed.liquid() && flowTimer <= 0) {
+                    flowTimer = FLOW_SOUND_INTERVAL;
+                    ctx.sound(SoundKeys.block(flowed.key(), "flow"), 0.4);
+                }
             }
+            if (flowTimer > 0) flowTimer -= dt;
             if (p.particlesEnabled) {
                 for (Projectile pr : world.projectiles()) {
                     emitTrail(pr.def.key(), pr.x, pr.y, pr.z);
@@ -645,7 +690,7 @@ public class PlayScene extends AbstractScene {
             }
             // The level's programmable stat rules run against this run's stats.
             for (StatRuleEngine.Fired fired : ruleEngine.update(stats, inventory)) {
-                ctx.sfx(Sfx.PICKUP);
+                ctx.sound(SoundKeys.world("stat_rule"));
                 ruleStatus = ruleFiredMessage(fired.rule());
                 ruleStatusTime = 3.5;
             }
@@ -653,7 +698,8 @@ public class PlayScene extends AbstractScene {
 
         if (me.health < prevHealth - 0.01) {
             stats.add("damage_taken", prevHealth - me.health);
-            ctx.sfx(Sfx.HURT);
+            // The hurt/death cry itself comes from the tracker below, which
+            // is watching the same health bar and knows the character.
         }
         prevHealth = me.health;
 
@@ -673,6 +719,23 @@ public class PlayScene extends AbstractScene {
             animStateClock += dt;
         }
 
+        // Everything that has to be tracked frame to frame — footsteps timed
+        // to the gait, the splash going in and the loop while swimming, the
+        // landing, a sustained ultimate, the roar of shots still in the air —
+        // plus the level's music and the ambience under it.
+        sounds.setEnabled(p.audioEnabled);
+        sounds.setCharacter(character.key);
+        sounds.update(dt, me, level, p, state,
+                world != null ? world.projectiles() : List.of(),
+                world != null ? world.mobs() : List.of(),
+                camera.viewportWidth / 2.0 / Math.max(0.01, camera.zoom));
+        boolean night = World.darknessFor(timeOfDay(), p) > 0.25;
+        if (night != wasNight) {
+            ctx.sound(SoundKeys.world(night ? "nightfall" : "daybreak"));
+            wasNight = night;
+        }
+        sounds.ambience(level, night, false);
+
         // Cutscene triggers watch the player: zones fire on entry, INTERACT
         // ones on E (doors and stations already had their chance above).
         if (cutscenes != null) {
@@ -681,7 +744,7 @@ public class PlayScene extends AbstractScene {
             if (cutscenes.checkTriggers(me.x + size / 2.0, me.y + size / 2.0,
                     interact, ts(), camera.x, camera.y) != null) {
                 if (world != null) world.cancelMining();
-                ctx.sfx(Sfx.CLICK);
+                ctx.sound(SoundKeys.cutscene("start"));
             }
         }
     }
@@ -706,6 +769,7 @@ public class PlayScene extends AbstractScene {
         if (link == null || link.targetLevel().isEmpty()) return true;
         LevelStore store = new LevelStore(p.name);
         if (!store.exists(link.targetLevel())) return true;
+        ctx.sound(SoundKeys.door("open"));
         level = store.load(link.targetLevel());
         // The destination's own toggles (and so its tile/player sizes) apply
         // before anything is built against them.
@@ -715,7 +779,7 @@ public class PlayScene extends AbstractScene {
         world.setPickupListener((player, key, count) -> {
             inventory.add(key, count);
             stats.add("items_picked_up", count);
-            ctx.sfx(Sfx.PICKUP);
+            itemSound(key, "pickup", "pickup");
         });
         ruleEngine = new StatRuleEngine(List.copyOf(level.statRules));
         cutscenes = new CutsceneDirector(level.cutscenes);
@@ -732,7 +796,12 @@ public class PlayScene extends AbstractScene {
         syncCameraFromProfile();
         parallax = null;
         particles.clear();
-        ctx.sfx(Sfx.CLICK);
+        // The new level brings its own music and ambience; the tracker is
+        // reset so the arrival isn't heard as a landing or a hurt.
+        sounds.reset();
+        ctx.sound(SoundKeys.door("travel"));
+        ctx.sound(SoundKeys.player("door_enter"));
+        ctx.sound(SoundKeys.world("level_load"));
         return true;
     }
 
@@ -754,6 +823,7 @@ public class PlayScene extends AbstractScene {
                     default -> null;
                 };
                 if (station != null) {
+                    ctx.sound(SoundKeys.world("craft_station"));
                     craftingPanel = new CraftingPanel(station, RecipeRegistry.standard(),
                             world != null ? world.itemTypes : ItemRegistry.standard());
                     ctx.sfx(Sfx.CLICK);
@@ -763,6 +833,7 @@ public class PlayScene extends AbstractScene {
                     // The chest/barrel's second inventory, stored in the level.
                     // The player's inventory opens beside it (side by side)
                     // so moving stacks between the two is one screen.
+                    ctx.sound(SoundKeys.world("chest_open"));
                     containerPanel = new ContainerPanel(level, pc + dc, pr + dr,
                             b.displayName(),
                             world != null ? world.itemTypes : ItemRegistry.standard());
@@ -801,7 +872,7 @@ public class PlayScene extends AbstractScene {
                 craftingPanel.update(input, inventory, viewportWidth, viewportHeight);
         if (crafted == null) return;
         stats.add("crafts", 1);
-        ctx.sfx(Sfx.PICKUP);
+        itemSound(crafted.recipe().output(), "craft", "craft");
         if (crafted.leftover() > 0 && world != null) {
             DroppedItem drop = world.spawnItem(crafted.recipe().output(),
                     crafted.leftover(), me.x, me.y);
@@ -865,28 +936,29 @@ public class PlayScene extends AbstractScene {
                     .bySourceItem(def.key());
             if (net != null) {
                 net.client().sendUseItem(inventory.selectedIndex());
-                if (edible || manaDrink) ctx.sfx(Sfx.EAT);
-                else if (relic) ctx.sfx(Sfx.BOOM);
-                else if (vehDef != null) ctx.sfx(Sfx.PLACE);
+                if (edible) itemSound(def.key(), "use", "eat");
+                else if (manaDrink) itemSound(def.key(), "use", "drink");
+                else if (relic) itemSound(def.key(), "use", "ult_activate");
+                else if (vehDef != null) itemSound(def.key(), "use", "place");
             } else if (vehDef != null) {
                 if (inventory.consumeSelected()) {
                     world.spawnVehicle(vehDef.key(),
                             me.x + (me.facingLeft ? -24 : 24), me.y);
                     ruleStatus = vehDef.name() + " deployed — [E] to ride";
                     ruleStatusTime = 3.0;
-                    ctx.sfx(Sfx.PLACE);
+                    itemSound(def.key(), "use", "place");
                 }
             } else if (relic) {
-                if (world.useRelic(me, def.key(), p)) ctx.sfx(Sfx.BOOM);
+                if (world.useRelic(me, def.key(), p)) itemSound(def.key(), "use", "ult_activate");
             } else if (manaDrink && inventory.consumeSelected()) {
                 me.mana = Math.min(me.maxMana, me.mana + 50);
-                ctx.sfx(Sfx.EAT);
+                itemSound(def.key(), "use", "drink");
             } else if (edible && inventory.consumeSelected()) {
                 // Food heals directly, restores stamina alongside, and rare
                 // delicacies also restore mana (World.applyFood).
                 World.applyFood(me, def);
                 prevHealth = me.health; // don't play the hurt sound on heals
-                ctx.sfx(Sfx.EAT);
+                itemSound(def.key(), "use", "eat");
             }
         }
 
@@ -931,7 +1003,7 @@ public class PlayScene extends AbstractScene {
     private void moveStack(int from, int to) {
         if (from == to) return;
         if (inventory.move(from, to)) {
-            ctx.sfx(Sfx.CLICK);
+            ctx.sound(SoundKeys.ui("click"));
             if (net != null) net.client().sendInvMove(from, to);
         }
     }
@@ -943,7 +1015,7 @@ public class PlayScene extends AbstractScene {
             // The server removes the items, spawns the drop, and pushes the
             // inventory back down.
             net.client().sendInvDrop(slot, count);
-            ctx.sfx(Sfx.CLICK);
+            playerSound("drop");
             return;
         }
         String key = stack.key;
@@ -954,7 +1026,7 @@ public class PlayScene extends AbstractScene {
             drop.tossForward(me.facing, level.format().gravity());
             drop.pickupDelay = 1.0; // don't instantly vacuum it back up
         }
-        ctx.sfx(Sfx.CLICK);
+        itemSound(key, "drop", "drop");
     }
 
     /**
@@ -998,16 +1070,25 @@ public class PlayScene extends AbstractScene {
                 // Legacy palette tile with no block definition: instant break.
                 if (leftClick && level.setTile(col, row, 0)) {
                     stats.add("blocks_mined", 1);
-                    ctx.sfx(Sfx.BREAK);
+                    playerSound("mine_break");
                     if (p.particlesEnabled) {
                         particles.burst((col + 0.5) * ts, (row + 0.5) * ts, Color.GRAY, 10);
                     }
                 }
             } else {
+                // The scrape of the tool against the block, while it lasts.
+                Block digging = level.blockAt(col, row);
+                mineSoundTimer -= dt;
+                if (digging != null && mineSoundTimer <= 0) {
+                    mineSoundTimer = MINE_SOUND_INTERVAL;
+                    Sounds.playFirst(0.5, SoundKeys.block(digging.key(), "mine"),
+                            SoundKeys.character(character.key, "mine"),
+                            SoundKeys.player("mine"));
+                }
                 Block mined = world.continueMining(col, row, held, p.itemsEnabled, dt);
                 if (mined != null) {
                     stats.add("blocks_mined", 1);
-                    ctx.sfx(Sfx.BREAK);
+                    blockSound(mined, "break", "mine_break");
                     if (p.particlesEnabled) {
                         particles.burst((col + 0.5) * ts, (row + 0.5) * ts, mined.color(), 10);
                     }
@@ -1017,6 +1098,7 @@ public class PlayScene extends AbstractScene {
         } else {
             if (net == null && world != null) world.cancelMining();
             cancelPredictedMining();
+            mineSoundTimer = 0;
         }
 
         if (leftClick) {
@@ -1067,7 +1149,7 @@ public class PlayScene extends AbstractScene {
     private void wearHeldTool(ItemDef held) {
         if (held == null || held.toolClass() == null || !profile().itemsEnabled) return;
         if (inventory.damageSelected(1)) {
-            ctx.sfx(Sfx.BREAK);
+            itemSound(held.key(), "break", "mine_break");
             ruleStatus = held.name() + " broke!";
             ruleStatusTime = 2.5;
         }
@@ -1080,7 +1162,11 @@ public class PlayScene extends AbstractScene {
         World.ChopResult res = world.chopDecor(aimX, aimY, axe, p.itemsEnabled);
         if (res == World.ChopResult.NONE) return false;
         swingTime = 0.2;
-        ctx.sfx(res == World.ChopResult.BROKEN ? Sfx.BREAK : Sfx.HIT);
+        Decor chopped = world.decorNear(aimX, aimY);
+        String chopState = res == World.ChopResult.BROKEN ? "break" : "hit";
+        Sounds.playFirst(1.0,
+                chopped == null ? "" : SoundKeys.decor(chopped.key(), chopState),
+                SoundKeys.character(character.key, "chop"), SoundKeys.player("chop"));
         if (p.particlesEnabled) {
             particles.burst(aimX, aimY, new Color(110, 85, 50),
                     res == World.ChopResult.BROKEN ? 14 : 5);
@@ -1114,7 +1200,7 @@ public class PlayScene extends AbstractScene {
         if (world.placeBlock(col, row, b.id())) {
             if (p.itemsEnabled) inventory.consumeSelected();
             stats.add("blocks_placed", 1);
-            ctx.sfx(Sfx.PLACE);
+            blockSound(b, "place", "place");
         }
     }
 
@@ -1127,9 +1213,13 @@ public class PlayScene extends AbstractScene {
             in.attackAt(aimX, aimY); // the server resolves the hit
             return;
         }
+        playerSound("attack");
         Mob hit = world.playerAttack(me, aimX, aimY, damage);
         if (hit != null) {
-            ctx.sfx(Sfx.HIT);
+            Sounds.playFirst(1.0,
+                    SoundKeys.mob(hit.def.key(), hit.dead() ? "death" : "hurt"),
+                    SoundKeys.character(character.key, "attack_hit"),
+                    SoundKeys.player("attack_hit"));
             if (p.particlesEnabled) {
                 particles.burst(hit.x + hit.def.size() / 2, hit.y + hit.def.size() / 2,
                         hit.def.body(), 8);
@@ -1138,7 +1228,8 @@ public class PlayScene extends AbstractScene {
             // A whiffed swing near an empty vehicle packs it back into its item.
             Vehicle packed = world.packUpVehicle(aimX, aimY, p.itemsEnabled);
             if (packed != null) {
-                ctx.sfx(Sfx.PICKUP);
+                Sounds.playFirst(1.0, SoundKeys.vehicle(packed.def.key(), "dismount"),
+                        SoundKeys.player("pickup"));
                 ruleStatus = packed.def.name() + " packed up";
                 ruleStatusTime = 2.5;
             }
@@ -1154,13 +1245,16 @@ public class PlayScene extends AbstractScene {
         swingTime = 0.1;
         if (net != null) {
             in.attackAt(aimX, aimY);
-            ctx.sfx(Sfx.SHOOT); // predicted; the server validates the cooldown
+            // Predicted; the server validates the cooldown.
+            VehicleDef armed = ridingArmedVehicle();
+            shotSound(armed != null ? armed.projectile() : "");
             return;
         }
         Vehicle v = world.vehicle(me.riding);
-        if (v != null && world.vehicleShoot(v, me, aimX, aimY) != null) {
+        Projectile fired = v == null ? null : world.vehicleShoot(v, me, aimX, aimY);
+        if (fired != null) {
             stats.add("shots_fired", 1);
-            ctx.sfx(Sfx.SHOOT);
+            shotSound(fired.def.key());
         }
     }
 
@@ -1176,12 +1270,14 @@ public class PlayScene extends AbstractScene {
             ItemDef held = inventory.selectedDef();
             boolean hasAmmo = held != null
                     && (held.ammo() == null || inventory.totalOf(held.ammo()) > 0);
-            if (hasAmmo) ctx.sfx(Sfx.SHOOT); // predicted; the server validates
+            // Predicted; the server validates the shot.
+            if (hasAmmo) shotSound(held.projectile());
             return;
         }
-        if (world.playerShoot(me, inventory, aimX, aimY) != null) {
+        Projectile fired = world.playerShoot(me, inventory, aimX, aimY);
+        if (fired != null) {
             stats.add("shots_fired", 1);
-            ctx.sfx(Sfx.SHOOT);
+            shotSound(fired.def.key());
         }
     }
 
@@ -1220,7 +1316,11 @@ public class PlayScene extends AbstractScene {
             ruleStatusTime = 2;
             return;
         }
-        ctx.sfx(Sfx.BOOM);
+        // The ability's own cast sound, then the character's generic one:
+        // a Meteor Volley can roar where a Nova Burst cracks.
+        Sounds.playFirst(1.0, SoundKeys.ultimate(u.key(), "activate"),
+                SoundKeys.character(character.key, "ult_activate"),
+                SoundKeys.player("ult_activate"));
         ruleStatus = u.name() + "!";
         ruleStatusTime = 2.5;
     }
@@ -1234,7 +1334,7 @@ public class PlayScene extends AbstractScene {
                 return;
             }
             case "warp" -> {
-                ctx.sfx(Sfx.PICKUP);
+                ctx.sound(SoundKeys.player("teleport"));
                 if (fx) {
                     particles.burst(im.x(), im.y(), new Color(200, 150, 255), 16,
                             Particles.Style.IMPLODE);
@@ -1254,7 +1354,7 @@ public class PlayScene extends AbstractScene {
                 return;
             }
             case "nova" -> {
-                ctx.sfx(Sfx.BOOM);
+                ctx.sound(SoundKeys.ultimate("nova_burst", "impact"));
                 if (fx) {
                     particles.burst(im.x(), im.y(), new Color(140, 220, 255), 30,
                             Particles.Style.RING);
@@ -1263,13 +1363,13 @@ public class PlayScene extends AbstractScene {
                 return;
             }
             case "tremor" -> {
-                ctx.sfx(Sfx.BREAK);
+                ctx.sound(SoundKeys.ultimate("earthshatter", "impact"));
                 if (fx) particles.burst(im.x(), im.y(), new Color(170, 140, 95), 18,
                         Particles.Style.SHARDS);
                 return;
             }
             case "revive" -> {
-                ctx.sfx(Sfx.PICKUP);
+                ctx.sound(SoundKeys.player("heal"));
                 if (fx) particles.burst(im.x(), im.y(), new Color(255, 190, 80), 24,
                         Particles.Style.FOUNTAIN);
                 return;
@@ -1283,15 +1383,19 @@ public class PlayScene extends AbstractScene {
         ProjectileDef def = projectileTypes().get(im.key());
         Color color = def == null ? Color.GRAY
                 : def.glows() ? def.lightColor() : def.color();
+        // A meteor's crash is projectile/meteor/impact (or /explode), so the
+        // whole arc — cast, fall, landing — can be three different sounds.
         if (im.explosion()) {
-            ctx.sfx(Sfx.BOOM);
+            Sounds.playFirst(1.0, SoundKeys.projectile(im.key(), "explode"),
+                    SoundKeys.world("explosion"));
             if (fx) {
                 particles.burst(im.x(), im.y(), color, 18, Particles.Style.RING);
                 particles.burst(im.x(), im.y(), color, 12);
                 particles.burst(im.x(), im.y(), new Color(255, 225, 130), 10);
             }
         } else {
-            ctx.sfx(Sfx.HIT);
+            Sounds.playFirst(1.0, SoundKeys.projectile(im.key(), "impact"),
+                    SoundKeys.player("attack_hit"));
             if (fx) {
                 particles.burst(im.x(), im.y(), color, 6,
                         def == null ? Particles.Style.BURST : elementStyle(def.element()));
@@ -1360,6 +1464,63 @@ public class PlayScene extends AbstractScene {
      * at the height the shot is actually at — a meteor's trail hangs in the
      * air behind it instead of lying on the floor it hasn't reached yet.
      */
+    // --- sound helpers ------------------------------------------------------------
+
+    /** Seconds between the scrapes of a tool held against a block. */
+    private static final double MINE_SOUND_INTERVAL = 0.33;
+
+    /**
+     * Play one of the player's action states in this character's voice,
+     * falling back to the generic player sound — so a creator can give the
+     * Rogue her own jump without having to re-record everyone else's.
+     */
+    private void playerSound(String state) {
+        Sounds.playFirst(1.0, SoundKeys.character(character.key, state),
+                SoundKeys.player(state));
+    }
+
+    /**
+     * A block's own sound for an action, falling back to the player's
+     * generic one — {@code block/stone/break}, then {@code player/mine_break}.
+     */
+    private void blockSound(Block block, String blockState, String playerState) {
+        Sounds.playFirst(1.0,
+                block == null ? "" : SoundKeys.block(block.key(), blockState),
+                SoundKeys.character(character.key, playerState),
+                SoundKeys.player(playerState));
+    }
+
+    /** An item's own sound for an action, falling back to the player's. */
+    private void itemSound(String itemKey, String itemState, String playerState) {
+        Sounds.playFirst(1.0,
+                itemKey == null ? "" : SoundKeys.item(itemKey, itemState),
+                SoundKeys.character(character.key, playerState),
+                SoundKeys.player(playerState));
+    }
+
+    /**
+     * A shot leaving the weapon. Its flight and its landing are separate
+     * sounds, played by {@link SceneSounds} and {@link #impactFeedback} — so
+     * a meteor can be called down, heard falling, and heard crashing.
+     */
+    private void shotSound(String projectileKey) {
+        Sounds.playFirst(1.0, SoundKeys.projectile(projectileKey, "fire"),
+                SoundKeys.character(character.key, "shoot"), SoundKeys.player("shoot"));
+    }
+
+    /** A vehicle being climbed into or out of. */
+    private void vehicleSound(Vehicle v, String state) {
+        Sounds.playFirst(1.0, v == null ? "" : SoundKeys.vehicle(v.def.key(), state),
+                SoundKeys.player(state));
+    }
+
+    /** The time of day sounds and lighting run off: the world's, or the server's. */
+    private double timeOfDay() {
+        if (net == null) return world != null ? world.timeOfDay() : 0.25;
+        Snapshot snap = net.client().latest();
+        return snap != null ? snap.timeOfDay() : 0.25;
+    }
+
     private void emitTrail(String key, double x, double y, double z) {
         ProjectileDef def = projectileTypes().get(key);
         if (def != null && def.trail() != null) {
@@ -1376,7 +1537,7 @@ public class PlayScene extends AbstractScene {
         GameClient client = net.client();
         for (int[] e : client.pollBlockEvents()) {
             if (e[2] == 0) {
-                ctx.sfx(Sfx.BREAK);
+                playerSound("mine_break");
                 if (profile().particlesEnabled) {
                     particles.burst((e[0] + 0.5) * ts(), (e[1] + 0.5) * ts(),
                             new Color(160, 150, 140), 8);
@@ -1385,7 +1546,7 @@ public class PlayScene extends AbstractScene {
                 // clear the predicted stroke so the cracks vanish with it.
                 if (e[0] == netMineCol && e[1] == netMineRow) cancelPredictedMining();
             } else {
-                ctx.sfx(Sfx.PLACE);
+                blockSound(level.blocks.get(e[2]), "place", "place");
             }
         }
         for (World.Impact im : client.pollFxEvents()) {

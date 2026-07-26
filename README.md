@@ -50,8 +50,18 @@ over in a generic, data-driven form and wired to the same toggles:
 - **Lighting** — day/night cycle and point lights, implemented as a
   [`LightingPass`](src/main/java/com/larsons/engine/graphics/shader/LightingPass.java)
   in the GLSL-first shader chain, so it composes with every other effect.
-- **Parallax backgrounds, particles, and synthesized sound effects** — all
-  procedural, keeping the engine asset-free and JDK-only.
+- **Sound** — every action state in the game is a *sound key* you can
+  supply: the player swimming, sprinting, landing and casting an ultimate;
+  each block placed, broken, mined and walked on; each mob spawning,
+  attacking and dying; each shot fired, in flight and landing; per-level
+  music, ambience, doors, cutscenes and mini-game events. Audio comes from a
+  **drop-in sound pack** of WAVs and MP3s beside the jar, and creative mode's
+  **sound editor** lists every one of them. Every sound plays at a slightly
+  different pitch each time, Minecraft-style, so repeats never sound
+  mechanical. See [Sound](#sound-every-action-state).
+- **Parallax backgrounds and particles** — procedural, keeping the engine
+  asset-free and JDK-only; the same is true of sound, which falls back to
+  synthesized effects and, beyond those, to silence.
 - **Auto Battler** — a complete standalone game mode, its own option on the
   launch menu: an
   online auto-battler for **2-10 players** in the style of Dota Auto Chess /
@@ -100,8 +110,8 @@ over in a generic, data-driven form and wired to the same toggles:
   its built-in icon. See [Texture packs](#texture-packs-drop-in-art).
 - **Share with friends** — launching from IntelliJ auto-builds a `share/`
   folder with a runnable jar, double-click launch scripts, online-play
-  instructions (including your LAN address), and an empty texture pack to
-  fill. See [Sharing the game](#sharing-the-game--how-joining-works).
+  instructions (including your LAN address), and empty texture and sound
+  packs to fill. See [Sharing the game](#sharing-the-game--how-joining-works).
 - **Giant levels (up to 65536×65536)** — levels past 1024×1024 switch to
   sparse **chunked storage**
   ([`ChunkedTiles`](src/main/java/com/larsons/engine/level/ChunkedTiles.java)):
@@ -690,9 +700,10 @@ everything the registries know, in categories —
 | Doors    | the game type's door list (external `doors.json`), each linking to another level |
 | Characters | every playable [character profile](#characters-ultimates--directional-animation) — skins and traits you create with "+ New Character" — plus *Level Roster…*, which picks the ones **this** level offers at its start |
 | Effects  | every particle style and projectile the game throws; click one to open its texture dialog (these aren't painted into the level, they belong to whatever throws them) |
+| Sounds   | the [sound editor](#sound-every-action-state): *Sound Editor…* lists **every place the game makes a noise** (~2,000 of them, custom objects included) with what each currently plays, *Sound Options…* holds the volumes and the fresh-pitch toggle, *Level Music…* picks this level's track, and one entry per family opens the list filtered to it |
 | Cutscenes | the level's scripted cutscenes — paint one to place its trigger marker; *Manage Cutscenes…* (or right-clicking an entry) opens the editor |
 | Mini Game | the *Mini Game Setup…* window plus the objective markers the four team modes are built from: flag bases, stockpile crates, team spawns, escort waypoints |
-| Tools    | player spawn, multiplayer spawn points, eraser, Brush Settings, the Generate button, the Stat Rules editor |
+| Tools    | player spawn, multiplayer spawn points, eraser, Brush Settings, the Generate button, the Stat Rules editor, the Sound Editor |
 
 Objects **you** created (via the "+" entries) wear a green corner badge in
 the palette and say "· custom" in the caption, so they're obvious at a
@@ -1809,6 +1820,182 @@ case — means "beside the jar", which is what makes a shared game just work.
 
 ---
 
+## Sound (every action state)
+
+Sound works exactly like [texture packs](#texture-packs-drop-in-art), and for
+the same reason: a creator should be able to give their game a voice by
+**dropping files in a folder**, without visiting a menu or writing a line of
+code. The difference is that sound is *silent by default* — every one of the
+game's sound keys makes no noise at all until you supply audio for it.
+
+### Sound keys: object + action state
+
+A **sound key** names an object and something it does
+([`SoundKeys`](src/main/java/com/larsons/engine/audio/SoundKeys.java)):
+
+```
+player/jump                       the player jumping
+player/swim                       swimming (repeats while you swim)
+player/run                        sprinting footsteps
+player/ult_activate               firing an ultimate
+character/rogue/hurt              the Rogue's own cry (falls back to player/hurt)
+block/dirt/break                  breaking Dirt
+block/dirt/step                   walking on Dirt
+block/water/splash                falling into Water
+mob/slime/attack                  the Slime lunging
+mob/slime/death                   the Slime dying
+item/iron_sword/use               swinging the Iron Sword
+projectile/meteor/fire            a meteor being called down
+projectile/meteor/flight          the meteor falling (repeats until it lands)
+projectile/meteor/impact          the meteor crashing
+ultimate/meteor_volley/activate   casting the volley
+music/level  ·  music/boss        the level's music
+ambient/night  ·  door/open  ·  minigame/victory  ·  ui/click
+```
+
+The engine currently names **~2,000 of these**, because every object in every
+registry gets the full set of action states for its kind — and that includes
+the blocks, mobs, items, decorations and characters you create with the
+palette's **"+ New …"** buttons, which register into the same registries the
+catalogue reads. Make a new mob and it arrives with `spawn`, `idle`, `step`,
+`attack`, `hurt` and `death` waiting for audio.
+
+Keys fall back one segment at a time, exactly like texture keys, so
+`mobs/slime.wav` alone gives a Slime one voice for everything it does, and
+adding `mobs/slime_death.wav` beside it takes over just for dying. The engine
+also asks for the *specific* sound before the general one: a footstep tries
+`block/stone/step`, then `character/rogue/walk`, then `player/walk`, and goes
+quiet if you supplied none of them.
+
+### Sound packs (drop-in audio)
+
+A `sounds/` folder **next to the jar**, filled with correctly-named WAVs and
+MP3s, gives the game its voice with no menu visit
+([`SoundPack`](src/main/java/com/larsons/engine/audio/SoundPack.java)).
+Launching from IntelliJ scaffolds an empty one inside `share/`, beside the
+texture pack, so it ships with the game you hand a friend:
+
+```
+share/sounds/
+├── soundpack.json    volume · pitch · pitch drift  (+ per-sound overrides)
+├── SOUND_KEYS.txt    every sound in the game and the file to name it (generated)
+├── README.txt
+├── player/       jump.wav · swim.wav · run.wav · ult_activate.wav · …
+├── blocks/       dirt_break.wav · stone_place.wav · …
+├── liquids/      water_splash.wav · lava_ambient.wav · …
+├── mobs/         slime.wav (everything it does) · slime_death.wav (just dying)
+├── items/        iron_sword_use.wav · …
+├── projectiles/  meteor_fire.wav · meteor_flight.wav · meteor_impact.wav
+├── ultimates/    meteor_volley_activate.wav · nova_burst_impact.wav · …
+├── music/        level.mp3 · boss.mp3 · menu.mp3 · …
+├── lights/  ·  decor/  ·  block_decor/  ·  vehicles/  ·  particles/
+├── ui/  ·  world/  ·  ambient/  ·  doors/  ·  cutscenes/  ·  minigame/
+```
+
+**WAV and MP3 both load.** WAV, AIFF and AU go through the JDK; MP3 goes
+through the engine's own decoder
+([`Mp3Decoder`](src/main/java/com/larsons/engine/audio/Mp3Decoder.java)) — a
+complete MPEG-1/2/2.5 Layer III decoder in pure Java, ported from the
+public-domain [minimp3](https://github.com/lieff/minimp3) (CC0), because the
+JDK has no MP3 support and the engine ships with **no third-party jars** by
+design. A file whose contents disagree with its extension is retried the
+other way, so a `.wav` that is really an MP3 still plays.
+
+**Everything defaults to silence.** A sound key with no file makes no noise.
+The one exception is the handful of actions the engine has always had a
+synthesized voice for — placing and breaking blocks, hitting a mob, picking
+an item up, jumping, firing, exploding, menu clicks — which keep theirs, so
+adding two thousand new sound slots doesn't silence a game that already made
+noise ([`SoundSynth`](src/main/java/com/larsons/engine/audio/SoundSynth.java)).
+Each of those is still a normal sound key, so a pack overrides it like
+anything else, and the editor can switch the built-in off to make the action
+genuinely silent.
+
+### Fresh pitch (the Minecraft trick)
+
+**Every sound plays at a slightly different pitch each time** — ±8% by
+default, drawn per playback. It is the reason a run of footsteps or a burst
+of block-breaking sounds alive instead of like a stuck record, and it is the
+same thing Minecraft does as you move around the world.
+
+It is a **toggle** in the sound editor (*Fresh pitch each time*), with a
+slider for the spread (0–50%), and it is saved with the game type and in the
+pack's `soundpack.json` so the feel travels with the folder. Music is never
+pitch-varied — a wandering soundtrack is a bug, not an effect — and any
+individual sound can opt out.
+
+Pitch is possible at all because the engine mixes sound in software
+([`SoundMixer`](src/main/java/com/larsons/engine/audio/SoundMixer.java)):
+voices are resampled as they play, so any number of sounds overlap, each at
+its own pitch, volume and stereo position, with music looping underneath. On
+a machine with no audio device — CI, a container, a dedicated server — the
+mixer disables itself silently and every call is a no-op, so gameplay code
+never has to ask whether sound exists.
+
+### The sound editor (creative mode)
+
+Creative mode has a **SOUNDS** palette category. It opens **the whole list**:
+every place the game makes a noise, what that sound currently resolves to,
+and the dialog to change it.
+
+```
+SOUNDS palette
+├── Sound Editor…        every sound in the game, one row each
+├── Sound Options…       master/effects/music volume · fresh pitch · pack folder
+├── Level Music…         which music/… track this level plays
+└── Player Sounds… · Blocks… · Mobs… · Items… · Ultimate abilities… ·
+    Projectiles… · Vehicles… · Music… · Ambience… · Mini games… · …
+    (one entry per family, opening the list filtered to it)
+```
+
+Each row reads `Slime — attack · pack: mobs/slime_attack.wav`, or
+`· silent`, or `· built-in`. A **Show sounds** filter narrows the list to
+*only the silent ones* (what still needs audio) or *only the ones with
+audio*. Clicking a row opens that one sound:
+
+- **Use sound pack folder** — on by default; this folder supplies the audio.
+- **Pack file: `player/swim.wav` ✓ found** / *(not there yet — click to
+  rescan)* — the exact file to create, and whether it is there yet. Clicking
+  rescans, for files added while the game is running.
+- **Sound file elsewhere** + **Browse…** — point this one sound at any WAV
+  or MP3 on disk instead.
+- **Volume**, **Pitch**, **Loop while the state holds**, **Fresh pitch each
+  time**, and **Built-in fallback** (for the keys that have one).
+- **▶ Preview** plays it as the dialog currently stands.
+
+Volume/pitch/loop are written into the pack's own `soundpack.json`, so those
+exceptions travel with the folder; the pack switch and any explicit path go
+to `sounds.json` beside `skins.json`. *Rewrite SOUND_KEYS.txt* regenerates
+the key list against the objects that exist right now, including everything
+you just created.
+
+### What actually makes noise
+
+Triggers are wired through the level loader — the play scene and creative
+mode's **play-test**, so a level under test sounds exactly like the level
+being played. One-shot events fire where they happen; anything that has to be
+watched frame to frame lives in
+[`SceneSounds`](src/main/java/com/larsons/engine/audio/SceneSounds.java):
+
+| What | Sounds |
+| --- | --- |
+| **Player** | footsteps timed to the gait (walk/run/swim), jump, double jump, landing, splash going in and out of water, sprint start, hurt, death, respawn, mining scrape, break, place, chop, pickup, drop, eat, drink, craft, teleport, door entry, mount/dismount |
+| **Ultimates** | the meter filling (`charged`), the cast (`activate`), a sustained ability's hum (`loop`), what it does where it lands (`impact`), and the effect ending (`end`) |
+| **Meteors** | the volley being cast, each meteor's `flight` looping as it falls, and its `impact`/`explode` where it lands — three separate sounds for one ability |
+| **Blocks** | place, break, the scrape while mining, footsteps per block underfoot, hits; liquids add splash, swim, flow and a lapping ambience |
+| **Mobs** | spawn, idle murmurs, footsteps as they close, the lunge into an attack, hurt, death — positioned and faded by distance so a horde off-screen is a murmur |
+| **Items** | use, equip, pickup, drop, craft, and a tool breaking |
+| **Projectiles** | fire, flight, impact, explode — per projectile type |
+| **World** | level load/save/generate, daybreak, nightfall, chests, crafting stations, stat rules firing, explosions |
+| **Music** | per level (`Level Music…`), plus menu, creative, combat, boss, victory and defeat tracks |
+| **Everything else** | doors, cutscenes, mini-game scoring and rounds, vehicles, particles, block decorations, and the interface |
+
+Levels store their own music track, so a boss arena can ask for `music/boss`
+while the caves next door play `music/level` — the track travels with the
+level like its other settings do.
+
+---
+
 ## Sharing the game & how joining works
 
 **Launching the game from IntelliJ automatically builds a shareable copy**
@@ -1822,7 +2009,8 @@ share/
 ├── run.bat                      # double-click launcher (Windows)
 ├── run.sh                       # double-click launcher (Mac/Linux)
 ├── HOW_TO_PLAY_ONLINE.txt       # hosting/joining instructions + your LAN IP
-└── textures/                    # drop-in texture pack (see Texture packs)
+├── textures/                    # drop-in texture pack (see Texture packs)
+└── sounds/                      # drop-in sound pack   (see Sound)
 ```
 
 **This only happens inside IntelliJ.** The share folder is a development
@@ -2279,7 +2467,12 @@ engine.scenes().setScene("mine"); // or transitionTo for a fade
 [`DirectionalAnimationTest`](src/test/java/com/larsons/engine/DirectionalAnimationTest.java),
 [`CharacterProfileTest`](src/test/java/com/larsons/engine/CharacterProfileTest.java),
 [`UltimateAbilityTest`](src/test/java/com/larsons/engine/UltimateAbilityTest.java),
-[`EffectSkinsAndJumpTest`](src/test/java/com/larsons/engine/EffectSkinsAndJumpTest.java))
+[`EffectSkinsAndJumpTest`](src/test/java/com/larsons/engine/EffectSkinsAndJumpTest.java),
+[`Mp3DecoderTest`](src/test/java/com/larsons/engine/Mp3DecoderTest.java),
+[`Mp3TablesTest`](src/test/java/com/larsons/engine/audio/Mp3TablesTest.java),
+[`SoundPackTest`](src/test/java/com/larsons/engine/SoundPackTest.java),
+[`SoundMixerTest`](src/test/java/com/larsons/engine/SoundMixerTest.java),
+[`SoundEditorTest`](src/test/java/com/larsons/engine/SoundEditorTest.java))
 covering JSON read/write, level loading (both tile modes + round-trips),
 sprite-sheet slicing, input edge detection, game-type save/load, the
 `ConfigForm` widget's keyboard/mouse interaction (including scrolling),
@@ -2296,6 +2489,18 @@ collisions, sprint stamina, block durability with tool speed-ups, crafting
 and smelting recipes, mana-costed magic, stat rules firing rewards and
 consumptions, brush footprints, mob wall-hopping, surface-decor and
 stat-rule serialization, and the creative scene rendering off-screen),
+sound (the MP3 decoder against streams it builds itself — frames, ID3v1/v2
+tags, resynchronisation past damage, and every truncation and random-byte
+case a half-written file can produce; the packed Huffman code books walked
+for structural integrity, since a mistyped digit there would corrupt audio
+silently rather than fail; the sound pack's name-based lookup with its
+specific-beats-general fallback and its liquids/lights folders; the rule that
+everything defaults to silence except the actions that always had a voice;
+per-sound overrides round-tripping through `soundpack.json` and `sounds.json`;
+the fresh-pitch drift staying inside its bound while never repeating, and
+never touching music; the whole system being a no-op with no audio device;
+objects made with the "+" button arriving with a full set of action states in
+the generated key list; and the creative sound menu driven by clicking it),
 cutscenes ([`CutsceneTest`](src/test/java/com/larsons/engine/CutsceneTest.java):
 sheet-anim frame timing with loop/one-shot clamping, the step player's
 sequencing — captions, moves with walk-state restore and facing, camera
