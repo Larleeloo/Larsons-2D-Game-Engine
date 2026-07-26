@@ -1,6 +1,10 @@
 package com.larsons.engine.config;
 
 import com.larsons.engine.audio.AudioManager;
+import com.larsons.engine.audio.SoundKeys;
+import com.larsons.engine.audio.SoundMixer;
+import com.larsons.engine.audio.SoundPack;
+import com.larsons.engine.audio.Sounds;
 import com.larsons.engine.core.Engine;
 import com.larsons.engine.graphics.TexturePack;
 import com.larsons.engine.graphics.shader.LightingPass;
@@ -19,6 +23,12 @@ import java.util.List;
  * settings — the render frame cap and the shader chain — to the running
  * {@link Engine}, and carries the active multiplayer {@link NetSession} (if
  * any) between the multiplayer menu and the play scene.
+ *
+ * <p>Also the way scenes make noise: {@link #sound(String)} plays any
+ * {@link SoundKeys} key through the drop-in {@link SoundPack}, and
+ * {@link #music(String)} runs the level's track. Both are gated by the
+ * profile's audio toggles, which {@link #applyLiveSettings()} pushes into the
+ * sound system alongside the render settings.
  *
  * <p>The {@code Engine} reference is optional so this can be used in headless
  * tests without a window/loop.
@@ -50,9 +60,39 @@ public class GameContext {
     /** Sound effects (no-op when the profile's audio toggle is off or headless). */
     public AudioManager audio() { return audio; }
 
-    /** Play a sound if the active profile has audio enabled. */
+    /** Play one of the engine's built-in effects if audio is enabled. */
     public void sfx(AudioManager.Sfx sfx) {
         if (profile().audioEnabled) audio.play(sfx);
+    }
+
+    /**
+     * Play a sound by {@link SoundKeys} key — the general form of
+     * {@link #sfx}, and what gameplay code should use so a creator can give
+     * that one object and action its own audio. Unknown or unsupplied keys
+     * are silent, so a caller never has to check first.
+     */
+    public void sound(String key) {
+        if (profile().audioEnabled) Sounds.play(key);
+    }
+
+    /** {@link #sound(String)} at a scaled volume (a softer, farther event). */
+    public void sound(String key, double volumeScale) {
+        if (profile().audioEnabled) Sounds.play(key, volumeScale);
+    }
+
+    /**
+     * Make {@code key} the music that is playing. Safe to call every frame:
+     * asking for the track already playing does nothing, and a blank key
+     * stops the music.
+     */
+    public void music(String key) {
+        if (profile().audioEnabled && profile().musicEnabled) Sounds.music(key);
+        else Sounds.stopMusic();
+    }
+
+    /** Stop everything the mixer is playing (leaving a level, shutting down). */
+    public void stopSounds() {
+        Sounds.stopAll();
     }
 
     public GameProfile profile() {
@@ -136,9 +176,15 @@ public class GameContext {
         if (profile != null) {
             profile.normalize();
             audio.setEnabled(profile.audioEnabled);
-            // A game type may keep its texture pack somewhere of its own;
-            // blank means the folder beside the jar (the default pack).
+            // A game type may keep its texture or sound pack somewhere of its
+            // own; blank means the folder beside the jar (the default pack).
             TexturePack.useDir(profile.texturePackDir);
+            SoundPack.useDir(profile.soundPackDir);
+            Sounds.setMusicEnabled(profile.musicEnabled);
+            Sounds.setMasterVolume(profile.masterVolume);
+            Sounds.setSfxVolume(profile.sfxVolume);
+            Sounds.setMusicVolume(profile.musicVolume);
+            Sounds.setPitchVariation(profile.soundPitchVariation);
         }
         if (engine != null && profile != null) {
             engine.setTargetFps(profile.maxFps);

@@ -66,6 +66,14 @@ public class Level {
      * sample), in which case the active game type's profile is used as-is.
      */
     public GameProfile settings;
+    /**
+     * The music track this level plays, as a {@link com.larsons.engine.audio.SoundKeys}
+     * music key ({@code "level"}, {@code "boss"}, a name of the creator's own).
+     * Blank means the generic {@code music/level} track, so a level that was
+     * never given one still plays whatever the sound pack has for levels.
+     * Set in creative mode's sound editor and saved with the level.
+     */
+    public String music = "";
     public int tileSize = 32;
     public int width;          // in tiles
     public int height;         // in tiles
@@ -197,6 +205,28 @@ public class Level {
     }
 
     /** Colour used to draw the given tile id, or {@code null} for empty tiles. */
+    /** The generic track a level with no music of its own asks for. */
+    private static final String DEFAULT_MUSIC_KEY = "music/level";
+    /** {@link #musicKey()}'s answer, remembered because it is asked every frame. */
+    private transient String musicKeyCache;
+    private transient String musicKeyFor;
+
+    /**
+     * The full sound key of this level's music — its own track when it names
+     * one, else the generic level track.
+     *
+     * <p>Asked once a frame by the scene that plays it, so the answer is kept
+     * until {@link #music} changes rather than rebuilt each time.
+     */
+    public String musicKey() {
+        String track = music == null ? "" : music;
+        if (!track.equals(musicKeyFor) || musicKeyCache == null) {
+            musicKeyFor = track;
+            musicKeyCache = track.isBlank() ? DEFAULT_MUSIC_KEY : "music/" + track.trim();
+        }
+        return musicKeyCache;
+    }
+
     public Color colorFor(int tileId) {
         if (tileId <= 0) return null;
         if (registryTiles) {
@@ -417,6 +447,7 @@ public class Level {
         // here still load in engine versions that only knew the projection.
         m.put("format", format().id());
         m.put("perspective", perspective.name());
+        if (music != null && !music.isBlank()) m.put("music", music);
         m.put("tileSize", tileSize);
         m.put("width", width);
         m.put("height", height);

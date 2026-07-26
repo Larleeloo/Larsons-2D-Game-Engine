@@ -121,7 +121,22 @@ public final class World {
      * The scene polls these offline; the server polls and broadcasts them as
      * {@code fx} messages so every client sees the same hit.
      */
-    public record Impact(String key, double x, double y, boolean explosion) {}
+    public record Impact(String key, double x, double y, boolean explosion) {
+
+        /**
+         * Prefix marking an impact as an ultimate ability's, followed by the
+         * ability's own key ({@code ultimate_meteor_volley}). Feedback code
+         * matches on this rather than on a list of effect kinds, so a new
+         * ability is named and heard without anything downstream changing.
+         */
+        public static final String ULTIMATE_PREFIX = "ultimate_";
+
+        /** The ability key when this is an ultimate's impact, else {@code ""}. */
+        public String ultimateKey() {
+            return key.startsWith(ULTIMATE_PREFIX)
+                    ? key.substring(ULTIMATE_PREFIX.length()) : "";
+        }
+    }
 
     private PickupListener pickupListener;
     private PvpRule pvpRule;
@@ -1107,7 +1122,7 @@ public final class World {
             case OVERDRIVE, BULWARK, LIFE_SIPHON -> { /* sustained; started below */ }
             case NOVA -> {
                 blastMobs(cx, cy, u.radius(), u.power(), profile);
-                impacts.add(new Impact("ultimate_nova", cx, cy, true));
+                impacts.add(new Impact("ultimate_" + u.key(), cx, cy, true));
             }
             case BLINK_STRIKE -> {
                 // Dash toward the aim, capped at the ability's reach, and cut
@@ -1117,7 +1132,7 @@ public final class World {
                 double reach = Math.min(len, u.radius());
                 double ux = len < 0.001 ? (p.facingLeft ? -1 : 1) : dx / len;
                 double uy = len < 0.001 ? 0 : dy / len;
-                impacts.add(new Impact("ultimate_blink", cx, cy, false));
+                impacts.add(new Impact("ultimate_" + u.key(), cx, cy, false));
                 int steps = Math.max(1, (int) Math.ceil(reach / (level.tileSize * 0.5)));
                 double lastX = p.x, lastY = p.y;
                 for (int i = 1; i <= steps; i++) {
@@ -1134,7 +1149,7 @@ public final class World {
                 p.x = lastX;
                 p.y = lastY;
                 p.vy = 0;
-                impacts.add(new Impact("ultimate_blink", p.x + half, p.y + half, false));
+                impacts.add(new Impact("ultimate_" + u.key(), p.x + half, p.y + half, false));
             }
             case METEOR_VOLLEY -> {
                 if (!profile.projectilesEnabled) return false;
@@ -1149,7 +1164,7 @@ public final class World {
                     projectiles.add(skyStrike(def, p.id, aimX, aimY,
                             i, shots, level.tileSize * 1.2, u.radius()));
                 }
-                impacts.add(new Impact("ultimate_volley", aimX, aimY, false));
+                impacts.add(new Impact("ultimate_" + u.key(), aimX, aimY, false));
             }
             case TIME_DILATION -> {
                 // Chill is the engine's existing slow, so a dilated mob reads
@@ -1162,7 +1177,7 @@ public final class World {
                         m.chillTime = Math.max(m.chillTime, u.duration());
                     }
                 }
-                impacts.add(new Impact("ultimate_dilation", cx, cy, true));
+                impacts.add(new Impact("ultimate_" + u.key(), cx, cy, true));
             }
             case EARTHSHATTER -> {
                 blastMobs(cx, cy, u.radius(), u.power(), profile);
@@ -1180,7 +1195,7 @@ public final class World {
                 if (profile.blockEditingEnabled) {
                     breakTerrain(cx, cy, level.tileSize * 2.2, profile.itemsEnabled);
                 }
-                impacts.add(new Impact("ultimate_shatter", cx, cy, true));
+                impacts.add(new Impact("ultimate_" + u.key(), cx, cy, true));
             }
         }
 
@@ -1592,33 +1607,42 @@ public final class World {
     public enum ChopResult { NONE, HIT, BROKEN }
 
     /**
+     * What a swing at a decoration did, and to what. The {@link Decor} comes
+     * back with the result so a caller that wants to react to <em>which</em>
+     * tree was hit — to play its own chopping sound — doesn't have to scan
+     * the level's decorations a second time to find out.
+     *
+     * @param result what the swing achieved
+     * @param decor  the decoration hit, or {@code null} when nothing was
+     */
+    public record Chop(ChopResult result, Decor decor) {
+        /** "The swing hit nothing" — what a miss returns. */
+        public static final Chop NONE = new Chop(ChopResult.NONE, null);
+
+        /** Whether the swing connected with anything at all. */
+        public boolean hit() {
+            return result != ChopResult.NONE;
+        }
+
+        public boolean broken() {
+            return result == ChopResult.BROKEN;
+        }
+    }
+
+    /**
      * Swing at the harvestable decoration under (aimX, aimY), if any: trees,
      * rocks and the like carry an optional hitbox and break down into
      * resources (logs + leaves for trees) after a few hits — an axe chops
      * twice as fast. Purely-ornamental shapes are ignored.
      */
-    public ChopResult chopDecor(double aimX, double aimY, boolean axe, boolean withDrops) {
+    public Chop chopDecor(double aimX, double aimY, boolean axe, boolean withDrops) {
         DecorRegistry registry = DecorRegistry.standard();
-        Level.EntitySpawn best = null;
-        Decor bestDef = null;
-        double bestD = Double.MAX_VALUE;
-        for (Level.EntitySpawn e : level.entities) {
-            if (!"decor_bg".equals(e.kind) && !"decor_fg".equals(e.kind)) continue;
-            Decor def = registry.get(e.type);
-            if (def == null || harvestDrops(def.shape()) == null) continue;
-            double h = def.sizeTiles() * level.tileSize;
-            // Decor sprites anchor at their bottom-centre.
-            double d = Math.hypot(aimX - e.x, aimY - (e.y - h / 2));
-            if (d <= h / 2 + 10 && d < bestD) {
-                bestD = d;
-                best = e;
-                bestDef = def;
-            }
-        }
-        if (best == null) return ChopResult.NONE;
+        Level.EntitySpawn best = harvestableAt(aimX, aimY);
+        Decor bestDef = best == null ? null : registry.get(best.type);
+        if (best == null || bestDef == null) return Chop.NONE;
         int needed = 2 + (int) bestDef.sizeTiles();
         int hits = decorHits.merge(best, axe ? 2 : 1, Integer::sum);
-        if (hits < needed) return ChopResult.HIT;
+        if (hits < needed) return new Chop(ChopResult.HIT, bestDef);
         decorHits.remove(best);
         level.entities.remove(best);
         if (withDrops) {
@@ -1631,7 +1655,32 @@ public final class World {
                 if (item != null) item.toss((i++ % 3 - 1) * 80, -220, tossGravity());
             }
         }
-        return ChopResult.BROKEN;
+        return new Chop(ChopResult.BROKEN, bestDef);
+    }
+
+    /**
+     * The harvestable decoration under an aim point, or {@code null} when
+     * there is none. Split out of {@link #chopDecor} so callers that only
+     * want to <em>know</em> what is there — the play scene, to play that
+     * tree's own chopping sound — don't have to swing at it.
+     */
+    private Level.EntitySpawn harvestableAt(double aimX, double aimY) {
+        DecorRegistry registry = DecorRegistry.standard();
+        Level.EntitySpawn best = null;
+        double bestD = Double.MAX_VALUE;
+        for (Level.EntitySpawn e : level.entities) {
+            if (!"decor_bg".equals(e.kind) && !"decor_fg".equals(e.kind)) continue;
+            Decor def = registry.get(e.type);
+            if (def == null || harvestDrops(def.shape()) == null) continue;
+            double h = def.sizeTiles() * level.tileSize;
+            // Decor sprites anchor at their bottom-centre.
+            double d = Math.hypot(aimX - e.x, aimY - (e.y - h / 2));
+            if (d <= h / 2 + 10 && d < bestD) {
+                bestD = d;
+                best = e;
+            }
+        }
+        return best;
     }
 
     /** What a decoration shape breaks down into, or {@code null} = not harvestable. */
