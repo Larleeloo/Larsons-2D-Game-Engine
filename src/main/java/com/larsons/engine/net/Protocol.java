@@ -39,6 +39,7 @@ import java.util.Map;
  *   client -> server   {"t":"invmove","a":fromSlot,"b":toSlot}    (move/merge/swap)
  *   client -> server   {"t":"invdrop","i":slot,"n":count}         (drop into the world)
  *   client -> server   {"t":"use","i":slot}    (eat / drink / fire a relic / deploy a vehicle)
+ *   client -> server   {"t":"ult","x":..,"y":..}   (fire the charged ultimate ability)
  *
  *   // vehicles &amp; mounts (replicated in snapshots as "veh" entries):
  *   client -> server   {"t":"mount","id":vehicleId}   (validated: near + saddle free)
@@ -278,6 +279,19 @@ public final class Protocol {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("t", "use");
         m.put("i", slot);
+        return encode(m);
+    }
+
+    /**
+     * Client asks to fire their charged ultimate ability at a world point. The
+     * server owns the meter and resolves the effect, so a client can neither
+     * fabricate a cast nor pick where it lands beyond naming an aim point.
+     */
+    public static String ultimate(double aimX, double aimY) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t", "ult");
+        m.put("x", aimX);
+        m.put("y", aimY);
         return encode(m);
     }
 

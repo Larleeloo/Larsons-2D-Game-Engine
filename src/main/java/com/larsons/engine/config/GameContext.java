@@ -102,6 +102,22 @@ public class GameContext {
         return requested;
     }
 
+    // --- character selection ------------------------------------------------------
+
+    /**
+     * The character profile the player last chose at a level's start. Levels
+     * offer their own roster, so this is only a preference: the picker
+     * pre-selects it when the level allows it, and the creative play-test uses
+     * it so testing a level plays as the character you were just playing.
+     */
+    private String characterKey = "";
+
+    public String character() { return characterKey; }
+
+    public void setCharacter(String key) {
+        this.characterKey = key == null ? "" : key;
+    }
+
     /** The active multiplayer session, or {@code null} when playing offline. */
     public NetSession session() { return session; }
 

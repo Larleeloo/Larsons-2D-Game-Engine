@@ -5,10 +5,15 @@ import com.larsons.engine.autobattler.AutoItem;
 import com.larsons.engine.autobattler.AutoItems;
 import com.larsons.engine.autobattler.AutoUnits;
 import com.larsons.engine.autobattler.UnitDef;
+import com.larsons.engine.character.CharacterProfile;
+import com.larsons.engine.character.Characters;
 import com.larsons.engine.entity.ItemDef;
 import com.larsons.engine.entity.ItemRegistry;
 import com.larsons.engine.entity.MobDef;
 import com.larsons.engine.entity.MobRegistry;
+import com.larsons.engine.entity.ProjectileDef;
+import com.larsons.engine.entity.ProjectileRegistry;
+import com.larsons.engine.fx.Particles;
 import com.larsons.engine.world.Block;
 import com.larsons.engine.world.BlockRegistry;
 import com.larsons.engine.world.Decor;
@@ -30,13 +35,24 @@ import java.util.Set;
  * after the object, so a pack is filled in by name alone — no config editing:
  *
  * <pre>
- *   block/dirt        -&gt; blocks/dirt.png
- *   block/water       -&gt; liquids/water.png   (a liquid; blocks/water.png also works)
- *   mob/slime/walk    -&gt; mobs/slime_walk.png (or mobs/slime.png for every state)
- *   item/iron_sword   -&gt; items/iron_sword.png
- *   surface/moss      -&gt; block_decor/moss.png
- *   player/idle       -&gt; player/idle.png
+ *   block/dirt          -&gt; blocks/dirt.png
+ *   block/water         -&gt; liquids/water.png   (a liquid; blocks/water.png also works)
+ *   mob/slime/walk      -&gt; mobs/slime_walk.png (or mobs/slime.png for every state)
+ *   mob/slime/walk/e    -&gt; mobs/slime_walk_e.png  (walking east; falls back to the above)
+ *   item/iron_sword     -&gt; items/iron_sword.png
+ *   surface/moss        -&gt; block_decor/moss.png
+ *   player/idle         -&gt; player/idle.png
+ *   player/walk/ne      -&gt; player/walk_ne.png   (walking north-east)
+ *   character/rogue/walk-&gt; player/rogue_walk.png (a character profile's sheet)
+ *   particle/embers     -&gt; particles/embers.png
+ *   projectile/arrow    -&gt; projectiles/arrow.png
  * </pre>
+ *
+ * <p>Keys nest from general to specific, and a missing sheet falls back one
+ * segment at a time: {@code mob/slime/walk/e} tries {@code mobs/slime_walk_e},
+ * then {@code mobs/slime_walk}, then {@code mobs/slime}. That is what lets one
+ * file reskin a whole mob while a creator who wants per-direction art just
+ * adds more files.
  *
  * <p>{@link #paths} lists the relative paths a key accepts, most specific
  * first; {@link #all} enumerates the whole catalogue so the pack can ship a
@@ -57,6 +73,7 @@ public final class TextureKeys {
     public static final String PLAYER = "player";
     public static final String UNITS = "units";
     public static final String PROJECTILES = "projectiles";
+    public static final String PARTICLES = "particles";
     public static final String BOARD = "board";
     /** Where keys from an unrecognised namespace land. */
     public static final String OTHER = "other";
@@ -71,52 +88,85 @@ public final class TextureKeys {
     public static final List<String> BOARD_PARTS = List.of("tile_a", "tile_b");
 
     /**
+     * The eight facing suffixes a character sheet may be split by
+     * ({@code player/walk/ne}). Unsupplied directions mirror or fall back to
+     * the direction-agnostic sheet, so this is always optional.
+     */
+    public static List<String> directions() {
+        List<String> keys = new ArrayList<>(Facing.values().length);
+        for (Facing f : Facing.values()) keys.add(f.key());
+        return keys;
+    }
+
+    /**
      * One catalogue row: an object, the pack folder it belongs in, the base
-     * file name to give its sheet (no extension), and the animation states
-     * that may be split into {@code <file>_<state>} sheets ({@code idle},
-     * {@code walk}…). An empty state list means the object has a single sheet.
+     * file name to give its sheet (no extension), the animation states that
+     * may be split into {@code <file>_<state>} sheets ({@code idle},
+     * {@code walk}…), and the facings each of those may be split by again
+     * ({@code <file>_<state>_<dir>}). Empty lists mean the object has a
+     * single sheet.
      */
     public record Entry(String category, String folder, String key,
-                        String file, String name, List<String> states) {}
+                        String file, String name, List<String> states,
+                        List<String> directions) {
+
+        public Entry(String category, String folder, String key,
+                     String file, String name, List<String> states) {
+            this(category, folder, key, file, name, states, List.of());
+        }
+    }
 
     private TextureKeys() {}
 
     /** Every pack folder, in the order the key list documents them. */
     public static List<String> folders() {
         return List.of(BLOCKS, LIQUIDS, LIGHTS, MOBS, ITEMS, DECOR, BLOCK_DECOR,
-                PLAYER, UNITS, PROJECTILES, BOARD);
+                PLAYER, UNITS, PROJECTILES, PARTICLES, BOARD);
     }
 
     /**
      * The relative pack paths (no extension) a texture key accepts, most
-     * specific first — so {@code mobs/slime_walk} wins over the catch-all
+     * specific first — so {@code mobs/slime_walk_e} wins over
+     * {@code mobs/slime_walk}, which wins over the catch-all
      * {@code mobs/slime}, and a block can be filed under whichever of
      * blocks/liquids/lights its palette category is.
      */
     public static List<String> paths(String key) {
         if (key == null || key.isBlank()) return List.of();
         String[] parts = key.split("/");
-        String rest = join(parts, 1);          // "slime_walk" / "dirt"
-        String base = parts.length > 1 ? parts[1] : "";  // "slime"
-        boolean stated = parts.length > 2;
+        String rest = join(parts, 1, parts.length);      // "slime_walk_e" / "dirt"
         return switch (parts[0]) {
             // Liquids and lights are blocks; accept all three palette folders.
             case "block" -> List.of(BLOCKS + "/" + rest, LIQUIDS + "/" + rest,
                     LIGHTS + "/" + rest);
-            case "mob" -> stated
-                    ? List.of(MOBS + "/" + rest, MOBS + "/" + base)
-                    : List.of(MOBS + "/" + rest);
+            // Nested namespaces drop one segment at a time, so a single sheet
+            // covers every state and direction until finer ones are supplied.
+            case "mob" -> progressive(MOBS, parts);
             case "item" -> List.of(ITEMS + "/" + rest);
             case "decor" -> List.of(DECOR + "/" + rest);
             case "surface" -> List.of(BLOCK_DECOR + "/" + rest);
-            case "player" -> List.of(PLAYER + "/" + rest);
-            case "unit" -> stated
-                    ? List.of(UNITS + "/" + rest, UNITS + "/" + base)
-                    : List.of(UNITS + "/" + rest);
+            case "player" -> progressive(PLAYER, parts);
+            // A character profile's sheets live beside the player's, prefixed
+            // with the profile key: player/rogue_walk_e.png.
+            case "character" -> progressive(PLAYER, parts);
+            case "unit" -> progressive(UNITS, parts);
             case "projectile" -> List.of(PROJECTILES + "/" + rest);
+            case "particle" -> List.of(PARTICLES + "/" + rest);
             case "board" -> List.of(BOARD + "/" + rest);
             default -> List.of(OTHER + "/" + key.replace('/', '_'));
         };
+    }
+
+    /**
+     * {@code folder/a_b_c}, {@code folder/a_b}, {@code folder/a} — every
+     * prefix of a nested key's segments, longest first.
+     */
+    private static List<String> progressive(String folder, String[] parts) {
+        List<String> out = new ArrayList<>(Math.max(1, parts.length - 1));
+        for (int end = parts.length; end > 1; end--) {
+            out.add(folder + "/" + join(parts, 1, end));
+        }
+        return out.isEmpty() ? List.of(folder + "/" + parts[0]) : out;
     }
 
     /** The file a creator should drop in for {@code key} (the preferred path). */
@@ -141,7 +191,7 @@ public final class TextureKeys {
         }
         for (MobDef d : MobRegistry.standard().all()) {
             out.add(new Entry("Mobs", MOBS, "mob/" + d.key() + "/idle", d.key(),
-                    d.displayName(), MOB_STATES));
+                    d.displayName(), MOB_STATES, directions()));
         }
         // World items and auto-battler items share the item/<key> namespace,
         // so they share one folder; the set keeps a shared key listed once.
@@ -162,7 +212,17 @@ public final class TextureKeys {
         }
         for (String state : PlayerSprites.ACTION_STATES) {
             out.add(new Entry("Player", PLAYER, PlayerSprites.stateKey(state), state,
-                    "Player — " + state, List.of()));
+                    "Player — " + state, List.of(), directions()));
+        }
+        // Character profiles: each one's sheets sit beside the player's,
+        // prefixed with the profile key, and split by state and facing too.
+        for (CharacterProfile c : Characters.all()) {
+            for (String state : PlayerSprites.ACTION_STATES) {
+                out.add(new Entry("Characters", PLAYER,
+                        PlayerSprites.characterStateKey(c.key, state),
+                        c.key + "_" + state, c.name + " — " + state,
+                        List.of(), directions()));
+            }
         }
         List<String> unitStates = new ArrayList<>();
         for (AnimState s : AnimState.values()) unitStates.add(s.key());
@@ -175,9 +235,27 @@ public final class TextureKeys {
                 out.add(new Entry("Items", ITEMS, "item/" + i.key, i.key, i.name, List.of()));
             }
         }
+        // Every projectile the world can fire, then the auto-battler's three
+        // generic kinds (both live in the projectile/<key> namespace).
+        Set<String> shotKeys = new LinkedHashSet<>();
+        for (ProjectileDef d : ProjectileRegistry.standard().all()) {
+            if (shotKeys.add(d.key())) {
+                out.add(new Entry("Projectiles", PROJECTILES, "projectile/" + d.key(),
+                        d.key(), d.name(), List.of()));
+            }
+        }
         for (String kind : PROJECTILE_KINDS) {
-            out.add(new Entry("Auto-battler projectiles", PROJECTILES,
-                    "projectile/" + kind, kind, kind, List.of()));
+            if (shotKeys.add(kind)) {
+                out.add(new Entry("Projectiles", PROJECTILES,
+                        "projectile/" + kind, kind, kind, List.of()));
+            }
+        }
+        // Particle textures: one per motion style, so a pack can replace the
+        // shards, embers and sparks the effects system throws.
+        for (Particles.Style style : Particles.Style.values()) {
+            String kind = Particles.textureKind(style);
+            out.add(new Entry("Particles", PARTICLES, Particles.textureKey(style),
+                    kind, Particles.styleName(style), List.of()));
         }
         for (String part : BOARD_PARTS) {
             out.add(new Entry("Auto-battler board", BOARD, "board/" + part, part,
@@ -186,10 +264,10 @@ public final class TextureKeys {
         return out;
     }
 
-    /** Join key segments from {@code from} with underscores: the file name. */
-    private static String join(String[] parts, int from) {
+    /** Join key segments {@code [from, to)} with underscores: the file name. */
+    private static String join(String[] parts, int from, int to) {
         StringBuilder sb = new StringBuilder();
-        for (int i = from; i < parts.length; i++) {
+        for (int i = from; i < Math.min(to, parts.length); i++) {
             if (sb.length() > 0) sb.append('_');
             sb.append(parts[i]);
         }

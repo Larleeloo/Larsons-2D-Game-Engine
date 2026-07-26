@@ -437,7 +437,7 @@ public final class GameServer {
                     : minigame.resolveMeleeHit(c.state, joinedPlayers(),
                     atk.aimX, atk.aimY);
             if (victim != null) {
-                victim.health -= damage;
+                victim.hurt(damage);
                 minigame.damaged(c.state.id, victim);
             } else if (world.playerAttack(c.state, atk.aimX, atk.aimY, damage) == null) {
                 world.packUpVehicle(atk.aimX, atk.aimY, profile.itemsEnabled);
@@ -576,6 +576,10 @@ public final class GameServer {
                     if (!profile.itemsEnabled) continue;
                     consumeFromInventory(conn, intOf(msg.get("i")));
                 }
+                // The meter lives on the server-side player state, so a
+                // request only fires when the server agrees it is charged.
+                case "ult" -> world.useUltimate(conn.state, dblOf(msg.get("x")),
+                        dblOf(msg.get("y")), profile);
                 default -> { /* not a request we know */ }
             }
         }
@@ -642,14 +646,14 @@ public final class GameServer {
             return;
         }
         if ("mana_potion".equals(def.key())) {
-            if (conn.state.mana >= PlayerState.MAX_MANA) return;
+            if (conn.state.mana >= conn.state.maxMana) return;
             if (conn.inventory.removeAt(slot, 1) < 1) return;
-            conn.state.mana = Math.min(PlayerState.MAX_MANA, conn.state.mana + 50);
+            conn.state.mana = Math.min(conn.state.maxMana, conn.state.mana + 50);
             sendInventory(conn);
             return;
         }
         if (def.heal() <= 0) return;
-        if (conn.state.health >= PlayerState.MAX_HEALTH) return;
+        if (conn.state.health >= conn.state.maxHealth) return;
         if (conn.inventory.removeAt(slot, 1) < 1) return;
         // Same food effects as offline play: heal, stamina, and (for rare
         // delicacies) mana — see World.applyFood.

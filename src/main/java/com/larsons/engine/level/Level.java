@@ -89,6 +89,14 @@ public class Level {
     /** Map-maker cutscenes (triggers + sprite-sheet actors + step scripts). */
     public final List<Cutscene> cutscenes = new ArrayList<>();
     /**
+     * The character profiles a player may pick from when this level starts —
+     * the level's roster, chosen by its creator in the Characters palette.
+     * Keys refer to {@link com.larsons.engine.character.Characters}. An empty
+     * roster means "all of them", so a level is never unplayable and levels
+     * built before character profiles existed keep working.
+     */
+    public final List<String> characters = new ArrayList<>();
+    /**
      * Storage-block inventories (chests, barrels), keyed by
      * {@link #cellKey(int, int)} — a second inventory per container cell that
      * saves and loads with the level data.
@@ -477,6 +485,8 @@ public class Level {
             for (Cutscene cs : cutscenes) scenes.add(cs.toMap());
             m.put("cutscenes", scenes);
         }
+        // The level's character roster; absent means "offer every profile".
+        if (!characters.isEmpty()) m.put("characters", new ArrayList<>(characters));
         if (!containers.isEmpty()) {
             // Storage-block inventories ride along with the level data.
             List<Object> boxes = new ArrayList<>(containers.size());

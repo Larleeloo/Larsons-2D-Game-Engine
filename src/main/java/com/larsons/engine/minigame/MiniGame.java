@@ -587,9 +587,8 @@ public final class MiniGame implements World.PvpRule {
             p.x = spawn[0];
             p.y = spawn[1];
             p.vy = 0;
-            p.health = PlayerState.MAX_HEALTH;
-            p.stamina = PlayerState.MAX_STAMINA;
-            p.mana = PlayerState.MAX_MANA;
+            // Each player's own character caps, not the engine defaults.
+            p.restore();
         }
         events.add("New round — go!");
     }

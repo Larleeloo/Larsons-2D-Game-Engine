@@ -288,6 +288,11 @@ public final class GameClient implements Closeable {
         if (connected) outbox.offer(Protocol.useItem(slot));
     }
 
+    /** Ask the server to fire our charged ultimate at a world point. */
+    public void sendUltimate(double aimX, double aimY) {
+        if (connected) outbox.offer(Protocol.ultimate(aimX, aimY));
+    }
+
     /** Ask the server to seat us on a vehicle (validated server-side). */
     public void sendMount(int vehicleId) {
         if (connected) outbox.offer(Protocol.mount(vehicleId));

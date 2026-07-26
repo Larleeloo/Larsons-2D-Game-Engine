@@ -1,5 +1,7 @@
 package com.larsons.engine.world;
 
+import com.larsons.engine.character.Ultimate;
+import com.larsons.engine.character.Ultimates;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.entity.DroppedItem;
 import com.larsons.engine.entity.Inventory;
@@ -380,27 +382,37 @@ public final class World {
         // Phoenix Feather burns up instead: the player revives in place.
         double size = profile.playerSize;
         for (PlayerState p : players) {
+            // Ultimates: charge the meter, keep a running one's effects live,
+            // and resolve whatever a sustained ability does each tick.
+            Ultimates.charge(p, dt);
+            Ultimates.applyActiveEffects(p);
+            stepSustainedUltimate(p, dt, profile);
+
             Block hazard = hazardAt(p.x + size / 2, p.y + size / 2);
-            if (hazard != null) p.health -= hazard.damage() * dt;
-            if (p.health > PlayerState.MAX_HEALTH) p.health = PlayerState.MAX_HEALTH;
+            // A plan-view hop lifts the character clear of the floor, so lava
+            // and spikes can be jumped over exactly as they can be in a
+            // side-scroller.
+            if (hazard != null && !p.hopping()) p.hurt(hazard.damage() * dt);
+            if (p.health > p.maxHealth) p.health = p.maxHealth;
             if (p.health <= 0) {
                 if (profile.itemsEnabled && itemConsumer != null
                         && itemConsumer.consumeOne(p, "phoenix_feather")) {
-                    p.health = PlayerState.MAX_HEALTH * 0.5;
-                    p.stamina = PlayerState.MAX_STAMINA;
+                    p.health = p.maxHealth * 0.5;
+                    p.stamina = p.maxStamina;
                     impacts.add(new Impact("revive", p.x + size / 2, p.y + size / 2, false));
                     continue;
                 }
                 if (deathListener != null) deathListener.onDeath(p, p.x, p.y);
                 dismount(p); // death unseats: the mount stays where it fell
-                p.health = PlayerState.MAX_HEALTH;
-                p.stamina = PlayerState.MAX_STAMINA;
-                p.mana = PlayerState.MAX_MANA;
+                p.restore();
+                Ultimates.clearEffects(p);
                 double[] spawn = respawnProvider != null
                         ? respawnProvider.respawnPoint(p.id) : level.spawnPointFor(p.id);
                 p.x = spawn[0];
                 p.y = spawn[1];
                 p.vy = 0;
+                p.z = 0;
+                p.vz = 0;
                 playerDeaths++;
             }
         }
@@ -502,7 +514,7 @@ public final class World {
                 double d = Math.hypot(pl.x + half - bx, pl.y + half - by);
                 if (d > radius + half) continue;
                 double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
-                pl.health -= dmg * falloff;
+                pl.hurt(dmg * falloff);
             }
         }
     }
@@ -520,6 +532,8 @@ public final class World {
      * {@code damage}. Returns the mob hit, or {@code null} on a whiff.
      */
     public Mob playerAttack(PlayerState attacker, double aimX, double aimY, double damage) {
+        // A running ultimate (Overdrive) multiplies what the swing lands for.
+        damage *= attacker.ultDamageFactor;
         double px = attacker.x, py = attacker.y;
         // Point of impact: from the player toward the aim, capped at reach.
         double dx = aimX - px, dy = aimY - py;
@@ -537,10 +551,15 @@ public final class World {
                 best = m;
             }
         }
-        if (best != null && best.damage(damage, px)) {
-            mobs.remove(best);
-            handleMobDeath(best, true, null);
-            killsByPlayers++;
+        if (best != null) {
+            // Damage dealt is what fills an ultimate meter fastest, exactly
+            // like the shooter it is borrowed from.
+            Ultimates.chargeFromDamage(attacker, damage);
+            if (best.damage(damage, px)) {
+                mobs.remove(best);
+                handleMobDeath(best, true, null);
+                killsByPlayers++;
+            }
         }
         return best;
     }
@@ -622,6 +641,7 @@ public final class World {
                 Projectile p = new Projectile(nextEntityId++, def, shooter.id,
                         sx, sy, mdx / mlen * def.speed(), mdy / mlen * def.speed());
                 if (held.damage() > 0) p.damage = held.damage();
+                p.damage *= shooter.ultDamageFactor;
                 projectiles.add(p);
                 if (first == null) first = p;
             }
@@ -636,6 +656,8 @@ public final class World {
                     shooter.x, shooter.y,
                     Math.cos(angle) * def.speed(), Math.sin(angle) * def.speed());
             if (held.damage() > 0) p.damage = held.damage();
+            // A running ultimate (Overdrive) empowers shots like it does swings.
+            p.damage *= shooter.ultDamageFactor;
             projectiles.add(p);
             if (first == null) first = p;
         }
@@ -690,6 +712,8 @@ public final class World {
                         explode(p, players, profile);
                     } else {
                         applyElementToMob(p, hit, profile);
+                        // Ranged damage charges the shooter's ultimate too.
+                        Ultimates.chargeFromDamage(playerById(players, p.ownerId), p.damage);
                         if (hit.damage(p.damage, p.x - p.vx)) {
                             mobs.remove(hit);
                             handleMobDeath(hit, true, profile);
@@ -710,7 +734,7 @@ public final class World {
                     if (p.def.explosionRadius() > 0) {
                         explode(p, players, profile);
                     } else {
-                        hit.health -= p.damage;
+                        hit.hurt(p.damage);
                         if (p.def.element() == ProjectileDef.Element.ICE) {
                             hit.stamina = 0; // webs and frost sap the sprint
                         }
@@ -894,7 +918,7 @@ public final class World {
                 double d = Math.hypot(pl.x + half - p.x, pl.y + half - p.y);
                 if (d > radius + half) continue;
                 double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
-                pl.health -= p.damage * falloff;
+                pl.hurt(p.damage * falloff);
                 if (!mobShot) pvpRule.damaged(p.ownerId, pl);
             }
         }
@@ -981,6 +1005,231 @@ public final class World {
                 return false;
             }
         }
+    }
+
+    // --- ultimate abilities --------------------------------------------------------
+
+    /**
+     * Fire a player's charged {@link Ultimate} toward (aimX, aimY). Resolved
+     * here — in the one authoritative simulation — so an ultimate behaves
+     * identically in single-player, the creative play-test, and on the
+     * dedicated server, and so a client can never fabricate one.
+     *
+     * <p>Every ability is written without reference to a gravity axis, so the
+     * same code produces the same fight in a side-scroller, a top-down map,
+     * and an isometric one: blasts are radial, the strike and the volley aim
+     * at a point, and the buffs are self-targeted.
+     *
+     * <p>Returns whether it fired. Firing spends the whole meter and starts
+     * the effect timer for sustained abilities ({@link Ultimates#applyActiveEffects}
+     * keeps the modifiers live from there).
+     */
+    public boolean useUltimate(PlayerState p, double aimX, double aimY, GameProfile profile) {
+        Ultimate u = Ultimates.of(p);
+        if (u == null || !Ultimates.ready(p)) return false;
+        double half = profile.playerSize / 2.0;
+        double cx = p.x + half, cy = p.y + half;
+        // Offensive abilities are combat; the terrain-wrecking one is block
+        // editing. A game type with those off keeps its meter rather than
+        // burning it on nothing.
+        boolean offensive = switch (u.kind()) {
+            case NOVA, BLINK_STRIKE, METEOR_VOLLEY, TIME_DILATION, LIFE_SIPHON,
+                 EARTHSHATTER -> true;
+            default -> false;
+        };
+        if (offensive && !profile.combatEnabled) return false;
+
+        switch (u.kind()) {
+            case OVERDRIVE, BULWARK, LIFE_SIPHON -> { /* sustained; started below */ }
+            case NOVA -> {
+                blastMobs(cx, cy, u.radius(), u.power(), profile);
+                impacts.add(new Impact("ultimate_nova", cx, cy, true));
+            }
+            case BLINK_STRIKE -> {
+                // Dash toward the aim, capped at the ability's reach, and cut
+                // down everything along the corridor travelled.
+                double dx = aimX - cx, dy = aimY - cy;
+                double len = Math.hypot(dx, dy);
+                double reach = Math.min(len, u.radius());
+                double ux = len < 0.001 ? (p.facingLeft ? -1 : 1) : dx / len;
+                double uy = len < 0.001 ? 0 : dy / len;
+                impacts.add(new Impact("ultimate_blink", cx, cy, false));
+                int steps = Math.max(1, (int) Math.ceil(reach / (level.tileSize * 0.5)));
+                double lastX = p.x, lastY = p.y;
+                for (int i = 1; i <= steps; i++) {
+                    double t = reach * i / steps;
+                    double nx = clampX(p.x + ux * t, profile.playerSize);
+                    double ny = clampY(p.y + uy * t, profile.playerSize);
+                    // Stop at the first wall rather than teleporting through it.
+                    if (blockedBody(nx, ny, profile.playerSize)) break;
+                    lastX = nx;
+                    lastY = ny;
+                    blastMobs(nx + half, ny + half, level.tileSize * 0.9,
+                            u.power(), profile);
+                }
+                p.x = lastX;
+                p.y = lastY;
+                p.vy = 0;
+                impacts.add(new Impact("ultimate_blink", p.x + half, p.y + half, false));
+            }
+            case METEOR_VOLLEY -> {
+                if (!profile.projectilesEnabled) return false;
+                ProjectileDef def = projectileTypes.get("meteor");
+                if (def == null) def = projectileTypes.get("fireball");
+                if (def == null) return false;
+                int shots = Math.max(1, (int) Math.round(u.power()));
+                for (int i = 0; i < shots; i++) {
+                    // Fanned around the aim point, launched from outside it so
+                    // they converge — the same pattern in every perspective.
+                    double spread = (i - (shots - 1) / 2.0) * level.tileSize * 1.2;
+                    double sx = aimX + spread;
+                    double sy = aimY - u.radius();
+                    double mdx = aimX - sx, mdy = aimY - sy;
+                    double mlen = Math.max(0.001, Math.hypot(mdx, mdy));
+                    projectiles.add(new Projectile(nextEntityId++, def, p.id, sx, sy,
+                            mdx / mlen * def.speed(), mdy / mlen * def.speed()));
+                }
+                impacts.add(new Impact("ultimate_volley", aimX, aimY, false));
+            }
+            case TIME_DILATION -> {
+                // Chill is the engine's existing slow, so a dilated mob reads
+                // the same as an ice-hit one and needs no new status bit.
+                for (Mob m : mobs) {
+                    if (m.dead()) continue;
+                    double d = Math.hypot(m.x + m.def.size() / 2 - cx,
+                            m.y + m.def.size() / 2 - cy);
+                    if (d <= u.radius() + m.def.size() / 2) {
+                        m.chillTime = Math.max(m.chillTime, u.duration());
+                    }
+                }
+                impacts.add(new Impact("ultimate_dilation", cx, cy, true));
+            }
+            case EARTHSHATTER -> {
+                blastMobs(cx, cy, u.radius(), u.power(), profile);
+                // Knock survivors outward: a shove along the vector away from
+                // the caster, which reads as a shockwave in any perspective.
+                for (Mob m : mobs) {
+                    if (m.dead()) continue;
+                    double mx = m.x + m.def.size() / 2, my = m.y + m.def.size() / 2;
+                    double d = Math.hypot(mx - cx, my - cy);
+                    if (d > u.radius() + m.def.size() / 2 || d < 0.001) continue;
+                    double push = level.tileSize * 1.4 * (1 - Math.min(1, d / u.radius()));
+                    m.x = clampX(m.x + (mx - cx) / d * push, m.def.size());
+                    m.y = clampY(m.y + (my - cy) / d * push, m.def.size());
+                }
+                if (profile.blockEditingEnabled) {
+                    breakTerrain(cx, cy, level.tileSize * 2.2, profile.itemsEnabled);
+                }
+                impacts.add(new Impact("ultimate_shatter", cx, cy, true));
+            }
+        }
+
+        p.ultCharge = 0;
+        if (u.sustained()) {
+            p.ultActive = u.duration();
+            p.ultActiveKey = u.key();
+            Ultimates.applyActiveEffects(p);
+            impacts.add(new Impact("ultimate_" + u.key(), cx, cy, false));
+        }
+        return true;
+    }
+
+    /**
+     * The per-tick half of a sustained ultimate — the part that keeps
+     * happening while the timer runs, rather than the modifiers
+     * {@link Ultimates#applyActiveEffects} sets on the player.
+     */
+    private void stepSustainedUltimate(PlayerState p, double dt, GameProfile profile) {
+        if (p.ultActive <= 0) return;
+        Ultimate u = Ultimates.get(p.ultActiveKey);
+        if (u == null) return;
+        double half = profile.playerSize / 2.0;
+        double cx = p.x + half, cy = p.y + half;
+        switch (u.kind()) {
+            case BULWARK -> // Regenerate alongside the damage soak.
+                    p.health = Math.min(p.maxHealth, p.health + u.power() * 12 * dt);
+            case LIFE_SIPHON -> {
+                if (!profile.combatEnabled) return;
+                double drained = 0;
+                List<Mob> died = null;
+                for (Mob m : mobs) {
+                    if (m.dead()) continue;
+                    double d = Math.hypot(m.x + m.def.size() / 2 - cx,
+                            m.y + m.def.size() / 2 - cy);
+                    if (d > u.radius() + m.def.size() / 2) continue;
+                    double tick = u.power() * dt;
+                    drained += tick;
+                    if (m.damage(tick, cx)) {
+                        if (died == null) died = new ArrayList<>();
+                        died.add(m);
+                    }
+                }
+                if (died != null) {
+                    for (Mob m : died) {
+                        mobs.remove(m);
+                        handleMobDeath(m, profile.itemsEnabled, profile);
+                        killsByPlayers++;
+                    }
+                }
+                if (drained > 0) {
+                    p.health = Math.min(p.maxHealth, p.health + drained);
+                    Ultimates.chargeFromDamage(p, drained);
+                }
+            }
+            default -> { /* the rest are pure modifiers on the player */ }
+        }
+    }
+
+    /**
+     * Damage every living mob inside a circle with distance falloff, clearing
+     * the dead out and crediting the kills. The shared body of the radial
+     * ultimates (and the shape the relic nova already used).
+     */
+    private void blastMobs(double cx, double cy, double radius, double damage,
+                           GameProfile profile) {
+        if (radius <= 0 || damage <= 0) return;
+        List<Mob> died = null;
+        for (Mob m : mobs) {
+            if (m.dead()) continue;
+            double d = Math.hypot(m.x + m.def.size() / 2 - cx,
+                    m.y + m.def.size() / 2 - cy);
+            if (d > radius + m.def.size() / 2) continue;
+            double falloff = 1.0 - Math.min(1, d / radius) * 0.6;
+            if (m.damage(damage * falloff, cx)) {
+                if (died == null) died = new ArrayList<>();
+                died.add(m);
+            }
+        }
+        if (died != null) {
+            for (Mob m : died) {
+                mobs.remove(m);
+                handleMobDeath(m, profile.itemsEnabled, profile);
+                killsByPlayers++;
+            }
+        }
+    }
+
+    /** Whether a body of {@code size} at (x, y) overlaps solid terrain. */
+    private boolean blockedBody(double x, double y, double size) {
+        double ts = level.tileSize;
+        int c0 = (int) Math.floor(x / ts);
+        int c1 = (int) Math.floor((x + size - 0.001) / ts);
+        int r0 = (int) Math.floor(y / ts);
+        int r1 = (int) Math.floor((y + size - 0.001) / ts);
+        for (int c = c0; c <= c1; c++) {
+            for (int r = r0; r <= r1; r++) {
+                if (level.solidAt(c, r)) return true;
+            }
+        }
+        return false;
+    }
+
+    private double clampX(double x, double size) {
+        return Math.max(0, Math.min(x, level.width * (double) level.tileSize - size));
+    }
+
+    private double clampY(double y, double size) {
+        return Math.max(0, Math.min(y, level.height * (double) level.tileSize - size));
     }
 
     // --- vehicles & mounts ---------------------------------------------------------
@@ -1268,10 +1517,10 @@ public final class World {
      * restore mana.
      */
     public static void applyFood(PlayerState p, ItemDef def) {
-        p.health = Math.min(PlayerState.MAX_HEALTH, p.health + def.heal());
-        p.stamina = Math.min(PlayerState.MAX_STAMINA, p.stamina + def.heal() * 0.6);
+        p.health = Math.min(p.maxHealth, p.health + def.heal());
+        p.stamina = Math.min(p.maxStamina, p.stamina + def.heal() * 0.6);
         if (def.rarity().ordinal() >= ItemDef.Rarity.RARE.ordinal()) {
-            p.mana = Math.min(PlayerState.MAX_MANA, p.mana + def.heal() * 0.5);
+            p.mana = Math.min(p.maxMana, p.mana + def.heal() * 0.5);
         }
     }
 

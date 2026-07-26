@@ -1,5 +1,7 @@
 package com.larsons.engine.entity;
 
+import com.larsons.engine.graphics.Facing;
+import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.sim.PlayerPhysics;
 import com.larsons.engine.sim.PlayerState;
@@ -108,6 +110,12 @@ public final class Mob {
     public double x, y;        // top-left, world px
     public double vy;
     public boolean facingLeft;
+    /**
+     * The compass direction this mob faces, which picks its directional
+     * sprite. Kept in step with {@link #facingLeft} (which stays the wire's
+     * compact form and the fallback for mirrored art).
+     */
+    public Facing facing = Facing.EAST;
     public double health;
     public AIState state = AIState.IDLE;
 
@@ -352,7 +360,7 @@ public final class Mob {
                         }
                     } else {
                         attackTimer = ATTACK_COOLDOWN;
-                        nearest.health -= def.damage();
+                        nearest.hurt(def.damage());
                         if (def.ability() == MobDef.Ability.LIFESTEAL) {
                             health = Math.min(def.maxHealth(), health + def.damage() * 0.5);
                         }
@@ -424,6 +432,11 @@ public final class Mob {
         }
 
         if (dx != 0) facingLeft = dx < 0;
+        // The compass direction the mob is heading, which picks the directional
+        // sprite that draws it: left/right on a platform, all eight on a plane
+        // (so a slime walking north-east is drawn from behind, like the player).
+        facing = Facing.of(dx, planar ? dyPlanar : 0,
+                planar ? Perspective.TOP_DOWN : Perspective.SIDE_SCROLL, facing);
 
         // --- movement & collision (the same AABB rules as PlayerPhysics) ---
         boolean inLiquid = level.liquidAt((int) Math.floor((x + size / 2) / ts),
@@ -693,6 +706,8 @@ public final class Mob {
         m.put("s", state.ordinal());
         int bits = statusBits();
         if (bits != 0) m.put("e", bits); // absent when clean, like input flags
+        // Absent for plain east/west facings, which the "f" flag already says.
+        if (facing != Facing.EAST && facing != Facing.WEST) m.put("d", facing.key());
         return m;
     }
 }

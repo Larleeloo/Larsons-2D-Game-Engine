@@ -191,6 +191,18 @@ public final class LevelLoader {
             }
         }
 
+        // The character roster this level offers at its start. Profiles that
+        // no longer exist are dropped when the roster is resolved, so a
+        // deleted character never makes a level unplayable.
+        if (root.get("characters") instanceof List<?> roster) {
+            for (Object o : roster) {
+                if (o instanceof String key && !key.isBlank()
+                        && !lvl.characters.contains(key)) {
+                    lvl.characters.add(key);
+                }
+            }
+        }
+
         if (root.get("containers") instanceof List<?> boxes) {
             // Storage-block inventories (chests, barrels) saved with the level.
             for (Object o : boxes) {

@@ -1,5 +1,8 @@
 package com.larsons.engine.demo;
 
+import com.larsons.engine.character.CharacterProfile;
+import com.larsons.engine.character.CharacterStore;
+import com.larsons.engine.character.Characters;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.input.InputManager;
@@ -136,9 +139,38 @@ public class LevelSelectScene extends AbstractScene {
         // — that one only seeds levels created later.)
         form.addEnum("Level format", LevelFormat.values(),
                 () -> editLevel.format(), v -> editLevel.setFormat(v));
+        addRosterOptions();
         ProfileForms.addFeatureOptions(form, editLevel.settings);
         form.addAction("Save", this::saveEdited);
         form.addAction("Back", () -> openActions(selectedLevel));
+    }
+
+    /**
+     * The level's character roster: which profiles a player may choose from
+     * when this level starts. Nothing ticked means every profile is offered,
+     * which is what levels built before character profiles existed do.
+     *
+     * <p>The creative editor's Characters palette has the same control; this
+     * is the one here because per-level settings are edited on this screen.
+     */
+    private void addRosterOptions() {
+        // The game type's profiles must be registered before they can be listed.
+        new CharacterStore(ctx.profile().name).loadAndRegister();
+        for (CharacterProfile c : Characters.all()) {
+            form.addToggle("Character: " + c.name,
+                    () -> editLevel.characters.contains(c.key),
+                    v -> {
+                        if (v) {
+                            if (!editLevel.characters.contains(c.key)) {
+                                editLevel.characters.add(c.key);
+                            }
+                        } else {
+                            editLevel.characters.remove(c.key);
+                        }
+                    });
+        }
+        form.addAction("Offer every character (clear the roster)",
+                () -> editLevel.characters.clear());
     }
 
     /** Persist the level's new name + settings, renaming its file if needed. */
