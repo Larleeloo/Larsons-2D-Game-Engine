@@ -1,7 +1,9 @@
 .gradle
 build/
-# Auto-built shareable game folder (see ShareJar)
+# Auto-built shareable game folder, incl. its texture pack (see ShareJar)
 share/
+# A texture pack dropped next to the project instead (see TexturePack)
+/textures/
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/

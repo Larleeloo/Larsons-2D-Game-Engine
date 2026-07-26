@@ -81,9 +81,13 @@ public class GameProfile {
     public boolean finalized = false;
 
     /**
-     * The creator's texture pack folder ("" = none): sprite-sheet browsing in
-     * the creative editor's texture dialog starts here, and bare sheet
-     * filenames resolve against it.
+     * The creator's texture pack folder. Blank — the normal case — means the
+     * {@code textures/} folder beside the game's jar, so a pack travels with
+     * the shared game and needs no setting at all. Point it elsewhere to keep
+     * a game type's pack in its own place: that folder then supplies every
+     * texture, sprite-sheet browsing starts there, and bare sheet filenames
+     * resolve against it (see
+     * {@link com.larsons.engine.graphics.TexturePack}).
      */
     public String texturePackDir = "";
 

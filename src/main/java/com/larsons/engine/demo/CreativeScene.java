@@ -18,6 +18,7 @@ import com.larsons.engine.entity.MobRegistry;
 import com.larsons.engine.entity.Projectile;
 import com.larsons.engine.fx.Particles;
 import com.larsons.engine.graphics.Animation;
+import com.larsons.engine.graphics.AssetLoader;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.CutscenePainter;
 import com.larsons.engine.graphics.EntitySprites;
@@ -27,6 +28,8 @@ import com.larsons.engine.graphics.SkinDef;
 import com.larsons.engine.graphics.SkinStore;
 import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.SurfaceDecorPainter;
+import com.larsons.engine.graphics.TextureKeys;
+import com.larsons.engine.graphics.TexturePack;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.level.Brush;
 import com.larsons.engine.level.Cutscene;
@@ -156,12 +159,18 @@ import java.util.Map;
  * the background layer (behind terrain) or the foreground (in front of
  * players) — toggle with {@code B} or the layer button.
  *
- * <p><b>Textures:</b> right-click any palette icon to assign a sprite sheet
- * to that block/item/mob/decoration (per animation state for mobs) via the
- * {@link Skins} system; assignments persist in {@code skins.json}. The Tools
- * palette's Player Skin… entry does the same for the player character, with
- * one animation per action state (idle/walk/run/jump/fall/swim) played back
- * in play-test and play.
+ * <p><b>Textures:</b> the palette swatches show the texture each object
+ * actually renders with, so a reskin is visible in the sidebar the moment it
+ * applies. Sheets come from the drop-in {@link TexturePack} folder beside the
+ * jar — named after the object, no menu visit needed — or from a path picked
+ * per object. Right-click any palette icon for that object's texture dialog:
+ * the pack switch (on by default, built-in art as the fallback), the file
+ * name the pack wants for it, the frame size/length/rate, and a "sheet
+ * elsewhere" path for art outside the pack; mobs get one sheet per animation
+ * state. Assignments persist in {@code skins.json} and pack exceptions in the
+ * pack's own {@code texturepack.json}. The Tools palette's Player Skin… entry
+ * does the same for the player character, with one animation per action state
+ * (idle/walk/run/jump/fall/swim) played back in play-test and play.
  *
  * <p><b>Generate:</b> the Tools palette's Generate button builds a large
  * Perlin-noise level — Minecraft-style terrain/caves/ores/liquids fused with
@@ -336,6 +345,8 @@ public class CreativeScene extends AbstractScene {
     private List<String> texStates = List.of("default");
     private int texStateIndex;
     private String texSheet = "", texW = "32", texH = "32", texCount = "1", texFps = "0";
+    /** Per-object texture pack switch; on by default (built-in art falls back). */
+    private boolean texUsePack = true;
 
     // Play-test state (offline only).
     private boolean testing;
@@ -482,7 +493,8 @@ public class CreativeScene extends AbstractScene {
             if (b.isFlow()) continue; // the sim's hidden flow twins
             if (!format.allowsBlock(b.key())) continue; // format-specific family
             Entry e = new Entry("block", b.key(), b.displayName(),
-                    EntitySprites.block(b, 40), customContent.isCustom("block", b.key()));
+                    swatch("block/" + b.key(), EntitySprites.block(b, 40)),
+                    customContent.isCustom("block", b.key()));
             if (b.liquid()) {
                 liquids.add(e);
             } else if (b.emitsLight()) {
@@ -497,28 +509,32 @@ public class CreativeScene extends AbstractScene {
 
         List<Entry> mobs = newList("+ New Mob");
         for (MobDef d : MobRegistry.standard().all()) {
-            mobs.add(new Entry("mob", d.key(), d.displayName(), EntitySprites.mob(d, 40),
+            mobs.add(new Entry("mob", d.key(), d.displayName(),
+                    swatch("mob/" + d.key() + "/idle", EntitySprites.mob(d, 40)),
                     customContent.isCustom("mob", d.key())));
         }
         palette.put(Category.MOBS, mobs);
 
         List<Entry> items = newList("+ New Item");
         for (ItemDef d : ItemRegistry.standard().allByRarity()) {
-            items.add(new Entry("item", d.key(), d.name(), EntitySprites.item(d, 40),
+            items.add(new Entry("item", d.key(), d.name(),
+                    swatch("item/" + d.key(), EntitySprites.item(d, 40)),
                     customContent.isCustom("item", d.key())));
         }
         palette.put(Category.ITEMS, items);
 
         List<Entry> decor = newList("+ New Decoration");
         for (Decor d : DecorRegistry.standard().all()) {
-            decor.add(new Entry("decor", d.key(), d.name(), EntitySprites.decor(d, 40),
+            decor.add(new Entry("decor", d.key(), d.name(),
+                    swatch("decor/" + d.key(), EntitySprites.decor(d, 40)),
                     customContent.isCustom("decor", d.key())));
         }
         palette.put(Category.DECOR, decor);
 
         List<Entry> surface = newList("+ New Block Decor");
         for (SurfaceDecor d : SurfaceDecorRegistry.standard().all()) {
-            surface.add(new Entry("surface", d.key(), d.name(), surfaceIcon(d),
+            surface.add(new Entry("surface", d.key(), d.name(),
+                    swatch("surface/" + d.key(), surfaceIcon(d)),
                     customContent.isCustom("surface", d.key())));
         }
         palette.put(Category.SURFACE, surface);
@@ -590,6 +606,20 @@ public class CreativeScene extends AbstractScene {
         List<Entry> list = new ArrayList<>();
         list.add(new Entry("new", "new", label, plusIcon()));
         return list;
+    }
+
+    /** Palette swatch side length, in pixels. */
+    private static final int SWATCH = 40;
+
+    /**
+     * The swatch a palette entry shows: the texture actually assigned to its
+     * key — from the drop-in texture pack or a sheet the creator picked — and
+     * only otherwise the built-in procedural art. So the sidebar previews
+     * what will land on the canvas, and a reskin is visible the moment it is
+     * applied (the palette is rebuilt after every texture change).
+     */
+    private static BufferedImage swatch(String textureKey, BufferedImage fallback) {
+        return Skins.icon(textureKey, fallback, SWATCH);
     }
 
     @Override
@@ -1410,8 +1440,7 @@ public class CreativeScene extends AbstractScene {
             return;
         }
         texEntry = e;
-        texStates = e.kind.equals("mob")
-                ? List.of("idle", "walk", "attack", "hurt") : List.of("default");
+        texStates = e.kind.equals("mob") ? TextureKeys.MOB_STATES : List.of("default");
         texStateIndex = 0;
         loadTextureFields();
         openDialog(Dialog.TEXTURE);
@@ -2499,16 +2528,32 @@ public class CreativeScene extends AbstractScene {
         };
     }
 
+    /**
+     * Fill the dialog's fields for the selected key: the texture pack switch
+     * as this object has it (on unless it was turned off), the sheet path the
+     * creator picked (if any), and the frame settings the texture actually
+     * plays at right now — the pack's universal spec for a pack texture, this
+     * object's exception when it has one.
+     */
     private void loadTextureFields() {
-        SkinDef existing = Skins.get(textureKey());
-        if (existing != null) {
-            texSheet = existing.sheet;
-            texW = String.valueOf(existing.frameWidth);
-            texH = String.valueOf(existing.frameHeight);
-            texCount = String.valueOf(existing.frameCount);
-            texFps = String.valueOf(existing.fps);
+        String key = textureKey();
+        SkinDef stored = Skins.get(key);
+        SkinDef showing = Skins.effective(key);
+        texUsePack = stored == null || stored.usePack;
+        texSheet = stored != null ? stored.sheet : "";
+        SkinDef frames = showing != null ? showing : stored;
+        if (frames != null) {
+            texW = String.valueOf(frames.frameWidth);
+            texH = String.valueOf(frames.frameHeight);
+            texCount = String.valueOf(frames.frameCount);
+            texFps = trimNumber(frames.fps);
+        } else if (texUsePack) {
+            TexturePack.Frames f = TexturePack.framesFor(key);
+            texW = String.valueOf(f.width());
+            texH = String.valueOf(f.height());
+            texCount = String.valueOf(f.count());
+            texFps = trimNumber(f.fps());
         } else {
-            texSheet = "";
             texW = texH = "32";
             texCount = "1";
             texFps = "0";
@@ -2516,56 +2561,72 @@ public class CreativeScene extends AbstractScene {
     }
 
     /**
-     * Assign any sprite sheet to the right-clicked palette entry. Mobs pick
-     * an action state (idle/walk/attack/hurt); one sheet per state, and the
-     * renderer falls back to idle for states without one. Applies live via
-     * {@link Skins} and persists to {@code skins.json}.
+     * Assign a sprite sheet to the right-clicked palette entry. Mobs pick an
+     * action state (idle/walk/attack/hurt); one sheet per state, and the
+     * renderer falls back to idle for states without one.
+     *
+     * <p>Two ways to supply the art, and the first is the default:
+     * <ul>
+     *   <li><b>Texture pack folder</b> (on unless switched off) — the sheet is
+     *       whatever sits at this object's file name inside the drop-in
+     *       {@link TexturePack} folder. Nothing there? The built-in icon
+     *       stands, so the switch is safe to leave on for everything. The
+     *       frame fields set this texture's exception to the pack's universal
+     *       size/length/rate and are saved into the pack itself.</li>
+     *   <li><b>A sheet elsewhere</b> — switch the pack off (or just fill in a
+     *       path, used as the pack's fallback) to point this one object at any
+     *       image on disk.</li>
+     * </ul>
+     *
+     * <p>Either way it applies live via {@link Skins}, persists to
+     * {@code skins.json}, and the palette swatch redraws with the new look.
      */
     private void buildTextureForm() {
+        String key = textureKey();
         if (texStates.size() > 1) {
             dialogForm.addEnum("Action state", texStates.toArray(new String[0]),
                     () -> texStates.get(texStateIndex),
                     v -> {
                         texStateIndex = Math.max(0, texStates.indexOf(v));
                         loadTextureFields();
+                        openDialog(Dialog.TEXTURE); // the pack file row follows the state
                     });
         }
-        // The game type's texture pack folder: Browse… opens here, and bare
-        // sheet filenames resolve against it — one folder keeps a pack's
-        // sheets organized instead of scattering absolute paths around.
-        dialogForm.addText("Texture pack folder (blank = default)",
+        dialogForm.addToggle("Use texture pack folder", () -> texUsePack, v -> {
+            texUsePack = v;
+            openDialog(Dialog.TEXTURE);
+        });
+        // Name the file this object wants, so a creator can go make it — and
+        // say whether it is there yet. Clicking re-scans, for sheets dropped
+        // in while the game was running.
+        Path packFile = TexturePack.fileFor(key);
+        dialogForm.addAction("Pack file: " + TexturePack.fileNameFor(key)
+                + (packFile != null ? "  ✓ found" : "  (not there yet — click to rescan)"),
+                this::rescanTexturePack).enabledWhen(() -> texUsePack);
+        // Where that folder is: blank = beside the jar (share/textures in the
+        // IDE), which is what a pack shipped with the game uses.
+        dialogForm.addText("Texture pack folder (blank = beside the jar)",
                 () -> profile().texturePackDir,
-                v -> profile().texturePackDir = v, 96);
-        dialogForm.addText("Sheet (PNG path)", () -> texSheet, v -> texSheet = v, 96);
+                v -> {
+                    profile().texturePackDir = v;
+                    TexturePack.useDir(v);
+                }, 96);
+        dialogForm.addText("Sheet elsewhere (PNG path)", () -> texSheet, v -> texSheet = v, 96);
         dialogForm.addAction("Browse…", this::browseForSheet);
         dialogForm.addText("Frame width px", () -> texW, v -> texW = v, 4);
         dialogForm.addText("Frame height px", () -> texH, v -> texH = v, 4);
         dialogForm.addText("Frame count", () -> texCount, v -> texCount = v, 3);
         dialogForm.addText("FPS (0 = static)", () -> texFps, v -> texFps = v, 5);
-        dialogForm.addAction("Apply Texture", () -> {
-            if (texSheet.isBlank()) {
-                setStatus("Pick a sprite sheet first (path or Browse…)");
-                return;
-            }
-            ctx.save(); // the texture pack folder persists with the game type
-            SkinDef def = new SkinDef(textureKey(), resolveSheetPath(texSheet.trim()),
-                    parseInt(texW, 32), parseInt(texH, 32),
-                    parseInt(texCount, 1), parseDouble(texFps));
-            Skins.put(def);
-            persistSkins();
-            // The Tools palette's Player Skin icon previews the current look.
-            if ("playerskin".equals(texEntry.kind)) buildPalette();
-            closeDialog();
-            setStatus(texEntry.name + " now uses " + def.sheet
-                    + " (" + def.frameCount + " frames @ " + def.fps + " fps)");
-        });
-        if (Skins.get(textureKey()) != null) {
-            dialogForm.addAction("Remove Override", () -> {
-                Skins.remove(textureKey());
+        dialogForm.addAction("Apply Texture", this::applyTexture);
+        if (Skins.get(key) != null || TexturePack.hasOverride(key)) {
+            dialogForm.addAction("Reset to defaults", () -> {
+                Skins.remove(key);
+                TexturePack.clearOverride(key);
                 persistSkins();
-                if ("playerskin".equals(texEntry.kind)) buildPalette();
+                buildPalette();
                 closeDialog();
-                setStatus(texEntry.name + " back to its procedural texture");
+                setStatus(texEntry.name + " reset — texture pack on,"
+                        + " built-in art as the fallback");
             });
         }
         // User-created objects are deletable right from their entry's dialog.
@@ -2573,6 +2634,60 @@ public class CreativeScene extends AbstractScene {
             dialogForm.addAction("DELETE this custom object", this::deleteCustomEntry);
         }
         dialogForm.addAction("Cancel", this::closeDialog);
+    }
+
+    /**
+     * Save the dialog: the frame settings go to the texture pack (as this
+     * key's exception to the universal spec) when the pack supplies the art,
+     * and the switch plus any explicit sheet path go to {@code skins.json}.
+     */
+    private void applyTexture() {
+        String key = textureKey();
+        int w = parseInt(texW, TexturePack.DEFAULT_FRAME_SIZE);
+        int h = parseInt(texH, TexturePack.DEFAULT_FRAME_SIZE);
+        int count = parseInt(texCount, 1);
+        double fps = parseDouble(texFps);
+        String sheet = texSheet.isBlank() ? "" : resolveSheetPath(texSheet.trim());
+        if (!texUsePack && sheet.isEmpty()) {
+            setStatus("Turn the texture pack back on, or pick a sheet (path or Browse…)");
+            return;
+        }
+        ctx.save(); // the texture pack folder persists with the game type
+        if (texUsePack) {
+            try {
+                TexturePack.setOverride(key, w, h, count, fps);
+            } catch (RuntimeException e) {
+                setStatus("Couldn't write the texture pack settings: " + e.getMessage());
+                return;
+            }
+        }
+        Skins.put(new SkinDef(key, sheet, w, h, count, fps, texUsePack));
+        persistSkins();
+        buildPalette(); // the palette swatch shows the texture that now applies
+        closeDialog();
+        SkinDef showing = Skins.effective(key);
+        if (showing == null) {
+            setStatus(texEntry.name + " keeps its built-in art — drop "
+                    + TexturePack.fileNameFor(key) + " in " + TexturePack.root()
+                    + " to reskin it");
+        } else {
+            setStatus(texEntry.name + " now uses " + showing.sheet + " ("
+                    + showing.frameCount + " frames @ " + trimNumber(showing.fps) + " fps)");
+        }
+    }
+
+    /** Pick up sheets added to the texture pack folder since the last look. */
+    private void rescanTexturePack() {
+        AssetLoader.clearCache(); // a path cached as missing may exist now
+        TexturePack.reload();
+        loadTextureFields();
+        buildPalette();
+        openDialog(Dialog.TEXTURE); // the pack file row re-reads the folder
+        boolean found = TexturePack.fileFor(textureKey()) != null;
+        setStatus(found
+                ? "Found " + TexturePack.fileNameFor(textureKey()) + " in " + TexturePack.root()
+                : "No " + TexturePack.fileNameFor(textureKey()) + " in " + TexturePack.root()
+                        + " — see " + TexturePack.KEYS_FILE + " for every file name");
     }
 
     /** Delete the right-clicked user-created object (custom.json + registries). */
@@ -2590,12 +2705,12 @@ public class CreativeScene extends AbstractScene {
 
     /**
      * Resolve a sheet path: as given when it exists (or is bundled), else
-     * relative to the game type's texture pack folder.
+     * relative to the texture pack folder — so a bare {@code my_dirt.png}
+     * typed into the field finds the sheet sitting in the pack.
      */
     private String resolveSheetPath(String sheet) {
-        String dir = profile().texturePackDir;
-        if (dir == null || dir.isBlank() || Files.exists(Path.of(sheet))) return sheet;
-        Path inPack = Path.of(dir.trim()).resolve(sheet);
+        if (Files.exists(Path.of(sheet))) return sheet;
+        Path inPack = TexturePack.root().resolve(sheet);
         return Files.exists(inPack) ? inPack.toString() : sheet;
     }
 
@@ -2607,10 +2722,8 @@ public class CreativeScene extends AbstractScene {
     /** Swing image chooser (texture pack folder first), or {@code null}. */
     private String chooseSheetFile() {
         try {
-            String dir = profile().texturePackDir;
-            Path start = dir != null && !dir.isBlank() && Files.isDirectory(Path.of(dir.trim()))
-                    ? Path.of(dir.trim())
-                    : Path.of(SkinStore.DEFAULT_DIR);
+            Path pack = TexturePack.root();
+            Path start = Files.isDirectory(pack) ? pack : Path.of(SkinStore.DEFAULT_DIR);
             javax.swing.JFileChooser chooser = new javax.swing.JFileChooser(
                     start.toAbsolutePath().toFile());
             chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter(
@@ -2646,6 +2759,11 @@ public class CreativeScene extends AbstractScene {
         } catch (NumberFormatException e) {
             return 0;
         }
+    }
+
+    /** 3.0 -> "3", 2.5 -> "2.5": frame rates without the trailing noise. */
+    private static String trimNumber(double v) {
+        return v == Math.floor(v) ? String.valueOf((long) v) : String.valueOf(v);
     }
 
     // --- custom object creation ("+ New…" palette entries) --------------------------
