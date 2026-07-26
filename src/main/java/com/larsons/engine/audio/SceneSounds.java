@@ -8,6 +8,7 @@ import com.larsons.engine.sim.PlayerState;
 import com.larsons.engine.world.Block;
 
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -45,6 +46,12 @@ public final class SceneSounds {
     private static final double MOB_IDLE_INTERVAL = 6.0;
     /** Mobs beyond this many screen-halves away are not heard at all. */
     private static final double MOB_EARSHOT = 1.6;
+
+    // The ambience keys, built once: ambience() is called every frame and
+    // almost always wants the same one it wanted last frame.
+    private static final String AMBIENT_DAY = SoundKeys.ambient("day");
+    private static final String AMBIENT_NIGHT = SoundKeys.ambient("night");
+    private static final String AMBIENT_CAVE = SoundKeys.ambient("cave");
 
     /** The character whose voice is used; blank is the default player. */
     private String characterKey = "";
@@ -95,16 +102,6 @@ public final class SceneSounds {
      *                    to leave everything centred
      */
     public void update(double dt, PlayerState me, Level level, GameProfile profile,
-                       String actionState, List<Projectile> shots, double halfWidth) {
-        update(dt, me, level, profile, actionState, shots, List.of(), halfWidth);
-    }
-
-    /**
-     * {@link #update(double, PlayerState, Level, GameProfile, String, List, double)}
-     * with the mobs too, so they can be heard spawning, walking, lunging and
-     * dying — the action states a creator gives each mob in the sound editor.
-     */
-    public void update(double dt, PlayerState me, Level level, GameProfile profile,
                        String actionState, List<Projectile> shots, List<Mob> mobs,
                        double halfWidth) {
         if (!enabled || me == null || level == null) return;
@@ -137,8 +134,7 @@ public final class SceneSounds {
             return;
         }
         Sounds.music(level == null ? "music/level" : level.musicKey());
-        String want = underground ? SoundKeys.ambient("cave")
-                : night ? SoundKeys.ambient("night") : SoundKeys.ambient("day");
+        String want = underground ? AMBIENT_CAVE : night ? AMBIENT_NIGHT : AMBIENT_DAY;
         if (want.equals(ambientKey) && ambientVoice != null && ambientVoice.isPlaying()) return;
         if (ambientVoice != null) ambientVoice.stop();
         ambientKey = want;
@@ -282,13 +278,13 @@ public final class SceneSounds {
             flightVoices.put(p.id, v);
         }
         if (flightVoices.isEmpty()) return;
-        flightVoices.entrySet().removeIf(e -> {
-            for (Projectile p : shots) {
-                if (p.id == e.getKey() && !p.dead()) return false;
-            }
+        for (Iterator<Map.Entry<Integer, SoundMixer.Voice>> it =
+                flightVoices.entrySet().iterator(); it.hasNext(); ) {
+            Map.Entry<Integer, SoundMixer.Voice> e = it.next();
+            if (stillFlying(shots, e.getKey())) continue;
             if (e.getValue() != null) e.getValue().stop();
-            return true;
-        });
+            it.remove();
+        }
     }
 
     /**
@@ -309,22 +305,22 @@ public final class SceneSounds {
         boolean stepped = false;
         boolean idled = false;
 
+        double reach = halfWidth > 0 ? halfWidth * MOB_EARSHOT : Double.MAX_VALUE;
         for (Mob m : mobs) {
             double dx = m.x - me.x;
-            double distance = Math.hypot(dx, m.y - me.y);
-            double reach = halfWidth > 0 ? halfWidth * MOB_EARSHOT : Double.MAX_VALUE;
-            boolean audible = distance <= reach;
-            double volume = halfWidth > 0 ? 1.0 / (1.0 + distance / Math.max(1, halfWidth)) : 1;
-            double at = pan(dx, halfWidth);
+            double dy = m.y - me.y;
+            // Out of earshot: still tracked (so a kill offscreen isn't heard
+            // as a spawn when it wanders back), just never sounded.
+            boolean audible = Math.hypot(dx, dy) <= reach;
 
             Mob.AIState was = mobStates.put(m.id, m.state);
             if (was == null && audible) {
-                Sounds.playFirst(volume * 0.8, SoundKeys.mob(m.def.key(), "spawn"));
+                Sounds.playAt(SoundKeys.mob(m.def.key(), "spawn"), dx, dy, halfWidth, 0.8);
             } else if (was != m.state && audible) {
                 if (m.state == Mob.AIState.ATTACK) {
-                    play(SoundKeys.mob(m.def.key(), "attack"), volume, at);
+                    Sounds.playAt(SoundKeys.mob(m.def.key(), "attack"), dx, dy, halfWidth);
                 } else if (m.state == Mob.AIState.DEAD) {
-                    play(SoundKeys.mob(m.def.key(), "death"), volume, at);
+                    Sounds.playAt(SoundKeys.mob(m.def.key(), "death"), dx, dy, halfWidth);
                 }
             }
             if (!audible || m.dead()) continue;
@@ -332,25 +328,32 @@ public final class SceneSounds {
             // are a patter of footsteps rather than ten simultaneous ones.
             if (stepDue && !stepped && m.state != Mob.AIState.IDLE) {
                 stepped = true;
-                play(SoundKeys.mob(m.def.key(), "step"), volume * 0.4, at);
+                Sounds.playAt(SoundKeys.mob(m.def.key(), "step"), dx, dy, halfWidth, 0.4);
             } else if (idleDue && !idled && m.state == Mob.AIState.IDLE) {
                 idled = true;
-                play(SoundKeys.mob(m.def.key(), "idle"), volume * 0.5, at);
+                Sounds.playAt(SoundKeys.mob(m.def.key(), "idle"), dx, dy, halfWidth, 0.5);
             }
         }
         if (stepDue) mobStepTimer = MOB_STEP_INTERVAL;
         if (idleDue) mobIdleTimer = MOB_IDLE_INTERVAL;
         // Mobs that are gone (killed and cleared) stop being remembered.
-        mobStates.keySet().removeIf(id -> {
-            for (Mob m : mobs) {
-                if (m.id == id) return false;
-            }
-            return true;
-        });
+        for (Iterator<Integer> it = mobStates.keySet().iterator(); it.hasNext(); ) {
+            if (!stillPresent(mobs, it.next())) it.remove();
+        }
     }
 
-    private static void play(String key, double volume, double pan) {
-        if (volume > 0.01) Sounds.play(key, volume, pan);
+    private static boolean stillFlying(List<Projectile> shots, int id) {
+        for (Projectile p : shots) {
+            if (p.id == id && !p.dead()) return true;
+        }
+        return false;
+    }
+
+    private static boolean stillPresent(List<Mob> mobs, int id) {
+        for (Mob m : mobs) {
+            if (m.id == id) return true;
+        }
+        return false;
     }
 
     private static double pan(double dx, double halfWidth) {
@@ -397,12 +400,15 @@ public final class SceneSounds {
     }
 
     /**
-     * Forget the previous frame as well as stopping the loops — so re-entering
-     * a level doesn't fire "landed" or "hurt" from the state it was left in.
+     * Silence everything and forget the previous frame — so re-entering a
+     * level doesn't fire "landed" or "hurt" from the state it was left in,
+     * and no one-shot carries over into whatever comes next. Both the play
+     * scene and the play-test tear down with this one call, so neither can
+     * leave something ringing that the other stops.
      */
     public void reset() {
         stopLoops();
-        Sounds.stopMusic();
+        Sounds.stopAll();
         lastState = "";
         wasSwimming = wasAirborne = wasSprinting = wasUltCharged = false;
         lastHealth = -1;
@@ -411,8 +417,4 @@ public final class SceneSounds {
         mobStepTimer = mobIdleTimer = 0;
     }
 
-    /** What the player was doing last frame (the play scene shows this in debug). */
-    public String lastActionState() {
-        return lastState;
-    }
 }

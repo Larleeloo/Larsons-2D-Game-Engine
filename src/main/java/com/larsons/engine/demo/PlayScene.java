@@ -518,14 +518,14 @@ public class PlayScene extends AbstractScene {
                 EntityView riding = snap.vehicleRiddenBy(me.id);
                 if (riding != null) {
                     net.client().sendDismount();
-                    Sounds.playFirst(1.0, SoundKeys.vehicle(riding.key, "dismount"),
-                            SoundKeys.player("dismount"));
+                    Sounds.actor(character.key,
+                            SoundKeys.vehicle(riding.key, "dismount"), "dismount");
                 } else {
                     EntityView near = nearestSnapshotVehicle(snap);
                     if (near != null) {
                         net.client().sendMount(near.id);
-                        Sounds.playFirst(1.0, SoundKeys.vehicle(near.key, "mount"),
-                                SoundKeys.player("mount"));
+                        Sounds.actor(character.key,
+                                SoundKeys.vehicle(near.key, "mount"), "mount");
                     }
                 }
             }
@@ -1081,9 +1081,8 @@ public class PlayScene extends AbstractScene {
                 mineSoundTimer -= dt;
                 if (digging != null && mineSoundTimer <= 0) {
                     mineSoundTimer = MINE_SOUND_INTERVAL;
-                    Sounds.playFirst(0.5, SoundKeys.block(digging.key(), "mine"),
-                            SoundKeys.character(character.key, "mine"),
-                            SoundKeys.player("mine"));
+                    Sounds.actor(character.key, SoundKeys.block(digging.key(), "mine"),
+                            "mine", 0.5);
                 }
                 Block mined = world.continueMining(col, row, held, p.itemsEnabled, dt);
                 if (mined != null) {
@@ -1159,17 +1158,14 @@ public class PlayScene extends AbstractScene {
     private boolean tryChopDecor(double aimX, double aimY, ItemDef held, GameProfile p) {
         if (world == null) return false;
         boolean axe = held != null && "axe".equals(held.toolClass());
-        World.ChopResult res = world.chopDecor(aimX, aimY, axe, p.itemsEnabled);
-        if (res == World.ChopResult.NONE) return false;
+        World.Chop chop = world.chopDecor(aimX, aimY, axe, p.itemsEnabled);
+        if (!chop.hit()) return false;
         swingTime = 0.2;
-        Decor chopped = world.decorNear(aimX, aimY);
-        String chopState = res == World.ChopResult.BROKEN ? "break" : "hit";
-        Sounds.playFirst(1.0,
-                chopped == null ? "" : SoundKeys.decor(chopped.key(), chopState),
-                SoundKeys.character(character.key, "chop"), SoundKeys.player("chop"));
+        Sounds.actor(character.key, chop.decor() == null ? ""
+                : SoundKeys.decor(chop.decor().key(), chop.broken() ? "break" : "hit"),
+                "chop");
         if (p.particlesEnabled) {
-            particles.burst(aimX, aimY, new Color(110, 85, 50),
-                    res == World.ChopResult.BROKEN ? 14 : 5);
+            particles.burst(aimX, aimY, new Color(110, 85, 50), chop.broken() ? 14 : 5);
         }
         return true;
     }
@@ -1216,10 +1212,9 @@ public class PlayScene extends AbstractScene {
         playerSound("attack");
         Mob hit = world.playerAttack(me, aimX, aimY, damage);
         if (hit != null) {
-            Sounds.playFirst(1.0,
+            Sounds.actor(character.key,
                     SoundKeys.mob(hit.def.key(), hit.dead() ? "death" : "hurt"),
-                    SoundKeys.character(character.key, "attack_hit"),
-                    SoundKeys.player("attack_hit"));
+                    "attack_hit");
             if (p.particlesEnabled) {
                 particles.burst(hit.x + hit.def.size() / 2, hit.y + hit.def.size() / 2,
                         hit.def.body(), 8);
@@ -1228,8 +1223,8 @@ public class PlayScene extends AbstractScene {
             // A whiffed swing near an empty vehicle packs it back into its item.
             Vehicle packed = world.packUpVehicle(aimX, aimY, p.itemsEnabled);
             if (packed != null) {
-                Sounds.playFirst(1.0, SoundKeys.vehicle(packed.def.key(), "dismount"),
-                        SoundKeys.player("pickup"));
+                Sounds.actor(character.key,
+                        SoundKeys.vehicle(packed.def.key(), "dismount"), "pickup");
                 ruleStatus = packed.def.name() + " packed up";
                 ruleStatusTime = 2.5;
             }
@@ -1318,15 +1313,17 @@ public class PlayScene extends AbstractScene {
         }
         // The ability's own cast sound, then the character's generic one:
         // a Meteor Volley can roar where a Nova Burst cracks.
-        Sounds.playFirst(1.0, SoundKeys.ultimate(u.key(), "activate"),
-                SoundKeys.character(character.key, "ult_activate"),
-                SoundKeys.player("ult_activate"));
+        Sounds.actor(character.key, SoundKeys.ultimate(u.key(), "activate"), "ult_activate");
         ruleStatus = u.name() + "!";
         ruleStatusTime = 2.5;
     }
 
     private void impactFeedback(World.Impact im, GameProfile p) {
         boolean fx = p.particlesEnabled;
+        // The sound comes from one shared mapping (so the play-test agrees);
+        // the switch below only picks the particles.
+        Sounds.playFirst(1.0,
+                SoundKeys.impact(im.key(), im.explosion()).toArray(new String[0]));
         switch (im.key()) {
             case "blink" -> {
                 if (fx) particles.burst(im.x(), im.y(), new Color(170, 140, 255), 10,
@@ -1334,7 +1331,6 @@ public class PlayScene extends AbstractScene {
                 return;
             }
             case "warp" -> {
-                ctx.sound(SoundKeys.player("teleport"));
                 if (fx) {
                     particles.burst(im.x(), im.y(), new Color(200, 150, 255), 16,
                             Particles.Style.IMPLODE);
@@ -1354,7 +1350,6 @@ public class PlayScene extends AbstractScene {
                 return;
             }
             case "nova" -> {
-                ctx.sound(SoundKeys.ultimate("nova_burst", "impact"));
                 if (fx) {
                     particles.burst(im.x(), im.y(), new Color(140, 220, 255), 30,
                             Particles.Style.RING);
@@ -1363,13 +1358,11 @@ public class PlayScene extends AbstractScene {
                 return;
             }
             case "tremor" -> {
-                ctx.sound(SoundKeys.ultimate("earthshatter", "impact"));
                 if (fx) particles.burst(im.x(), im.y(), new Color(170, 140, 95), 18,
                         Particles.Style.SHARDS);
                 return;
             }
             case "revive" -> {
-                ctx.sound(SoundKeys.player("heal"));
                 if (fx) particles.burst(im.x(), im.y(), new Color(255, 190, 80), 24,
                         Particles.Style.FOUNTAIN);
                 return;
@@ -1378,24 +1371,30 @@ public class PlayScene extends AbstractScene {
                 if (fx) particles.burst(im.x(), im.y(), new Color(220, 220, 230), 6);
                 return;
             }
-            default -> { /* a projectile impact: styled below */ }
+            default -> { /* an ultimate or a projectile: styled below */ }
+        }
+        // An ultimate's landing, thrown in the ability's own colour — new
+        // abilities are drawn and heard without a case of their own.
+        String ability = im.ultimateKey();
+        if (!ability.isEmpty()) {
+            Ultimate cast = Ultimates.get(ability);
+            if (fx) {
+                Color tint = cast != null ? cast.color() : new Color(200, 190, 255);
+                particles.burst(im.x(), im.y(), tint, im.explosion() ? 24 : 12,
+                        im.explosion() ? Particles.Style.RING : Particles.Style.MOTES);
+            }
+            return;
         }
         ProjectileDef def = projectileTypes().get(im.key());
         Color color = def == null ? Color.GRAY
                 : def.glows() ? def.lightColor() : def.color();
-        // A meteor's crash is projectile/meteor/impact (or /explode), so the
-        // whole arc — cast, fall, landing — can be three different sounds.
         if (im.explosion()) {
-            Sounds.playFirst(1.0, SoundKeys.projectile(im.key(), "explode"),
-                    SoundKeys.world("explosion"));
             if (fx) {
                 particles.burst(im.x(), im.y(), color, 18, Particles.Style.RING);
                 particles.burst(im.x(), im.y(), color, 12);
                 particles.burst(im.x(), im.y(), new Color(255, 225, 130), 10);
             }
         } else {
-            Sounds.playFirst(1.0, SoundKeys.projectile(im.key(), "impact"),
-                    SoundKeys.player("attack_hit"));
             if (fx) {
                 particles.burst(im.x(), im.y(), color, 6,
                         def == null ? Particles.Style.BURST : elementStyle(def.element()));
@@ -1475,27 +1474,23 @@ public class PlayScene extends AbstractScene {
      * Rogue her own jump without having to re-record everyone else's.
      */
     private void playerSound(String state) {
-        Sounds.playFirst(1.0, SoundKeys.character(character.key, state),
-                SoundKeys.player(state));
+        Sounds.actor(character.key, "", state);
     }
 
     /**
-     * A block's own sound for an action, falling back to the player's
-     * generic one — {@code block/stone/break}, then {@code player/mine_break}.
+     * A block's own sound for an action, falling back to this character's
+     * and then the player's — {@code block/stone/break}, then
+     * {@code character/rogue/mine_break}, then {@code player/mine_break}.
      */
     private void blockSound(Block block, String blockState, String playerState) {
-        Sounds.playFirst(1.0,
-                block == null ? "" : SoundKeys.block(block.key(), blockState),
-                SoundKeys.character(character.key, playerState),
-                SoundKeys.player(playerState));
+        Sounds.actor(character.key,
+                block == null ? "" : SoundKeys.block(block.key(), blockState), playerState);
     }
 
-    /** An item's own sound for an action, falling back to the player's. */
+    /** An item's own sound for an action, falling back the same way. */
     private void itemSound(String itemKey, String itemState, String playerState) {
-        Sounds.playFirst(1.0,
-                itemKey == null ? "" : SoundKeys.item(itemKey, itemState),
-                SoundKeys.character(character.key, playerState),
-                SoundKeys.player(playerState));
+        Sounds.actor(character.key,
+                itemKey == null ? "" : SoundKeys.item(itemKey, itemState), playerState);
     }
 
     /**
@@ -1504,14 +1499,13 @@ public class PlayScene extends AbstractScene {
      * a meteor can be called down, heard falling, and heard crashing.
      */
     private void shotSound(String projectileKey) {
-        Sounds.playFirst(1.0, SoundKeys.projectile(projectileKey, "fire"),
-                SoundKeys.character(character.key, "shoot"), SoundKeys.player("shoot"));
+        Sounds.actor(character.key, SoundKeys.projectile(projectileKey, "fire"), "shoot");
     }
 
     /** A vehicle being climbed into or out of. */
     private void vehicleSound(Vehicle v, String state) {
-        Sounds.playFirst(1.0, v == null ? "" : SoundKeys.vehicle(v.def.key(), state),
-                SoundKeys.player(state));
+        Sounds.actor(character.key,
+                v == null ? "" : SoundKeys.vehicle(v.def.key(), state), state);
     }
 
     /** The time of day sounds and lighting run off: the world's, or the server's. */

@@ -53,17 +53,7 @@ public record SoundDef(String key, String file, double volume, double pitch,
     }
 
     private static double clamp(double v, double lo, double hi) {
-        return v < lo ? lo : Math.min(v, hi);
-    }
-
-    /** Whether this differs from what the key would do with no assignment. */
-    public boolean isDefault() {
-        return file.isEmpty() && usePack && builtin && equalsPlayback(SoundPack.playbackFor(key));
-    }
-
-    private boolean equalsPlayback(SoundPack.Playback p) {
-        return volume == p.volume() && pitch == p.pitch()
-                && loop == p.loop() && varyPitch == p.varyPitch();
+        return SoundPack.clamp(v, lo, hi);
     }
 
     public Map<String, Object> toMap() {

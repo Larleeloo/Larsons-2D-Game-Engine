@@ -344,11 +344,12 @@ class LevelFormatTest {
             assertEquals(2, pickedUp[0], "pickup works in " + format);
 
             // Decorations: harvestable scenery breaks down into resources.
-            World.ChopResult result = World.ChopResult.NONE;
-            for (int i = 0; i < 8 && result != World.ChopResult.BROKEN; i++) {
-                result = world.chopDecor(300, 300 - 32, true, true);
+            World.Chop chop = World.Chop.NONE;
+            for (int i = 0; i < 8 && !chop.broken(); i++) {
+                chop = world.chopDecor(300, 300 - 32, true, true);
             }
-            assertEquals(World.ChopResult.BROKEN, result, "chopping works in " + format);
+            assertEquals(World.ChopResult.BROKEN, chop.result(), "chopping works in " + format);
+            assertNotNull(chop.decor(), "the chop reports what it felled in " + format);
 
             // Containers: a chest's second inventory lives in the level data.
             int chest = lvl.blocks.get("chest").id();

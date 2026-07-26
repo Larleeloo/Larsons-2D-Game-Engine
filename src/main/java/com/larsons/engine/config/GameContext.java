@@ -81,16 +81,6 @@ public class GameContext {
     }
 
     /**
-     * Play a sound positioned by where it happened relative to the camera, so
-     * a meteor landing off to the left is heard on the left and fades with
-     * distance. Offsets are in world pixels; {@code halfWidth} is half the
-     * visible world width.
-     */
-    public void soundAt(String key, double dx, double dy, double halfWidth) {
-        if (profile().audioEnabled) Sounds.playAt(key, dx, dy, halfWidth);
-    }
-
-    /**
      * Make {@code key} the music that is playing. Safe to call every frame:
      * asking for the track already playing does nothing, and a blank key
      * stops the music.

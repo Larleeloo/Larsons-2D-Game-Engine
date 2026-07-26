@@ -163,11 +163,21 @@ public final class Sounds {
         if (!isEnabled()) return null;
         if (SoundKeys.isMusic(key)) return music(key);
         SoundDef def = definition(key);
-        PcmClip clip = resolve(key, def);
+        return start(def, resolve(key, def), volumeScale, pan, def.loop());
+    }
+
+    /**
+     * Hand an already-resolved sound to the mixer. Split out so the
+     * fallback-chain callers below can resolve a key <em>once</em>: they have
+     * to resolve it anyway to find out whether it is silent, and re-resolving
+     * it to play would double the work on every footstep.
+     */
+    private static SoundMixer.Voice start(SoundDef def, PcmClip clip,
+                                          double volumeScale, double pan, boolean loop) {
         if (clip.isEmpty()) return null;
         double volume = def.volume() * volumeScale * sfxVolume();
         if (volume <= 0) return null;
-        return MIXER.play(clip, pitchFor(def), volume, pan, def.loop());
+        return MIXER.play(clip, pitchFor(def), volume, pan, loop);
     }
 
     /**
@@ -183,22 +193,62 @@ public final class Sounds {
      * sometimes have.
      */
     public static SoundMixer.Voice playFirst(double volumeScale, String... keys) {
-        if (!isEnabled() || keys == null) return null;
-        for (String key : keys) {
-            if (key == null || key.isEmpty()) continue;
-            if (resolve(key).isEmpty()) continue;
-            return play(key, volumeScale);
-        }
-        return null;
+        return first(volumeScale, false, keys);
+    }
+
+    /**
+     * Play the most specific sound available for something a character did:
+     * <b>the object's own sound</b>, then <b>this character's voice</b> for
+     * the action, then <b>the plain player's</b>.
+     *
+     * <p>This is the rule behind nearly every trigger in the game, in one
+     * place: breaking stone asks for {@code block/stone/break}, then
+     * {@code character/rogue/mine_break}, then {@code player/mine_break}.
+     * Pass a blank {@code objectKey} for actions no object is involved in (a
+     * jump, a landing).
+     *
+     * <p>Having it here rather than copied into each scene is what keeps a
+     * level's play-test sounding like the level being played — both call
+     * this, so neither can quietly lose a tier.
+     *
+     * @param characterKey the character acting; blank means the default player
+     * @param objectKey    the specific object's sound key, or {@code ""}
+     * @param playerState  the {@link SoundKeys#PLAYER_STATES} action to fall
+     *                     back to
+     */
+    public static SoundMixer.Voice actor(String characterKey, String objectKey,
+                                         String playerState, double volumeScale) {
+        String character = SoundKeys.character(characterKey, playerState);
+        String player = SoundKeys.player(playerState);
+        // A blank character key makes those two the same key; skip the twin
+        // so the common case resolves once instead of twice.
+        return character.equals(player)
+                ? playFirst(volumeScale, objectKey, player)
+                : playFirst(volumeScale, objectKey, character, player);
+    }
+
+    /** {@link #actor} at full volume, for the usual case. */
+    public static SoundMixer.Voice actor(String characterKey, String objectKey,
+                                         String playerState) {
+        return actor(characterKey, objectKey, playerState, 1.0);
     }
 
     /** {@link #playFirst} for a sound that repeats until its voice is stopped. */
     public static SoundMixer.Voice playLoopFirst(double volumeScale, String... keys) {
+        return first(volumeScale, true, keys);
+    }
+
+    /** Walk the candidates, resolving each at most once, and play the first. */
+    private static SoundMixer.Voice first(double volumeScale, boolean forceLoop,
+                                          String... keys) {
         if (!isEnabled() || keys == null) return null;
         for (String key : keys) {
             if (key == null || key.isEmpty()) continue;
-            SoundMixer.Voice v = playLoop(key, volumeScale, 0);
-            if (v != null) return v;
+            if (SoundKeys.isMusic(key)) return music(key);
+            SoundDef def = definition(key);
+            PcmClip clip = resolve(key, def);
+            if (clip.isEmpty()) continue;
+            return start(def, clip, volumeScale, 0, forceLoop || def.loop());
         }
         return null;
     }
@@ -212,11 +262,7 @@ public final class Sounds {
     public static SoundMixer.Voice playLoop(String key, double volumeScale, double pan) {
         if (!isEnabled()) return null;
         SoundDef def = definition(key);
-        PcmClip clip = resolve(key, def);
-        if (clip.isEmpty()) return null;
-        double volume = def.volume() * volumeScale * sfxVolume();
-        if (volume <= 0) return null;
-        return MIXER.play(clip, pitchFor(def), volume, pan, true);
+        return start(def, resolve(key, def), volumeScale, pan, true);
     }
 
     /**
@@ -226,11 +272,25 @@ public final class Sounds {
      * world pixels — the distance at which a sound is fully panned.
      */
     public static SoundMixer.Voice playAt(String key, double dx, double dy, double halfWidth) {
-        if (halfWidth <= 0) return play(key);
+        return playAt(key, dx, dy, halfWidth, 1.0);
+    }
+
+    /**
+     * {@link #playAt(String, double, double, double)} with an extra volume
+     * scale, for events that are quieter than a full-strength one even up
+     * close — a mob's footfall against its death cry.
+     *
+     * <p>This is the only distance/pan model in the engine: everything that
+     * happens somewhere in the world goes through it, so a mob and a meteor
+     * fade the same way.
+     */
+    public static SoundMixer.Voice playAt(String key, double dx, double dy,
+                                          double halfWidth, double volumeScale) {
+        if (halfWidth <= 0) return play(key, volumeScale);
         double pan = Math.max(-1, Math.min(1, dx / halfWidth));
         double distance = Math.hypot(dx, dy) / (halfWidth * 2);
         double falloff = 1.0 / (1.0 + distance * distance * 3);
-        return play(key, falloff, pan);
+        return play(key, falloff * volumeScale, pan);
     }
 
     /**

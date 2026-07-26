@@ -418,6 +418,76 @@ class SoundPackTest {
         }
     }
 
+    // --- the shared fallback rule -----------------------------------------------
+
+    /**
+     * The three-tier rule every trigger uses: the object's own sound, then
+     * this character's voice, then the plain player's. Both the play scene
+     * and creative mode's play-test go through this one method, which is what
+     * stops a play-test from quietly losing a tier the play scene has.
+     */
+    @Test
+    void theActorChainPrefersObjectThenCharacterThenPlayer(@TempDir Path dir)
+            throws IOException {
+        SoundPack.scaffold(dir);
+        SoundPack.useDir(dir.toString());
+
+        // Only the plain player's sound exists, so that is the one tier the
+        // pack supplies; the others still ride the engine's built-in voice.
+        wav(dir.resolve("player/mine_break.wav"));
+        SoundPack.reload();
+        assertNotNull(SoundPack.fileFor("player/mine_break"));
+        assertNull(SoundPack.fileFor("character/rogue/mine_break"),
+                "the Rogue has no file of her own yet");
+        assertNull(SoundPack.fileFor("block/stone/break"), "stone has none either");
+
+        // Give the Rogue her own: it is found for her key, and nobody else's.
+        wav(dir.resolve("player/rogue_mine_break.wav"));
+        SoundPack.reload();
+        assertEquals(dir.resolve("player/rogue_mine_break.wav"),
+                SoundPack.fileFor("character/rogue/mine_break"),
+                "player/rogue_mine_break.wav should be the Rogue's own voice");
+        assertEquals(dir.resolve("player/mine_break.wav"),
+                SoundPack.fileFor("player/mine_break"),
+                "…without displacing the generic one");
+
+        // And a block's own break is found for the block's key.
+        wav(dir.resolve("blocks/stone_break.wav"));
+        SoundPack.reload();
+        assertEquals(dir.resolve("blocks/stone_break.wav"),
+                SoundPack.fileFor("block/stone/break"));
+    }
+
+    /**
+     * An impact from the simulation maps to a sound without the scenes
+     * keeping their own tables — and an ultimate's landing names the ability
+     * that fired it, rather than being guessed at from the effect kind.
+     */
+    @Test
+    void impactsMapToSoundsByWhatFiredThem() {
+        assertEquals("ultimate/meteor_volley/impact",
+                SoundKeys.impact("ultimate_meteor_volley", false).get(0),
+                "an ultimate's landing should name its own ability");
+        assertEquals("ultimate/earthshatter/impact",
+                SoundKeys.impact("ultimate_earthshatter", true).get(0));
+        // A projectile lands (or detonates) as itself.
+        assertEquals("projectile/meteor/impact", SoundKeys.impact("meteor", false).get(0));
+        assertEquals("projectile/fireball/explode",
+                SoundKeys.impact("fireball", true).get(0));
+        // Relic effects are not ultimates and must not claim to be.
+        for (String relic : List.of("nova", "tremor")) {
+            for (String key : SoundKeys.impact(relic, true)) {
+                assertFalse(key.startsWith("ultimate/"),
+                        "the " + relic + " relic should not borrow an ultimate's sound key");
+            }
+        }
+        // Every impact resolves to something rather than nothing.
+        for (String fx : List.of("blink", "warp", "summon", "chain", "revive", "mount",
+                "ultimate_overdrive", "arrow", "")) {
+            assertFalse(SoundKeys.impact(fx, false).isEmpty(), fx + " should map to a sound");
+        }
+    }
+
     /** Custom content is deregistered again, so other tests see the built-ins. */
     @Test
     void theCatalogueTracksTheLiveRegistries() {

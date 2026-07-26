@@ -79,7 +79,7 @@ public final class SoundPack {
     public static final double MAX_PITCH_VARIATION = 0.5;
 
     /** Audio types a pack file may use, in lookup order. */
-    private static final String[] EXTENSIONS = {".wav", ".mp3", ".ogg", ".aiff", ".aif", ".au"};
+    private static final String[] EXTENSIONS = {".wav", ".mp3", ".aiff", ".aif", ".au"};
 
     /** How one sound plays: its level, its pitch, and whether it repeats. */
     public record Playback(double volume, double pitch, boolean loop, boolean varyPitch) {
@@ -97,12 +97,20 @@ public final class SoundPack {
     private static volatile String dirOverride = "";
     private static Config config;
     private static Path configRoot;
+    /**
+     * The folder {@link #autoRoot()} last worked out. Finding it costs a few
+     * stat calls and a code-source lookup, and {@link #fileFor} runs on every
+     * footstep — so it is worked out once and dropped only when the pack
+     * actually moves ({@link #useDir}) or is rescanned ({@link #reload}).
+     */
+    private static Path autoRootCache;
     /** Resolved audio file per sound key ({@code null} = none in the pack). */
     private static final Map<String, Path> FILES = new HashMap<>();
 
     private SoundPack() {}
 
-    private static double clamp(double v, double lo, double hi) {
+    /** Clamp used across the audio package's settings records. */
+    static double clamp(double v, double lo, double hi) {
         return v < lo ? lo : Math.min(v, hi);
     }
 
@@ -128,7 +136,8 @@ public final class SoundPack {
     /** The folder currently searched for audio (it need not exist yet). */
     public static synchronized Path root() {
         if (!dirOverride.isBlank()) return Path.of(dirOverride);
-        return autoRoot();
+        if (autoRootCache == null) autoRootCache = autoRoot();
+        return autoRootCache;
     }
 
     /** True when the pack folder is actually there to read sounds from. */
@@ -178,6 +187,7 @@ public final class SoundPack {
     private static synchronized void forgetFiles() {
         config = null;
         configRoot = null;
+        autoRootCache = null; // a rescan re-answers "where is the pack?" too
         FILES.clear();
     }
 
@@ -210,17 +220,7 @@ public final class SoundPack {
         return SoundKeys.preferredFile(key);
     }
 
-    /** Whether the pack currently holds a file for {@code key}. */
-    public static synchronized boolean has(String key) {
-        return fileFor(key) != null;
-    }
-
     // --- settings -------------------------------------------------------------------
-
-    /** The volume/pitch/loop every sound in the pack plays at by default. */
-    public static synchronized Playback defaults() {
-        return settings().defaults();
-    }
 
     /**
      * How far pitch drifts either way when the fresh-pitch option is on, as a
@@ -281,18 +281,6 @@ public final class SoundPack {
     public static synchronized void clearOverride(String key) {
         Config c = settings();
         if (c.overrides().remove(key) != null) writeConfig();
-    }
-
-    /** Change the defaults the whole pack plays at. */
-    public static void setDefaults(double volume, double pitch, boolean varyPitch) {
-        synchronized (SoundPack.class) {
-            Config c = settings();
-            Playback p = new Playback(volume, pitch, false, varyPitch);
-            if (p.equals(c.defaults())) return;
-            config = new Config(p, c.pitchVariation(), c.overrides());
-            writeConfig();
-        }
-        SoundLoader.clearCache();
     }
 
     private static Config settings() {
@@ -534,10 +522,5 @@ public final class SoundPack {
         String file = e.file();
         String suffix = "_" + e.state();
         return file.endsWith(suffix) ? file.substring(0, file.length() - suffix.length()) : file;
-    }
-
-    /** The folders a scaffolded pack contains. */
-    public static List<String> folders() {
-        return SoundKeys.folders();
     }
 }

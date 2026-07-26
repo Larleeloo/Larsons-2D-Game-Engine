@@ -1941,7 +1941,8 @@ and the dialog to change it.
 ```
 SOUNDS palette
 ├── Sound Editor…        every sound in the game, one row each
-├── Sound Options…       master/effects/music volume · fresh pitch · pack folder
+├── Sound Options…       master/effects/music volume · fresh pitch · pack folder ·
+│                     whether this machine has an audio device at all
 ├── Level Music…         which music/… track this level plays
 └── Player Sounds… · Blocks… · Mobs… · Items… · Ultimate abilities… ·
     Projectiles… · Vehicles… · Music… · Ambience… · Mini games… · …

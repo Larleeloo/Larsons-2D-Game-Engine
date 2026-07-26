@@ -285,19 +285,6 @@ public final class SoundKeys {
     }
 
     /**
-     * The display name of a sound key, for the editor's list — the object and
-     * the action, e.g. {@code "Slime — attack"}.
-     */
-    public static String describe(String key) {
-        for (Entry e : all()) {
-            if (e.key().equals(key)) {
-                return e.state().isEmpty() ? e.name() : e.name() + " — " + e.state();
-            }
-        }
-        return key;
-    }
-
-    /**
      * The whole catalogue, grouped by category and ordered the way the sound
      * editor lists it. Reads the live registries, so a block or mob a creator
      * just made with "+ New …" is in here with a full set of action states.
@@ -378,7 +365,7 @@ public final class SoundKeys {
         for (Particles.Style style : Particles.Style.values()) {
             String kind = Particles.textureKind(style);
             for (String state : PARTICLE_STATES) {
-                out.add(new Entry("Particles", PARTICLES, "particle/" + kind + "/" + state,
+                out.add(new Entry("Particles", PARTICLES, particle(kind, state),
                         kind + "_" + state, Particles.styleName(style), state));
             }
         }
@@ -504,6 +491,44 @@ public final class SoundKeys {
 
     public static String minigame(String name) {
         return "minigame/" + name;
+    }
+
+    /**
+     * The sound an impact from the world simulation makes.
+     *
+     * <p>{@link com.larsons.engine.world.World} reports what happened as a
+     * short tag — a projectile key, {@code ultimate_<ability>}, or one of a
+     * few effect names — and this turns it into the sound key to play, so
+     * the play scene and creative mode's play-test both get it right without
+     * either of them keeping its own table.
+     *
+     * @param fxKey     the {@code World.Impact} tag
+     * @param explosion whether the simulation called it an explosion
+     * @return the keys to try in order, most specific first
+     */
+    public static List<String> impact(String fxKey, boolean explosion) {
+        if (fxKey == null || fxKey.isBlank()) return List.of(world("explosion"));
+        if (fxKey.startsWith("ultimate_")) {
+            // The ability's own landing sound, then a generic one, so a new
+            // ultimate is audible before anyone records anything for it.
+            String ability = fxKey.substring("ultimate_".length());
+            return List.of(ultimate(ability, "impact"),
+                    explosion ? world("explosion") : player("attack_hit"));
+        }
+        return switch (fxKey) {
+            // Relic and ability effects the simulation names in its own terms.
+            case "nova", "tremor" -> List.of(world("explosion"));
+            case "blink" -> List.of(player("teleport"));
+            case "warp" -> List.of(player("teleport"));
+            case "summon" -> List.of(world("spawn_wave"), player("craft"));
+            case "chain" -> List.of(world("explosion"));
+            case "revive" -> List.of(player("heal"));
+            case "mount" -> List.of(player("mount"));
+            // Anything else is a projectile, named by its own key.
+            default -> explosion
+                    ? List.of(projectile(fxKey, "explode"), world("explosion"))
+                    : List.of(projectile(fxKey, "impact"), player("attack_hit"));
+        };
     }
 
     /** Whether a key names music (which is looped, and never pitch-varied). */

@@ -37,12 +37,18 @@ public final class SoundLoader {
 
     /**
      * The decoded clip for a file, or {@link PcmClip#SILENCE} when it is
-     * missing or unreadable. Results are cached by path + last-modified time,
-     * so replacing a file while the game runs is picked up by a rescan.
+     * missing or unreadable.
+     *
+     * <p>Cached by path alone — deliberately not by modification time. A
+     * sound is resolved on every footstep, and stat-ing the file each time to
+     * build a cache key would defeat the cache it is looking in. Files
+     * replaced while the game runs are picked up by {@link #clearCache()},
+     * which is what the editor's "Rescan sound pack folder" and
+     * {@link SoundPack#reload()} call.
      */
     public static PcmClip load(Path file) {
         if (file == null) return PcmClip.SILENCE;
-        String key = cacheKey(file);
+        String key = file.toAbsolutePath().toString();
         PcmClip cached = CACHE.get(key);
         if (cached != null) return cached;
         PcmClip clip = read(file);
@@ -55,17 +61,9 @@ public final class SoundLoader {
         CACHE.clear();
     }
 
-    /** How many clips are held in memory (the editor reports this). */
+    /** How many clips are held in memory; shown by the sound editor. */
     public static int cachedCount() {
         return CACHE.size();
-    }
-
-    private static String cacheKey(Path file) {
-        try {
-            return file.toAbsolutePath() + "@" + Files.getLastModifiedTime(file).toMillis();
-        } catch (IOException | RuntimeException e) {
-            return file.toString();
-        }
     }
 
     private static PcmClip read(Path file) {

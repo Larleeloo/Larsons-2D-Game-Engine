@@ -205,12 +205,26 @@ public class Level {
     }
 
     /** Colour used to draw the given tile id, or {@code null} for empty tiles. */
+    /** The generic track a level with no music of its own asks for. */
+    private static final String DEFAULT_MUSIC_KEY = "music/level";
+    /** {@link #musicKey()}'s answer, remembered because it is asked every frame. */
+    private transient String musicKeyCache;
+    private transient String musicKeyFor;
+
     /**
      * The full sound key of this level's music — its own track when it names
      * one, else the generic level track.
+     *
+     * <p>Asked once a frame by the scene that plays it, so the answer is kept
+     * until {@link #music} changes rather than rebuilt each time.
      */
     public String musicKey() {
-        return music == null || music.isBlank() ? "music/level" : "music/" + music.trim();
+        String track = music == null ? "" : music;
+        if (!track.equals(musicKeyFor) || musicKeyCache == null) {
+            musicKeyFor = track;
+            musicKeyCache = track.isBlank() ? DEFAULT_MUSIC_KEY : "music/" + track.trim();
+        }
+        return musicKeyCache;
     }
 
     public Color colorFor(int tileId) {
