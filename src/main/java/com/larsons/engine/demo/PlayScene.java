@@ -1,5 +1,11 @@
 package com.larsons.engine.demo;
 
+import com.larsons.engine.character.CharacterPicker;
+import com.larsons.engine.character.CharacterProfile;
+import com.larsons.engine.character.CharacterStore;
+import com.larsons.engine.character.Characters;
+import com.larsons.engine.character.Ultimate;
+import com.larsons.engine.character.Ultimates;
 import com.larsons.engine.config.CustomContentStore;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
@@ -22,10 +28,10 @@ import com.larsons.engine.entity.Vehicle;
 import com.larsons.engine.entity.VehicleDef;
 import com.larsons.engine.entity.VehicleRegistry;
 import com.larsons.engine.fx.Particles;
-import com.larsons.engine.graphics.Animation;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.CutscenePainter;
 import com.larsons.engine.graphics.EntitySprites;
+import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.ParallaxBackground;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.PlayerSprites;
@@ -95,9 +101,16 @@ import java.util.Map;
  * only simulation). Mining, placing, and attacks are requests the server
  * validates and applies.
  *
- * <p>Controls: WASD/arrows move, P cycles perspective (if enabled), +/- zoom
- * (if enabled), left-click mine/attack, right-click place, 1-5 + wheel hotbar,
- * I inventory, F eat, Esc pause.
+ * <p><b>Characters (requirement: character profiles).</b> A level offers the
+ * roster its creator chose; the picker shown at its start decides who you
+ * play as, and that profile's traits — speed, sprint, air jumps, jump height,
+ * health/mana/stamina — ride on the simulated player state from there. Their
+ * {@link Ultimate} charges with time and damage dealt and fires on [R].
+ *
+ * <p>Controls: WASD/arrows move, Space jumps (in every perspective — a hop
+ * along Z in top-down and isometric levels), P cycles perspective (if
+ * enabled), +/- zoom (if enabled), left-click mine/attack, right-click place,
+ * 1-5 + wheel hotbar, I inventory, F eat, R ultimate, Esc pause.
  */
 public class PlayScene extends AbstractScene {
 
@@ -130,7 +143,6 @@ public class PlayScene extends AbstractScene {
 
     private Level level;
     private Camera camera;
-    private Animation walkAnim;
     // The player's current action state (idle/walk/run/jump/fall/swim) and
     // how long it has played — picks which skin animation draws, and from
     // which frame (the clock resets whenever the state changes).
@@ -139,6 +151,12 @@ public class PlayScene extends AbstractScene {
 
     private PlayerState me = new PlayerState();
     private int inputSeq;
+
+    // The character being played, and the picker shown at the level's start
+    // while the player chooses from the roster its creator put together.
+    private CharacterStore characterStore;
+    private CharacterProfile character = CharacterProfile.defaultProfile();
+    private CharacterPicker picker;
 
     private NetSession net; // null in single-player
 
@@ -151,8 +169,6 @@ public class PlayScene extends AbstractScene {
      * are no-ops (the fade covers the blank frame).
      */
     private boolean leaving;
-
-    private final Map<Integer, Animation> remoteAnims = new HashMap<>();
 
     /**
      * Online: every locally-predicted step since the last server
@@ -200,6 +216,7 @@ public class PlayScene extends AbstractScene {
     private Vehicle predictedVehicle;
     private double swingTime;      // seconds left on the melee swing visual
     private double prevVy;
+    private double prevVz;         // plan-view hop velocity, for jump feedback
     private double prevHealth = PlayerState.MAX_HEALTH;
     // Stat tracking + the level's programmable rules + station crafting
     // (offline: the local world owns all three).
@@ -236,7 +253,6 @@ public class PlayScene extends AbstractScene {
         leaving = false;
         pauseForm = null;
         net = ctx.session();
-        remoteAnims.clear();
         particles.clear();
         predictedVehicle = null;
         showInventory = false;
@@ -246,6 +262,10 @@ public class PlayScene extends AbstractScene {
         // Objects created with the creative editor's "+" entries must be
         // registered before a level referencing them loads.
         new CustomContentStore(profile().name).loadAndRegister();
+        // …and so must the game type's character profiles, since the level
+        // about to load names the ones it offers.
+        characterStore = new CharacterStore(profile().name);
+        characterStore.loadAndRegister();
         stats = new PlayerStats();
         craftingPanel = null;
         containerPanel = null;
@@ -290,12 +310,35 @@ public class PlayScene extends AbstractScene {
 
         me = new PlayerState(net != null ? net.client().localId() : 0, "",
                 level.spawnX, level.spawnY);
+        openCharacterChoice();
         prevHealth = me.health;
         setupLocalMinigame();
 
         parallax = null; // rebuilt lazily against the level's background
-        rebuildSprite();
         syncCameraFromProfile();
+    }
+
+    /**
+     * Open the level's character choice: the profiles its creator put on the
+     * roster, offered as cards before play begins. A roster of one (or a level
+     * from before character profiles existed, whose empty roster means "all of
+     * them" and whose game type has only the default) needs no decision, so
+     * that character is applied and play starts straight away.
+     */
+    private void openCharacterChoice() {
+        List<CharacterProfile> roster = Characters.rosterFor(level.characters);
+        picker = CharacterPicker.needed(roster)
+                ? new CharacterPicker(roster, level.name, ctx.character()) : null;
+        applyCharacter(picker != null ? picker.selected()
+                : roster.isEmpty() ? CharacterProfile.defaultProfile() : roster.get(0));
+    }
+
+    /** Make {@code p} the character being played: traits, pools, and sprite. */
+    private void applyCharacter(CharacterProfile p) {
+        character = p == null ? CharacterProfile.defaultProfile() : p;
+        character.applyTo(me);
+        ctx.setCharacter(character.key);
+        prevHealth = me.health;
     }
 
     /**
@@ -358,6 +401,16 @@ public class PlayScene extends AbstractScene {
         }
         if (paused) {
             updatePaused(dt, input);
+            return;
+        }
+        // The character choice owns the level's first frames: the world is
+        // built and waiting, but nothing simulates until a character is picked.
+        if (picker != null) {
+            if (picker.update(dt, input)) {
+                applyCharacter(picker.selected());
+                picker = null;
+                ctx.sfx(Sfx.CLICK);
+            }
             return;
         }
         // A running cutscene owns the frame: the world holds still, the
@@ -493,6 +546,9 @@ public class PlayScene extends AbstractScene {
 
         if (!showInventory && craftingPanel == null && containerPanel == null) {
             handleMouseActions(input, p, in, dt);
+            // [R] fires the character's ultimate at the cursor, once charged.
+            // (Q is already "drop one of the held stack".)
+            if (input.isKeyJustPressed(KeyEvent.VK_R)) tryUltimate(p);
         } else {
             if (world != null) world.cancelMining();
             cancelPredictedMining();
@@ -518,16 +574,18 @@ public class PlayScene extends AbstractScene {
                 while (pendingSteps.size() > MAX_PENDING_STEPS) pendingSteps.pollFirst();
             }
         }
-        if (me.vy < -1 && prevVy >= 0) {
+        // A jump counts in every perspective: gravity's -vy in a side-scroller,
+        // the hop's upward vz on a plane (see PlayerPhysics.stepHop).
+        if ((me.vy < -1 && prevVy >= 0) || (me.vz > 1 && prevVz <= 0)) {
             stats.add("jumps", 1);
             ctx.sfx(Sfx.JUMP);
         }
+        prevVz = me.vz;
         stats.add("distance_traveled", Math.abs(me.x - preX) + Math.abs(me.y - preY));
 
         if (net != null) {
             net.client().sendInput(in);
             reconcile(dt);
-            advanceRemoteAnimations(dt);
             consumeNetFeedback();
             mgView = net.client().minigame(); // replicated mini-game state
             if (p.particlesEnabled) {
@@ -537,6 +595,9 @@ public class PlayScene extends AbstractScene {
                 }
                 emitStatusParticles(dt);
             }
+            // Online the server owns the meter and sends it back in snapshots;
+            // charge locally too so the HUD fills smoothly between them.
+            Ultimates.charge(me, dt);
         } else {
             // Same order as the server tick: the referee sees deaths before
             // the world respawns them.
@@ -586,7 +647,6 @@ public class PlayScene extends AbstractScene {
 
         double size = ps();
         camera.centerOn(me.x + size / 2.0, me.y + size / 2.0);
-        walkAnim.update(me.moving ? dt : 0);
         // A mounted player sits (idle art); otherwise classify the action so
         // the matching skin animation plays, restarting on state changes.
         String state = riding ? "idle"
@@ -781,9 +841,9 @@ public class PlayScene extends AbstractScene {
         // the results back.
         if (input.isKeyJustPressed(KeyEvent.VK_F)) {
             ItemDef def = inventory.selectedDef();
-            boolean edible = def != null && def.heal() > 0 && me.health < PlayerState.MAX_HEALTH;
+            boolean edible = def != null && def.heal() > 0 && me.health < me.maxHealth;
             boolean manaDrink = def != null && "mana_potion".equals(def.key())
-                    && me.mana < PlayerState.MAX_MANA;
+                    && me.mana < me.maxMana;
             boolean relic = def != null && World.relicManaCost(def.key()) != null;
             VehicleDef vehDef = def == null ? null
                     : (world != null ? world.vehicleTypes : VehicleRegistry.standard())
@@ -804,7 +864,7 @@ public class PlayScene extends AbstractScene {
             } else if (relic) {
                 if (world.useRelic(me, def.key(), p)) ctx.sfx(Sfx.BOOM);
             } else if (manaDrink && inventory.consumeSelected()) {
-                me.mana = Math.min(PlayerState.MAX_MANA, me.mana + 50);
+                me.mana = Math.min(me.maxMana, me.mana + 50);
                 ctx.sfx(Sfx.EAT);
             } else if (edible && inventory.consumeSelected()) {
                 // Food heals directly, restores stamina alongside, and rare
@@ -1116,6 +1176,41 @@ public class PlayScene extends AbstractScene {
      * hits styled by their element, plus the ability/relic FX keys the World
      * emits — blinks, summons, warps, novas, tremors, chain arcs, revives.
      */
+    /**
+     * Fire the character's ultimate at the cursor. Offline the local world
+     * resolves it; online it is a request the server validates against its own
+     * copy of the meter, exactly like an attack — so nobody can cast one they
+     * haven't earned.
+     */
+    private void tryUltimate(GameProfile p) {
+        Ultimate u = Ultimates.of(me);
+        if (u == null) {
+            ruleStatus = character.name + " has no ultimate ability";
+            ruleStatusTime = 2.5;
+            return;
+        }
+        if (!Ultimates.ready(me)) {
+            ruleStatus = u.name() + " — " + (int) Math.round(me.ultCharge * 100) + "% charged";
+            ruleStatusTime = 2;
+            return;
+        }
+        double[] aim = camera.screenToWorld(mouseX, mouseY);
+        double aimX = aim[0], aimY = aim[1];
+        if (net != null) {
+            net.client().sendUltimate(aimX, aimY);
+            // The server's snapshot brings the spent meter back; clearing it
+            // locally keeps the HUD honest in the meantime.
+            me.ultCharge = 0;
+        } else if (!world.useUltimate(me, aimX, aimY, p)) {
+            ruleStatus = u.name() + " can't fire here";
+            ruleStatusTime = 2;
+            return;
+        }
+        ctx.sfx(Sfx.BOOM);
+        ruleStatus = u.name() + "!";
+        ruleStatusTime = 2.5;
+    }
+
     private void impactFeedback(World.Impact im, GameProfile p) {
         boolean fx = p.particlesEnabled;
         switch (im.key()) {
@@ -1399,17 +1494,6 @@ public class PlayScene extends AbstractScene {
         me.mana += (corrected.mana - me.mana) * rk;
     }
 
-    private void advanceRemoteAnimations(double dt) {
-        Snapshot snap = net.client().latest();
-        if (snap == null) return;
-        for (PlayerState ps : snap.players()) {
-            if (ps.id == me.id) continue;
-            Animation anim = remoteAnims.computeIfAbsent(ps.id, this::buildRemoteAnimation);
-            anim.update(ps.moving ? dt : 0);
-        }
-        remoteAnims.keySet().removeIf(id -> snap.player(id) == null && id != me.id);
-    }
-
     private void updatePaused(double dt, InputManager input) {
         if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
             resume();
@@ -1455,8 +1539,9 @@ public class PlayScene extends AbstractScene {
             MiniGameHud.drawTeamRing(g, camera, me.x + ps() / 2, me.y + ps(),
                     ps(), mgView.teamOf(me.id), camera.zoom);
         }
-        drawPlayer(g, me.x, me.y, me.facingLeft,
-                PlayerSprites.frame(animState, walkAnim, animStateClock), null);
+        drawPlayer(g, me.x, me.y, me.z, PlayerSprites.directionalFrame(
+                        me.characterKey, animState, me.facing, animStateClock,
+                        (int) ps(), character.body), null);
         if (swingTime > 0) drawSwing(g);
         if (cutscenes != null && cutscenes.active() != null) {
             CutscenePainter.drawActors(g, camera, cutscenes.active());
@@ -1471,6 +1556,7 @@ public class PlayScene extends AbstractScene {
         if (p.itemsEnabled) drawHotbar(g);
         if (p.combatEnabled || p.mobsEnabled) drawHealthBar(g);
         drawResourceBars(g);
+        drawUltimateMeter(g);
         if (net == null) drawStatRuleBars(g);
         drawRuleStatus(g);
         if (net != null) drawEvents(g);
@@ -1486,6 +1572,9 @@ public class PlayScene extends AbstractScene {
         }
 
         if (paused) drawPauseOverlay(g);
+        // The character choice sits over the built level, so a player sees the
+        // world they are about to drop into behind the cards.
+        if (picker != null) picker.render(g, viewportWidth, viewportHeight);
         if (net != null && !net.client().isConnected()) drawDisconnectOverlay(g);
     }
 
@@ -1528,11 +1617,47 @@ public class PlayScene extends AbstractScene {
         int w = 180, h = 8;
         int x = 12;
         drawResourceBar(g, x, viewportHeight - 40, w, h,
-                me.stamina / PlayerState.MAX_STAMINA,
+                me.maxStamina <= 0 ? 0 : me.stamina / me.maxStamina,
                 new Color(40, 90, 40), new Color(110, 220, 110));
         drawResourceBar(g, x, viewportHeight - 52, w, h,
-                me.mana / PlayerState.MAX_MANA,
+                me.maxMana <= 0 ? 0 : me.mana / me.maxMana,
                 new Color(35, 45, 100), new Color(100, 140, 245));
+    }
+
+    /**
+     * The ultimate meter, bottom-right (mirroring the health/stamina/mana
+     * stack on the left, clear of the centred hotbar): a bar that fills with
+     * time and damage dealt, glowing and naming its key once it is ready to
+     * fire, and counting down while a sustained ability runs.
+     */
+    private void drawUltimateMeter(Graphics2D g) {
+        Ultimate u = Ultimates.of(me);
+        if (u == null) return;
+        int w = 220, h = 16;
+        int x = viewportWidth - w - 12, y = viewportHeight - 30;
+        boolean ready = Ultimates.ready(me);
+        boolean running = me.ultActive > 0;
+        double fill = running ? me.ultActive / Math.max(0.001, u.duration()) : me.ultCharge;
+
+        g.setColor(new Color(0, 0, 0, 165));
+        g.fillRoundRect(x - 2, y - 2, w + 4, h + 4, 8, 8);
+        Color c = u.color();
+        // A ready meter pulses so it catches the eye without a sound cue.
+        int alpha = ready ? (int) (190 + 60 * Math.sin(animClock * 6)) : 190;
+        g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(),
+                Math.max(0, Math.min(255, alpha))));
+        g.fillRoundRect(x, y, (int) (w * Math.max(0, Math.min(1, fill))), h, 6, 6);
+        g.setColor(new Color(255, 255, 255, ready ? 220 : 90));
+        g.setStroke(new BasicStroke(ready ? 2f : 1f));
+        g.drawRoundRect(x, y, w, h, 6, 6);
+
+        g.setFont(SMALL_FONT);
+        String label = running
+                ? u.name() + "  " + String.format("%.1fs", me.ultActive)
+                : ready ? u.name() + "  [R] READY"
+                : u.name() + "  " + (int) (me.ultCharge * 100) + "%";
+        g.setColor(Color.WHITE);
+        g.drawString(label, x + (w - g.getFontMetrics().stringWidth(label)) / 2, y + h - 4);
     }
 
     private void drawResourceBar(Graphics2D g, int x, int y, int w, int h,
@@ -1792,8 +1917,6 @@ public class PlayScene extends AbstractScene {
     private void enforceProfileConstraints(GameProfile p) {
         if (!p.perspectiveSwitchingEnabled) camera.setPerspective(basePerspective());
         camera.zoom = p.zoomEnabled ? clampZoom(camera.zoom, p) : clampZoom(p.defaultZoom, p);
-        // Player sprite tracks the configured size.
-        if (walkAnim == null || walkAnim.frameCount() == 0) rebuildSprite();
     }
 
     private void syncCameraFromProfile() {
@@ -1801,7 +1924,6 @@ public class PlayScene extends AbstractScene {
         camera.tileSize = level.tileSize;
         if (!p.perspectiveSwitchingEnabled) camera.setPerspective(basePerspective());
         camera.zoom = clampZoom(p.zoomEnabled ? camera.zoom : p.defaultZoom, p);
-        rebuildSprite();
     }
 
     private double clampZoom(double z, GameProfile p) {
@@ -2022,7 +2144,7 @@ public class PlayScene extends AbstractScene {
                 drawItemSprite(g, item.key, item.x, item.y, item.count);
             }
             for (Mob m : world.mobs()) {
-                drawMobSprite(g, m.def, m.x, m.y, m.facingLeft, m.health, m.hurting(),
+                drawMobSprite(g, m.def, m.x, m.y, m.facing, m.health, m.hurting(),
                         stateKeyFor(m.state.ordinal(), m.hurting()), m.statusBits());
             }
             for (Projectile pr : world.projectiles()) {
@@ -2065,7 +2187,7 @@ public class PlayScene extends AbstractScene {
                 MobDef def = mobs.get(mv.key);
                 if (def != null) {
                     drawMobSprite(g, def, lerpX(old.get(mv.id), mv, t),
-                            lerpY(old.get(mv.id), mv, t), mv.facingLeft, mv.health, false,
+                            lerpY(old.get(mv.id), mv, t), mv.facing, mv.health, false,
                             stateKeyFor(mv.aiState, false), mv.status);
                 }
             }
@@ -2118,12 +2240,17 @@ public class PlayScene extends AbstractScene {
         };
     }
 
-    /** A projectile, rotated to its flight direction. */
+    /**
+     * A projectile, rotated to its flight direction. Its texture is skinnable
+     * like everything else ({@code projectile/<key>} — the drop-in pack or the
+     * creative Effects palette); the procedural bolt is the fallback.
+     */
     private void drawProjectileSprite(Graphics2D g, String key, double x, double y,
                                       double vx, double vy) {
         ProjectileDef def = projectileTypes().get(key);
         if (def == null) return;
-        BufferedImage img = EntitySprites.projectile(def, 16);
+        BufferedImage img = Skins.frame("projectile/" + key, animClock);
+        if (img == null) img = EntitySprites.projectile(def, 16);
         int w = Math.max(8, (int) Math.round(def.radius() * 3.5 * camera.zoom));
         camera.worldToScreen(x, y, corner);
         AffineTransform old = g.getTransform();
@@ -2133,19 +2260,41 @@ public class PlayScene extends AbstractScene {
         g.setTransform(old);
     }
 
+    /**
+     * A mob, drawn for the direction it faces. The texture resolves from the
+     * most specific sheet outward — {@code mob/<key>/<state>/<dir>}, this
+     * direction's mirror twin (drawn flipped), the state's own sheet, the
+     * mob's idle sheet — and falls back to the pre-generated directional art,
+     * which is already drawn facing the right way and so is never flipped.
+     */
     private void drawMobSprite(Graphics2D g, MobDef def, double x, double y,
-                               boolean facingLeft, double health, boolean hurt,
+                               Facing facing, double health, boolean hurt,
                                String state, int statusBits) {
-        BufferedImage img = Skins.frame("mob/" + def.key() + "/" + state, animClock);
-        if (img == null && !"idle".equals(state)) {
-            img = Skins.frame("mob/" + def.key() + "/idle", animClock);
+        Facing dir = facing == null ? Facing.EAST : facing;
+        String base = "mob/" + def.key() + "/";
+        boolean mirror = false;
+        BufferedImage img = Skins.frame(base + state + "/" + dir.key(), animClock);
+        if (img == null && dir.mirrored()) {
+            img = Skins.frame(base + state + "/" + dir.mirrorOf().key(), animClock);
+            mirror = img != null;
         }
-        if (img == null) img = EntitySprites.mob(def, 32);
+        if (img == null) {
+            img = Skins.frame(base + state, animClock);
+            mirror = img != null && dir.facingLeft();
+        }
+        if (img == null && !"idle".equals(state)) {
+            img = Skins.frame(base + "idle", animClock);
+            mirror = img != null && dir.facingLeft();
+        }
+        if (img == null) {
+            img = EntitySprites.mob(def, 32, dir);
+            mirror = false;
+        }
         int w = (int) Math.round(def.size() * camera.zoom);
         camera.worldToScreen(x + def.size() / 2, y + def.size(), corner);
         int dx = corner[0] - w / 2;
         int dy = corner[1] - w;
-        if (facingLeft) {
+        if (mirror) {
             g.drawImage(img, dx + w, dy, -w, w, null);
         } else {
             g.drawImage(img, dx, dy, w, w, null);
@@ -2261,13 +2410,34 @@ public class PlayScene extends AbstractScene {
             PlayerState old = from.player(ps.id);
             double x = old != null ? old.x + (ps.x - old.x) * t : ps.x;
             double y = old != null ? old.y + (ps.y - old.y) * t : ps.y;
-            Animation anim = remoteAnims.computeIfAbsent(ps.id, this::buildRemoteAnimation);
             if (mgView != null) {
                 MiniGameHud.drawTeamRing(g, camera, x + size / 2, y + size,
                         size, mgView.teamOf(ps.id), camera.zoom);
             }
-            drawPlayer(g, x, y, ps.facingLeft, anim.current(), ps.name);
+            // Remote players wear their own character's skin and face their
+            // own direction — both ride along in the snapshot.
+            CharacterProfile theirs = Characters.getOrDefault(ps.characterKey);
+            Color body = remoteBody(ps.id, theirs);
+            PlayerSprites.Frame sprite = PlayerSprites.directionalFrame(
+                    ps.characterKey, ps.moving ? "walk" : "idle", ps.facing,
+                    animClock, (int) size, body);
+            drawPlayer(g, x, y, ps.z, sprite, ps.name);
         }
+    }
+
+    /**
+     * The body colour a remote player is drawn in: their character profile's,
+     * or — for the default character, where everyone would look alike — a
+     * stable per-id hue, replaced by the team colour in a mini game.
+     */
+    private Color remoteBody(int id, CharacterProfile theirs) {
+        MiniGameView v = mgView;
+        if (v != null && v.teamOf(id) >= 0) return Team.color(v.teamOf(id));
+        if (theirs != null && !CharacterProfile.DEFAULT_KEY.equals(theirs.key)) {
+            return theirs.body;
+        }
+        // Golden-ratio hue spacing gives each player a distinct, stable colour.
+        return Color.getHSBColor((id * 0.6180339887f) % 1f, 0.6f, 0.85f);
     }
 
     /** Interpolation fraction of {@code renderTime} between two snapshots. */
@@ -2278,20 +2448,34 @@ public class PlayScene extends AbstractScene {
         return Math.max(0.0, Math.min(1.0, t));
     }
 
-    private void drawPlayer(Graphics2D g, double x, double y, boolean facingLeft,
-                            BufferedImage frame, String nameTag) {
-        if (frame == null) return;
+    /**
+     * Draw a player: their directional sprite, lifted by any plan-view hop
+     * (over a shadow that stays on the ground, so the height reads), and
+     * mirrored only when the sprite that resolved is east-facing art standing
+     * in for a westward facing.
+     */
+    private void drawPlayer(Graphics2D g, double x, double y, double z,
+                            PlayerSprites.Frame sprite, String nameTag) {
+        if (sprite == null || sprite.image() == null) return;
         double size = ps();
         int w = (int) Math.round(size * camera.zoom);
         int h = w;
         int footX = camera.worldToScreenX(x + size / 2.0, y + size);
         int footY = camera.worldToScreenY(x + size / 2.0, y + size);
         int dx = footX - w / 2;
-        int dy = footY - h;
-        if (facingLeft) {
-            g.drawImage(frame, dx + w, dy, -w, h, null);
+        int lift = (int) Math.round(z * camera.zoom * PlayerPhysics.HOP_DRAW_SCALE);
+        if (lift > 0) {
+            // The shadow marks where they will land, shrinking with height.
+            double shrink = Math.max(0.35, 1 - z / (size * 3));
+            int sw = (int) (w * 0.7 * shrink), sh = Math.max(2, (int) (w * 0.25 * shrink));
+            g.setColor(new Color(0, 0, 0, (int) (90 * shrink)));
+            g.fillOval(footX - sw / 2, footY - sh / 2, sw, sh);
+        }
+        int dy = footY - h - lift;
+        if (sprite.mirrored()) {
+            g.drawImage(sprite.image(), dx + w, dy, -w, h, null);
         } else {
-            g.drawImage(frame, dx, dy, w, h, null);
+            g.drawImage(sprite.image(), dx, dy, w, h, null);
         }
         if (nameTag != null && !nameTag.isEmpty()) {
             g.setFont(NAME_FONT);
@@ -2326,6 +2510,7 @@ public class PlayScene extends AbstractScene {
         if (profile().perspectiveSwitchingEnabled) hud.append("  [P] perspective");
         if (profile().zoomEnabled) hud.append("  [+/-] zoom");
         if (profile().itemsEnabled) hud.append("  [I] inventory");
+        if (Ultimates.of(me) != null) hud.append("  [R] ultimate");
         g.drawString(hud.toString(), 12, 24);
     }
 
@@ -2337,10 +2522,10 @@ public class PlayScene extends AbstractScene {
         g.setColor(new Color(120, 30, 30));
         g.fillRect(x, y, w, h);
         g.setColor(new Color(220, 60, 60));
-        g.fillRect(x, y, (int) (w * Math.max(0, me.health / PlayerState.MAX_HEALTH)), h);
+        g.fillRect(x, y, (int) (w * Math.max(0, me.health / me.maxHealth)), h);
         g.setColor(Color.WHITE);
         g.setFont(SMALL_FONT);
-        g.drawString((int) Math.ceil(me.health) + " / " + (int) PlayerState.MAX_HEALTH,
+        g.drawString((int) Math.ceil(me.health) + " / " + (int) me.maxHealth,
                 x + w / 2 - 20, y + 11);
     }
 
@@ -2510,18 +2695,4 @@ public class PlayScene extends AbstractScene {
 
     private double ps() { return profile().playerSize; }
 
-    private void rebuildSprite() {
-        walkAnim = PlayerSprites.walkAnimation((int) ps(), PlayerSprites.DEFAULT_BODY);
-        remoteAnims.clear(); // rebuilt lazily at the (possibly new) size
-    }
-
-    private Animation buildRemoteAnimation(int id) {
-        int size = Math.max(8, (int) ps());
-        // Golden-ratio hue spacing gives each player a distinct, stable colour;
-        // in a mini game the body wears the team colour instead.
-        Color body = Color.getHSBColor((id * 0.6180339887f) % 1f, 0.6f, 0.85f);
-        MiniGameView v = mgView;
-        if (v != null && v.teamOf(id) >= 0) body = Team.color(v.teamOf(id));
-        return PlayerSprites.walkAnimation(size, body);
-    }
 }

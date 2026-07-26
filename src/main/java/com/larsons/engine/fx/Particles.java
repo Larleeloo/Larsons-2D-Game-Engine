@@ -1,27 +1,41 @@
 package com.larsons.engine.fx;
 
 import com.larsons.engine.graphics.Camera;
+import com.larsons.engine.graphics.Skins;
 
+import java.awt.AlphaComposite;
 import java.awt.Color;
+import java.awt.Composite;
 import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
 import java.util.Random;
 
 /**
  * A tiny pooled particle system for gameplay feedback — block-break shards,
  * hit sparks, pickup sparkles — ported in spirit from the Side-Scroller
- * engine's status/impact particles but kept asset-free (coloured squares) and
- * allocation-free (fixed pool, no per-frame garbage). Purely visual and
- * local: never simulated on the server or replicated.
+ * engine's status/impact particles and kept allocation-free (fixed pool, no
+ * per-frame garbage). Purely visual and local: never simulated on the server
+ * or replicated.
  *
  * <p>{@link Style} shapes a burst's motion so effects read differently:
  * embers float up, shards rain down, sparks snap outward, rings blast in a
  * circle, motes hang in the air — the auto-battler keys these off the
  * elemental damage types.
+ *
+ * <p><b>Skinnable.</b> Each style is a texture key of its own
+ * ({@code particle/embers}, {@code particle/sparks}…), so a texture pack — or
+ * the creative editor's Effects palette — can replace the flecks with real
+ * art. The pre-generated fallback is the engine's own coloured fleck, tinted
+ * by whatever colour the effect asked for, so an unskinned game looks exactly
+ * as it always did.
  */
 public final class Particles {
 
     private static final int MAX = 512;
     private static final double GRAVITY = 900;
+
+    /** Texture-key namespace of the particle sheets ({@code particle/<kind>}). */
+    public static final String TEXTURE_NAMESPACE = "particle";
 
     /** Motion profile for a burst. {@link #BURST} is the classic shard spray. */
     public enum Style {
@@ -45,6 +59,33 @@ public final class Particles {
         IMPLODE
     }
 
+    /** The file-name stem a style's sheet takes in the pack ({@code embers}). */
+    public static String textureKind(Style style) {
+        return style.name().toLowerCase();
+    }
+
+    /** The {@link Skins} texture key of a style's sheet. */
+    public static String textureKey(Style style) {
+        return TEXTURE_NAMESPACE + "/" + textureKind(style);
+    }
+
+    /** A readable name for a style ("EMBERS" -> "Embers"). */
+    public static String styleName(Style style) {
+        String k = textureKind(style);
+        return Character.toUpperCase(k.charAt(0)) + k.substring(1);
+    }
+
+    /** The {@link Style} behind a texture key, or {@code null}. */
+    public static Style styleForKey(String key) {
+        if (key == null) return null;
+        String kind = key.startsWith(TEXTURE_NAMESPACE + "/")
+                ? key.substring(TEXTURE_NAMESPACE.length() + 1) : key;
+        for (Style s : Style.values()) {
+            if (textureKind(s).equals(kind)) return s;
+        }
+        return null;
+    }
+
     private final double[] x = new double[MAX];
     private final double[] y = new double[MAX];
     private final double[] vx = new double[MAX];
@@ -54,6 +95,8 @@ public final class Particles {
     private final double[] grav = new double[MAX];
     private final int[] rgb = new int[MAX];
     private final float[] size = new float[MAX];
+    /** {@link Style} ordinal, so each fleck can draw its own skinned texture. */
+    private final int[] styleIdx = new int[MAX];
     private int count;
 
     private final Random rng = new Random();
@@ -71,6 +114,7 @@ public final class Particles {
             x[p] = wx;
             y[p] = wy;
             rgb[p] = color.getRGB() & 0xFFFFFF;
+            styleIdx[p] = style.ordinal();
             double angle = rng.nextDouble() * Math.PI * 2;
             switch (style) {
                 case EMBERS -> {
@@ -162,6 +206,7 @@ public final class Particles {
                 life[p] = life[count]; maxLife[p] = maxLife[count];
                 grav[p] = grav[count];
                 rgb[p] = rgb[count]; size[p] = size[count];
+                styleIdx[p] = styleIdx[count];
                 continue;
             }
             vy[p] += GRAVITY * grav[p] * dt;
@@ -171,15 +216,39 @@ public final class Particles {
         }
     }
 
+    /**
+     * Draw every live fleck. A style with a texture assigned (pack folder or
+     * creative Effects palette) draws that sheet, animated over the
+     * particle's own lifetime and fading out with it; a style with none keeps
+     * the built-in coloured fleck, which is the pre-generated fallback.
+     */
     public void render(Graphics2D g, Camera camera) {
+        Style[] styles = Style.values();
+        Composite restore = null;
         for (int p = 0; p < count; p++) {
-            int alpha = (int) (255 * (life[p] / maxLife[p]));
-            g.setColor(new Color(rgb[p] | (Math.max(0, Math.min(255, alpha)) << 24), true));
+            double fade = Math.max(0, Math.min(1, life[p] / maxLife[p]));
             int sx = camera.worldToScreenX(x[p], y[p]);
             int sy = camera.worldToScreenY(x[p], y[p]);
             int s = Math.max(1, (int) (size[p] * camera.zoom));
-            g.fillRect(sx - s / 2, sy - s / 2, s, s);
+            Style style = styles[styleIdx[p]];
+            // Age drives the sheet, so a multi-frame particle texture plays
+            // once across the fleck's life instead of flickering per frame.
+            BufferedImage tex = Skins.frame(textureKey(style), maxLife[p] - life[p]);
+            if (tex != null) {
+                if (restore == null) restore = g.getComposite();
+                g.setComposite(AlphaComposite.getInstance(
+                        AlphaComposite.SRC_OVER, (float) fade));
+                // Textured flecks read better a little larger than the bare
+                // squares they replace, which are only a few pixels across.
+                int w = Math.max(2, s * 2);
+                g.drawImage(tex, sx - w / 2, sy - w / 2, w, w, null);
+            } else {
+                int alpha = (int) (255 * fade);
+                g.setColor(new Color(rgb[p] | (Math.max(0, Math.min(255, alpha)) << 24), true));
+                g.fillRect(sx - s / 2, sy - s / 2, s, s);
+            }
         }
+        if (restore != null) g.setComposite(restore);
     }
 
     public int count() {

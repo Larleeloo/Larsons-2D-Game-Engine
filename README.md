@@ -232,18 +232,25 @@ On launch you'll choose or create a **game type** before playing — see
 - **Menus / forms:** arrow keys to move, **Left/Right** to adjust a value,
   **Enter** to activate, or use the mouse (hover + click the toggles/steppers).
   In the game-type editor, just type to set the name.
-- **Level:** `WASD` / arrows to move, **P** to cycle perspective (if enabled),
-  **+ / -** to zoom (if enabled), **Esc** to open the pause menu.
-  In side-scroll with gravity enabled the character can jump; otherwise it
-  moves freely on both axes. Which of these are available depends on the active
-  game type.
+- **Level:** `WASD` / arrows to move, **Space** to jump, **P** to cycle
+  perspective (if enabled), **+ / -** to zoom (if enabled), **Esc** to open
+  the pause menu. Jumping works in **all three formats**: gravity in
+  side-scroll, and a **hop along a separate Z axis** in top-down and isometric
+  (you rise over your own shadow and land back down) — same key, same double
+  jump, same stamina cost. Which of these are available depends on the active
+  game type and the character you picked.
 - **World interaction** (per the game type's toggles): **left-click** fires
   the held ranged weapon / throwable, else mines the aimed block, else swings
   at mobs; **right-click** places the selected hotbar block; **1-5** / mouse
   wheel select the hotbar slot; **Q** drops one of the selected item;
-  **F** eats the selected food (a server request online); **I** opens the
+  **F** eats the selected food (a server request online); **R** fires your
+  character's **ultimate ability** once its meter is full; **I** opens the
   inventory — click a stack to pick it up, click another slot to place/merge/
   swap it, click outside the panel to drop it into the world.
+- **Starting a level:** if its creator put more than one character on the
+  level's roster, a **character picker** opens first — arrow keys or the
+  mouse to choose, Enter to drop in (see
+  [Characters, ultimates & directional animation](#characters-ultimates--directional-animation)).
 - **Creative mode:** see [Creative mode](#creative-mode-paint-objects).
 - **Multiplayer:** from the main menu, *Multiplayer (Host / Join)* — host a
   server on a port, or type a `host[:port]` address and join (see
@@ -630,6 +637,8 @@ everything the registries know, in categories —
 | Decor    | trees, rocks, bushes, crystals… painted into the background or foreground layer |
 | Surface  | per-face block details (grass tufts, hanging moss, twigs, icicles, cobwebs…) with face / open-closed / layer toggles |
 | Doors    | the game type's door list (external `doors.json`), each linking to another level |
+| Characters | every playable [character profile](#characters-ultimates--directional-animation) — skins and traits you create with "+ New Character" — plus *Level Roster…*, which picks the ones **this** level offers at its start |
+| Effects  | every particle style and projectile the game throws; click one to open its texture dialog (these aren't painted into the level, they belong to whatever throws them) |
 | Cutscenes | the level's scripted cutscenes — paint one to place its trigger marker; *Manage Cutscenes…* (or right-clicking an entry) opens the editor |
 | Mini Game | the *Mini Game Setup…* window plus the objective markers the four team modes are built from: flag bases, stockpile crates, team spawns, escort waypoints |
 | Tools    | player spawn, multiplayer spawn points, eraser, Brush Settings, the Generate button, the Stat Rules editor |
@@ -1061,6 +1070,152 @@ snapshots (`veh`); the riding client *predicts* its vehicle with the same
 step and blends toward the server state, exactly like player prediction, so
 a gallop feels instant at any ping. Levels can also declare vehicles in
 their entity lists (`{"kind":"vehicle","type":"horse",…}`).
+
+---
+
+## Characters, ultimates & directional animation
+
+Who you play as, what they can do, and which way they are drawn — three
+systems that arrived together, all built on the same seams as everything
+else: created from the creative palette like a block, persisted with the game
+type, and resolved in the one authoritative
+[`World`](src/main/java/com/larsons/engine/world/World.java) so they behave
+identically offline, in the play-test, and on the dedicated server.
+
+### Directional animations
+
+The direction a character faces picks the sprite that draws them
+([`Facing`](src/main/java/com/larsons/engine/graphics/Facing.java)):
+
+- **Side-scroll** — two directions. Facing right, the **right arm swings in
+  front of the torso and the left behind it**; facing left, the reverse. It
+  is one drawing and its mirror, which is exactly what makes the near arm
+  stay near through a turn.
+- **Top-down / isometric** — **all eight** compass points (E, NE, N, NW, W,
+  SW, S, SE). Walk north and you are drawn from behind; walk south and you
+  are looking at the camera; the diagonals are three-quarter views.
+
+Mobs use the same system, so a slime chasing you north-east is drawn turned
+away, not mirrored in profile.
+
+**Every direction has pre-generated fallback art**
+([`DirectionalSprites`](src/main/java/com/larsons/engine/graphics/DirectionalSprites.java)):
+a four-frame walk cycle drawn per facing, with far limbs shaded behind the
+body and near limbs in front, so a game with no art at all already reads as
+directional. Supply real art whenever you like — the resolution runs from
+most specific to least, and stops at the first sheet that exists:
+
+```
+player/walk/ne   ->  player/walk_ne.png   this facing's own sheet
+player/walk/nw   ->  player/walk_ne.png   the eastern twin, drawn mirrored
+player/walk      ->  player/walk.png      one sheet for every direction
+player/idle      ->  player/idle.png      the state fallback chain
+                                          … then the generated art
+```
+
+The same nesting works for mobs (`mobs/slime_walk_e.png` → `mobs/slime_walk`
+→ `mobs/slime`) and for a character profile's own sheets
+(`player/rogue_walk_ne.png`). In creative mode, right-click any of these and
+the texture dialog grows a **Facing** row: leave it on *(every direction)* —
+the normal case — or assign one compass point at a time.
+
+### Character profiles
+
+A **character profile** is a skin plus the traits that make someone feel
+different to control
+([`CharacterProfile`](src/main/java/com/larsons/engine/character/CharacterProfile.java)):
+
+| Trait | What it does |
+|-------|--------------|
+| Body / skin colour | tints the generated directional art (real sheets override it entirely) |
+| Speed | multiplies walk and sprint speed |
+| Sprint | whether Shift sprints at all |
+| Mid-air jumps | 1 is the classic double jump; 0 grounds them; up to 8 |
+| Jump height | multiplies take-off velocity — side-scroll jumps and plan-view hops alike |
+| Max health / mana / stamina | this character's own pools, not the engine's defaults |
+| Ultimate | which signature ability they bring, and a switch to turn it off |
+
+They are created **exactly like a custom block or mob**: the creative
+palette's **Characters** category leads with a **"+ New Character"** button,
+and the form edits every field above. Create saves it into the game type's
+`characters.json` beside its levels
+([`CharacterStore`](src/main/java/com/larsons/engine/character/CharacterStore.java))
+and registers it live, so it is immediately paintable-adjacent in the palette,
+right-clickable for its skin, and deletable from that same dialog.
+
+**Each level decides which characters it offers.** The Characters palette's
+*Level Roster…* window (and the same toggles on the *Load Level → Edit
+Settings* screen) tick the profiles this level allows; the roster saves inside
+the level file. When the level starts, a **character picker** shows a card per
+profile — its sprite walking, its traits, its ultimate — and the one you
+choose is applied to the simulated player: pools resized, speed and jumps
+retuned, ultimate meter reset. A roster with one entry skips the picker; an
+empty roster means *every* profile, so a level built before profiles existed
+is never unplayable.
+
+### Ultimate abilities
+
+Each profile can carry one **ultimate**
+([`Ultimates`](src/main/java/com/larsons/engine/character/Ultimates.java)),
+charged the way an Overwatch ultimate is: a slow passive trickle plus a much
+faster gain **per point of damage dealt**, so a player who fights earns theirs
+long before a player who hides. A full meter fires once on **R**, spends
+itself entirely, and — because every one of them is radial, aimed, or
+self-targeted, with no assumption of a "down" — **plays the same in
+side-scroll, top-down and isometric**.
+
+| Ability | What it does |
+|---------|--------------|
+| **Overdrive** | Move half again as fast and hit twice as hard for 8 seconds — stamina never runs dry |
+| **Nova Burst** | Detonate a ring of arcane force around you, damaging everything within four tiles |
+| **Bulwark** | Shrug off 80% of incoming damage and regenerate steadily for 7 seconds |
+| **Blink Strike** | Flash to where you are aiming, cutting down everything along the way |
+| **Meteor Volley** | Call five meteors down onto the spot you are aiming at |
+| **Time Dilation** | Freeze the tempo: everything within six tiles crawls for 6 seconds |
+| **Life Siphon** | Drain the life out of everything near you for 5 seconds, healing yourself |
+| **Earthshatter** | Slam the ground: a shockwave hurls enemies back and the terrain around you shatters |
+
+The meter is a bar across the bottom of the HUD that pulses when it is ready
+and counts down while a sustained ability runs. Resolution lives in
+`World.useUltimate`, so online it is a request
+(`{"t":"ult","x":…,"y":…}`) the **server** validates against its own copy of
+your meter — nobody casts one they haven't earned. A game type with combat
+switched off simply keeps the charge instead of burning it on nothing.
+
+### Jumping in every perspective
+
+Top-down and isometric levels have no gravity axis on the tile grid, so
+**Space** lifts you along a separate **Z axis** instead
+([`PlayerState.z`](src/main/java/com/larsons/engine/sim/PlayerState.java)):
+you rise, hang, and settle back down over your own **shadow**, which shrinks
+as you climb. It is a real jump, not a decoration — steering keeps working
+mid-air, the character's air jumps apply, it costs the same stamina, it feeds
+the `jumps` stat rule, and while airborne you clear contact-damage tiles
+(lava, spikes) exactly as a side-scroll jump does. The jump/fall animation
+states play off it too, so a per-state sprite sheet animates a hop.
+
+Side-scroll jumping also now answers **Space** from the ground, not just
+`W`/`Up` — the jump key is the jump key in all three formats.
+
+### Particle & projectile textures
+
+Every particle style and every projectile is a **texture key of its own**, so
+the effects layer is as reskinnable as the world:
+
+```
+particles/burst.png      particles/embers.png     particles/shards.png
+particles/sparks.png     particles/drip.png       particles/ring.png
+particles/motes.png      particles/fountain.png   particles/implode.png
+projectiles/arrow.png    projectiles/fireball.png projectiles/ice_shard.png  …
+```
+
+Drop them in the [texture pack](#texture-packs-drop-in-art) folder and they
+apply by name, or open the creative palette's **Effects** category and click
+one for its texture dialog (frame size, count, fps, a sheet from anywhere on
+disk). A skinned particle plays its sheet across the fleck's own lifetime and
+fades out with it; an unskinned one keeps the engine's coloured fleck, and an
+unskinned projectile keeps its procedural bolt — so **every effect has a
+pre-generated fallback** and a missing file never breaks anything.
 
 ---
 
@@ -1564,15 +1719,20 @@ share/textures/
 ├── blocks/     dirt.png · stone.png · …
 ├── liquids/    water.png · lava.png · …
 ├── lights/     torch.png · lantern.png · …
-├── mobs/       slime.png (all states) · slime_walk.png (one state) · …
+├── mobs/       slime.png (all states) · slime_walk.png (one state) · slime_walk_e.png (one facing)
 ├── items/      iron_sword.png · …
-├── decor/  ·  block_decor/  ·  player/  ·  units/  ·  projectiles/  ·  board/
+├── player/     idle.png · walk_ne.png (one facing) · rogue_walk.png (a character profile)
+├── particles/  embers.png · sparks.png · shards.png · …
+├── projectiles/ arrow.png · fireball.png · …
+├── decor/  ·  block_decor/  ·  lights/  ·  units/  ·  board/
 ```
 
 **Subfolders are palette categories, files are objects.** A sheet is picked
 up purely by where it sits and what it's called — `blocks/dirt.png` is the
 Dirt block, `mobs/slime.png` is the Slime in every animation state (add
-`_walk` for one state only), `player/idle.png` is the player standing still.
+`_walk` for one state only, and `_walk_e` for one state in one **facing** —
+see [directional animations](#directional-animations)), `player/idle.png` is
+the player standing still, `particles/embers.png` is the ember particle.
 The generated `TEXTURE_KEYS.txt` lists **every object in the game** with the
 exact file name and texture key to use, including custom content you created
 yourself — so nobody has to guess or memorize a key. PNG is preferred; GIF
@@ -2061,7 +2221,11 @@ engine.scenes().setScene("mine"); // or transitionTo for a fade
 [`VehicleTest`](src/test/java/com/larsons/engine/VehicleTest.java),
 [`GenomeTest`](src/test/java/com/larsons/engine/evolution/GenomeTest.java),
 [`EvolutionGameTest`](src/test/java/com/larsons/engine/evolution/EvolutionGameTest.java),
-[`EvolutionSceneTest`](src/test/java/com/larsons/engine/EvolutionSceneTest.java))
+[`EvolutionSceneTest`](src/test/java/com/larsons/engine/EvolutionSceneTest.java),
+[`DirectionalAnimationTest`](src/test/java/com/larsons/engine/DirectionalAnimationTest.java),
+[`CharacterProfileTest`](src/test/java/com/larsons/engine/CharacterProfileTest.java),
+[`UltimateAbilityTest`](src/test/java/com/larsons/engine/UltimateAbilityTest.java),
+[`EffectSkinsAndJumpTest`](src/test/java/com/larsons/engine/EffectSkinsAndJumpTest.java))
 covering JSON read/write, level loading (both tile modes + round-trips),
 sprite-sheet slicing, input edge detection, game-type save/load, the
 `ConfigForm` widget's keyboard/mouse interaction (including scrolling),
@@ -2096,6 +2260,20 @@ links, mount validation, gallop/jump physics, buoyant boats, flying
 carpets, the terrain-grinding drill, dragon fire, pack-up recovery, wire
 form — plus a full online ride: mount request, replicated gallop with the
 rider glued to the saddle, dismount),
+characters and their signature moves (the eight-point compass and its
+side-scroll two, per-facing sprite resolution with mirrored twins and the
+pre-generated fallback nobody flips, per-direction pack file names,
+character-profile persistence and re-registration per game type, trait
+clamping, level rosters saving and degrading gracefully when a profile is
+deleted, traits actually reaching the physics — speed, sprint permission, air
+jumps, jump height, resized pools — ultimate charging from time and damage,
+one-cast spending, every ability's effect in all three perspectives, sustained
+buffs lapsing on their own and on death, particle and projectile texture keys
+with their built-in fallbacks, a skinned particle sheet actually rendering,
+and jumping in all three formats: Space off the ground in side-scroll, the
+plan-view hop's launch/peak/landing, its mid-air steering and double jump, the
+jump/fall animation states it drives, and the Z axis parking when a door leads
+into a side-scrolling level),
 and full loopback multiplayer (a real server + clients: handshake, movement,
 join/leave, version rejection, shutdown — plus block edits replicating to
 every client and late joiners, painted mobs appearing in snapshots and being

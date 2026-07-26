@@ -398,7 +398,19 @@ public final class TexturePack {
                       decor/oak_tree.png         the Oak Tree decoration
                       block_decor/moss.png       the Moss block detail
                       player/idle.png            the player standing still
+                      player/walk_ne.png         the player walking north-east
+                      player/rogue_walk.png      the Rogue character walking
+                      particles/embers.png       the ember particle
+                      projectiles/arrow.png      the arrow projectile
                       units/squire.png           the auto-battler Squire
+
+                DIRECTIONS
+                  Characters and mobs are drawn facing one of eight compass
+                  points: e, ne, n, nw, w, sw, s, se. Add the direction to the
+                  file name (player/walk_ne.png) to draw that facing yourself.
+                  Supply none and one sheet serves them all — the westward
+                  facings are drawn by mirroring their eastern twin, which is
+                  what puts the near arm in front whichever way you turn.
 
                   %s lists the exact name for every object in the
                   game, including anything you created yourself. Anything you
@@ -466,6 +478,13 @@ public final class TexturePack {
                 sb.append("  (one sheet reskins every state; add _<state> to the file\n")
                         .append("   name for a per-state sheet — states: ")
                         .append(String.join(", ", first.states())).append(")\n");
+            }
+            if (!first.directions().isEmpty()) {
+                sb.append("  (these are drawn per facing: add _<dir> for one direction's\n")
+                        .append("   sheet — ").append(String.join(", ", first.directions()))
+                        .append(".\n")
+                        .append("   Skip it and one sheet serves every direction, mirrored\n")
+                        .append("   for the westward ones.)\n");
             }
             sb.append('\n');
             for (TextureKeys.Entry e : entries) {

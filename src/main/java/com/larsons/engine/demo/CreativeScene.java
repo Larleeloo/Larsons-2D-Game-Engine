@@ -1,6 +1,12 @@
 package com.larsons.engine.demo;
 
 import com.larsons.engine.audio.AudioManager.Sfx;
+import com.larsons.engine.character.CharacterPicker;
+import com.larsons.engine.character.CharacterProfile;
+import com.larsons.engine.character.CharacterStore;
+import com.larsons.engine.character.Characters;
+import com.larsons.engine.character.Ultimate;
+import com.larsons.engine.character.Ultimates;
 import com.larsons.engine.config.CustomContentStore;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
@@ -16,12 +22,14 @@ import com.larsons.engine.entity.Mob;
 import com.larsons.engine.entity.MobDef;
 import com.larsons.engine.entity.MobRegistry;
 import com.larsons.engine.entity.Projectile;
+import com.larsons.engine.entity.ProjectileDef;
+import com.larsons.engine.entity.ProjectileRegistry;
 import com.larsons.engine.fx.Particles;
-import com.larsons.engine.graphics.Animation;
 import com.larsons.engine.graphics.AssetLoader;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.CutscenePainter;
 import com.larsons.engine.graphics.EntitySprites;
+import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.PlayerSprites;
 import com.larsons.engine.graphics.SkinDef;
@@ -177,12 +185,14 @@ import java.util.Map;
  * a connected Metroidvania room network ({@link LevelGenerator}).
  *
  * <p><b>Play-test:</b> {@code P} drops a player at the spawn and simulates
- * the painted world with the real physics/mob/item code — including a full
- * inventory (hold-to-mine against block durability with tool speed-ups,
- * pick up items, place from the hotbar, eat, shoot on mana, sprint on
- * stamina, craft at stations with {@code E}) and door travel; {@code P}/Esc
- * returns to editing with the terrain restored (test-mode mining isn't
- * destructive).
+ * the painted world with the real physics/mob/item code — including the
+ * level's own character roster (its picker opens first, exactly as it will
+ * for a player), a full inventory (hold-to-mine against block durability with
+ * tool speed-ups, pick up items, place from the hotbar, eat, shoot on mana,
+ * sprint on stamina, craft at stations with {@code E}), {@code Space} to jump
+ * or hop, {@code R} to fire the character's ultimate, and door travel;
+ * {@code P}/Esc returns to editing with the terrain restored (test-mode
+ * mining isn't destructive).
  *
  * <p><b>Online:</b> opened from a multiplayer session (pause menu), the same
  * editor paints into the <em>server's</em> world: block strokes and
@@ -214,12 +224,13 @@ public class CreativeScene extends AbstractScene {
     /** Slider cap without the "override map size" toggle. */
     private static final int STANDARD_MAX_SIZE = 1024;
 
-    /** What the palette can paint. */
+    /** What the palette can paint (and, for the last few, configure). */
     private enum Category { BLOCKS, LIQUIDS, LIGHTS, MOBS, ITEMS, DECOR, SURFACE, DOORS,
-        CUTSCENES, MINIGAME, TOOLS }
+        CHARACTERS, EFFECTS, CUTSCENES, MINIGAME, TOOLS }
 
     private enum Dialog { NONE, NEW_LEVEL, SAVE, LOAD, CONFIRM_EXIT, GENERATE, DOORS, TEXTURE,
-        CUSTOM, RULES, BRUSH, CUTSCENES, CUTSCENE_ACTORS, CUTSCENE_STEPS, MINIGAME }
+        CUSTOM, RULES, BRUSH, CUTSCENES, CUTSCENE_ACTORS, CUTSCENE_STEPS, MINIGAME,
+        ROSTER }
 
     /** {@code custom} marks user-created objects (badged, deletable). */
     private record Entry(String kind, String key, String name, BufferedImage icon,
@@ -275,6 +286,15 @@ public class CreativeScene extends AbstractScene {
 
     // Custom-content creation ("+ New…" palette entries).
     private CustomContentStore customContent;
+    /** This game type's playable character profiles ("+ New Character"). */
+    private CharacterStore characterStore;
+    // "+ New Character" fields: skin colours plus the traits a profile sets.
+    private double cCharSpeed = 1.0, cCharJump = 1.0;
+    private boolean cCharSprint = true;
+    private int cCharAirJumps = 1;
+    private int cCharHp = 100, cCharMana = 100, cCharStamina = 100;
+    private int cCharUltIndex;
+    private boolean cCharUltEnabled = true;
     private Category customCategory = Category.BLOCKS;
     private String cName = "";
     private int cR = 150, cG = 150, cB = 150;      // primary colour
@@ -345,6 +365,13 @@ public class CreativeScene extends AbstractScene {
     private List<String> texStates = List.of("default");
     private int texStateIndex;
     private String texSheet = "", texW = "32", texH = "32", texCount = "1", texFps = "0";
+    /**
+     * The facing the texture dialog is assigning, for objects drawn per
+     * direction (the player, character profiles, mobs). Index 0 is
+     * {@link #ALL_DIRECTIONS} — one sheet used whichever way they face, which
+     * is what most creators want; the rest name a single compass point.
+     */
+    private int texDirIndex;
     /** Per-object texture pack switch; on by default (built-in art falls back). */
     private boolean texUsePack = true;
 
@@ -369,13 +396,17 @@ public class CreativeScene extends AbstractScene {
     private CutsceneDirector cutsceneDirector; // runs the level's cutscenes
     private CraftingPanel craftingPanel; // non-null while a station UI is open
     private double prevTestVy;
-    // The exact same walk sprite the play scene uses, so the play-test
+    // The exact same directional sprite the play scene draws, so the play-test
     // character is identical to the one "load level" play loads. The action
-    // state (idle/walk/run/jump/fall/swim) picks which skin animation plays;
-    // its clock resets on every state change.
-    private Animation testWalkAnim;
+    // state (idle/walk/run/jump/fall/swim) picks which skin animation plays
+    // and the facing picks its direction; the clock resets on state changes.
     private String testAnimState = "idle";
     private double testAnimClock;
+    private double prevTestVz;
+    /** The character profile the play-test is played as. */
+    private CharacterProfile testCharacter = CharacterProfile.defaultProfile();
+    /** The roster picker shown when a play-test starts, or {@code null}. */
+    private CharacterPicker testPicker;
 
     public CreativeScene(GameContext ctx) {
         this.ctx = ctx;
@@ -402,6 +433,10 @@ public class CreativeScene extends AbstractScene {
         // registered before any level referencing them loads.
         customContent = new CustomContentStore(profile().name);
         customContent.loadAndRegister();
+        // Character profiles register the same way, so a level's roster can
+        // name them and the Characters palette can list them.
+        characterStore = new CharacterStore(profile().name);
+        characterStore.loadAndRegister();
 
         if (net != null && net.client().level() != null) {
             level = net.client().level(); // paint straight into the shared world
@@ -539,6 +574,34 @@ public class CreativeScene extends AbstractScene {
         }
         palette.put(Category.SURFACE, surface);
 
+        // Characters: the playable profiles this game type offers, created the
+        // same way a block or mob is. The roster entry decides which of them
+        // this level lets a player pick from when it starts.
+        List<Entry> characterEntries = newList("+ New Character");
+        for (CharacterProfile c : Characters.all()) {
+            characterEntries.add(new Entry("character", c.key, c.name,
+                    CharacterPicker.icon(c, SWATCH),
+                    characterStore.isCustom(c.key)));
+        }
+        characterEntries.add(new Entry("roster", "roster", "Level Roster…", rosterIcon()));
+        palette.put(Category.CHARACTERS, characterEntries);
+
+        // Effects: the particle styles and projectiles the game throws. They
+        // aren't painted — clicking one opens its texture dialog, so every
+        // effect texture is editable here and falls back to built-in art.
+        List<Entry> effectEntries = new ArrayList<>();
+        for (Particles.Style style : Particles.Style.values()) {
+            effectEntries.add(new Entry("particle", Particles.textureKind(style),
+                    Particles.styleName(style),
+                    swatch(Particles.textureKey(style),
+                            EntitySprites.particle(style, SWATCH, particleSwatchColor(style)))));
+        }
+        for (ProjectileDef d : ProjectileRegistry.standard().all()) {
+            effectEntries.add(new Entry("projectile", d.key(), d.name(),
+                    swatch("projectile/" + d.key(), EntitySprites.projectile(d, SWATCH))));
+        }
+        palette.put(Category.EFFECTS, effectEntries);
+
         List<Entry> doorEntries = newList("+ New Door");
         for (DoorLink link : doors.all()) {
             doorEntries.add(new Entry("door", link.key(), link.label(), doorIcon(link.color())));
@@ -599,6 +662,25 @@ public class CreativeScene extends AbstractScene {
             selected.computeIfPresent(c, (k, i) -> Math.max(0, Math.min(i, size - 1)));
         }
         clampScroll();
+    }
+
+    /**
+     * The tint a particle style's palette swatch is drawn in — the colour the
+     * engine most often throws that style in, so the Effects palette reads at
+     * a glance rather than showing nine grey flecks.
+     */
+    private static Color particleSwatchColor(Particles.Style style) {
+        return switch (style) {
+            case EMBERS -> new Color(255, 150, 60);
+            case SHARDS -> new Color(150, 210, 255);
+            case SPARKS -> new Color(255, 245, 150);
+            case DRIP -> new Color(150, 210, 80);
+            case RING -> new Color(140, 220, 255);
+            case MOTES -> new Color(200, 170, 255);
+            case FOUNTAIN -> new Color(255, 190, 80);
+            case IMPLODE -> new Color(170, 140, 255);
+            default -> new Color(190, 170, 140);
+        };
     }
 
     /** A fresh palette list starting with the "+" creator entry. */
@@ -1372,6 +1454,19 @@ public class CreativeScene extends AbstractScene {
                     else setStatus("The mini game is configured before hosting, offline");
                 }
                 case "playerskin" -> openPlayerSkinDialog();
+                case "roster" -> {
+                    if (net == null) openDialog(Dialog.ROSTER);
+                    else setStatus("The character roster is edited offline");
+                }
+                // Effects aren't painted into the level — they belong to the
+                // objects that throw them — so a click opens the texture
+                // dialog that reskins them.
+                case "particle", "projectile" -> openTextureDialog(e);
+                case "character" -> {
+                    CharacterProfile c = Characters.get(e.key);
+                    setStatus(c == null ? e.name : c.name + " — " + c.summary()
+                            + "  ·  right-click for its skin");
+                }
                 case "cutscene" -> setStatus(e.name
                         + " — click the canvas to place its trigger marker");
                 default -> setStatus(e.name + (e.custom ? "  (your custom object)" : ""));
@@ -1410,6 +1505,26 @@ public class CreativeScene extends AbstractScene {
         }
         customCategory = category;
         cName = "";
+        if (category == Category.CHARACTERS) {
+            // Start every new character from the engine's own defaults rather
+            // than the last block/mob the creator built.
+            CharacterProfile d = CharacterProfile.defaultProfile();
+            cR = d.body.getRed();
+            cG = d.body.getGreen();
+            cB = d.body.getBlue();
+            cR2 = d.accent.getRed();
+            cG2 = d.accent.getGreen();
+            cB2 = d.accent.getBlue();
+            cCharSpeed = d.speed;
+            cCharSprint = d.sprintEnabled;
+            cCharAirJumps = d.airJumps;
+            cCharJump = d.jumpHeight;
+            cCharHp = (int) Math.round(d.maxHealth);
+            cCharMana = (int) Math.round(d.maxMana);
+            cCharStamina = (int) Math.round(d.maxStamina);
+            cCharUltIndex = 0;
+            cCharUltEnabled = true;
+        }
         openDialog(Dialog.CUSTOM);
     }
 
@@ -1439,16 +1554,39 @@ public class CreativeScene extends AbstractScene {
             openPlayerSkinDialog(); // per-action-state, with legacy migration
             return;
         }
+        openTextureDialog(e);
+    }
+
+    /**
+     * Open the texture dialog for a palette entry. Objects drawn per action
+     * state (mobs, characters) get the state row; the ones drawn per facing
+     * get the direction row on top of it.
+     */
+    private void openTextureDialog(Entry e) {
         texEntry = e;
-        texStates = e.kind.equals("mob") ? TextureKeys.MOB_STATES : List.of("default");
+        texStates = switch (e.kind) {
+            case "mob" -> TextureKeys.MOB_STATES;
+            case "character" -> PlayerSprites.ACTION_STATES;
+            default -> List.of("default");
+        };
         texStateIndex = 0;
+        texDirIndex = 0;
         loadTextureFields();
         openDialog(Dialog.TEXTURE);
     }
 
     private static boolean skinnable(String kind) {
         return switch (kind) {
-            case "block", "mob", "item", "decor", "surface", "playerskin" -> true;
+            case "block", "mob", "item", "decor", "surface", "playerskin",
+                 "character", "particle", "projectile" -> true;
+            default -> false;
+        };
+    }
+
+    /** Whether an object's sheets may be split by facing (see {@link Facing}). */
+    private static boolean directional(String kind) {
+        return switch (kind) {
+            case "mob", "playerskin", "character" -> true;
             default -> false;
         };
     }
@@ -1476,6 +1614,7 @@ public class CreativeScene extends AbstractScene {
         texEntry = new Entry("playerskin", "playerskin", "Player Skin", playerSkinIcon());
         texStates = PlayerSprites.ACTION_STATES;
         texStateIndex = 0;
+        texDirIndex = 0;
         loadTextureFields();
         openDialog(Dialog.TEXTURE);
     }
@@ -1549,10 +1688,49 @@ public class CreativeScene extends AbstractScene {
         testMe = new PlayerState(0, "", spawn[0], spawn[1]);
         prevHealth = testMe.health;
         prevTestVy = 0;
-        testWalkAnim = PlayerSprites.walkAnimation(profile().playerSize,
-                PlayerSprites.DEFAULT_BODY);
+        prevTestVz = 0;
+        // Play-test as one of the characters this level offers — the same
+        // roster, and the same picker, a player will meet at its start.
+        List<CharacterProfile> roster = Characters.rosterFor(level.characters);
+        testPicker = CharacterPicker.needed(roster)
+                ? new CharacterPicker(roster, level.name, ctx.character()) : null;
+        applyTestCharacter(testPicker != null ? testPicker.selected()
+                : roster.isEmpty() ? CharacterProfile.defaultProfile() : roster.get(0));
         testAnimState = "idle";
         testAnimClock = 0;
+    }
+
+    /**
+     * Fire the play-test character's ultimate at the cursor. The local test
+     * world resolves it with the same {@code World.useUltimate} play uses, so
+     * a creator tunes an ability against the behaviour players will get.
+     */
+    private void tryTestUltimate(GameProfile p) {
+        Ultimate u = Ultimates.of(testMe);
+        if (u == null) {
+            setStatus(testCharacter.name + " has no ultimate ability");
+            return;
+        }
+        if (!Ultimates.ready(testMe)) {
+            setStatus(u.name() + " — " + (int) Math.round(testMe.ultCharge * 100)
+                    + "% charged");
+            return;
+        }
+        double[] aim = camera.screenToWorld(mouseX, mouseY);
+        if (testWorld.useUltimate(testMe, aim[0], aim[1], p)) {
+            ctx.sfx(Sfx.BOOM);
+            setStatus(u.name() + "!");
+        } else {
+            setStatus(u.name() + " can't fire here");
+        }
+    }
+
+    /** Make {@code p} the character the play-test runs as (traits and skin). */
+    private void applyTestCharacter(CharacterProfile p) {
+        testCharacter = p == null ? CharacterProfile.defaultProfile() : p;
+        testCharacter.applyTo(testMe);
+        ctx.setCharacter(testCharacter.key);
+        prevHealth = testMe.health;
     }
 
     private void bindTestPickups() {
@@ -1611,6 +1789,16 @@ public class CreativeScene extends AbstractScene {
 
     private void updateTest(double dt, InputManager input) {
         GameProfile p = profile();
+        // The character choice comes first, exactly as it does in play: the
+        // test world is built and waiting behind the cards.
+        if (testPicker != null) {
+            if (testPicker.update(dt, input)) {
+                applyTestCharacter(testPicker.selected());
+                testPicker = null;
+                ctx.sfx(Sfx.CLICK);
+            }
+            return;
+        }
         // A running cutscene owns the frame: the world holds still, the
         // director drives the camera, Enter/Esc skips to the end.
         if (cutsceneDirector != null && cutsceneDirector.active() != null) {
@@ -1696,9 +1884,13 @@ public class CreativeScene extends AbstractScene {
         PlayerPhysics.step(testMe, in, level, p, level.perspective, dt);
         // Stat tracking: distance in world px, jump take-offs.
         testStats.add("distance_traveled", Math.abs(testMe.x - preX) + Math.abs(testMe.y - preY));
-        if (prevTestVy >= 0 && testMe.vy < 0) testStats.add("jumps", 1);
+        // A jump counts in every perspective: gravity's -vy in a side-scroller,
+        // the hop's upward vz on a plane.
+        if ((prevTestVy >= 0 && testMe.vy < 0) || (prevTestVz <= 0 && testMe.vz > 1)) {
+            testStats.add("jumps", 1);
+        }
         prevTestVy = testMe.vy;
-        testWalkAnim.update(testMe.moving ? dt : 0);
+        prevTestVz = testMe.vz;
         // Play-test classifies the action in the level's own perspective,
         // exactly like the play scene, so the same skin animations play.
         String state = PlayerSprites.actionState(testMe, level, p,
@@ -1744,6 +1936,9 @@ public class CreativeScene extends AbstractScene {
 
         if (!showInventory && craftingPanel == null && containerPanel == null) {
             updateTestMouseActions(input, p, dt);
+            // [R] fires the character's ultimate at the cursor, once charged —
+            // the same key and the same World resolution as in play.
+            if (input.isKeyJustPressed(KeyEvent.VK_R)) tryTestUltimate(p);
         } else {
             testWorld.cancelMining();
         }
@@ -2079,6 +2274,7 @@ public class CreativeScene extends AbstractScene {
             case CUTSCENE_ACTORS -> "Actors — " + editingCutsceneName();
             case CUTSCENE_STEPS -> "Steps — " + editingCutsceneName();
             case MINIGAME -> "Mini Game — " + level.name;
+            case ROSTER -> "Character Roster — " + level.name;
             default -> "";
         }).theme(MenuTheme.dark());
 
@@ -2181,6 +2377,7 @@ public class CreativeScene extends AbstractScene {
             case CUTSCENE_ACTORS -> buildCutsceneActorsForm();
             case CUTSCENE_STEPS -> buildCutsceneStepsForm();
             case MINIGAME -> buildMiniGameForm();
+            case ROSTER -> buildRosterForm();
             default -> { /* NONE */ }
         }
     }
@@ -2341,6 +2538,7 @@ public class CreativeScene extends AbstractScene {
             case ITEMS -> "Item";
             case DECOR -> "Decoration";
             case SURFACE -> "Block Decor";
+            case CHARACTERS -> "Character";
             default -> "Block";
         };
     }
@@ -2516,14 +2714,37 @@ public class CreativeScene extends AbstractScene {
     // --- texture overrides -----------------------------------------------------------
 
     /** The Skins texture key for the dialog's entry + selected action state. */
+    /** "(every direction)" — the texture dialog's non-directional choice. */
+    private static final String ALL_DIRECTIONS = "(every direction)";
+
+    /** The direction row's choices: one sheet for all, or a compass point. */
+    private static String[] directionChoices() {
+        String[] out = new String[Facing.values().length + 1];
+        out[0] = ALL_DIRECTIONS;
+        for (Facing f : Facing.values()) out[f.ordinal() + 1] = f.label();
+        return out;
+    }
+
+    /** The facing the dialog is assigning, or {@code null} for "every". */
+    private Facing texFacing() {
+        return texDirIndex <= 0 || texDirIndex > Facing.values().length
+                ? null : Facing.values()[texDirIndex - 1];
+    }
+
     private String textureKey() {
         String state = texStates.get(Math.min(texStateIndex, texStates.size() - 1));
+        Facing dir = directional(texEntry.kind) ? texFacing() : null;
+        String suffix = dir == null ? "" : "/" + dir.key();
         return switch (texEntry.kind) {
-            case "mob" -> "mob/" + texEntry.key + "/" + state;
+            case "mob" -> "mob/" + texEntry.key + "/" + state + suffix;
             case "item" -> "item/" + texEntry.key;
             case "decor" -> "decor/" + texEntry.key;
             case "surface" -> "surface/" + texEntry.key;
-            case "playerskin" -> PlayerSprites.stateKey(state);
+            case "playerskin" -> PlayerSprites.stateKey(state) + suffix;
+            case "character" ->
+                    PlayerSprites.characterStateKey(texEntry.key, state) + suffix;
+            case "particle" -> Particles.TEXTURE_NAMESPACE + "/" + texEntry.key;
+            case "projectile" -> "projectile/" + texEntry.key;
             default -> "block/" + texEntry.key;
         };
     }
@@ -2590,6 +2811,19 @@ public class CreativeScene extends AbstractScene {
                         texStateIndex = Math.max(0, texStates.indexOf(v));
                         loadTextureFields();
                         openDialog(Dialog.TEXTURE); // the pack file row follows the state
+                    });
+        }
+        // Directional objects can have one sheet per facing. Leaving this on
+        // "(every direction)" is the normal case: that sheet draws whichever
+        // way the character turns, mirrored for the westward facings.
+        if (directional(texEntry.kind)) {
+            String[] dirs = directionChoices();
+            dialogForm.addEnum("Facing", dirs,
+                    () -> dirs[Math.min(texDirIndex, dirs.length - 1)],
+                    v -> {
+                        texDirIndex = Math.max(0, List.of(dirs).indexOf(v));
+                        loadTextureFields();
+                        openDialog(Dialog.TEXTURE);
                     });
         }
         dialogForm.addToggle("Use texture pack folder", () -> texUsePack, v -> {
@@ -2692,6 +2926,19 @@ public class CreativeScene extends AbstractScene {
 
     /** Delete the right-clicked user-created object (custom.json + registries). */
     private void deleteCustomEntry() {
+        if ("character".equals(texEntry.kind)) {
+            if (characterStore.remove(texEntry.key)) {
+                level.characters.remove(texEntry.key);
+                buildPalette();
+                selected.put(category, 0);
+                closeDialog();
+                setStatus("Deleted the " + texEntry.name + " character —"
+                        + " levels offering it fall back to the rest of the roster");
+            } else {
+                setStatus("The built-in character can't be deleted");
+            }
+            return;
+        }
         if (customContent.remove(texEntry.kind, texEntry.key)) {
             buildPalette();
             selected.put(category, 0);
@@ -2784,10 +3031,83 @@ public class CreativeScene extends AbstractScene {
             case ITEMS -> buildCustomItemFields();
             case DECOR -> buildCustomDecorFields();
             case SURFACE -> buildCustomSurfaceFields();
+            case CHARACTERS -> buildCustomCharacterFields();
             default -> buildCustomBlockFields();
         }
         dialogForm.addAction("Create", this::createCustomObject);
         dialogForm.addAction("Cancel", this::closeDialog);
+    }
+
+    /**
+     * "+ New Character": a playable character profile — its skin colours and
+     * the traits that make it feel different to control. Every field here is
+     * what {@link CharacterProfile} carries into the simulation, so the
+     * numbers a creator picks are the numbers the physics runs.
+     */
+    private void buildCustomCharacterFields() {
+        addColorSliders("Body colour", false);
+        addColorSliders("Skin colour", true);
+        dialogForm.addDouble("Speed (× normal)", () -> cCharSpeed,
+                v -> cCharSpeed = v, 0.25, 3.0, 0.05);
+        dialogForm.addToggle("Can sprint (Shift)", () -> cCharSprint, v -> cCharSprint = v);
+        dialogForm.addSlider("Mid-air jumps (1 = double jump)", () -> cCharAirJumps,
+                v -> cCharAirJumps = v, 0, 4);
+        dialogForm.addDouble("Jump height (× normal)", () -> cCharJump,
+                v -> cCharJump = v, 0.25, 3.0, 0.05);
+        dialogForm.addSlider("Max health", () -> cCharHp, v -> cCharHp = v, 10, 500);
+        dialogForm.addSlider("Max mana", () -> cCharMana, v -> cCharMana = v, 0, 500);
+        dialogForm.addSlider("Max stamina", () -> cCharStamina,
+                v -> cCharStamina = v, 0, 500);
+        String[] ults = Ultimates.choices();
+        dialogForm.addEnum("Ultimate ability", ults,
+                () -> ults[Math.min(cCharUltIndex, ults.length - 1)],
+                v -> {
+                    cCharUltIndex = Math.max(0, List.of(ults).indexOf(v));
+                    openDialog(Dialog.CUSTOM); // the description row follows it
+                });
+        Ultimate picked = Ultimates.get(Ultimates.keyForChoice(
+                ults[Math.min(cCharUltIndex, ults.length - 1)]));
+        if (picked != null) {
+            // Read-only: what the chosen ability actually does, so a creator
+            // isn't picking from names alone.
+            dialogForm.addAction(picked.description(), () -> { }).enabledWhen(() -> false);
+            dialogForm.addToggle("Ultimate switched on", () -> cCharUltEnabled,
+                    v -> cCharUltEnabled = v);
+        }
+    }
+
+    /**
+     * Level Roster…: which character profiles this level offers when a player
+     * starts it. Nothing ticked means every profile is available, so a level
+     * is never unplayable and levels built before profiles existed keep
+     * working.
+     */
+    private void buildRosterForm() {
+        List<CharacterProfile> all = Characters.all();
+        for (CharacterProfile c : all) {
+            String label = c.name + " — " + c.summary();
+            dialogForm.addToggle(label,
+                    () -> level.characters.contains(c.key),
+                    v -> {
+                        if (v) {
+                            if (!level.characters.contains(c.key)) level.characters.add(c.key);
+                        } else {
+                            level.characters.remove(c.key);
+                        }
+                    });
+        }
+        dialogForm.addAction("Offer every character (clear the roster)", () -> {
+            level.characters.clear();
+            openDialog(Dialog.ROSTER);
+            setStatus("This level offers every character profile");
+        });
+        dialogForm.addAction("Done", () -> {
+            closeDialog();
+            setStatus(level.characters.isEmpty()
+                    ? "Roster cleared — this level offers every character"
+                    : "This level offers " + level.characters.size() + " character(s)"
+                    + " — save the level to keep the roster");
+        });
     }
 
     private void addColorSliders(String label, boolean accent) {
@@ -2905,6 +3225,27 @@ public class CreativeScene extends AbstractScene {
         String name = cName.isBlank() ? "Custom " + customKindName() : cName.trim();
         try {
             switch (customCategory) {
+                case CHARACTERS -> {
+                    CharacterProfile c = new CharacterProfile(
+                            CharacterStore.keyFor(name), name);
+                    c.body = new Color(cR, cG, cB);
+                    c.accent = new Color(cR2, cG2, cB2);
+                    c.speed = cCharSpeed;
+                    c.sprintEnabled = cCharSprint;
+                    c.airJumps = cCharAirJumps;
+                    c.jumpHeight = cCharJump;
+                    c.maxHealth = cCharHp;
+                    c.maxMana = cCharMana;
+                    c.maxStamina = cCharStamina;
+                    String[] ults = Ultimates.choices();
+                    c.ultimateKey = Ultimates.keyForChoice(
+                            ults[Math.min(cCharUltIndex, ults.length - 1)]);
+                    c.ultimateEnabled = cCharUltEnabled;
+                    characterStore.add(c);
+                    // A brand-new character joins this level's roster, unless
+                    // the roster is empty (which already means "everyone").
+                    if (!level.characters.isEmpty()) level.characters.add(c.key);
+                }
                 case MOBS -> {
                     String key = CustomContentStore.keyFor(name,
                             k -> MobRegistry.standard().get(k) != null);
@@ -3593,6 +3934,10 @@ public class CreativeScene extends AbstractScene {
             drawSidebar(g);
             if (dialog == Dialog.NONE) drawPaletteTooltip(g);
         }
+        // The play-test's character choice sits over the level being tested.
+        if (testing && testPicker != null) {
+            testPicker.render(g, viewportWidth, viewportHeight);
+        }
         drawTopBar(g);
         if (testing) {
             if (p.itemsEnabled) drawTestHotbar(g);
@@ -3853,7 +4198,7 @@ public class CreativeScene extends AbstractScene {
                 drawItemAt(g, items.get(item.key), item.x, item.y);
             }
             for (Mob m : testWorld.mobs()) {
-                drawMobAt(g, m.def, m.x, m.y, m.facingLeft, mobStateKey(m));
+                drawMobAt(g, m.def, m.x, m.y, m.facing, mobStateKey(m));
             }
             for (Projectile pr : testWorld.projectiles()) {
                 drawProjectileAt(g, pr);
@@ -3866,7 +4211,7 @@ public class CreativeScene extends AbstractScene {
                 for (EntityView e : snap.items()) drawItemAt(g, items.get(e.key), e.x, e.y);
                 for (EntityView e : snap.mobs()) {
                     MobDef def = mobs.get(e.key);
-                    if (def != null) drawMobAt(g, def, e.x, e.y, e.facingLeft, "idle");
+                    if (def != null) drawMobAt(g, def, e.x, e.y, e.facing, "idle");
                 }
                 drawNetPlayers(g, snap);
             }
@@ -3876,7 +4221,9 @@ public class CreativeScene extends AbstractScene {
             switch (e.kind) {
                 case "mob" -> {
                     MobDef def = mobs.get(e.type);
-                    if (def != null) drawMobAt(g, def, e.x, e.y, false, "idle");
+                    // A painted-but-not-yet-live spawn faces the camera, so
+                    // the editor shows the species rather than a profile.
+                    if (def != null) drawMobAt(g, def, e.x, e.y, Facing.SOUTH, "idle");
                 }
                 case "item" -> drawItemAt(g, items.get(e.type), e.x, e.y);
                 default -> { /* doors/decor/markers drawn by their own passes */ }
@@ -4047,17 +4394,38 @@ public class CreativeScene extends AbstractScene {
         }
     }
 
+    /**
+     * A mob at a world position, drawn for the direction it faces — the same
+     * resolution the play scene uses, so what a creator sees in the editor is
+     * what a player sees: this direction's sheet, its mirror twin, the state's
+     * sheet, the idle sheet, then the pre-generated directional art.
+     */
     private void drawMobAt(Graphics2D g, MobDef def, double x, double y,
-                           boolean facingLeft, String state) {
-        BufferedImage img = Skins.frame("mob/" + def.key() + "/" + state, animClock);
-        if (img == null && !"idle".equals(state)) {
-            img = Skins.frame("mob/" + def.key() + "/idle", animClock);
+                           Facing facing, String state) {
+        Facing dir = facing == null ? Facing.EAST : facing;
+        String base = "mob/" + def.key() + "/";
+        boolean mirror = false;
+        BufferedImage img = Skins.frame(base + state + "/" + dir.key(), animClock);
+        if (img == null && dir.mirrored()) {
+            img = Skins.frame(base + state + "/" + dir.mirrorOf().key(), animClock);
+            mirror = img != null;
         }
-        if (img == null) img = EntitySprites.mob(def, 32);
+        if (img == null) {
+            img = Skins.frame(base + state, animClock);
+            mirror = img != null && dir.facingLeft();
+        }
+        if (img == null && !"idle".equals(state)) {
+            img = Skins.frame(base + "idle", animClock);
+            mirror = img != null && dir.facingLeft();
+        }
+        if (img == null) {
+            img = EntitySprites.mob(def, 32, dir);
+            mirror = false;
+        }
         int w = Math.max(6, (int) Math.round(def.size() * camera.zoom));
         camera.worldToScreen(x + def.size() / 2, y + def.size(), pcorner);
         int dx = pcorner[0] - w / 2, dy = pcorner[1] - w;
-        if (facingLeft) {
+        if (mirror) {
             g.drawImage(img, dx + w, dy, -w, w, null);
         } else {
             g.drawImage(img, dx, dy, w, w, null);
@@ -4108,7 +4476,10 @@ public class CreativeScene extends AbstractScene {
     }
 
     private void drawProjectileAt(Graphics2D g, Projectile pr) {
-        BufferedImage img = EntitySprites.projectile(pr.def, 16);
+        // Skinnable like every other texture (the Effects palette edits these);
+        // the procedural bolt is the fallback.
+        BufferedImage img = Skins.frame("projectile/" + pr.def.key(), animClock);
+        if (img == null) img = EntitySprites.projectile(pr.def, 16);
         int w = Math.max(8, (int) Math.round(pr.def.radius() * 3.5 * camera.zoom));
         camera.worldToScreen(pr.x, pr.y, pcorner);
         var old = g.getTransform();
@@ -4188,22 +4559,33 @@ public class CreativeScene extends AbstractScene {
      * draws its player: the shared animated walk sprite (or the assigned
      * player skin), foot-anchored, mirrored when facing left.
      */
+    /**
+     * The play-test character: the same directional sprite the play scene
+     * draws, lifted by a plan-view hop over its own shadow — so testing a
+     * top-down level shows the jump exactly as a player will see it.
+     */
     private void drawTestPlayer(Graphics2D g) {
         double size = profile().playerSize;
-        if (testWalkAnim == null || testWalkAnim.frameCount() == 0) {
-            testWalkAnim = PlayerSprites.walkAnimation((int) size, PlayerSprites.DEFAULT_BODY);
-        }
-        BufferedImage frame = PlayerSprites.frame(testAnimState, testWalkAnim, testAnimClock);
+        PlayerSprites.Frame sprite = PlayerSprites.directionalFrame(
+                testMe.characterKey, testAnimState, testMe.facing, testAnimClock,
+                (int) size, testCharacter.body);
         camera.worldToScreen(testMe.x + size / 2.0, testMe.y + size, pcorner);
         int w = (int) Math.round(size * camera.zoom);
         int h = w;
         int dx = pcorner[0] - w / 2;
-        int dy = pcorner[1] - h;
-        if (frame != null) {
-            if (testMe.facingLeft) {
-                g.drawImage(frame, dx + w, dy, -w, h, null);
+        int lift = (int) Math.round(testMe.z * camera.zoom * PlayerPhysics.HOP_DRAW_SCALE);
+        if (lift > 0) {
+            double shrink = Math.max(0.35, 1 - testMe.z / (size * 3));
+            int sw = (int) (w * 0.7 * shrink), sh = Math.max(2, (int) (w * 0.25 * shrink));
+            g.setColor(new Color(0, 0, 0, (int) (90 * shrink)));
+            g.fillOval(pcorner[0] - sw / 2, pcorner[1] - sh / 2, sw, sh);
+        }
+        int dy = pcorner[1] - h - lift;
+        if (sprite.image() != null) {
+            if (sprite.mirrored()) {
+                g.drawImage(sprite.image(), dx + w, dy, -w, h, null);
             } else {
-                g.drawImage(frame, dx, dy, w, h, null);
+                g.drawImage(sprite.image(), dx, dy, w, h, null);
             }
         }
         if (swingTime > 0) {
@@ -4262,7 +4644,7 @@ public class CreativeScene extends AbstractScene {
             }
             case "mob" -> {
                 MobDef def = MobRegistry.standard().get(entry.key);
-                if (def != null) drawMobAt(g, def, aim[0], aim[1], false, "idle");
+                if (def != null) drawMobAt(g, def, aim[0], aim[1], Facing.SOUTH, "idle");
             }
             case "item" -> drawItemAt(g, ItemRegistry.standard().get(entry.key), aim[0], aim[1]);
             case "decor" -> {
@@ -4576,7 +4958,29 @@ public class CreativeScene extends AbstractScene {
             case "playerskin" -> {
                 return "Customize the player character: assign a sprite-sheet"
                         + " animation to each action state (idle, walk, run, jump,"
-                        + " fall, swim), used in play and play-test alike.";
+                        + " fall, swim) and, if you like, to each of the eight"
+                        + " facings — used in play and play-test alike.";
+            }
+            case "character" -> {
+                CharacterProfile c = Characters.get(e.key);
+                if (c == null) return "";
+                Ultimate u = c.ultimate();
+                return "Playable character — " + c.summary()
+                        + (u == null ? "." : ".  Ultimate: " + u.description())
+                        + "  Right-click to give it sprite sheets.";
+            }
+            case "roster" -> {
+                return "Picks which characters this level offers when it starts."
+                        + " Tick none and it offers every one of them.";
+            }
+            case "particle" -> {
+                return "The " + e.name.toLowerCase() + " particle effect — click to"
+                        + " give it your own sprite sheet. Without one it keeps the"
+                        + " engine's built-in fleck.";
+            }
+            case "projectile" -> {
+                return "The " + e.name + " projectile — click to give it your own"
+                        + " sprite sheet. Without one it keeps its built-in art.";
             }
             case "eraser" -> {
                 return "Removes what you click — entities first, then surface"
@@ -4954,6 +5358,8 @@ public class CreativeScene extends AbstractScene {
             case DECOR -> "Decor";
             case SURFACE -> "Surface";
             case DOORS -> "Doors";
+            case CHARACTERS -> "Characters";
+            case EFFECTS -> "Effects";
             case CUTSCENES -> "Cutscenes";
             case MINIGAME -> "Mini Game";
             case TOOLS -> "Tools";
@@ -4966,9 +5372,9 @@ public class CreativeScene extends AbstractScene {
     private static BufferedImage playerSkinIcon() {
         BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
-        BufferedImage frame = PlayerSprites.frame("idle",
-                PlayerSprites.walkAnimation(40, PlayerSprites.DEFAULT_BODY), 0);
-        if (frame != null) g.drawImage(frame, 0, 0, 40, 40, null);
+        PlayerSprites.Frame frame = PlayerSprites.directionalFrame("", "idle",
+                Facing.SOUTH_EAST, 0, 40, PlayerSprites.DEFAULT_BODY);
+        if (frame.image() != null) g.drawImage(frame.image(), 0, 0, 40, 40, null);
         g.dispose();
         return img;
     }
@@ -5191,6 +5597,28 @@ public class CreativeScene extends AbstractScene {
         g.setColor(new Color(150, 230, 150));
         g.setStroke(new BasicStroke(2f));
         g.drawLine(5, 36, 36, 36);
+        g.dispose();
+        return img;
+    }
+
+    /** Level Roster… icon: a line-up of characters with one picked out. */
+    private static BufferedImage rosterIcon() {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+        Color[] tint = {new Color(90, 110, 150), new Color(110, 190, 255),
+                new Color(90, 110, 150)};
+        for (int i = 0; i < 3; i++) {
+            int x = 4 + i * 12;
+            int top = i == 1 ? 8 : 12; // the chosen one stands forward
+            g.setColor(tint[i]);
+            g.fillOval(x + 1, top, 8, 8);
+            g.fillRoundRect(x, top + 9, 10, 15, 4, 4);
+        }
+        g.setColor(new Color(110, 190, 255));
+        g.setStroke(new BasicStroke(2f));
+        g.drawRect(15, 5, 12, 30);
         g.dispose();
         return img;
     }

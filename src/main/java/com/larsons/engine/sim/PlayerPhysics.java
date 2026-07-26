@@ -1,6 +1,7 @@
 package com.larsons.engine.sim;
 
 import com.larsons.engine.config.GameProfile;
+import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.level.Level;
 
@@ -22,7 +23,20 @@ import com.larsons.engine.level.Level;
  * (gravity, jumps, swimming); the plan-view formats (top-down, isometric) walk
  * the whole plane instead — both axes are steering, diagonals are normalized
  * so they aren't faster than the axes, and sprinting applies in every
- * direction.
+ * direction. Jumping works in <em>all three</em>: with no gravity axis on the
+ * tile grid, a plan-view jump is a hop along a separate Z axis
+ * ({@link PlayerState#z}) that lifts the character over their own shadow and
+ * sets them back down — same key, same double jump, same stamina cost.
+ *
+ * <p><b>Facing.</b> Every step records the compass direction the character is
+ * heading ({@link PlayerState#facing}): two directions in a side-scroller,
+ * eight on the plane, which is what picks the directional sprite that draws
+ * them.
+ *
+ * <p><b>Character traits.</b> The chosen
+ * {@link com.larsons.engine.character.CharacterProfile} rides on the state —
+ * speed multiplier, sprint permission, air-jump allowance, jump height — so
+ * two players in the same level move differently while running one simulation.
  *
  * <p><b>Stamina.</b> Sprinting (Shift) multiplies ground speed while stamina
  * lasts and jumping takes a bite; standing or walking restores it. Mana
@@ -55,9 +69,19 @@ public final class PlayerPhysics {
      */
     public static final double WATER_EXIT_JUMP = JUMP * 0.85;
 
-    // Mid-air jumps: a double jump is always available; special items carried
-    // in the inventory raise PlayerState.bonusAirJumps for triple/quad/infinite.
+    // Mid-air jumps: the character profile's allowance (1 by default — the
+    // classic double jump); special items carried in the inventory raise
+    // PlayerState.bonusAirJumps for triple/quad/infinite.
     public static final double AIR_JUMP_FACTOR = 0.92;   // of a grounded jump
+
+    // Plan-view hop (top-down / isometric). There is no gravity axis on the
+    // tile grid, so Space lifts the character along a separate Z axis: they
+    // rise, hang, and settle back down over their own shadow. Slower than a
+    // side-scroll jump so it reads as a hop rather than a launch.
+    public static final double HOP_SPEED = 320;          // px/sec upward
+    public static final double HOP_GRAVITY = 900;        // px/sec^2 pulling back down
+    /** How far a hop's peak lifts the sprite, as a fraction of its height. */
+    public static final double HOP_DRAW_SCALE = 1.0;
 
     // Relic passives (see PlayerState.speedFactor / slowFall / canFly).
     public static final double FLY_ACCEL = 2600;         // Aether Wings climb accel
@@ -95,8 +119,13 @@ public final class PlayerPhysics {
         // for sprinting too — sprinting north in a top-down level is the same
         // act as sprinting east.
         boolean wantsMove = in.left || in.right || (!sideScroll && (in.up || in.down));
-        boolean sprinting = in.sprint && wantsMove && !inLiquid && s.stamina > 0;
-        double speed = SPEED * s.speedFactor;
+        // Sprinting needs a character that can sprint and stamina to spend —
+        // unless a running ultimate is carrying them (Overdrive).
+        boolean sprinting = in.sprint && wantsMove && !inLiquid
+                && s.sprintAllowed && (s.stamina > 0 || s.ultTireless);
+        // Relic boots, the character's own pace, and any active ultimate all
+        // scale the same base speed.
+        double speed = SPEED * s.speedFactor * s.characterSpeed * s.ultSpeedFactor;
         if (inLiquid) speed *= SWIM_SPEED_FACTOR;
         if (sprinting) speed *= SPRINT_FACTOR;
         // Diagonals on a plane would otherwise travel √2 times as fast as the
@@ -110,6 +139,7 @@ public final class PlayerPhysics {
         if (in.left) { dx -= speed * dt; s.facingLeft = true; }
         if (in.right) { dx += speed * dt; s.facingLeft = false; }
         boolean moving = dx != 0;
+        double steerY = 0; // plan-view vertical steering, for the facing below
 
         if (sideScroll && inLiquid) {
             s.airJumpsUsed = 0; // water resets the double jump
@@ -133,17 +163,19 @@ public final class PlayerPhysics {
             if (grounded && s.vy >= 0) {
                 s.vy = 0;
                 s.airJumpsUsed = 0;
-                if (in.up) {
-                    s.vy = -JUMP;
-                    s.stamina = Math.max(0, s.stamina - JUMP_COST);
+                // Space and up both jump from the ground: the jump key is the
+                // jump key, whichever one the player reaches for.
+                if (in.up || in.jump) {
+                    s.vy = -JUMP * s.jumpFactor;
+                    spendJumpStamina(s);
                 }
             } else {
-                // Mid-air jumps on a fresh press: the double jump is always
-                // active; carried items add more (see PlayerState.bonusAirJumps).
-                if (in.jump && s.airJumpsUsed < 1 + s.bonusAirJumps) {
+                // Mid-air jumps on a fresh press: the character's allowance
+                // (a double jump by default); carried items add more.
+                if (in.jump && s.airJumpsUsed < s.airJumps + s.bonusAirJumps) {
                     s.airJumpsUsed++;
-                    s.vy = -JUMP * AIR_JUMP_FACTOR;
-                    s.stamina = Math.max(0, s.stamina - JUMP_COST);
+                    s.vy = -JUMP * AIR_JUMP_FACTOR * s.jumpFactor;
+                    spendJumpStamina(s);
                 }
                 if (s.canFly && in.up) {
                     // Aether Wings: holding up climbs instead of falling.
@@ -160,26 +192,74 @@ public final class PlayerPhysics {
             double ny = slideY(level, s.x, s.y, size, size, dy);
             if (ny != s.y + dy) s.vy = 0; // landed, or bonked a ceiling
             s.y = ny;
+            // Nothing hops in a side-scroller; keep the Z axis parked so a
+            // level swapped mid-game never leaves the sprite floating.
+            s.z = 0;
+            s.vz = 0;
         } else {
             double dy = 0;
             if (in.up) dy -= speed * dt;
             if (in.down) dy += speed * dt;
             s.y = slideY(level, s.x, s.y, size, size, dy);
             moving = moving || dy != 0;
+            steerY = dy;
+            stepHop(s, in, dt);
         }
 
         s.x = slideX(level, s.x, s.y, size, size, dx);
         clampToLevel(s, level, size);
         s.moving = moving;
+        // Which way the character is drawn facing: left/right in a
+        // side-scroller, all eight compass points on the plane. Standing still
+        // keeps the last heading rather than snapping back to a default.
+        s.facing = Facing.of(dx, steerY, perspective, s.facing);
+        if (!sideScroll) s.facingLeft = s.facing.facingLeft();
 
         // Resource flow: sprint drains, everything else recovers.
-        if (sprinting) {
+        if (sprinting && !s.ultTireless) {
             s.stamina -= SPRINT_COST * dt;
         } else {
             s.stamina += STAMINA_REGEN * dt;
         }
-        s.stamina = Math.max(0, Math.min(PlayerState.MAX_STAMINA, s.stamina));
-        s.mana = Math.max(0, Math.min(PlayerState.MAX_MANA, s.mana + MANA_REGEN * dt));
+        s.stamina = Math.max(0, Math.min(s.maxStamina, s.stamina));
+        s.mana = Math.max(0, Math.min(s.maxMana, s.mana + MANA_REGEN * dt));
+    }
+
+    /**
+     * Advance the plan-view hop: a fresh jump press off the ground launches
+     * along Z, further presses spend the character's air jumps, and the
+     * character falls back to Z=0. Steering keeps working mid-air, so a hop
+     * carries you across a gap exactly as a side-scroll jump does.
+     */
+    private static void stepHop(PlayerState s, PlayerInput in, double dt) {
+        if (s.z <= 0 && s.vz <= 0) {
+            // Standing on the ground: nothing to integrate unless we launch.
+            s.z = 0;
+            s.vz = 0;
+            s.airJumpsUsed = 0;
+            if (!in.jump) return;
+            s.vz = HOP_SPEED * s.jumpFactor;
+            spendJumpStamina(s);
+        } else if (in.jump && s.airJumpsUsed < s.airJumps + s.bonusAirJumps) {
+            s.airJumpsUsed++;
+            s.vz = HOP_SPEED * AIR_JUMP_FACTOR * s.jumpFactor;
+            spendJumpStamina(s);
+        }
+        // Airborne — including the tick we took off on, so a hop reads as
+        // airborne (and plays the jump animation) from its very first frame.
+        s.vz -= HOP_GRAVITY * dt;
+        s.z += s.vz * dt;
+        if (s.z <= 0) {
+            s.z = 0;
+            s.vz = 0;
+            s.airJumpsUsed = 0;
+        }
+    }
+
+    /** A jump's stamina bite, which a tireless ultimate waives. */
+    private static void spendJumpStamina(PlayerState s) {
+        if (s.ultTireless) return;
+        s.stamina = Math.max(0, s.stamina - JUMP_COST);
     }
 
     // --- shared AABB collision helpers (players and mobs) ------------------------

@@ -1,5 +1,6 @@
 package com.larsons.engine.config;
 
+import com.larsons.engine.character.CharacterStore;
 import com.larsons.engine.core.ShareJar;
 import com.larsons.engine.level.DoorDirectory;
 import com.larsons.engine.level.LevelStore;
@@ -20,7 +21,8 @@ import java.util.stream.Stream;
 /**
  * A shareable game package: one {@code .larsonsengine} file that bundles a
  * whole game type — its {@link GameProfile}, every level in it, and the
- * {@code doors.json} / {@code custom.json} that wire those levels together and
+ * {@code doors.json} / {@code custom.json} / {@code characters.json} that wire
+ * those levels together and
  * define their custom content. This is how a creator hands a finished game to
  * someone else: a single file that sits next to the runnable jar and imports
  * itself at launch.
@@ -39,6 +41,7 @@ import java.util.stream.Stream;
  *   "levels": { "level_one": { ...level... }, ... },
  *   "doors":  { ...doors.json... },          // present only if the type has doors
  *   "custom": { ...custom.json... }          // present only if it has custom content
+ *   "characters": { ...characters.json... }  // present only if it has character profiles
  * }
  * </pre>
  *
@@ -103,6 +106,10 @@ public final class GamePackage {
         if (Files.exists(doors)) pkg.put("doors", readJson(doors));
         Path custom = dir.resolve(CustomContentStore.FILE_NAME);
         if (Files.exists(custom)) pkg.put("custom", readJson(custom));
+        // The game type's playable characters travel with it, so a level's
+        // roster still names real profiles on the machine that receives it.
+        Path characters = dir.resolve(CharacterStore.FILE_NAME);
+        if (Files.exists(characters)) pkg.put("characters", readJson(characters));
         return pkg;
     }
 
@@ -150,7 +157,8 @@ public final class GamePackage {
     /** Files that live beside the levels but aren't levels themselves. */
     private static boolean isMetaFile(Path p) {
         String f = p.getFileName().toString();
-        return f.equals(DoorDirectory.FILE_NAME) || f.equals(CustomContentStore.FILE_NAME);
+        return f.equals(DoorDirectory.FILE_NAME) || f.equals(CustomContentStore.FILE_NAME)
+                || f.equals(CharacterStore.FILE_NAME);
     }
 
     // --- import -------------------------------------------------------------------
@@ -263,6 +271,10 @@ public final class GamePackage {
             if (root.get("custom") != null) {
                 Files.writeString(levelsDir.resolve(CustomContentStore.FILE_NAME),
                         Json.stringify(root.get("custom")));
+            }
+            if (root.get("characters") != null) {
+                Files.writeString(levelsDir.resolve(CharacterStore.FILE_NAME),
+                        Json.stringify(root.get("characters")));
             }
         } catch (IOException e) {
             throw new UncheckedIOException(e);

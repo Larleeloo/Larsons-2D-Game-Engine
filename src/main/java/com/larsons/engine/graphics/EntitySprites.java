@@ -4,6 +4,7 @@ import com.larsons.engine.entity.ItemDef;
 import com.larsons.engine.entity.MobDef;
 import com.larsons.engine.entity.ProjectileDef;
 import com.larsons.engine.entity.VehicleDef;
+import com.larsons.engine.fx.Particles;
 import com.larsons.engine.world.Block;
 import com.larsons.engine.world.Decor;
 
@@ -29,10 +30,36 @@ public final class EntitySprites {
 
     private EntitySprites() {}
 
-    /** A critter sprite: body + head + eyes, wings when it flies. */
+    /** A critter sprite: body + head + eyes, wings when it flies, facing east. */
     public static BufferedImage mob(MobDef def, int size) {
-        return cached("mob:" + def.key() + ":" + size, size, g -> {
+        return mob(def, size, Facing.EAST);
+    }
+
+    /**
+     * A critter sprite drawn for one facing: the head and eyes move to the
+     * heading, so a mob walking north shows its back and one walking south
+     * looks at the camera. The west-facing directions are drawn by mirroring
+     * their eastern twin, which is why a mob's near side stays near.
+     */
+    public static BufferedImage mob(MobDef def, int size, Facing facing) {
+        Facing dir = facing == null ? Facing.EAST : facing;
+        return cached("mob:" + def.key() + ":" + size + ":" + dir.key(), size, g -> {
             int s = size;
+            Facing drawn = dir.mirrorOf();
+            if (dir.mirrored()) {
+                g.translate(s, 0);
+                g.scale(-1, 1);
+            }
+            // How far the head sits toward the heading, and whether the face
+            // (eyes) is turned toward the camera at all.
+            boolean profile = drawn == Facing.EAST;
+            boolean facingCamera = drawn == Facing.SOUTH || drawn == Facing.SOUTH_EAST;
+            boolean facingAway = drawn == Facing.NORTH || drawn == Facing.NORTH_EAST;
+            int headShift = switch (drawn) {
+                case EAST -> s / 2;
+                case NORTH_EAST, SOUTH_EAST -> s * 5 / 12;
+                default -> s * 7 / 24;
+            };
             g.setColor(def.body());
             if (def.flying()) {
                 // Winged blob.
@@ -47,13 +74,89 @@ public final class EntitySprites {
                 g.fillRect(s / 4, s * 4 / 5, s / 8, s / 5);
                 g.fillRect(s * 5 / 8, s * 4 / 5, s / 8, s / 5);
                 g.setColor(def.body());
-                g.fillOval(s / 2, s / 12, s * 5 / 12, s * 5 / 12);
+                g.fillOval(headShift, s / 12, s * 5 / 12, s * 5 / 12);
             }
-            // Eye + accent marking.
+            // Eyes on the side we are looking from; a mob turned away has none.
             g.setColor(def.accent());
             int eye = Math.max(2, s / 8);
-            g.fillOval(s * 2 / 3, s / 5, eye, eye);
+            if (!facingAway) {
+                g.fillOval(headShift + (profile ? s / 4 : s / 8), s / 5, eye, eye);
+                if (facingCamera) {
+                    g.fillOval(headShift + s * 5 / 24 + eye / 2, s / 5, eye, eye);
+                }
+            }
             g.fillRect(s / 4, s / 2, s / 3, Math.max(2, s / 10));
+        });
+    }
+
+    /**
+     * A particle's pre-generated fleck: the shape a burst of that style throws
+     * when no texture is assigned. The particle system itself draws bare
+     * coloured squares for speed; this is the same idea at palette size, so
+     * the creative Effects palette shows what a style looks like and what a
+     * replacement sheet stands in for.
+     */
+    public static BufferedImage particle(Particles.Style style, int size, Color color) {
+        return cached("particle:" + style.name() + ":" + size + ":" + color.getRGB(),
+                size, g -> {
+            int s = size;
+            g.setColor(color);
+            switch (style) {
+                case EMBERS -> { // flecks rising, biggest at the bottom
+                    g.fillOval(s * 2 / 5, s * 3 / 5, s / 4, s / 4);
+                    g.fillOval(s / 5, s * 2 / 5, s / 6, s / 6);
+                    g.fillOval(s * 5 / 8, s / 4, s / 8, s / 8);
+                }
+                case SHARDS -> { // angular splinters
+                    g.fillPolygon(new int[]{s / 4, s / 2, s * 3 / 8},
+                            new int[]{s / 5, s / 3, s * 3 / 4}, 3);
+                    g.fillPolygon(new int[]{s * 5 / 8, s * 7 / 8, s * 3 / 4},
+                            new int[]{s / 3, s / 2, s * 4 / 5}, 3);
+                }
+                case SPARKS -> { // a four-armed crackle
+                    g.setStroke(new BasicStroke(Math.max(1.5f, s / 12f),
+                            BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g.drawLine(s / 2, s / 6, s / 2, s * 5 / 6);
+                    g.drawLine(s / 6, s / 2, s * 5 / 6, s / 2);
+                    g.drawLine(s / 4, s / 4, s * 3 / 4, s * 3 / 4);
+                }
+                case DRIP -> { // a teardrop
+                    g.fillOval(s / 3, s * 2 / 5, s / 3, s / 3);
+                    g.fillPolygon(new int[]{s / 3, s / 2, s * 2 / 3},
+                            new int[]{s / 2, s / 6, s / 2}, 3);
+                }
+                case RING -> { // a blast ring
+                    g.setStroke(new BasicStroke(Math.max(2f, s / 8f)));
+                    g.drawOval(s / 6, s / 6, s * 2 / 3, s * 2 / 3);
+                }
+                case MOTES -> { // scattered dust
+                    int dot = Math.max(2, s / 8);
+                    g.fillOval(s / 4, s / 3, dot, dot);
+                    g.fillOval(s * 3 / 5, s / 4, dot, dot);
+                    g.fillOval(s / 2, s * 5 / 8, dot, dot);
+                    g.fillOval(s / 4, s * 2 / 3, dot / 2, dot / 2);
+                }
+                case FOUNTAIN -> { // an upward plume
+                    g.setStroke(new BasicStroke(Math.max(2f, s / 10f),
+                            BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g.drawArc(s / 5, s / 5, s * 3 / 5, s * 3 / 5, 20, 140);
+                    g.fillOval(s * 7 / 16, s / 8, s / 8, s / 8);
+                }
+                case IMPLODE -> { // arrows rushing inward
+                    g.setStroke(new BasicStroke(Math.max(1.5f, s / 12f),
+                            BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g.drawLine(s / 6, s / 6, s * 2 / 5, s * 2 / 5);
+                    g.drawLine(s * 5 / 6, s / 6, s * 3 / 5, s * 2 / 5);
+                    g.drawLine(s / 6, s * 5 / 6, s * 2 / 5, s * 3 / 5);
+                    g.drawLine(s * 5 / 6, s * 5 / 6, s * 3 / 5, s * 3 / 5);
+                }
+                default -> { // BURST: the classic shard spray
+                    int dot = Math.max(2, s / 6);
+                    g.fillRect(s / 4, s / 4, dot, dot);
+                    g.fillRect(s * 5 / 8, s / 3, dot, dot);
+                    g.fillRect(s * 3 / 8, s * 5 / 8, dot, dot);
+                }
+            }
         });
     }
 
