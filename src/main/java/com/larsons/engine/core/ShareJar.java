@@ -1,11 +1,12 @@
 package com.larsons.engine.core;
 
+import com.larsons.engine.graphics.TexturePack;
 import com.larsons.engine.net.Lan;
 
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
+import java.lang.management.ManagementFactory;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Files;
@@ -13,8 +14,11 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.jar.Attributes;
 import java.util.jar.JarEntry;
@@ -24,8 +28,8 @@ import java.util.stream.Stream;
 
 /**
  * Builds a shareable, double-clickable game jar automatically on launch —
- * so starting the game from IntelliJ (or {@code gradle run}) leaves a
- * {@code share/} folder containing everything a friend needs to join:
+ * so starting the game from IntelliJ leaves a {@code share/} folder
+ * containing everything a friend needs to play:
  *
  * <ul>
  *   <li>{@code larsons-2d-game-engine.jar} — the whole game, runnable with
@@ -33,8 +37,17 @@ import java.util.stream.Stream;
  *       other dependencies by design);</li>
  *   <li>{@code run.bat} / {@code run.sh} — double-click launchers;</li>
  *   <li>{@code HOW_TO_PLAY_ONLINE.txt} — hosting/joining instructions,
- *       including this machine's LAN address for same-network play.</li>
+ *       including this machine's LAN address for same-network play;</li>
+ *   <li>{@code textures/} — an empty {@link TexturePack} to drop sprite
+ *       sheets into, with a folder per palette category and a generated list
+ *       of every object's file name.</li>
  * </ul>
+ *
+ * <p><b>This only happens inside IntelliJ</b> ({@link #insideIntelliJ}). The
+ * share folder is a development convenience — a shipped game must not write
+ * a copy of itself beside wherever the player put it — so {@link #writeAsync}
+ * does nothing anywhere else. {@code -Dlarsons.share=true} forces it on (and
+ * {@code false} off) for the odd case that wants the other answer.
  *
  * <p>When launched from an IDE/Gradle the classpath is class directories;
  * they're bundled into the jar (with a {@code Main-Class} manifest). When
@@ -47,10 +60,17 @@ public final class ShareJar {
     public static final String JAR_NAME = "larsons-2d-game-engine.jar";
     public static final String DEFAULT_DIR = "share";
 
+    /** {@code -Dlarsons.share=true|false} overrides the IntelliJ check. */
+    public static final String FORCE_PROPERTY = "larsons.share";
+
     private ShareJar() {}
 
-    /** Build (or refresh) the share folder in the background; never blocks launch. */
+    /**
+     * Build (or refresh) the share folder in the background; never blocks
+     * launch, and does nothing at all outside IntelliJ.
+     */
     public static void writeAsync() {
+        if (!insideIntelliJ()) return;
         Thread t = new Thread(() -> {
             try {
                 Path jar = write(Path.of(DEFAULT_DIR));
@@ -62,6 +82,57 @@ public final class ShareJar {
         }, "share-jar");
         t.setDaemon(true);
         t.start();
+    }
+
+    /**
+     * Whether this JVM was launched by IntelliJ IDEA — the one place the
+     * share folder is built.
+     */
+    public static boolean insideIntelliJ() {
+        List<String> jvmArgs;
+        try {
+            jvmArgs = ManagementFactory.getRuntimeMXBean().getInputArguments();
+        } catch (RuntimeException | LinkageError e) {
+            jvmArgs = List.of(); // no management layer: fall back to the other signals
+        }
+        return insideIntelliJ(System.getProperties(), jvmArgs, System.getenv());
+    }
+
+    /**
+     * {@link #insideIntelliJ()} against a given environment, so the signals
+     * are testable. IntelliJ gives itself away several ways depending on the
+     * run configuration: its own {@code idea.*} system properties, the
+     * {@code idea_rt.jar} helper on the classpath or attached as an agent,
+     * its {@code com.intellij.rt} launcher, and the {@code IDEA_*}
+     * environment it exports.
+     */
+    public static boolean insideIntelliJ(Properties props, Collection<String> jvmArgs,
+                                         Map<String, String> env) {
+        String forced = props == null ? null : props.getProperty(FORCE_PROPERTY);
+        if (forced != null && !forced.isBlank()) return Boolean.parseBoolean(forced.trim());
+
+        if (props != null) {
+            for (String name : props.stringPropertyNames()) {
+                if (name.startsWith("idea.")) return true;
+            }
+            if (contains(props.getProperty("java.class.path"), "idea_rt.jar")) return true;
+            if (contains(props.getProperty("sun.java.command"), "com.intellij.rt.")) return true;
+        }
+        if (jvmArgs != null) {
+            for (String arg : jvmArgs) {
+                if (contains(arg, "idea_rt")) return true;
+            }
+        }
+        if (env != null) {
+            for (String name : env.keySet()) {
+                if (name.startsWith("IDEA_") || name.contains("INTELLIJ")) return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean contains(String haystack, String needle) {
+        return haystack != null && haystack.contains(needle);
     }
 
     /** Build the share folder at {@code outDir}; returns the jar path. */
@@ -86,6 +157,9 @@ public final class ShareJar {
 
         writeScripts(outDir);
         writeInstructions(outDir);
+        // The drop-in texture pack sits beside the jar, so whoever receives
+        // the folder reskins the game by dropping PNGs into it.
+        TexturePack.scaffold(outDir.resolve(TexturePack.DIR_NAME));
         return jar;
     }
 
@@ -199,6 +273,15 @@ public final class ShareJar {
                   run.bat (Windows) / run.sh (Mac & Linux), or run:
                       java -jar %s
 
+                YOUR OWN TEXTURES
+                  The textures/ folder next to the jar is a drop-in texture pack:
+                  put a sprite sheet in the subfolder for its palette category,
+                  named after the object (blocks/dirt.png, mobs/slime.png), and
+                  the game uses it. textures/%s lists the name for
+                  every object; textures/%s sets the frame size and
+                  playback rate the whole pack is drawn to. Keep the folder next
+                  to the jar and it is found automatically.
+
                 HOSTING AN AUTO-BATTLER GAME
                   Launch menu -> Auto Battler -> set a port (default 7788) -> Host Game.
                   The lobby shows the address friends should join.
@@ -217,6 +300,7 @@ public final class ShareJar {
                     forwarded on their router (exactly like hosting Minecraft).
 
                 The world game hosts the same way from Multiplayer (default port 7777).
-                """.formatted(JAR_NAME, lanLine));
+                """.formatted(JAR_NAME, TexturePack.KEYS_FILE, TexturePack.CONFIG_FILE,
+                lanLine));
     }
 }

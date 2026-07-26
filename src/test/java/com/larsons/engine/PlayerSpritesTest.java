@@ -5,7 +5,9 @@ import com.larsons.engine.graphics.AssetLoader;
 import com.larsons.engine.graphics.PlayerSprites;
 import com.larsons.engine.graphics.SkinDef;
 import com.larsons.engine.graphics.Skins;
+import com.larsons.engine.graphics.TexturePack;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -32,9 +34,16 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 @Timeout(30)
 class PlayerSpritesTest {
 
+    /** No drop-in texture pack on this machine — the built-in art is the baseline. */
+    @BeforeEach
+    void withoutATexturePack(@TempDir Path tmp) {
+        TexturePack.useDir(tmp.resolve("no-texture-pack").toString());
+    }
+
     @AfterEach
     void resetRuntime() {
         Skins.install(List.of());
+        TexturePack.useDir("");
         AssetLoader.clearCache();
     }
 

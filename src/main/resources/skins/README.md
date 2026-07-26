@@ -1,5 +1,13 @@
 # Skins: texture overrides
 
+> Reskinning a lot at once? Use a **texture pack** instead: a `textures/`
+> folder next to the game's jar, with a subfolder per palette category and
+> files named after the objects (`blocks/dirt.png`, `mobs/slime.png`), is
+> picked up with no menu visit at all. Running the game from IntelliJ
+> scaffolds an empty one in `share/textures/`, complete with a generated
+> `TEXTURE_KEYS.txt` naming every object. This folder is still the place for
+> one-off assignments and for skins you want bundled *inside* the jar.
+
 Drop PNG sprite sheets in this folder (any subfolder works — `units/`,
 `items/`, `projectiles/`, `boards/` are provided as a starting layout) and
 assign them to game textures in the **Auto Battler lobby → Customize Skins**
@@ -39,3 +47,9 @@ them all, so you never have to type one.
 
 Sheet paths are resolved against the classpath first (this folder is on it,
 so `skins/units/my_squire.png` works) and then the working directory.
+
+The same keys address the texture pack folder: `unit/squire/idle` is
+`units/squire_idle.png` there (or `units/squire.png` for every state),
+`item/sword` is `items/sword.png`, `projectile/arrow` is
+`projectiles/arrow.png`, `board/tile_a` is `board/tile_a.png`. An assignment
+made here takes precedence over the pack for that one key.

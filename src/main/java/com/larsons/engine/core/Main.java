@@ -43,9 +43,10 @@ public class Main {
     public static final String LEVEL = "levels/sample_level.json";
 
     public static void main(String[] args) {
-        // Leave a ready-to-send copy of the game in share/ (built in the
-        // background), so launching from the IDE is all it takes to have
-        // something to hand to friends.
+        // Development convenience only: launching from IntelliJ leaves a
+        // ready-to-send copy of the game (plus an empty texture pack to fill)
+        // in share/, built in the background. A shipped jar builds nothing —
+        // it must not write a copy of itself wherever the player put it.
         ShareJar.writeAsync();
 
         // Install any game-type packages (.larsonsengine) dropped next to the

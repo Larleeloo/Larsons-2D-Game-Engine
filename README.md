@@ -92,10 +92,16 @@ over in a generic, data-driven form and wired to the same toggles:
   frame pixel width/height + frame count + a 0-120 fps playback rate, per
   texture (units get one per animation state). Saved to your game files and
   applied live. See [Skins](#skins-texture-overrides).
-- **Share with friends** — launching from IntelliJ/Gradle auto-builds a
-  `share/` folder with a runnable jar, double-click launch scripts, and
-  online-play instructions (including your LAN address). See
-  [Sharing the game](#sharing-the-game--how-joining-works).
+- **Texture packs** — or skip the menus entirely: a `textures/` folder next
+  to the jar, with a subfolder per palette category and files named after the
+  objects (`blocks/dirt.png`, `mobs/slime.png`), reskins the game on sight.
+  A generated key list names every object for you, one universal frame
+  size/count/fps covers the whole pack, and anything you don't supply keeps
+  its built-in icon. See [Texture packs](#texture-packs-drop-in-art).
+- **Share with friends** — launching from IntelliJ auto-builds a `share/`
+  folder with a runnable jar, double-click launch scripts, online-play
+  instructions (including your LAN address), and an empty texture pack to
+  fill. See [Sharing the game](#sharing-the-game--how-joining-works).
 - **Giant levels (up to 65536×65536)** — levels past 1024×1024 switch to
   sparse **chunked storage**
   ([`ChunkedTiles`](src/main/java/com/larsons/engine/level/ChunkedTiles.java)):
@@ -271,7 +277,9 @@ com.larsons.engine
 │   ├── CutscenePainter.java Cutscene actors (sheet frames + fallbacks) + letterbox/captions
 │   ├── SkinDef.java       One texture override: sheet + frame w/h/count + 0-120 fps
 │   ├── SkinStore.java     Persist skins.json under resources/skins/ (game files)
-│   ├── Skins.java         Runtime resolver: skin frame for a key at a time, or null
+│   ├── Skins.java         Runtime resolver: assignment → texture pack → null (built-in art)
+│   ├── TexturePack.java   Drop-in textures/ folder beside the jar; scaffold + config + lookup
+│   ├── TextureKeys.java   Every skinnable object → its pack folder and file name
 │   ├── EntitySprites.java Procedural mob/item/block sprites (no assets needed)
 │   ├── ParallaxBackground.java Procedural multi-layer parallax backdrop
 │   └── shader
@@ -718,11 +726,28 @@ joining players by the server, and respawns use them too. Without any, the
 single spawn marker is used, as before.
 
 **Right-click textures.** Right-clicking a palette icon opens the texture
-dialog: point it at any sprite sheet (frame size, count, fps — 0 = static),
-per action state for mobs (idle/walk/attack/hurt), and the assignment
-applies live everywhere that thing is drawn and persists via the engine's
-`Skins`/`skins.json` system. Remove the override to get the procedural art
-back.
+dialog for that object. Two ways to supply art, and the first needs no
+setting at all:
+
+- **Texture pack folder** (a per-object toggle, **on** by default) — the
+  sheet is whatever sits at that object's file name inside the drop-in
+  [texture pack](#texture-packs-drop-in-art) beside the jar. The dialog
+  names the file it wants (`blocks/dirt.png`) and says whether it's there
+  yet; click that row to rescan after adding sheets mid-session. Nothing
+  there? The built-in icon stands, which is why the toggle is safe to leave
+  on for everything.
+- **A sheet elsewhere** — turn the pack off (or just fill in *Sheet
+  elsewhere*, used as the pack's fallback) to point that one object at any
+  image on disk.
+
+Either way you set frame size, count and fps (0 = static), per action state
+for mobs (idle/walk/attack/hurt); frame settings for a pack texture are
+saved into the pack's own `texturepack.json`, so the exception travels with
+the folder. The assignment applies live everywhere that thing is drawn,
+persists via the engine's `Skins`/`skins.json` system, and **the palette
+swatch redraws with the new texture** — the sidebar always previews what
+will land on the canvas. *Reset to defaults* puts an object back on the
+pack with the procedural art as its fallback.
 
 **Generate** (Tools palette) builds a level from Perlin noise
 ([`LevelGenerator`](src/main/java/com/larsons/engine/level/LevelGenerator.java)):
@@ -912,11 +937,13 @@ A batch of gameplay and editor refinements layered onto the systems above:
   the mob's body edge, not its top-left corner.
 - **Softer feedback** — the hit/hurt effects are gentle sine thuds instead
   of the old alarming square-wave shrieks.
-- **Texture pack folder** — set one per game type in the texture dialog:
-  *Browse…* starts there and bare sheet filenames resolve against it. Surface
-  details (grass, spikes…) are sprite-sheet skinnable like everything else
-  (`surface/<key>`), and the stat-rule editor's reward/consume fields grow
-  **look-up cyclers** over the whole item catalog so nobody memorizes keys.
+- **Texture pack folder** — a `textures/` folder beside the jar reskins the
+  game by file name alone ([Texture packs](#texture-packs-drop-in-art)); the
+  texture dialog toggles it per object, *Browse…* starts there, and bare
+  sheet filenames resolve against it. Surface details (grass, spikes…) are
+  sprite-sheet skinnable like everything else (`surface/<key>`), and the
+  stat-rule editor's reward/consume fields grow **look-up cyclers** over the
+  whole item catalog so nobody memorizes keys.
 
 ---
 
@@ -1520,12 +1547,58 @@ asks for a texture key's frame at a point in time and draws the fallback when
 it gets `null`; the key table is documented in
 [`resources/skins/README.md`](src/main/resources/skins/README.md).
 
+### Texture packs (drop-in art)
+
+Assigning sheets one at a time is the *precise* route. The **texture pack**
+is the bulk one: a `textures/` folder **next to the jar**, filled with
+correctly-named PNGs, reskins the game with **no menu visit at all**
+([`TexturePack`](src/main/java/com/larsons/engine/graphics/TexturePack.java)).
+Launching from IntelliJ scaffolds an empty one inside `share/`, so it ships
+with the game you hand a friend:
+
+```
+share/textures/
+├── texturepack.json     universal frame size / count / fps  (+ per-texture overrides)
+├── TEXTURE_KEYS.txt     every object's file name and texture key (generated)
+├── README.txt
+├── blocks/     dirt.png · stone.png · …
+├── liquids/    water.png · lava.png · …
+├── lights/     torch.png · lantern.png · …
+├── mobs/       slime.png (all states) · slime_walk.png (one state) · …
+├── items/      iron_sword.png · …
+├── decor/  ·  block_decor/  ·  player/  ·  units/  ·  projectiles/  ·  board/
+```
+
+**Subfolders are palette categories, files are objects.** A sheet is picked
+up purely by where it sits and what it's called — `blocks/dirt.png` is the
+Dirt block, `mobs/slime.png` is the Slime in every animation state (add
+`_walk` for one state only), `player/idle.png` is the player standing still.
+The generated `TEXTURE_KEYS.txt` lists **every object in the game** with the
+exact file name and texture key to use, including custom content you created
+yourself — so nobody has to guess or memorize a key. PNG is preferred; GIF
+and JPG load too.
+
+**One spec for the whole pack.** Every sheet plays at the universal settings
+in `texturepack.json` — **32×32 frames, 3 frames, 3 fps** — so a pack is
+drawn to a single target (the default sheet is one 96×32 image, sliced
+left-to-right). Any single texture can depart from that via the `overrides`
+block, or from the creative texture dialog, which writes the override back
+into the pack.
+
+**Always safe to leave on.** The pack is consulted for every texture key by
+default, and a key with no file in it keeps its built-in procedural icon —
+so a pack can be one file or a thousand. Per object, the texture dialog can
+switch the pack off or point at [a sheet somewhere
+else](#creative-mode-paint-objects) instead. A game type that wants its pack
+kept elsewhere sets *Texture pack folder* in that dialog; blank — the normal
+case — means "beside the jar", which is what makes a shared game just work.
+
 ---
 
 ## Sharing the game & how joining works
 
-**Launching the game from IntelliJ (or `./gradlew run`) automatically
-builds a shareable copy** in `share/`, in the background, on every launch
+**Launching the game from IntelliJ automatically builds a shareable copy**
+in `share/`, in the background, on every launch
 ([`ShareJar`](src/main/java/com/larsons/engine/core/ShareJar.java) — skipped
 when nothing changed):
 
@@ -1534,12 +1607,23 @@ share/
 ├── larsons-2d-game-engine.jar   # the whole game: java -jar, Java 21+, no deps
 ├── run.bat                      # double-click launcher (Windows)
 ├── run.sh                       # double-click launcher (Mac/Linux)
-└── HOW_TO_PLAY_ONLINE.txt       # hosting/joining instructions + your LAN IP
+├── HOW_TO_PLAY_ONLINE.txt       # hosting/joining instructions + your LAN IP
+└── textures/                    # drop-in texture pack (see Texture packs)
 ```
+
+**This only happens inside IntelliJ.** The share folder is a development
+convenience, so a shipped game never writes a copy of itself beside wherever
+the player put it: `ShareJar` checks for IntelliJ's own launch signals (its
+`idea.*` system properties, the `idea_rt` helper on the classpath or attached
+as an agent, the `IDEA_*` environment it exports) and does nothing anywhere
+else — a plain `java -jar`, `./gradlew run` from a terminal, or a friend's
+machine all leave the folder alone. `-Dlarsons.share=true` (or `false`)
+overrides the check when you want the other answer.
 
 Send a friend the `share/` folder (or just the jar) and they can play — and
 because the jar packages your `resources/`, your game types and skins travel
-with it.
+with it. The `textures/` folder rides along too, so they can reskin the game
+by dropping PNGs beside the jar.
 
 **Connecting — which address do I type?**
 
@@ -1755,7 +1839,7 @@ level is never exported on its own: it only means something inside the game type
 whose features, doors, and custom content it was built against.
 
 The file is written next to the runnable jar (in the `share/` folder when you're
-running from the IDE/Gradle). **At launch the engine scans that folder for
+running from IntelliJ). **At launch the engine scans that folder for
 `.larsonsengine` files and installs any it hasn't seen** — so a recipient just
 drops the file beside their jar and starts the game; the game type appears on
 the startup chooser with all its levels. An already-installed game type is left
@@ -2051,6 +2135,11 @@ events, board-scouting requests — including for eliminated spectators),
 definitions, the 0-120 fps clamp, store round-trips, sheet slicing and
 fallbacks), [`AutoHudTest`](src/test/java/com/larsons/engine/demo/AutoHudTest.java)
 (HUD text regions stay pairwise disjoint across window sizes and fill
-levels), and [`ShareJarTest`](src/test/java/com/larsons/engine/ShareJarTest.java)
-(the auto-built share jar is runnable, scripted, documented, and not
-rebuilt needlessly).
+levels), [`ShareJarTest`](src/test/java/com/larsons/engine/ShareJarTest.java)
+(the auto-built share jar is runnable, scripted, documented, carries a
+texture pack, isn't rebuilt needlessly — and is only built inside IntelliJ),
+and [`TexturePackTest`](src/test/java/com/larsons/engine/TexturePackTest.java)
+(the drop-in folder scaffolds itself, finds sheets by palette-category file
+name, plays them at one universal spec that any single texture can override,
+lets each object opt out or point elsewhere, and keeps palette icons showing
+the texture that actually renders).

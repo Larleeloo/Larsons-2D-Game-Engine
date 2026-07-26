@@ -2,6 +2,7 @@ package com.larsons.engine.config;
 
 import com.larsons.engine.audio.AudioManager;
 import com.larsons.engine.core.Engine;
+import com.larsons.engine.graphics.TexturePack;
 import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.graphics.shader.ShaderChain;
 import com.larsons.engine.graphics.shader.ShaderPass;
@@ -119,6 +120,9 @@ public class GameContext {
         if (profile != null) {
             profile.normalize();
             audio.setEnabled(profile.audioEnabled);
+            // A game type may keep its texture pack somewhere of its own;
+            // blank means the folder beside the jar (the default pack).
+            TexturePack.useDir(profile.texturePackDir);
         }
         if (engine != null && profile != null) {
             engine.setTargetFps(profile.maxFps);

@@ -4,7 +4,9 @@ import com.larsons.engine.graphics.AssetLoader;
 import com.larsons.engine.graphics.SkinDef;
 import com.larsons.engine.graphics.SkinStore;
 import com.larsons.engine.graphics.Skins;
+import com.larsons.engine.graphics.TexturePack;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -33,9 +35,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @Timeout(30)
 class SkinsTest {
 
+    /**
+     * These cases are about the assignment side of the resolver, so the
+     * drop-in texture pack is pointed at a folder that isn't there — the same
+     * state as a machine that has never made one.
+     */
+    @BeforeEach
+    void withoutATexturePack(@TempDir Path tmp) {
+        TexturePack.useDir(tmp.resolve("no-texture-pack").toString());
+    }
+
     @AfterEach
     void resetRuntime() {
         Skins.install(List.of());
+        TexturePack.useDir("");
         AssetLoader.clearCache();
     }
 
