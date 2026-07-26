@@ -57,6 +57,7 @@ import com.larsons.engine.minigame.Team;
 import com.larsons.engine.net.NetSession;
 import com.larsons.engine.net.Snapshot;
 import com.larsons.engine.scene.AbstractScene;
+import com.larsons.engine.sim.PerspectiveSpace;
 import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerPhysics;
 import com.larsons.engine.sim.PlayerState;
@@ -716,6 +717,10 @@ public class CreativeScene extends AbstractScene {
         animClock += dt;
         mouseX = input.getMouseX();
         mouseY = input.getMouseY();
+        // Effects are authored in the space the editor is drawing in, so a
+        // top-down map's shards spray across its floor while a side-scroller's
+        // rain down the screen — in the editor exactly as in play.
+        particles.setSpace(PerspectiveSpace.of(camera.getPerspective()));
 
         if (testing) {
             updateTest(dt, input);
@@ -1874,9 +1879,8 @@ public class CreativeScene extends AbstractScene {
                 input.isKeyDown(KeyEvent.VK_S) || input.isKeyDown(KeyEvent.VK_DOWN),
                 ++inputSeq);
         in.sprint = input.isKeyDown(KeyEvent.VK_SHIFT);
-        in.jump = input.isKeyJustPressed(KeyEvent.VK_W)
-                || input.isKeyJustPressed(KeyEvent.VK_UP)
-                || input.isKeyJustPressed(KeyEvent.VK_SPACE);
+        // Space jumps in play-test too; W/Up only ever steer (see PlayScene).
+        in.jump = input.isKeyJustPressed(KeyEvent.VK_SPACE);
         testInv.applyPassivesTo(testMe, p.itemsEnabled);
         double preX = testMe.x, preY = testMe.y;
         // Play-test simulates in the level's own perspective, so a top-down
@@ -2104,8 +2108,7 @@ public class CreativeScene extends AbstractScene {
         if (removed <= 0) return;
         DroppedItem drop = testWorld.spawnItem(key, removed, testMe.x, testMe.y);
         if (drop != null) {
-            drop.toss(testMe.facingLeft ? -170 : 170,
-                    level.format().gravity() ? -180 : 0);
+            drop.tossForward(testMe.facing, level.format().gravity());
             drop.pickupDelay = 1.0;
         }
         ctx.sfx(Sfx.CLICK);
@@ -4480,10 +4483,21 @@ public class CreativeScene extends AbstractScene {
         // the procedural bolt is the fallback.
         BufferedImage img = Skins.frame("projectile/" + pr.def.key(), animClock);
         if (img == null) img = EntitySprites.projectile(pr.def, 16);
-        int w = Math.max(8, (int) Math.round(pr.def.radius() * 3.5 * camera.zoom));
+        // A plan-view shot still in the air (a meteor on its way down) draws
+        // above the floor tile it is aimed at, over a shadow that marks it.
+        PerspectiveSpace space = PerspectiveSpace.of(camera.getPerspective());
+        int w = Math.max(8, (int) Math.round(pr.def.radius() * 3.5 * camera.zoom
+                * space.heightScale(pr.z, level.tileSize)));
         camera.worldToScreen(pr.x, pr.y, pcorner);
+        int lift = (int) Math.round(pr.z * space.screenLift() * camera.zoom);
+        if (lift > 0) {
+            double shrink = Math.max(0.3, 1 - pr.z / (level.tileSize * 8.0));
+            int sw = Math.max(3, (int) (w * 0.6 * shrink));
+            g.setColor(new Color(0, 0, 0, (int) (80 * shrink)));
+            g.fillOval(pcorner[0] - sw / 2, pcorner[1] - sw / 4, sw, Math.max(2, sw / 2));
+        }
         var old = g.getTransform();
-        g.translate(pcorner[0], pcorner[1]);
+        g.translate(pcorner[0], pcorner[1] - lift);
         if (pr.vx != 0 || pr.vy != 0) g.rotate(Math.atan2(pr.vy, pr.vx));
         g.drawImage(img, -w / 2, -w / 2, w, w, null);
         g.setTransform(old);

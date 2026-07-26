@@ -131,7 +131,8 @@ class MechanicsFixesTest {
             PlayerPhysics.step(s, idle, level, p, Perspective.SIDE_SCROLL, DT);
         }
         double restY = s.y;
-        PlayerInput jump = new PlayerInput(false, false, true, false, 1);
+        PlayerInput jump = new PlayerInput(false, false, false, false, 1);
+        jump.jump = true;
         PlayerPhysics.step(s, jump, level, p, Perspective.SIDE_SCROLL, DT);
         assertTrue(s.vy < 0, "the level's bottom edge should count as ground");
         assertTrue(s.y < restY, "the player should leave the bottom edge");
@@ -162,7 +163,8 @@ class MechanicsFixesTest {
         for (int i = 0; i < 200; i++) {
             PlayerPhysics.step(s, idleSettle, level, p, Perspective.SIDE_SCROLL, DT);
         }
-        PlayerInput held = new PlayerInput(false, false, true, false, 1);
+        PlayerInput held = new PlayerInput(false, false, false, false, 1);
+        held.jump = true;
         PlayerPhysics.step(s, held, level, p, Perspective.SIDE_SCROLL, DT); // ground jump
         assertTrue(s.vy < 0);
         // Let the jump decay a little, then press again mid-air.
@@ -171,7 +173,7 @@ class MechanicsFixesTest {
             PlayerPhysics.step(s, idle, level, p, Perspective.SIDE_SCROLL, DT);
         }
         double vyBefore = s.vy;
-        PlayerInput airPress = new PlayerInput(false, false, true, false, 2);
+        PlayerInput airPress = new PlayerInput(false, false, false, false, 2);
         airPress.jump = true;
         PlayerPhysics.step(s, airPress, level, p, Perspective.SIDE_SCROLL, DT);
         assertTrue(s.vy < vyBefore && s.vy < 0, "the double jump should re-launch mid-air");

@@ -10,6 +10,11 @@ package com.larsons.engine.graphics;
  *
  * <p>The {@link Camera} consumes this enum to choose how world coordinates map
  * to the screen, so a game can switch perspective at runtime.
+ *
+ * <p>This enum is only about <em>projection</em>. The matching physical space —
+ * which axis is up, where gravity pulls, how height is drawn — is
+ * {@code com.larsons.engine.sim.PerspectiveSpace}, which every simulation and
+ * effect reads instead of assuming a side-scroller's screen.
  */
 public enum Perspective {
     SIDE_SCROLL,

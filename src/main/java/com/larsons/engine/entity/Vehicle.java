@@ -115,7 +115,9 @@ public final class Vehicle {
                 vx = approach(vx, target * top, top * ACCEL_FACTOR * dt);
                 if (grounded && vy >= 0) {
                     vy = 0;
-                    if (in.up || in.jump) vy = -def.jump();
+                    // Space vaults the mount, same as it does on foot; up is
+                    // left free to mean "up" (steering a flier, swimming).
+                    if (in.jump) vy = -def.jump();
                 } else {
                     vy += GRAVITY * dt;
                 }

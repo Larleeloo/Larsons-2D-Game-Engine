@@ -67,7 +67,8 @@ class PlayerPhysicsTest {
         GameProfile p = profile();
         PlayerState s = new PlayerState(1, "t", 64, 128); // standing on the floor
 
-        PlayerInput jump = new PlayerInput(false, false, true, false, 1);
+        PlayerInput jump = new PlayerInput(false, false, false, false, 1);
+        jump.jump = true; // Space, the only jump key
         PlayerPhysics.step(s, jump, level, p, Perspective.SIDE_SCROLL, DT);
         assertTrue(s.vy < 0, "jump should set upward velocity");
         assertTrue(s.y < 128, "player should leave the ground");

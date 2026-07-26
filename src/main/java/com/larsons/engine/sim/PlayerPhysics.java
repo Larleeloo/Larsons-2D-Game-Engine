@@ -19,14 +19,21 @@ import com.larsons.engine.level.Level;
  * players pass through walls. Mobs share the same helpers so both simulations
  * obey identical rules.
  *
- * <p><b>Perspective.</b> The side-scrolling format runs the platformer model
- * (gravity, jumps, swimming); the plan-view formats (top-down, isometric) walk
- * the whole plane instead — both axes are steering, diagonals are normalized
- * so they aren't faster than the axes, and sprinting applies in every
- * direction. Jumping works in <em>all three</em>: with no gravity axis on the
- * tile grid, a plan-view jump is a hop along a separate Z axis
- * ({@link PlayerState#z}) that lifts the character over their own shadow and
- * sets them back down — same key, same double jump, same stamina cost.
+ * <p><b>Perspective.</b> Each format simulates in its own space (see
+ * {@link PerspectiveSpace}). The side-scrolling format runs the platformer
+ * model (gravity down the screen, jumps, swimming); the plan-view formats
+ * (top-down, isometric) walk the whole plane instead — both axes are steering,
+ * diagonals are normalized so they aren't faster than the axes, and sprinting
+ * applies in every direction. Jumping works in <em>all three</em>: on a plane
+ * the world grid is the floor, so gravity has moved off it onto the elevation
+ * axis and a jump is a hop along {@link PlayerState#z} that lifts the
+ * character over their own shadow and sets them back down — same key, same
+ * double jump, same stamina cost.
+ *
+ * <p><b>Jump is Space.</b> {@link PlayerInput#jump} is the only thing that
+ * launches one, in every format. {@link PlayerInput#up} is a <em>direction</em>
+ * — it strokes upward while swimming, climbs while flying, and walks north on
+ * a plane — so holding it no longer bounces the character off the ground.
  *
  * <p><b>Facing.</b> Every step records the compass direction the character is
  * heading ({@link PlayerState#facing}): two directions in a side-scroller,
@@ -74,8 +81,8 @@ public final class PlayerPhysics {
     // PlayerState.bonusAirJumps for triple/quad/infinite.
     public static final double AIR_JUMP_FACTOR = 0.92;   // of a grounded jump
 
-    // Plan-view hop (top-down / isometric). There is no gravity axis on the
-    // tile grid, so Space lifts the character along a separate Z axis: they
+    // Plan-view hop (top-down / isometric). The tile grid is the floor there,
+    // so Space lifts the character along the elevation axis instead: they
     // rise, hang, and settle back down over their own shadow. Slower than a
     // side-scroll jump so it reads as a hop rather than a launch.
     public static final double HOP_SPEED = 320;          // px/sec upward
@@ -114,7 +121,11 @@ public final class PlayerPhysics {
                 (int) Math.floor((s.x + size / 2.0) / ts),
                 (int) Math.floor((s.y + size / 2.0) / ts)) != null;
 
-        boolean sideScroll = perspective == Perspective.SIDE_SCROLL && profile.gravityEnabled;
+        // Which axis is down here, and whether the game type lets it pull: a
+        // side-scroller with gravity switched off walks its plane like a plan
+        // view does.
+        PerspectiveSpace space = PerspectiveSpace.of(perspective);
+        boolean sideScroll = space.gravityOnPlane() && profile.gravityEnabled;
         // On a plane every direction is walking, so up/down count as movement
         // for sprinting too — sprinting north in a top-down level is the same
         // act as sprinting east.
@@ -163,9 +174,11 @@ public final class PlayerPhysics {
             if (grounded && s.vy >= 0) {
                 s.vy = 0;
                 s.airJumpsUsed = 0;
-                // Space and up both jump from the ground: the jump key is the
-                // jump key, whichever one the player reaches for.
-                if (in.up || in.jump) {
+                // Only the jump key (Space) jumps. Up is a direction, not a
+                // jump: it swims, it flies, and on a plane it walks north —
+                // binding it here meant holding W to swim or to steer fired
+                // jumps too.
+                if (in.jump) {
                     s.vy = -JUMP * s.jumpFactor;
                     spendJumpStamina(s);
                 }

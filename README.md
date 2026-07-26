@@ -234,8 +234,11 @@ On launch you'll choose or create a **game type** before playing — see
   In the game-type editor, just type to set the name.
 - **Level:** `WASD` / arrows to move, **Space** to jump, **P** to cycle
   perspective (if enabled), **+ / -** to zoom (if enabled), **Esc** to open
-  the pause menu. Jumping works in **all three formats**: gravity in
-  side-scroll, and a **hop along a separate Z axis** in top-down and isometric
+  the pause menu. **Space is the only jump key** — `W`/`Up` are *directions*:
+  they stroke upward while swimming, climb while flying, and walk north in a
+  top-down or isometric level, so holding one no longer bounces you off the
+  ground. Jumping itself works in **all three formats**: gravity in
+  side-scroll, and a **hop along the elevation axis** in top-down and isometric
   (you rise over your own shadow and land back down) — same key, same double
   jump, same stamina cost. Which of these are available depends on the active
   game type and the character you picked.
@@ -421,11 +424,11 @@ A level belongs to one of three **formats**
 the format, not the game type, is what decides how it is built and how it
 plays:
 
-| Format | Projection | Movement | Palette |
-|--------|-----------|----------|---------|
-| **Side-Scroller** | orthographic | gravity: run, jump, swim, fall | everything except paths/walls |
-| **Top-Down** | orthographic | walks the plane on both axes | everything, **plus paths & walls** |
-| **Isometric** | diamond | walks the plane on both axes | everything, **plus paths & walls** |
+| Format | Projection | Up is | Movement | Palette |
+|--------|-----------|-------|----------|---------|
+| **Side-Scroller** | orthographic | up the screen | gravity: run, jump, swim, fall | everything except paths/walls |
+| **Top-Down** | orthographic | out of the screen | walks the plane on both axes | everything, **plus paths & walls** |
+| **Isometric** | diamond | along the screen's vertical | walks the plane on both axes | everything, **plus paths & walls** |
 
 Each format has its **own creative mode** — the main menu's *Creative Mode*
 entry picks which one to open, and the editor then paints, play-tests and
@@ -458,8 +461,56 @@ vehicles, mini games — is offered in all three and behaves in all three:
 - **The player** walks the whole plane in top-down/isometric, with diagonals
   normalized (a diagonal isn't √2 faster than an axis) and sprint applying in
   every direction.
+- **Which way is up** — every directional effect resolves against the format's
+  own axes, not a side-scroller's screen. See
+  [the three physical spaces](#the-three-physical-spaces-which-way-is-up).
 - **Online**, the server simulates the *served level's* format, so hosting an
   isometric level moves everyone isometrically and client prediction agrees.
+
+### The three physical spaces (which way is up)
+
+A format is not a camera angle with the same physics behind it. Each one loads
+a **space** of its own
+([`PerspectiveSpace`](src/main/java/com/larsons/engine/sim/PerspectiveSpace.java)),
+and that is the axis every directional thing in the engine asks before it
+moves:
+
+| | Side-Scroller | Top-Down | Isometric |
+|---|---|---|---|
+| The screen shows | the vertical plane | the floor, from above | the floor, in a diamond |
+| Up points | up the screen | out of the screen, at you | oblique to the view |
+| Gravity pulls along | world **+y** | the **elevation** axis | the **elevation** axis |
+| Height is drawn as | *(no height axis)* | a lift **and a growth** — rising means coming nearer | a pure vertical lift, same size |
+
+**Gravity does not switch off on a plane — it turns.** The pull is the same
+strength in all three formats; only the axis changes. That is what makes a
+top-down level feel like a floor you are standing on rather than a wall you
+are pinned to.
+
+What used to go wrong without this: anything with a direction was authored in
+screen terms and replayed unchanged in every format, so "up" quietly meant
+**north** in a top-down level and **north-west** in an isometric one. Meteors
+called down from the sky spawned a screen's worth of pixels north of their
+target and flew in sideways along the ground; embers drifted north instead of
+rising; drips crawled south away from whatever they dripped off; a blast ring
+tilted out of the floor it had just blasted. Now:
+
+- **Sky strikes** (Meteor Staff, the Meteor Volley ultimate) spawn *above* the
+  aim point on the elevation axis, ringed around it, and fall onto the tile you
+  picked. While falling they are **over** the level — they clear walls and pass
+  over heads — and they strike the instant they touch down. In a side-scroller
+  they still arrive from up the screen, exactly as before.
+- **Particles** spread across the *floor* (which the isometric camera projects
+  into a diamond for free) and put their upward component on the elevation
+  axis, so embers rise off the ground toward you, fountains go straight up,
+  shards rain back down onto the floor, and a blast ring stays flat on it.
+- **Knockback** follows the whole hit vector on a plane: a mob struck from the
+  north is knocked *south*, not shoved east or west because that was the only
+  axis a side-scroller had.
+- **Thrown stacks** leave along the direction you are facing — all eight of
+  them — instead of always due east or west.
+- **The side-scroller is untouched.** It is the reference format, and every one
+  of the above keeps its original motion there.
 
 ### Perspectives (the projection)
 
@@ -1184,8 +1235,8 @@ switched off simply keeps the charge instead of burning it on nothing.
 
 ### Jumping in every perspective
 
-Top-down and isometric levels have no gravity axis on the tile grid, so
-**Space** lifts you along a separate **Z axis** instead
+In top-down and isometric levels the tile grid is the **floor**, so gravity has
+moved off it onto the elevation axis and **Space** lifts you along that instead
 ([`PlayerState.z`](src/main/java/com/larsons/engine/sim/PlayerState.java)):
 you rise, hang, and settle back down over your own **shadow**, which shrinks
 as you climb. It is a real jump, not a decoration — steering keeps working
@@ -1194,8 +1245,11 @@ the `jumps` stat rule, and while airborne you clear contact-damage tiles
 (lava, spikes) exactly as a side-scroll jump does. The jump/fall animation
 states play off it too, so a per-state sprite sheet animates a hop.
 
-Side-scroll jumping also now answers **Space** from the ground, not just
-`W`/`Up` — the jump key is the jump key in all three formats.
+**Space is the jump key, and the only one, in all three formats.** `W`/`Up`
+used to jump as well, which made them unusable as what they actually are — a
+direction. They now only ever mean *up*: stroking toward the surface while
+swimming, climbing while flying, walking north on a plane. Mounts follow the
+same rule, so steering a flier no longer vaults it.
 
 ### Particle & projectile textures
 
@@ -2274,6 +2328,16 @@ and jumping in all three formats: Space off the ground in side-scroll, the
 plan-view hop's launch/peak/landing, its mid-air steering and double jump, the
 jump/fall animation states it drives, and the Z axis parking when a door leads
 into a side-scrolling level),
+the per-format physical spaces (which axis each one calls up, that gravity
+turns rather than switching off, and how height draws in each; that `W`/`Up`
+jump nothing — on foot or on a mount — while Space still does; meteor salvos
+spawning above the aim point on a plane and landing on the tile they were
+aimed at, still arriving from up the screen in a side-scroller, and a falling
+shot clearing walls until it touches down; particle trajectories rising up the
+screen isometrically instead of spraying north-east and splashing across the
+floor instead of running south, with the side-scroller's own motion unchanged;
+knockback following the hit vector on a plane; thrown stacks leaving along all
+eight facings),
 and full loopback multiplayer (a real server + clients: handshake, movement,
 join/leave, version rejection, shutdown — plus block edits replicating to
 every client and late joiners, painted mobs appearing in snapshots and being

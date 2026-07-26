@@ -27,6 +27,13 @@ import java.util.Set;
  *       players/mobs/vehicles steer both axes, drops scatter instead of
  *       falling, liquids pool outward instead of pouring down, and
  *       sand/gravel stay put.</li>
+ *   <li><b>Which way is up</b> — the format's
+ *       {@code com.larsons.engine.sim.PerspectiveSpace}, loaded with the
+ *       level. Gravity does not switch off on a plane, it <em>turns</em>: the
+ *       world grid becomes the floor and height moves onto an elevation axis,
+ *       which is what jumps hop along, what meteors fall down, and what an
+ *       ember rises through. Effects ask the space which axis carries their
+ *       vertical component instead of replaying a side-scroller's screen.</li>
  *   <li><b>Palette</b> — the path and wall block families only exist in the
  *       plan-view formats ({@link #allowsBlock}); a side-scroller's creative
  *       palette never offers them.</li>
