@@ -613,10 +613,10 @@ public final class GameServer {
         if (removed <= 0) return;
         DroppedItem drop = world.spawnItem(key, removed, conn.state.x, conn.state.y);
         if (drop != null) {
-            // Thrown out in front of the player; the upward lob only exists
-            // where gravity can bring it back down.
-            drop.toss(conn.state.facingLeft ? -170 : 170,
-                    level.format().gravity() ? -180 : 0);
+            // Thrown out in front of the player — along the way they are
+            // facing, with the upward lob only where gravity can bring it back
+            // down (see DroppedItem.tossForward).
+            drop.tossForward(conn.state.facing, level.format().gravity());
             drop.pickupDelay = 1.0; // don't instantly vacuum it back up
         }
         sendInventory(conn);

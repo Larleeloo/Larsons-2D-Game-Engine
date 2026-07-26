@@ -11,14 +11,21 @@ import java.util.Map;
  */
 public final class PlayerInput {
 
+    /**
+     * Movement intent, held. These are <em>directions</em> and nothing else:
+     * {@link #up} strokes upward while swimming, climbs while flying, and
+     * walks north in a plan-view level — it never jumps. Jumping is
+     * {@link #jump}.
+     */
     public boolean left, right, up, down;
     /** Sprint intent (Shift held): faster while the player has stamina. */
     public boolean sprint;
     /**
-     * Jump key <em>freshly pressed</em> this tick (edge-triggered by the
-     * sender, unlike the level-triggered {@link #up}). Mid-air jumps key off
-     * this so holding the key doesn't burn every air jump at once. Absent on
-     * the wire when false, keeping old messages compatible.
+     * The jump key (Space) <em>freshly pressed</em> this tick — edge-triggered
+     * by the sender, unlike the level-triggered {@link #up}, so holding it
+     * doesn't burn every air jump at once. This is the only thing that
+     * launches a jump, in every level format. Absent on the wire when false,
+     * keeping old messages compatible.
      */
     public boolean jump;
     /** Client-assigned sequence number, echoed back in snapshots. */

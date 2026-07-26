@@ -54,6 +54,7 @@ import com.larsons.engine.net.GameClient;
 import com.larsons.engine.net.NetSession;
 import com.larsons.engine.net.Snapshot;
 import com.larsons.engine.scene.AbstractScene;
+import com.larsons.engine.sim.PerspectiveSpace;
 import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerPhysics;
 import com.larsons.engine.sim.PlayerState;
@@ -107,10 +108,18 @@ import java.util.Map;
  * health/mana/stamina — ride on the simulated player state from there. Their
  * {@link Ultimate} charges with time and damage dealt and fires on [R].
  *
- * <p>Controls: WASD/arrows move, Space jumps (in every perspective — a hop
- * along Z in top-down and isometric levels), P cycles perspective (if
- * enabled), +/- zoom (if enabled), left-click mine/attack, right-click place,
- * 1-5 + wheel hotbar, I inventory, F eat, R ultimate, Esc pause.
+ * <p><b>Perspective (requirement #2).</b> The level's format decides how the
+ * world is drawn <em>and</em> which axis is up in it — see
+ * {@link com.larsons.engine.sim.PerspectiveSpace}. That is what the effects
+ * here read: a burst on a plane spreads across the floor and rises off it
+ * toward the viewer, and a shot with height on it draws above its own shadow,
+ * rather than every effect replaying a side-scroller's screen-space "up".
+ *
+ * <p>Controls: WASD/arrows move — up is a direction (it swims, it climbs, it
+ * walks north), never a jump — Space jumps in every perspective (a hop along
+ * the elevation axis in top-down and isometric levels), P cycles perspective
+ * (if enabled), +/- zoom (if enabled), left-click mine/attack, right-click
+ * place, 1-5 + wheel hotbar, I inventory, F eat, R ultimate, Esc pause.
  */
 public class PlayScene extends AbstractScene {
 
@@ -499,6 +508,10 @@ public class PlayScene extends AbstractScene {
         if (p.perspectiveSwitchingEnabled && input.isKeyJustPressed(KeyEvent.VK_P)) {
             camera.setPerspective(camera.getPerspective().next());
         }
+        // Effects are authored in the space they are drawn in — which axis is
+        // up, and whether height is an axis at all. Re-read every tick so the
+        // [P] toggle above lands on the very next burst.
+        particles.setSpace(PerspectiveSpace.of(camera.getPerspective()));
         if (p.zoomEnabled) {
             if (input.isKeyDown(KeyEvent.VK_EQUALS)) camera.zoom = clampZoom(camera.zoom + dt * 2, p);
             if (input.isKeyDown(KeyEvent.VK_MINUS)) camera.zoom = clampZoom(camera.zoom - dt * 2, p);
@@ -534,10 +547,10 @@ public class PlayScene extends AbstractScene {
                 input.isKeyDown(KeyEvent.VK_S) || input.isKeyDown(KeyEvent.VK_DOWN),
                 ++inputSeq);
         in.sprint = input.isKeyDown(KeyEvent.VK_SHIFT);
-        // Fresh presses drive mid-air jumps (double jump and beyond).
-        in.jump = input.isKeyJustPressed(KeyEvent.VK_W)
-                || input.isKeyJustPressed(KeyEvent.VK_UP)
-                || input.isKeyJustPressed(KeyEvent.VK_SPACE);
+        // Space is the jump key, and the only one: W/Up steer, swim and climb.
+        // A fresh press is what drives mid-air jumps (double jump and beyond),
+        // so holding Space doesn't burn the whole allowance in one tick.
+        in.jump = input.isKeyJustPressed(KeyEvent.VK_SPACE);
         // The server resolves attacks against what this player holds.
         in.selected = inventory.selectedIndex();
         // Relic passives — extra air jumps, speed, slow fall, flight,
@@ -591,7 +604,7 @@ public class PlayScene extends AbstractScene {
             if (p.particlesEnabled) {
                 Snapshot snap = net.client().latest();
                 if (snap != null) {
-                    for (EntityView s : snap.shots()) emitTrail(s.key, s.x, s.y);
+                    for (EntityView s : snap.shots()) emitTrail(s.key, s.x, s.y, s.z);
                 }
                 emitStatusParticles(dt);
             }
@@ -625,7 +638,9 @@ public class PlayScene extends AbstractScene {
                 }
             }
             if (p.particlesEnabled) {
-                for (Projectile pr : world.projectiles()) emitTrail(pr.def.key(), pr.x, pr.y);
+                for (Projectile pr : world.projectiles()) {
+                    emitTrail(pr.def.key(), pr.x, pr.y, pr.z);
+                }
                 emitStatusParticles(dt);
             }
             // The level's programmable stat rules run against this run's stats.
@@ -936,8 +951,7 @@ public class PlayScene extends AbstractScene {
         if (removed <= 0) return;
         DroppedItem drop = world.spawnItem(key, removed, me.x, me.y);
         if (drop != null) {
-            drop.toss(me.facingLeft ? -170 : 170,
-                    level.format().gravity() ? -180 : 0);
+            drop.tossForward(me.facing, level.format().gravity());
             drop.pickupDelay = 1.0; // don't instantly vacuum it back up
         }
         ctx.sfx(Sfx.CLICK);
@@ -1341,10 +1355,16 @@ public class PlayScene extends AbstractScene {
         }
     }
 
-    /** One spark per tick behind projectiles that define a trail colour. */
-    private void emitTrail(String key, double x, double y) {
+    /**
+     * One spark per tick behind projectiles that define a trail colour, shed
+     * at the height the shot is actually at — a meteor's trail hangs in the
+     * air behind it instead of lying on the floor it hasn't reached yet.
+     */
+    private void emitTrail(String key, double x, double y, double z) {
         ProjectileDef def = projectileTypes().get(key);
-        if (def != null && def.trail() != null) particles.burst(x, y, def.trail(), 1);
+        if (def != null && def.trail() != null) {
+            particles.burst(x, y, z, def.trail(), 1, Particles.Style.BURST);
+        }
     }
 
     private ProjectileRegistry projectileTypes() {
@@ -2148,7 +2168,7 @@ public class PlayScene extends AbstractScene {
                         stateKeyFor(m.state.ordinal(), m.hurting()), m.statusBits());
             }
             for (Projectile pr : world.projectiles()) {
-                drawProjectileSprite(g, pr.def.key(), pr.x, pr.y, pr.vx, pr.vy);
+                drawProjectileSprite(g, pr.def.key(), pr.x, pr.y, pr.z, pr.vx, pr.vy);
             }
         } else {
             // Replicated entities interpolate between the two buffered
@@ -2194,7 +2214,7 @@ public class PlayScene extends AbstractScene {
             old = viewsById(from.shots());
             for (EntityView s : to.shots()) {
                 drawProjectileSprite(g, s.key, lerpX(old.get(s.id), s, t),
-                        lerpY(old.get(s.id), s, t), s.vx, s.vy);
+                        lerpY(old.get(s.id), s, t), s.z, s.vx, s.vy);
             }
         }
     }
@@ -2244,17 +2264,32 @@ public class PlayScene extends AbstractScene {
      * A projectile, rotated to its flight direction. Its texture is skinnable
      * like everything else ({@code projectile/<key>} — the drop-in pack or the
      * creative Effects palette); the procedural bolt is the fallback.
+     *
+     * <p>It is drawn where its level's space says it is: a side-scrolling shot
+     * is simply at (x, y), while a plan-view shot with height on it — a meteor
+     * still falling — draws above the floor tile it will hit, over a shrinking
+     * shadow that marks the target, and grows as it rises in a top-down level,
+     * where up points at the viewer.
      */
     private void drawProjectileSprite(Graphics2D g, String key, double x, double y,
-                                      double vx, double vy) {
+                                      double z, double vx, double vy) {
         ProjectileDef def = projectileTypes().get(key);
         if (def == null) return;
         BufferedImage img = Skins.frame("projectile/" + key, animClock);
         if (img == null) img = EntitySprites.projectile(def, 16);
-        int w = Math.max(8, (int) Math.round(def.radius() * 3.5 * camera.zoom));
+        PerspectiveSpace space = PerspectiveSpace.of(camera.getPerspective());
+        int w = Math.max(8, (int) Math.round(def.radius() * 3.5 * camera.zoom
+                * space.heightScale(z, ts())));
         camera.worldToScreen(x, y, corner);
+        int lift = (int) Math.round(z * space.screenLift() * camera.zoom);
+        if (lift > 0) {
+            double shrink = Math.max(0.3, 1 - z / (ts() * 8));
+            int sw = Math.max(3, (int) (w * 0.6 * shrink));
+            g.setColor(new Color(0, 0, 0, (int) (80 * shrink)));
+            g.fillOval(corner[0] - sw / 2, corner[1] - sw / 4, sw, Math.max(2, sw / 2));
+        }
         AffineTransform old = g.getTransform();
-        g.translate(corner[0], corner[1]);
+        g.translate(corner[0], corner[1] - lift);
         if (vx != 0 || vy != 0) g.rotate(Math.atan2(vy, vx));
         g.drawImage(img, -w / 2, -w / 2, w, w, null);
         g.setTransform(old);
@@ -2495,8 +2530,12 @@ public class PlayScene extends AbstractScene {
         g.setColor(Color.WHITE);
         g.setFont(HUD_FONT);
         StringBuilder hud = new StringBuilder();
+        // Naming where up points says which physics this level is running —
+        // the formats differ in more than how they are drawn.
+        PerspectiveSpace space = PerspectiveSpace.of(camera.getPerspective());
         hud.append(profile().name)
-                .append("    |    ").append(camera.getPerspective());
+                .append("    |    ").append(camera.getPerspective())
+                .append(" · up is ").append(space.upLabel());
         if (net != null) {
             Snapshot snap = net.client().latest();
             int online = snap != null ? snap.players().size() : 1;

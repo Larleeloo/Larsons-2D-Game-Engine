@@ -16,6 +16,8 @@ public final class EntityView {
     public final int id;
     public final String key;
     public final double x, y;
+    /** Height over the floor (plan-view formats); 0 for anything on it. */
+    public final double z;
     public final boolean facingLeft;
     public final double health;
     public final int aiState;   // Mob.AIState ordinal (drives hurt/dead tint)
@@ -26,13 +28,15 @@ public final class EntityView {
     /** The compass direction a mob faces, which picks its directional sprite. */
     public final Facing facing;
 
-    private EntityView(int id, String key, double x, double y, boolean facingLeft,
+    private EntityView(int id, String key, double x, double y, double z,
+                       boolean facingLeft,
                        double health, int aiState, int count, double vx, double vy,
                        int status, int rider, Facing facing) {
         this.id = id;
         this.key = key;
         this.x = x;
         this.y = y;
+        this.z = z;
         this.facingLeft = facingLeft;
         this.facing = facing;
         this.health = health;
@@ -50,7 +54,7 @@ public final class EntityView {
         return new EntityView(
                 num(m.get("id"), 0),
                 m.get("k") instanceof String s ? s : "",
-                dbl(m.get("x")), dbl(m.get("y")),
+                dbl(m.get("x")), dbl(m.get("y")), dbl(m.get("z")),
                 facingLeft,
                 dbl(m.get("h")),
                 num(m.get("s"), 0),

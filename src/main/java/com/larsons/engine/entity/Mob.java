@@ -3,6 +3,7 @@ package com.larsons.engine.entity;
 import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.level.Level;
+import com.larsons.engine.sim.PerspectiveSpace;
 import com.larsons.engine.sim.PlayerPhysics;
 import com.larsons.engine.sim.PlayerState;
 import com.larsons.engine.world.Block;
@@ -75,6 +76,7 @@ public final class Mob {
     private static final double LOSE_FACTOR = 1.5;
     private static final double ATTACK_COOLDOWN = 1.0;   // seconds between hits
     private static final double HURT_FLASH = 0.25;       // seconds of hurt tint
+    private static final double KNOCKBACK = 12;          // world px shoved per hit
 
     // Navigation tuning.
     private static final double JUMP_VELOCITY = 430;     // clears ~1.5 tiles
@@ -184,8 +186,27 @@ public final class Mob {
         return bits;
     }
 
-    /** Apply damage with knockback away from (fromX). Returns true if this killed it. */
+    /**
+     * Apply damage with a side-scroller's knockback — shoved along x, away
+     * from {@code fromX}. The shorthand for hits that have no second
+     * coordinate to give.
+     */
     public boolean damage(double amount, double fromX) {
+        return damage(amount, fromX, 0, PerspectiveSpace.SIDE_VIEW);
+    }
+
+    /**
+     * Apply damage with knockback away from (fromX, fromY), shoved along the
+     * axes {@code space} actually gives this mob. A side-scroller can only
+     * shove sideways and pop the mob up the screen; on a plane a hit from the
+     * north knocks it <em>south</em>, along the full vector away from whatever
+     * struck it, because there the screen is the floor and every direction on
+     * it is a direction to be knocked in.
+     *
+     * <p>Returns true if this killed it.
+     */
+    public boolean damage(double amount, double fromX, double fromY,
+                          PerspectiveSpace space) {
         if (dead()) return false;
         if (shielded()) {
             hurtTimer = HURT_FLASH * 0.5; // a clank, not a wound
@@ -193,8 +214,21 @@ public final class Mob {
         }
         health -= amount;
         hurtTimer = HURT_FLASH;
-        if (!def.flying()) vy = -220; // knock up a touch
-        x += (x + def.size() / 2 < fromX ? -12 : 12);
+        double half = def.size() / 2;
+        if (space.hasElevation()) {
+            double dx = x + half - fromX, dy = y + half - fromY;
+            double len = Math.hypot(dx, dy);
+            if (len < 0.001) {
+                dx = 1;
+                dy = 0;
+                len = 1;
+            }
+            x += dx / len * KNOCKBACK;
+            y += dy / len * KNOCKBACK;
+        } else {
+            if (!def.flying()) vy = -220; // knock up a touch
+            x += (x + half < fromX ? -KNOCKBACK : KNOCKBACK);
+        }
         if (health <= 0) {
             health = 0;
             state = AIState.DEAD;

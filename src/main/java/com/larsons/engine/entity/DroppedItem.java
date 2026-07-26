@@ -1,5 +1,6 @@
 package com.larsons.engine.entity;
 
+import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.level.Level;
 
 import java.util.LinkedHashMap;
@@ -16,6 +17,11 @@ public final class DroppedItem {
     private static final double GRAVITY = 1500;
     private static final double BOUNCE = 0.45;   // energy kept per bounce
     private static final double FRICTION = 6.0;  // horizontal damping per second
+
+    /** Speed a thrown stack leaves the player's hands at, world px/sec. */
+    public static final double THROW_SPEED = 170;
+    /** Upward lob added only where gravity can bring the stack back down. */
+    public static final double THROW_LOB = 180;
 
     public final int id;
     public final String key;   // ItemRegistry key
@@ -61,6 +67,23 @@ public final class DroppedItem {
         double speed = Math.hypot(kickX, kickY) * PLANE_KICK_FACTOR;
         double angle = id * GOLDEN_ANGLE;
         return toss(Math.cos(angle) * speed, Math.sin(angle) * speed);
+    }
+
+    /**
+     * Throw this drop out in front of a player facing {@code facing}. A
+     * side-scroller lobs it forward off their back, the way it always has. On
+     * a plane there are eight ways to be facing and no "up" to lob toward, so
+     * the stack skids out along the direction the player is actually looking —
+     * dropping something while walking north used to fling it due east.
+     */
+    public DroppedItem tossForward(Facing facing, boolean gravityOn) {
+        if (gravityOn) {
+            boolean left = facing != null && facing.facingLeft();
+            return toss(left ? -THROW_SPEED : THROW_SPEED, -THROW_LOB);
+        }
+        Facing dir = facing == null ? Facing.SOUTH : facing;
+        double len = Math.max(0.001, Math.hypot(dir.dx(), dir.dy()));
+        return toss(dir.dx() / len * THROW_SPEED, dir.dy() / len * THROW_SPEED);
     }
 
     /** Plan-view scatter keeps part of the arc's energy (no fall to add to it). */

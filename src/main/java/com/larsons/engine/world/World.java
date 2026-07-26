@@ -18,6 +18,7 @@ import com.larsons.engine.entity.Vehicle;
 import com.larsons.engine.entity.VehicleDef;
 import com.larsons.engine.entity.VehicleRegistry;
 import com.larsons.engine.level.Level;
+import com.larsons.engine.sim.PerspectiveSpace;
 import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerState;
 
@@ -53,6 +54,13 @@ public final class World {
 
     /** Soft cap on live mobs, so summoners can't flood the simulation. */
     private static final int MOB_CAP = 80;
+
+    /**
+     * How far above the floor a plan-view sky strike starts. The same distance
+     * a side-scrolling salvo spawns up the screen, so a meteor takes about as
+     * long to arrive in every format.
+     */
+    private static final double SKY_HEIGHT = 280;
 
     public final Level level;
     public final MobRegistry mobTypes;
@@ -303,6 +311,16 @@ public final class World {
         return level.format().gravity();
     }
 
+    /**
+     * The physical space this world simulates in — which axis is up, and so
+     * where "called down from the sky" spawns and which way a fall goes. Read
+     * from the level every time it is asked for, because a door can move play
+     * from a side-scrolling dungeon into a top-down overworld mid-session.
+     */
+    public PerspectiveSpace space() {
+        return PerspectiveSpace.of(level.format());
+    }
+
     /** Remove a mob, dropped item, or vehicle by entity id (creative erase, online too). */
     public boolean removeEntity(int id) {
         return mobs.removeIf(m -> m.id == id) || items.removeIf(i -> i.id == id)
@@ -497,7 +515,7 @@ public final class World {
                         m.y + m.def.size() / 2 - by);
                 if (d > radius + m.def.size() / 2) continue;
                 double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
-                if (m.damage(dmg * falloff, bx)) {
+                if (m.damage(dmg * falloff, bx, by, space())) {
                     if (killed == null) killed = new ArrayList<>();
                     killed.add(m);
                 }
@@ -555,7 +573,7 @@ public final class World {
             // Damage dealt is what fills an ultimate meter fastest, exactly
             // like the shooter it is borrowed from.
             Ultimates.chargeFromDamage(attacker, damage);
-            if (best.damage(damage, px)) {
+            if (best.damage(damage, px, py, space())) {
                 mobs.remove(best);
                 handleMobDeath(best, true, null);
                 killsByPlayers++;
@@ -633,13 +651,8 @@ public final class World {
         // the Scatter Bow fans three arrows.
         if ("meteor_staff".equals(held.key())) {
             Projectile first = null;
-            for (int i = -1; i <= 1; i++) {
-                double sx = aimX + i * 46;
-                double sy = Math.max(8, aimY - 280);
-                double mdx = aimX - sx, mdy = aimY - sy;
-                double mlen = Math.max(0.001, Math.hypot(mdx, mdy));
-                Projectile p = new Projectile(nextEntityId++, def, shooter.id,
-                        sx, sy, mdx / mlen * def.speed(), mdy / mlen * def.speed());
+            for (int i = 0; i < 3; i++) {
+                Projectile p = skyStrike(def, shooter.id, aimX, aimY, i, 3, 46, SKY_HEIGHT);
                 if (held.damage() > 0) p.damage = held.damage();
                 p.damage *= shooter.ultDamageFactor;
                 projectiles.add(p);
@@ -662,6 +675,44 @@ public final class World {
             if (first == null) first = p;
         }
         return first;
+    }
+
+    /**
+     * One shot of a salvo called down onto (aimX, aimY) — the Meteor Staff's
+     * three, the Meteor Volley ultimate's five. Where "down" comes <em>from</em>
+     * is the level format's business, which is the whole point of routing both
+     * callers through here:
+     *
+     * <ul>
+     *   <li><b>Side-scroller</b> — the sky is up the screen. The salvo spawns
+     *       {@code height} above the aim point, fanned along x by
+     *       {@code spacing}, and dives at it. Unchanged.</li>
+     *   <li><b>Top-down / isometric</b> — the screen is the floor, so there is
+     *       no "above" on it. The salvo spawns {@code height} up the elevation
+     *       axis, ringed around the aim point at {@code spacing}, and falls
+     *       onto the tile the caster picked. Previously it spawned a screen's
+     *       worth of pixels <em>north</em> of the target and flew in sideways
+     *       along the ground, which is what a warped side-scrolling sky gets
+     *       you.</li>
+     * </ul>
+     */
+    private Projectile skyStrike(ProjectileDef def, int ownerId,
+                                 double aimX, double aimY,
+                                 int index, int shots, double spacing, double height) {
+        if (space().hasElevation()) {
+            double angle = shots <= 1 ? 0 : index * (Math.PI * 2 / shots);
+            double radius = shots <= 1 ? 0 : spacing;
+            return Projectile.fromSky(nextEntityId++, def, ownerId,
+                    clampX(aimX + Math.cos(angle) * radius, 0),
+                    clampY(aimY + Math.sin(angle) * radius, 0),
+                    aimX, aimY, height);
+        }
+        double sx = aimX + (index - (shots - 1) / 2.0) * spacing;
+        double sy = Math.max(8, aimY - height);
+        double dx = aimX - sx, dy = aimY - sy;
+        double len = Math.max(0.001, Math.hypot(dx, dy));
+        return new Projectile(nextEntityId++, def, ownerId, sx, sy,
+                dx / len * def.speed(), dy / len * def.speed());
     }
 
     /**
@@ -697,11 +748,24 @@ public final class World {
     private void stepProjectiles(double dt, boolean gravityOn,
                                  List<PlayerState> players, GameProfile profile) {
         double playerRadius = profile.playerSize * 0.45;
+        PerspectiveSpace space = space();
         Iterator<Projectile> it = projectiles.iterator();
         while (it.hasNext()) {
             Projectile p = it.next();
-            boolean landed = p.step(level, gravityOn, dt);
+            boolean landed = p.step(level, space, gravityOn, dt);
             boolean mobShot = p.ownerId < 0;
+            // A shot still falling out of the sky is above everyone's head: it
+            // strikes when it reaches the floor (where z is back to 0 and the
+            // usual resolution below runs), not on the way past. Reaching the
+            // end of its life up there fizzles instead.
+            if (p.airborne()) {
+                if (landed) {
+                    impacts.add(new Impact(p.def.key(), p.x, p.y,
+                            p.def.explosionRadius() > 0));
+                    it.remove();
+                }
+                continue;
+            }
 
             if (!p.dead() && !mobShot && profile.combatEnabled && profile.mobsEnabled) {
                 Mob hit = mobAt(p.x, p.y, p.def.radius());
@@ -714,7 +778,7 @@ public final class World {
                         applyElementToMob(p, hit, profile);
                         // Ranged damage charges the shooter's ultimate too.
                         Ultimates.chargeFromDamage(playerById(players, p.ownerId), p.damage);
-                        if (hit.damage(p.damage, p.x - p.vx)) {
+                        if (hit.damage(p.damage, p.x - p.vx, p.y - p.vy, space())) {
                             mobs.remove(hit);
                             handleMobDeath(hit, true, profile);
                             killsByPlayers++;
@@ -979,7 +1043,7 @@ public final class World {
                             m.y + m.def.size() / 2 - cy);
                     if (d > radius + m.def.size() / 2) continue;
                     double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
-                    if (m.damage(22 * falloff, cx)) {
+                    if (m.damage(22 * falloff, cx, cy, space())) {
                         if (died == null) died = new ArrayList<>();
                         died.add(m);
                     }
@@ -1079,15 +1143,11 @@ public final class World {
                 if (def == null) return false;
                 int shots = Math.max(1, (int) Math.round(u.power()));
                 for (int i = 0; i < shots; i++) {
-                    // Fanned around the aim point, launched from outside it so
-                    // they converge — the same pattern in every perspective.
-                    double spread = (i - (shots - 1) / 2.0) * level.tileSize * 1.2;
-                    double sx = aimX + spread;
-                    double sy = aimY - u.radius();
-                    double mdx = aimX - sx, mdy = aimY - sy;
-                    double mlen = Math.max(0.001, Math.hypot(mdx, mdy));
-                    projectiles.add(new Projectile(nextEntityId++, def, p.id, sx, sy,
-                            mdx / mlen * def.speed(), mdy / mlen * def.speed()));
+                    // Fanned around the aim point and launched from outside it
+                    // so they converge on it — a line up the screen in a
+                    // side-scroller, a ring on the floor overhead on a plane.
+                    projectiles.add(skyStrike(def, p.id, aimX, aimY,
+                            i, shots, level.tileSize * 1.2, u.radius()));
                 }
                 impacts.add(new Impact("ultimate_volley", aimX, aimY, false));
             }
@@ -1159,7 +1219,7 @@ public final class World {
                     if (d > u.radius() + m.def.size() / 2) continue;
                     double tick = u.power() * dt;
                     drained += tick;
-                    if (m.damage(tick, cx)) {
+                    if (m.damage(tick, cx, cy, space())) {
                         if (died == null) died = new ArrayList<>();
                         died.add(m);
                     }
@@ -1195,7 +1255,7 @@ public final class World {
                     m.y + m.def.size() / 2 - cy);
             if (d > radius + m.def.size() / 2) continue;
             double falloff = 1.0 - Math.min(1, d / radius) * 0.6;
-            if (m.damage(damage * falloff, cx)) {
+            if (m.damage(damage * falloff, cx, cy, space())) {
                 if (died == null) died = new ArrayList<>();
                 died.add(m);
             }
@@ -1353,7 +1413,7 @@ public final class World {
                 if (hit != null && v.tryRam()) {
                     impacts.add(new Impact("chain", hit.x + hit.def.size() / 2,
                             hit.y + hit.def.size() / 2, false));
-                    if (hit.damage(v.def.contactDamage(), v.x)) {
+                    if (hit.damage(v.def.contactDamage(), v.x, v.y, space())) {
                         mobs.remove(hit);
                         handleMobDeath(hit, profile.itemsEnabled, profile);
                         killsByPlayers++;

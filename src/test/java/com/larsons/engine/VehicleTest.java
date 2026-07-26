@@ -117,8 +117,9 @@ class VehicleTest {
         assertEquals(horse.seatX(p.playerSize), rider.x, 0.001, "rider glued to the saddle");
         assertEquals(horse.seatY(p.playerSize), rider.y, 0.001);
 
-        // Jump: grounded + up launches the horse.
-        PlayerInput jump = new PlayerInput(false, false, true, false, 2);
+        // Jump: grounded + Space launches the horse (up only ever steers).
+        PlayerInput jump = new PlayerInput(false, false, false, false, 2);
+        jump.jump = true;
         world.driveVehicle(horse, rider, jump, p, 1.0 / 60);
         assertTrue(horse.vy < -300, "the horse jumped, vy=" + horse.vy);
 
