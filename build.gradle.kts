@@ -30,6 +30,17 @@ application {
     mainClass = "com.larsons.engine.core.Main"
 }
 
+// IntelliJ starts the Gradle daemon with -Didea.active=true, but the daemon
+// forks a *fresh* JVM for `run` and that fork inherits none of the IDE's
+// markers. Hand the signal down so ShareJar can tell an IDE launch from a
+// player double-clicking a jar (see ShareJar.insideIntelliJ).
+val launchedFromIdea = System.getProperty("idea.active") != null
+        || System.getProperty("idea.version") != null
+
+tasks.named<JavaExec>("run") {
+    if (launchedFromIdea) systemProperty("idea.active", "true")
+}
+
 tasks.test {
     useJUnitPlatform()
 }
