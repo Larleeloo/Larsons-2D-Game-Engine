@@ -33,6 +33,7 @@ import com.larsons.engine.entity.VehicleRegistry;
 import com.larsons.engine.fx.Particles;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.CutscenePainter;
+import com.larsons.engine.graphics.DecorPainter;
 import com.larsons.engine.graphics.EntitySprites;
 import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.ParallaxBackground;
@@ -68,8 +69,6 @@ import com.larsons.engine.ui.ContainerPanel;
 import com.larsons.engine.ui.CraftingPanel;
 import com.larsons.engine.ui.MenuTheme;
 import com.larsons.engine.world.Block;
-import com.larsons.engine.world.Decor;
-import com.larsons.engine.world.DecorRegistry;
 import com.larsons.engine.world.World;
 
 import java.awt.AlphaComposite;
@@ -1701,11 +1700,17 @@ public class PlayScene extends AbstractScene {
             parallax.render(g, camera.x, camera.y, viewportWidth, viewportHeight);
         }
 
-        drawDecorLayer(g, false); // background scenery behind the terrain
-        SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), false, animClock);
+        // A side view's blocks are a wall the background layer hides behind; a
+        // plan view's are the floor it stands on, so there the scenery goes on
+        // after the terrain — otherwise every tree is painted over by the very
+        // tile it was planted on.
+        boolean sceneryBehind = PerspectiveSpace.of(camera.getPerspective())
+                .scenerySitsBehindTerrain();
+        if (sceneryBehind) drawDecorLayer(g, false);
         drawTiles(g);
         drawMiningCracks(g);
         if (p.gridVisible) drawGrid(g); // projects to a diamond lattice in isometric
+        if (!sceneryBehind) drawDecorLayer(g, false);
         drawDoors(g);
         drawWorldEntities(g, p);
         if (mgView != null) MiniGameHud.drawWorld(g, camera, level, mgView, animClock);
@@ -1722,7 +1727,6 @@ public class PlayScene extends AbstractScene {
             CutscenePainter.drawActors(g, camera, cutscenes.active());
         }
         drawDecorLayer(g, true); // foreground scenery covers players
-        SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), true, animClock);
         if (p.particlesEnabled) particles.render(g, camera);
         if (net == null) drawDoorHint(g, p);
         drawVehicleHint(g, p);
@@ -2199,20 +2203,18 @@ public class PlayScene extends AbstractScene {
         return img;
     }
 
-    /** One decoration layer: background behind the terrain, foreground over players. */
+    /**
+     * One scenery layer: the free-standing decorations plus the block details
+     * painted into it. Where it lands relative to the terrain is the level
+     * format's call — behind the blocks in a side view, where they are a wall
+     * standing between the camera and the distance; on top of them in the plan
+     * views, where the same blocks are the floor the scenery is planted on and
+     * "behind" would mean buried. {@code render} asks
+     * {@link PerspectiveSpace#scenerySitsBehindTerrain()} which it is.
+     */
     private void drawDecorLayer(Graphics2D g, boolean foreground) {
-        String kind = foreground ? "decor_fg" : "decor_bg";
-        DecorRegistry registry = DecorRegistry.standard();
-        for (Level.EntitySpawn e : level.entities) {
-            if (!kind.equals(e.kind)) continue;
-            Decor def = registry.get(e.type);
-            if (def == null) continue;
-            BufferedImage img = Skins.frame("decor/" + e.type, animClock);
-            if (img == null) img = EntitySprites.decor(def, 64);
-            int size = Math.max(8, (int) Math.round(def.sizeTiles() * ts() * camera.zoom));
-            camera.worldToScreen(e.x, e.y, corner);
-            g.drawImage(img, corner[0] - size / 2, corner[1] - size, size, size, null);
-        }
+        DecorPainter.draw(g, level, camera, foreground, animClock);
+        SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), foreground, animClock);
     }
 
     /** Painted doors: tinted door shapes anchored at their base. */

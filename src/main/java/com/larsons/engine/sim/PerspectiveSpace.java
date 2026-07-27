@@ -104,6 +104,20 @@ public enum PerspectiveSpace {
      */
     public boolean gravityOnPlane() { return !elevation; }
 
+    /**
+     * Whether background scenery is drawn <em>behind</em> the terrain.
+     *
+     * <p>Only the side view has a behind. Its blocks stand edge-on between the
+     * camera and the distance, so a tree painted into the background layer is
+     * meant to be hidden by the hill in front of it — that is the layer doing
+     * its job. On a plane the very same blocks <em>are</em> the floor, and
+     * behind the floor is under it: scenery drawn there could never be seen at
+     * all, because every tile a decoration is planted on is painted over it.
+     * So the plan views plant background scenery <em>on</em> the floor, and
+     * "background" keeps its other meaning — behind the actors walking about.
+     */
+    public boolean scenerySitsBehindTerrain() { return !elevation; }
+
     /** The pull along whichever axis is down here, px/sec². */
     public double gravity() { return GRAVITY; }
 
