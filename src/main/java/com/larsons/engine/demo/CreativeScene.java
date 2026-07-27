@@ -74,6 +74,7 @@ import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.ContainerPanel;
 import com.larsons.engine.ui.CraftingPanel;
 import com.larsons.engine.ui.MenuTheme;
+import com.larsons.engine.ui.UiText;
 import com.larsons.engine.world.Block;
 import com.larsons.engine.world.Decor;
 import com.larsons.engine.world.DecorRegistry;
@@ -86,6 +87,7 @@ import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Composite;
 import java.awt.Font;
+import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RadialGradientPaint;
 import java.awt.Rectangle;
@@ -2548,16 +2550,16 @@ public class CreativeScene extends AbstractScene {
                 });
         switch (cfg.mode) {
             case CTF -> {
-                dialogForm.addAction("2 teams steal each other's flag "
-                        + "(paint both Flag Bases anywhere)", () -> { });
+                dialogForm.addNote("Two teams steal each other's flag — paint both "
+                        + "Flag Bases anywhere on the level.");
                 dialogForm.addInt("Captures to win", () -> cfg.scoreLimit,
                         v -> cfg.scoreLimit = v, 1, 50, 1);
                 dialogForm.addToggle("PvP (players can fight)", () -> cfg.pvp,
                         v -> cfg.pvp = v);
             }
             case STOCKPILE -> {
-                dialogForm.addAction("Teams race to bank resources at their "
-                        + "Stockpile marker", () -> { });
+                dialogForm.addNote("Teams race to bank resources at their "
+                        + "Stockpile marker.");
                 dialogForm.addInt("Teams", () -> cfg.teams, v -> cfg.teams = v, 2, Team.MAX, 1);
                 dialogForm.addInt("Resources to win", () -> cfg.scoreLimit,
                         v -> cfg.scoreLimit = v, 1, 500, 1);
@@ -2568,23 +2570,21 @@ public class CreativeScene extends AbstractScene {
                 dialogForm.addText("Resource item 3 (key)", () -> mgRes3, v -> mgRes3 = v, 24);
             }
             case BATTLE -> {
-                dialogForm.addAction("Team deathmatch — everyone spawns with "
-                        + "magic weapons and tools", () -> { });
+                dialogForm.addNote("Team deathmatch — everyone spawns with magic "
+                        + "weapons and tools. PvP is always on in Battle.");
                 dialogForm.addInt("Teams", () -> cfg.teams, v -> cfg.teams = v, 2, Team.MAX, 1);
                 dialogForm.addInt("Kills to win", () -> cfg.scoreLimit,
                         v -> cfg.scoreLimit = v, 1, 100, 1);
-                dialogForm.addAction("PvP: always ON in Battle", () -> { });
             }
             case ESCORT -> {
-                dialogForm.addAction("Red escorts the payload along the "
-                        + "waypoint path; Blue stops them", () -> { });
+                dialogForm.addNote("Red escorts the payload along the waypoint "
+                        + "path; Blue stops them.");
                 dialogForm.addInt("Round time (seconds)", () -> cfg.escortTimeSec,
                         v -> cfg.escortTimeSec = v, 30, 1800, 30);
                 dialogForm.addToggle("PvP (players can fight)", () -> cfg.pvp,
                         v -> cfg.pvp = v);
             }
-            default -> dialogForm.addAction(
-                    "No mini game — this plays as a normal level", () -> { });
+            default -> dialogForm.addNote("No mini game — this plays as a normal level.");
         }
         dialogForm.addAction("Done", () -> {
             if (cfg.mode == MiniGameConfig.Mode.STOCKPILE) {
@@ -2640,7 +2640,7 @@ public class CreativeScene extends AbstractScene {
                 v -> brushMix = v);
         Entry sel = selectedEntry();
         String primary = sel != null && "block".equals(sel.kind) ? sel.name : "(palette pick)";
-        dialogForm.addAction("Block 1: " + primary + " (the palette selection)", () -> { });
+        dialogForm.addNote("Block 1 is the palette selection: " + primary + ".");
         dialogForm.addText("Block 2 key (blank = unused)", () -> brushKey2,
                 v -> brushKey2 = v, 24).enabledWhen(() -> brushMix);
         dialogForm.addText("Block 3 key (blank = unused)", () -> brushKey3,
@@ -2970,18 +2970,20 @@ public class CreativeScene extends AbstractScene {
         // say whether it is there yet. Clicking re-scans, for sheets dropped
         // in while the game was running.
         Path packFile = TexturePack.fileFor(key);
-        dialogForm.addAction("Pack file: " + TexturePack.fileNameFor(key)
-                + (packFile != null ? "  ✓ found" : "  (not there yet — click to rescan)"),
+        dialogForm.addAction(TexturePack.fileNameFor(key)
+                + (packFile != null ? "  ✓ found" : "  — rescan"),
                 this::rescanTexturePack).enabledWhen(() -> texUsePack);
         // Where that folder is: blank = beside the jar (share/textures in the
         // IDE), which is what a pack shipped with the game uses.
-        dialogForm.addText("Texture pack folder (blank = beside the jar)",
+        dialogForm.addNote("Leave the pack folder blank to use the one beside "
+                + "the jar. A sheet path points this one object anywhere on disk.");
+        dialogForm.addText("Texture pack folder",
                 () -> profile().texturePackDir,
                 v -> {
                     profile().texturePackDir = v;
                     TexturePack.useDir(v);
                 }, 96);
-        dialogForm.addText("Sheet elsewhere (PNG path)", () -> texSheet, v -> texSheet = v, 96);
+        dialogForm.addText("Sheet elsewhere (PNG)", () -> texSheet, v -> texSheet = v, 96);
         dialogForm.addAction("Browse…", this::browseForSheet);
         dialogForm.addText("Frame width px", () -> texW, v -> texW = v, 4);
         dialogForm.addText("Frame height px", () -> texH, v -> texH = v, 4);
@@ -3107,16 +3109,20 @@ public class CreativeScene extends AbstractScene {
      */
     private void addSoundPackRows(boolean withFolderField) {
         if (withFolderField) {
-            dialogForm.addText("Sound pack folder (blank = beside the jar)",
+            dialogForm.addNote("Leave the pack folder blank to use the one "
+                    + "beside the jar.");
+            dialogForm.addText("Sound pack folder",
                     () -> profile().soundPackDir,
                     v -> {
                         profile().soundPackDir = v;
                         SoundPack.useDir(v);
                     }, 96);
         }
-        dialogForm.addAction("Sound pack folder: " + SoundPack.root()
-                        + (SoundPack.exists() ? "  ✓" : "  (not there yet — click to create)"),
-                this::createSoundPackFolder);
+        // The folder is a path, and paths are long, so where it is wraps as a
+        // note; the buttons under it stay short because they are buttons.
+        dialogForm.addNote("Pack folder: " + SoundPack.root()
+                + (SoundPack.exists() ? "  ✓" : "  (not there yet)"));
+        dialogForm.addAction("Create / refresh the pack folder", this::createSoundPackFolder);
         dialogForm.addAction("Rescan sound pack folder", this::rescanSoundPack);
     }
 
@@ -3133,9 +3139,8 @@ public class CreativeScene extends AbstractScene {
 
     /** The "Pack file: …  ✓ found / not there yet" row for one sound. */
     private void addPackFileRow(String key, java.util.function.BooleanSupplier enabled) {
-        ConfigForm.Option row = dialogForm.addAction("Pack file: " + SoundPack.fileNameFor(key)
-                        + (SoundPack.fileFor(key) != null ? "  ✓ found"
-                        : "  (not there yet — click to rescan)"),
+        ConfigForm.Option row = dialogForm.addAction(SoundPack.fileNameFor(key)
+                        + (SoundPack.fileFor(key) != null ? "  ✓ found" : "  — rescan"),
                 this::rescanSoundPack);
         if (enabled != null) row.enabledWhen(enabled);
     }
@@ -3202,9 +3207,8 @@ public class CreativeScene extends AbstractScene {
             }
         }
         int silent = soundRows.size() - fromPack - fromFile - builtIn;
-        dialogForm.addAction(soundRows.size() + " sounds · " + (fromPack + fromFile)
-                        + " yours · " + builtIn + " built-in · " + silent + " silent",
-                () -> {}).enabledWhen(() -> false);
+        dialogForm.addNote(soundRows.size() + " sounds · " + (fromPack + fromFile)
+                + " yours · " + builtIn + " built-in · " + silent + " silent");
         for (SoundKeys.Entry e : soundRows) {
             String key = e.key();
             String label = e.name() + (e.state().isEmpty() ? "" : " — " + e.state())
@@ -3250,19 +3254,21 @@ public class CreativeScene extends AbstractScene {
      */
     private void buildSoundForm() {
         String key = soundKey;
-        dialogForm.addAction("Sound key: " + key, () -> {}).enabledWhen(() -> false);
+        dialogForm.addNote("Sound key: " + key);
         dialogForm.addToggle("Use sound pack folder", () -> sndUsePack, v -> {
             sndUsePack = v;
             openDialog(Dialog.SOUND);
         });
         addPackFileRow(key, () -> sndUsePack);
-        dialogForm.addText("Sound pack folder (blank = beside the jar)",
+        dialogForm.addNote("Leave the pack folder blank to use the one beside "
+                + "the jar. A file path points this one sound anywhere on disk.");
+        dialogForm.addText("Sound pack folder",
                 () -> profile().soundPackDir,
                 v -> {
                     profile().soundPackDir = v;
                     SoundPack.useDir(v);
                 }, 96);
-        dialogForm.addText("Sound file elsewhere (WAV/MP3 path)",
+        dialogForm.addText("Sound file (WAV/MP3)",
                 () -> sndFile, v -> sndFile = v, 96);
         dialogForm.addAction("Browse…", this::browseForSound);
         dialogForm.addText("Volume (1 = as recorded)", () -> sndVolume, v -> sndVolume = v, 5);
@@ -3446,15 +3452,15 @@ public class CreativeScene extends AbstractScene {
         addSoundPackRows(true);
         // What the sound system is actually doing right now — the quickest
         // answer to "is it even working?" on a machine with no audio device.
-        dialogForm.addAction(Sounds.mixer().isAvailable()
-                        ? "Audio device ready · " + Sounds.mixer().activeVoices()
-                        + " sounds playing · " + SoundLoader.cachedCount() + " loaded"
-                        : "No audio device on this machine — the game runs silent",
-                () -> {}).enabledWhen(() -> false);
-        dialogForm.addAction("Rewrite " + SoundPack.KEYS_FILE
-                + " (lists your custom objects too)", this::refreshSoundKeyList);
-        dialogForm.addAction("Sound Editor… (" + SoundKeys.all().size()
-                + " sounds in this game)", () -> openSoundList(soundCategory));
+        dialogForm.addNote(Sounds.mixer().isAvailable()
+                ? "Audio device ready · " + Sounds.mixer().activeVoices()
+                + " sounds playing · " + SoundLoader.cachedCount() + " loaded"
+                : "No audio device on this machine — the game runs silent.");
+        dialogForm.addAction("Rewrite " + SoundPack.KEYS_FILE, this::refreshSoundKeyList);
+        dialogForm.addNote("That list names every sound the game can make, your "
+                + "custom objects included.");
+        dialogForm.addAction("Sound Editor… (" + SoundKeys.all().size() + " sounds)",
+                () -> openSoundList(soundCategory));
         dialogForm.addAction("Save & close", () -> {
             ctx.applyLiveSettings();
             ctx.save();
@@ -3480,7 +3486,7 @@ public class CreativeScene extends AbstractScene {
         dialogForm.addEnum("Track", names,
                 () -> musicTrack.isBlank() ? names[0] : musicTrack,
                 v -> musicTrack = v.equals(names[0]) ? "" : v);
-        dialogForm.addText("…or a track name of your own", () -> musicTrack,
+        dialogForm.addText("…or your own track name", () -> musicTrack,
                 v -> musicTrack = v, 32);
         String key = musicTrack.isBlank() ? SoundKeys.music("level")
                 : SoundKeys.music(musicTrack.trim());
@@ -3648,7 +3654,8 @@ public class CreativeScene extends AbstractScene {
         dialogForm.addDouble("Speed (× normal)", () -> cCharSpeed,
                 v -> cCharSpeed = v, 0.25, 3.0, 0.05);
         dialogForm.addToggle("Can sprint (Shift)", () -> cCharSprint, v -> cCharSprint = v);
-        dialogForm.addSlider("Mid-air jumps (1 = double jump)", () -> cCharAirJumps,
+        // "Extra" is what the number means: 1 is a double jump, 2 a triple.
+        dialogForm.addSlider("Extra mid-air jumps", () -> cCharAirJumps,
                 v -> cCharAirJumps = v, 0, 4);
         dialogForm.addDouble("Jump height (× normal)", () -> cCharJump,
                 v -> cCharJump = v, 0.25, 3.0, 0.05);
@@ -3666,9 +3673,10 @@ public class CreativeScene extends AbstractScene {
         Ultimate picked = Ultimates.get(Ultimates.keyForChoice(
                 ults[Math.min(cCharUltIndex, ults.length - 1)]));
         if (picked != null) {
-            // Read-only: what the chosen ability actually does, so a creator
-            // isn't picking from names alone.
-            dialogForm.addAction(picked.description(), () -> { }).enabledWhen(() -> false);
+            // What the chosen ability actually does, so a creator isn't picking
+            // from names alone. A note, not a row: it is a sentence, and it
+            // wraps instead of running across the form.
+            dialogForm.addNote(picked.description());
             dialogForm.addToggle("Ultimate switched on", () -> cCharUltEnabled,
                     v -> cCharUltEnabled = v);
         }
@@ -3683,8 +3691,9 @@ public class CreativeScene extends AbstractScene {
     private void buildRosterForm() {
         List<CharacterProfile> all = Characters.all();
         for (CharacterProfile c : all) {
-            String label = c.name + " — " + c.summary();
-            dialogForm.addToggle(label,
+            // The name is the row; its stat line is a note underneath, because
+            // a full stat line on the row would run straight over the toggle.
+            dialogForm.addToggle(c.name,
                     () -> level.characters.contains(c.key),
                     v -> {
                         if (v) {
@@ -3693,6 +3702,7 @@ public class CreativeScene extends AbstractScene {
                             level.characters.remove(c.key);
                         }
                     });
+            dialogForm.addNote(c.summary());
         }
         dialogForm.addAction("Offer every character (clear the roster)", () -> {
             level.characters.clear();
@@ -4406,16 +4416,19 @@ public class CreativeScene extends AbstractScene {
         dialogForm.addInt("Threshold", () -> ruleThreshold,
                 v -> ruleThreshold = v, 1, 1000000, 1);
         // Item keys are typeable, but the "look up" cyclers below browse the
-        // whole catalog so creators don't have to memorize keys.
+        // whole catalog so creators don't have to memorize keys — which is what
+        // the note says, since the fields have no room to say it themselves.
         String[] itemKeys = ruleItemKeyChoices();
-        dialogForm.addText("Reward item key (blank = none)",
+        dialogForm.addNote("Leave an item key blank for none, or browse the "
+                + "catalogue with the \"look up\" row under it.");
+        dialogForm.addText("Reward item key",
                 () -> ruleReward, v -> ruleReward = v, 24);
         dialogForm.addEnum("· look up reward key", itemKeys,
                 () -> keyChoiceShown(itemKeys, ruleReward),
                 v -> { if (!itemKeys[0].equals(v)) ruleReward = v; });
         dialogForm.addInt("Reward count", () -> ruleRewardCount,
                 v -> ruleRewardCount = v, 1, 99, 1);
-        dialogForm.addText("Consume item key (blank = none)",
+        dialogForm.addText("Consume item key",
                 () -> ruleConsume, v -> ruleConsume = v, 24);
         dialogForm.addEnum("· look up consume key", itemKeys,
                 () -> keyChoiceShown(itemKeys, ruleConsume),
@@ -5343,7 +5356,10 @@ public class CreativeScene extends AbstractScene {
                 g.fillRoundRect(6, y, SIDEBAR_W - 12, 20, 6, 6);
             }
             g.setColor(active ? new Color(255, 220, 120) : new Color(180, 180, 195));
-            g.drawString(categoryName(c) + "  (" + palette.get(c).size() + ")", 14, y + 15);
+            g.drawString(UiText.fit(g.getFontMetrics(),
+                            categoryName(c) + "  (" + palette.get(c).size() + ")",
+                            SIDEBAR_W - 26),
+                    14, y + 15);
             y += 22;
         }
 
@@ -5421,16 +5437,28 @@ public class CreativeScene extends AbstractScene {
         g.fillRect(0, viewportHeight - 36, SIDEBAR_W, 36);
         g.setColor(new Color(255, 220, 120));
         g.setFont(HUD_FONT);
-        g.drawString(sel != null ? sel.name + (sel.custom ? " · custom" : "") : "",
+        // Entry names are content — a custom object is named by its creator —
+        // so the name is cut to the sidebar rather than run out over the canvas.
+        g.drawString(UiText.fit(g.getFontMetrics(),
+                        sel != null ? sel.name + (sel.custom ? " · custom" : "") : "",
+                        SIDEBAR_W - 20),
                 10, viewportHeight - 20);
         g.setColor(new Color(150, 150, 165));
         g.setFont(SMALL_FONT);
         g.drawString("right-click icon = texture · Tab category", 10, viewportHeight - 6);
     }
 
+    /** Tooltip geometry: how wide the body wraps and what it insets by. */
+    private static final int TIP_WRAP_W = 320, TIP_PAD = 12, TIP_LINE_H = 15;
+
     /**
      * Hover tooltip beside the sidebar: the hovered palette entry's name plus
      * a description of what it does, so every palette item explains itself.
+     *
+     * <p>The box is sized from the text but bounded by the window — the wrap
+     * width shrinks on a narrow window, the line count is capped to what fits
+     * below the sidebar's top, and the box is nudged back inside if the cursor
+     * is near an edge — so a wordy entry never paints off the screen.
      */
     private void drawPaletteTooltip(Graphics2D g) {
         if (mouseX >= SIDEBAR_W) return;
@@ -5441,18 +5469,24 @@ public class CreativeScene extends AbstractScene {
         String desc = describeEntry(e);
         if (desc == null || desc.isBlank()) return;
 
-        String title = e.name + (e.custom ? "  (custom)" : "");
-        g.setFont(SMALL_FONT);
-        List<String> lines = wrapText(desc, g.getFontMetrics(), 250);
-        int bodyW = 0;
-        for (String line : lines) {
-            bodyW = Math.max(bodyW, g.getFontMetrics().stringWidth(line));
-        }
-        g.setFont(HUD_FONT);
-        int w = Math.max(g.getFontMetrics().stringWidth(title), bodyW) + 24;
-        int h = 30 + lines.size() * 15 + 8;
         int x = SIDEBAR_W + 10;
-        int y = Math.max(44, Math.min(mouseY - 12, viewportHeight - h - 8));
+        int wrapW = Math.min(TIP_WRAP_W, viewportWidth - x - 2 * TIP_PAD - 10);
+        if (wrapW < 80) return; // no room for a tooltip at all
+        int maxLines = Math.max(1, (viewportHeight - 96) / TIP_LINE_H);
+
+        g.setFont(SMALL_FONT);
+        FontMetrics bodyFm = g.getFontMetrics();
+        List<String> lines = UiText.wrap(bodyFm, desc, wrapW, maxLines);
+        int bodyW = 0;
+        for (String line : lines) bodyW = Math.max(bodyW, bodyFm.stringWidth(line));
+
+        g.setFont(HUD_FONT);
+        FontMetrics titleFm = g.getFontMetrics();
+        String title = UiText.fit(titleFm, e.name + (e.custom ? "  (custom)" : ""), wrapW);
+        int w = Math.max(titleFm.stringWidth(title), bodyW) + 2 * TIP_PAD;
+        int h = 30 + lines.size() * TIP_LINE_H + 8;
+        x = Math.min(x, viewportWidth - w - 8);
+        int y = Math.max(8, Math.min(mouseY - 12, viewportHeight - h - 8));
 
         g.setColor(new Color(12, 12, 20, 235));
         g.fillRoundRect(x, y, w, h, 10, 10);
@@ -5460,29 +5494,12 @@ public class CreativeScene extends AbstractScene {
         g.setStroke(new BasicStroke(1f));
         g.drawRoundRect(x, y, w, h, 10, 10);
         g.setColor(new Color(255, 220, 120));
-        g.drawString(title, x + 12, y + 19);
+        g.drawString(title, x + TIP_PAD, y + 19);
         g.setFont(SMALL_FONT);
         g.setColor(new Color(205, 205, 220));
         for (int i = 0; i < lines.size(); i++) {
-            g.drawString(lines.get(i), x + 12, y + 36 + i * 15);
+            g.drawString(lines.get(i), x + TIP_PAD, y + 36 + i * TIP_LINE_H);
         }
-    }
-
-    /** Greedy word wrap of {@code text} to lines at most {@code maxW} px wide. */
-    private static List<String> wrapText(String text, java.awt.FontMetrics fm, int maxW) {
-        List<String> lines = new ArrayList<>();
-        StringBuilder line = new StringBuilder();
-        for (String word : text.split(" ")) {
-            String probe = line.isEmpty() ? word : line + " " + word;
-            if (fm.stringWidth(probe) > maxW && !line.isEmpty()) {
-                lines.add(line.toString());
-                line = new StringBuilder(word);
-            } else {
-                line = new StringBuilder(probe);
-            }
-        }
-        if (!line.isEmpty()) lines.add(line.toString());
-        return lines;
     }
 
     /**
@@ -5532,9 +5549,9 @@ public class CreativeScene extends AbstractScene {
                 };
             }
             case "new" -> {
-                return "Creates your own custom " + e.name.replace("+ New ", "").toLowerCase()
-                        + " — set its properties in a form; it registers live, joins"
-                        + " this palette, and saves with the game type.";
+                return "Build your own " + e.name.replace("+ New ", "").toLowerCase()
+                        + " — set its properties and it joins this palette live,"
+                        + " saved with the game type.";
             }
             case MiniGame.KIND_FLAG -> {
                 return "Capture the Flag marker — this team's flag base. Steal the"
@@ -5565,10 +5582,9 @@ public class CreativeScene extends AbstractScene {
                         + " players across these.";
             }
             case "playerskin" -> {
-                return "Customize the player character: assign a sprite-sheet"
-                        + " animation to each action state (idle, walk, run, jump,"
-                        + " fall, swim) and, if you like, to each of the eight"
-                        + " facings — used in play and play-test alike.";
+                return "Reskin the player: a sprite sheet per action state"
+                        + " (idle, walk, run, jump, fall, swim), and per facing"
+                        + " if you want one.";
             }
             case "character" -> {
                 CharacterProfile c = Characters.get(e.key);
@@ -5576,7 +5592,7 @@ public class CreativeScene extends AbstractScene {
                 Ultimate u = c.ultimate();
                 return "Playable character — " + c.summary()
                         + (u == null ? "." : ".  Ultimate: " + u.description())
-                        + "  Right-click to give it sprite sheets.";
+                        + "  Right-click for sprite sheets.";
             }
             case "roster" -> {
                 return "Picks which characters this level offers when it starts."

@@ -17,6 +17,7 @@ import com.larsons.engine.input.InputManager;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.MenuTheme;
+import com.larsons.engine.ui.UiText;
 
 import javax.swing.JFileChooser;
 import javax.swing.filechooser.FileNameExtensionFilter;
@@ -414,12 +415,6 @@ public class SkinEditorScene extends AbstractScene {
     }
 
     private static String trimTo(Graphics2D g, String s, int maxWidth) {
-        var fm = g.getFontMetrics();
-        if (fm.stringWidth(s) <= maxWidth) return s;
-        String out = s;
-        while (out.length() > 1 && fm.stringWidth(out + "…") > maxWidth) {
-            out = out.substring(0, out.length() - 1);
-        }
-        return out + "…";
+        return UiText.fit(g.getFontMetrics(), s, maxWidth);
     }
 }

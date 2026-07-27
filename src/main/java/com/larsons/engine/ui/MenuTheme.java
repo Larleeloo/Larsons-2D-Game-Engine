@@ -21,6 +21,9 @@ public class MenuTheme {
     public Font titleFont = new Font("SansSerif", Font.BOLD, 48);
     public Font subtitleFont = new Font("SansSerif", Font.PLAIN, 20);
     public Font itemFont = new Font("SansSerif", Font.PLAIN, 26);
+    /** Explanatory copy inside a form ({@code ConfigForm.addNote}) — it wraps,
+     *  so it is set smaller than the rows it explains. */
+    public Font noteFont = new Font("SansSerif", Font.PLAIN, 16);
 
     public int itemSpacing = 54;
     public boolean drawBackground = true;

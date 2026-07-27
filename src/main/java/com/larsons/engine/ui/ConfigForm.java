@@ -29,32 +29,48 @@ import java.util.function.Supplier;
  * {@code GameProfile} (or anything else) in place. Rows can be conditionally
  * disabled (greyed out and skipped) via {@code enabledWhen} — e.g. the zoom
  * range is disabled when zoom itself is off.
+ *
+ * <p>A row is laid out control-first: the control is right-aligned in the
+ * content column, and the label gets whatever is left of the column, shortened
+ * with an ellipsis if it needs to be (see {@link UiText}). Nothing a caller
+ * passes in — a wordy label, a level name in a cycler, a long path typed into a
+ * field — can therefore be drawn over the control next to it or outside the
+ * column.
  */
 public class ConfigForm {
 
     /** What kind of control a row renders as. */
-    public enum Control { TOGGLE, STEPPER, CYCLER, TEXT, ACTION, SLIDER }
+    public enum Control { TOGGLE, STEPPER, CYCLER, TEXT, ACTION, SLIDER, NOTE }
 
     /** Base class for a form row. */
     public abstract static class Option {
         final String label;
         BooleanSupplier enabledWhen;          // null => always enabled
         boolean enabled = true;               // recomputed each frame
+        boolean selectable = true;            // false for rows that only explain
 
         final Rectangle rowBox = new Rectangle();
         final Rectangle decBox = new Rectangle();   // [-] or '<'
         final Rectangle incBox = new Rectangle();   // [+] or '>'
         final Rectangle mainBox = new Rectangle();  // toggle pill / text field / button
+        final Rectangle labelBox = new Rectangle(); // the label as actually drawn
 
         Option(String label) { this.label = label; }
 
         public Option enabledWhen(BooleanSupplier cond) { this.enabledWhen = cond; return this; }
 
         public boolean isEnabled() { return enabled; }
+        /** Whether keyboard/mouse selection can land on this row. */
+        public boolean isSelectable() { return selectable; }
         public String label() { return label; }
 
         /** Row hit box (computed during render). */
         public Rectangle rowBounds() { return rowBox; }
+        /**
+         * Where the label was actually drawn (computed during render) — after
+         * any shortening, so this never reaches into the control's boxes.
+         */
+        public Rectangle labelBounds() { return labelBox; }
         /** Activate hit box: toggle pill / text field / action button (0-size if n/a). */
         public Rectangle mainBounds() { return mainBox; }
         /** Decrement / previous hit box for steppers & cyclers (0-size if n/a). */
@@ -62,7 +78,8 @@ public class ConfigForm {
         /** Increment / next hit box for steppers & cyclers (0-size if n/a). */
         public Rectangle incBounds() { return incBox; }
 
-        abstract Control control();
+        /** Which control this row renders as. */
+        public abstract Control control();
         abstract String valueText();
         void adjust(int dir) {}
         void activate() {}
@@ -77,7 +94,7 @@ public class ConfigForm {
         ToggleOption(String label, BooleanSupplier get, Consumer<Boolean> set) {
             super(label); this.get = get; this.set = set;
         }
-        @Override Control control() { return Control.TOGGLE; }
+        @Override public Control control() { return Control.TOGGLE; }
         @Override String valueText() { return get.getAsBoolean() ? "ON" : "OFF"; }
         @Override void adjust(int dir) { set.accept(!get.getAsBoolean()); }
         @Override void activate() { set.accept(!get.getAsBoolean()); }
@@ -88,7 +105,7 @@ public class ConfigForm {
         IntOption(String label, IntSupplier get, IntConsumer set, int min, int max, int step) {
             super(label); this.get = get; this.set = set; this.min = min; this.max = max; this.step = step;
         }
-        @Override Control control() { return Control.STEPPER; }
+        @Override public Control control() { return Control.STEPPER; }
         @Override String valueText() { return Integer.toString(get.getAsInt()); }
         @Override void adjust(int dir) {
             set.accept(Math.max(min, Math.min(max, get.getAsInt() + dir * step)));
@@ -101,7 +118,7 @@ public class ConfigForm {
         DoubleOption(String label, DoubleSupplier get, DoubleConsumer set, double min, double max, double step) {
             super(label); this.get = get; this.set = set; this.min = min; this.max = max; this.step = step;
         }
-        @Override Control control() { return Control.STEPPER; }
+        @Override public Control control() { return Control.STEPPER; }
         @Override String valueText() {
             double v = Math.round(get.getAsDouble() * 100.0) / 100.0;
             return (v == Math.floor(v)) ? String.format("%.1f", v) : String.valueOf(v);
@@ -119,7 +136,7 @@ public class ConfigForm {
         EnumOption(String label, T[] values, Supplier<T> get, Consumer<T> set) {
             super(label); this.values = values; this.get = get; this.set = set;
         }
-        @Override Control control() { return Control.CYCLER; }
+        @Override public Control control() { return Control.CYCLER; }
         @Override String valueText() { return String.valueOf(get.get()); }
         @Override void adjust(int dir) {
             int idx = 0;
@@ -136,7 +153,7 @@ public class ConfigForm {
         TextOption(String label, Supplier<String> get, Consumer<String> set, int maxLen) {
             super(label); this.get = get; this.set = set; this.maxLen = maxLen;
         }
-        @Override Control control() { return Control.TEXT; }
+        @Override public Control control() { return Control.TEXT; }
         @Override String valueText() { return get.get(); }
         @Override boolean isText() { return true; }
         @Override void typeChars(String s) {
@@ -154,9 +171,21 @@ public class ConfigForm {
     static final class ActionOption extends Option {
         final Runnable action;
         ActionOption(String label, Runnable action) { super(label); this.action = action; }
-        @Override Control control() { return Control.ACTION; }
+        @Override public Control control() { return Control.ACTION; }
         @Override String valueText() { return ""; }
         @Override void activate() { if (action != null) action.run(); }
+    }
+
+    /**
+     * A caption: prose explaining the rows around it — what the ability you just
+     * picked does, what a mini-game mode means. It wraps across the whole
+     * content column at the theme's smaller note font, and the selection skips
+     * over it, because there is nothing on it to activate.
+     */
+    static final class NoteOption extends Option {
+        NoteOption(String text) { super(text); selectable = false; }
+        @Override public Control control() { return Control.NOTE; }
+        @Override String valueText() { return ""; }
     }
 
     /** A draggable horizontal slider over an int range (drag, click, or arrow keys). */
@@ -165,7 +194,7 @@ public class ConfigForm {
         SliderOption(String label, IntSupplier get, IntConsumer set, int min, int max) {
             super(label); this.get = get; this.set = set; this.min = min; this.max = Math.max(min + 1, max);
         }
-        @Override Control control() { return Control.SLIDER; }
+        @Override public Control control() { return Control.SLIDER; }
         @Override String valueText() { return Integer.toString(get.getAsInt()); }
         @Override void adjust(int dir) {
             int step = Math.max(1, (max - min) / 50);
@@ -178,6 +207,21 @@ public class ConfigForm {
             set.accept(min + (int) Math.round(Math.max(0, Math.min(1, t)) * (max - min)));
         }
     }
+
+    /** Clear space kept between a row's label and the control it belongs to. */
+    private static final int LABEL_GAP = 16;
+    /** Space either side of an action button's label. */
+    private static final int BUTTON_PAD = 40;
+    /** Inset of a text field's value from the field's edges. */
+    private static final int FIELD_PAD = 8;
+    /**
+     * How wide a text field may be. It takes whatever room its label leaves,
+     * between these bounds, so a short-labelled field (a path, say) gets more of
+     * the column to show its value in.
+     */
+    private static final int MIN_FIELD_W = 240, MAX_FIELD_W = 380;
+    /** Widest a stepper/cycler value box grows before its text is shortened. */
+    private static final int MAX_VALUE_W = 200;
 
     private final List<Option> options = new ArrayList<>();
     private MenuTheme theme = MenuTheme.defaultTheme();
@@ -225,6 +269,14 @@ public class ConfigForm {
     }
     public Option addAction(String label, Runnable action) {
         return add(new ActionOption(label, action));
+    }
+    /**
+     * Add a caption row: explanatory prose that wraps across the column instead
+     * of being squeezed onto one line. Use this rather than a do-nothing
+     * {@link #addAction} for text that describes rather than does something.
+     */
+    public Option addNote(String text) {
+        return add(new NoteOption(text));
     }
     public Option addSlider(String label, IntSupplier get, IntConsumer set, int min, int max) {
         return add(new SliderOption(label, get, set, min, max));
@@ -286,7 +338,7 @@ public class ConfigForm {
 
         for (int i = 0; i < options.size(); i++) {
             Option o = options.get(i);
-            if (!o.enabled) continue;
+            if (!o.enabled || !o.selectable) continue;
             if (o.rowBox.contains(mx, my)) {
                 selected = i;
                 if (click) {
@@ -307,7 +359,8 @@ public class ConfigForm {
         int n = options.size();
         for (int step = 0; step < n; step++) {
             selected = (selected + dir + n) % n;
-            if (options.get(selected).enabled) { followSelection = true; return; }
+            Option o = options.get(selected);
+            if (o.enabled && o.selectable) { followSelection = true; return; }
         }
     }
 
@@ -349,7 +402,8 @@ public class ConfigForm {
 
     private void ensureSelectedEnabled(int dir) {
         if (selected < 0 || selected >= options.size()) selected = 0;
-        if (!options.get(selected).enabled) move(dir);
+        Option o = options.get(selected);
+        if (!o.enabled || !o.selectable) move(dir);
     }
 
     public void render(Graphics2D g, int viewportW, int viewportH) {
@@ -360,7 +414,11 @@ public class ConfigForm {
         g.setColor(theme.title);
         FontMetrics tfm = g.getFontMetrics();
         int titleY = Math.max(tfm.getAscent() + 24, viewportH / 8);
-        if (title != null) g.drawString(title, contentX, titleY);
+        // Titles carry names the creator chose ("Settings — <level>"), so they
+        // are shortened to the room right of the column rather than run off it.
+        if (title != null) {
+            g.drawString(UiText.fit(tfm, title, viewportW - contentX - 24), contentX, titleY);
+        }
 
         g.setFont(theme.itemFont);
         FontMetrics fm = g.getFontMetrics();
@@ -387,6 +445,7 @@ public class ConfigForm {
             o.decBox.setBounds(0, 0, 0, 0);
             o.incBox.setBounds(0, 0, 0, 0);
             o.mainBox.setBounds(0, 0, 0, 0);
+            o.labelBox.setBounds(0, 0, 0, 0);
 
             if (i < scroll || i >= scroll + visibleCount) continue; // off-screen
 
@@ -398,9 +457,15 @@ public class ConfigForm {
             Color labelColor = !o.enabled ? theme.itemDisabled
                     : (i == selected ? theme.itemSelected : theme.item);
 
-            if (i == selected && o.enabled) {
+            if (i == selected && o.enabled && o.selectable) {
                 g.setColor(new Color(255, 255, 255, 18));
                 g.fillRect(o.rowBox.x, o.rowBox.y, o.rowBox.width, o.rowBox.height);
+            }
+
+            if (o.control() == Control.NOTE) {
+                renderNoteRow(g, o, contentX, contentW, boxTop);
+                g.setFont(theme.itemFont);
+                continue;
             }
 
             if (o.control() == Control.ACTION) {
@@ -408,9 +473,13 @@ public class ConfigForm {
                 continue;
             }
 
+            // The control is placed first so the label knows how much room is
+            // left: a long label is shortened, never drawn over the field.
+            int controlLeft = renderValue(g, fm, o, contentX, contentW, baseY, boxTop, boxH, labelColor);
+            String label = UiText.fit(fm, o.label, controlLeft - LABEL_GAP - contentX);
+            o.labelBox.setBounds(contentX, boxTop, fm.stringWidth(label), boxH);
             g.setColor(labelColor);
-            g.drawString(o.label, contentX, baseY);
-            renderValue(g, fm, o, contentX, contentW, baseY, boxTop, boxH, labelColor);
+            g.drawString(label, contentX, baseY);
         }
 
         drawScrollBar(g, fm, contentX, contentW, startY, viewportH);
@@ -446,23 +515,62 @@ public class ConfigForm {
         g.fillRoundRect(barX, thumbY, barW, thumbH, barW, barW);
     }
 
-    private void renderActionRow(Graphics2D g, FontMetrics fm, Option o,
-                                 int contentX, int contentW, int baseY, int boxTop, int boxH, Color color) {
-        int tw = fm.stringWidth(o.label);
-        int bw = tw + 40;
-        int bx = contentX + (contentW - bw) / 2;
-        o.mainBox.setBounds(bx, boxTop, bw, boxH);
-        g.setColor(color);
-        g.drawRoundRect(bx, boxTop, bw, boxH, 10, 10);
-        g.drawString(o.label, bx + (bw - tw) / 2, baseY);
+    /**
+     * A note row: the caption wrapped across the content column at the theme's
+     * note font, as many lines as the row height holds. Prose is what these
+     * rows carry, so they wrap rather than being cut down to one line — only an
+     * overrun past the last line is ellipsised.
+     */
+    private void renderNoteRow(Graphics2D g, Option o, int contentX, int contentW, int boxTop) {
+        g.setFont(theme.noteFont);
+        FontMetrics nfm = g.getFontMetrics();
+        int lineH = nfm.getHeight();
+        int maxLines = Math.max(1, (rowHeight - 6) / lineH);
+        List<String> lines = UiText.wrap(nfm, o.label, contentW, maxLines);
+        if (lines.isEmpty()) return;
+
+        // Centre the block in the row slot so a one-line note sits level with
+        // the rows above and below it.
+        int blockH = lines.size() * lineH;
+        int y = boxTop + (rowHeight - 6 - blockH) / 2 + nfm.getAscent();
+        int widest = 0;
+        g.setColor(theme.itemDisabled);
+        for (String line : lines) {
+            g.drawString(line, contentX, y);
+            widest = Math.max(widest, nfm.stringWidth(line));
+            y += lineH;
+        }
+        o.labelBox.setBounds(contentX, boxTop, widest, blockH);
     }
 
-    private void renderValue(Graphics2D g, FontMetrics fm, Option o,
-                             int contentX, int contentW, int baseY, int boxTop, int boxH, Color color) {
+    /**
+     * An action row is a centred button. The button never grows past the
+     * content column — a label too wide for it is shortened rather than left to
+     * spill across the screen.
+     */
+    private void renderActionRow(Graphics2D g, FontMetrics fm, Option o,
+                                 int contentX, int contentW, int baseY, int boxTop, int boxH, Color color) {
+        String label = UiText.fit(fm, o.label, contentW - BUTTON_PAD);
+        int tw = fm.stringWidth(label);
+        int bw = tw + BUTTON_PAD;
+        int bx = contentX + (contentW - bw) / 2;
+        o.mainBox.setBounds(bx, boxTop, bw, boxH);
+        o.labelBox.setBounds(bx + (bw - tw) / 2, boxTop, tw, boxH);
+        g.setColor(color);
+        g.drawRoundRect(bx, boxTop, bw, boxH, 10, 10);
+        g.drawString(label, bx + (bw - tw) / 2, baseY);
+    }
+
+    /**
+     * Draw the row's control, right-aligned in the content column, and return
+     * the x of its leftmost box — the point the row's label has to stop before.
+     */
+    private int renderValue(Graphics2D g, FontMetrics fm, Option o,
+                            int contentX, int contentW, int baseY, int boxTop, int boxH, Color color) {
         int rightEdge = contentX + contentW;
         String value = o.valueText();
 
-        switch (o.control()) {
+        return switch (o.control()) {
             case TOGGLE -> {
                 String text = value;
                 int pw = Math.max(64, fm.stringWidth(text) + 28);
@@ -472,6 +580,7 @@ public class ConfigForm {
                 g.setColor(o.enabled ? (on ? theme.accent : theme.itemDisabled) : theme.itemDisabled);
                 g.drawRoundRect(px, boxTop, pw, boxH, boxH, boxH);
                 g.drawString(text, px + (pw - fm.stringWidth(text)) / 2, baseY);
+                yield px;
             }
             case STEPPER, CYCLER -> {
                 boolean cycler = o.control() == Control.CYCLER;
@@ -480,7 +589,11 @@ public class ConfigForm {
                 int boxW = 30;
                 int gap = 10;
                 int incX = rightEdge - boxW;
-                int valW = Math.max(60, fm.stringWidth(value) + 16);
+                // A cycler's values are content too (level names, door labels),
+                // so the value box is capped and its text shortened instead of
+                // being allowed to push the arrows back over the label.
+                String shown = UiText.fit(fm, value, MAX_VALUE_W - 16);
+                int valW = Math.max(60, fm.stringWidth(shown) + 16);
                 int valRight = incX - gap;
                 int valX = valRight - valW;
                 int decX = valX - gap - boxW;
@@ -493,18 +606,24 @@ public class ConfigForm {
                 g.drawString(dec, decX + (boxW - fm.stringWidth(dec)) / 2, baseY);
                 g.drawRoundRect(incX, boxTop, boxW, boxH, 8, 8);
                 g.drawString(inc, incX + (boxW - fm.stringWidth(inc)) / 2, baseY);
-                g.drawString(value, valX + (valW - fm.stringWidth(value)) / 2, baseY);
+                g.drawString(shown, valX + (valW - fm.stringWidth(shown)) / 2, baseY);
+                yield decX;
             }
             case TEXT -> {
-                int fw = 240;
+                int fw = Math.max(MIN_FIELD_W, Math.min(MAX_FIELD_W,
+                        contentW - fm.stringWidth(o.label) - LABEL_GAP));
                 int fx = rightEdge - fw;
                 o.mainBox.setBounds(fx, boxTop, fw, boxH);
                 g.setColor(o.enabled ? theme.item : theme.itemDisabled);
                 g.drawRoundRect(fx, boxTop, fw, boxH, 8, 8);
                 boolean editing = options.get(selected) == o;
-                String shown = value + (editing ? "_" : "");
+                // Show the end of the value: typing appends, so the tail is the
+                // part being worked on. Anything longer is cut at the field's
+                // edge instead of running on across the screen.
+                String shown = UiText.fitTail(fm, value + (editing ? "_" : ""), fw - 2 * FIELD_PAD);
                 g.setColor(o.enabled ? theme.title : theme.itemDisabled);
-                g.drawString(shown, fx + 8, baseY);
+                g.drawString(shown, fx + FIELD_PAD, baseY);
+                yield fx;
             }
             case SLIDER -> {
                 SliderOption s = (SliderOption) o;
@@ -523,9 +642,10 @@ public class ConfigForm {
                 g.fillOval(thumbX - 6, cy - 7, 14, 14);
                 g.setColor(color);
                 g.drawString(value, rightEdge - valW + 8, baseY);
+                yield trackX;
             }
-            default -> { }
-        }
+            default -> rightEdge;
+        };
     }
 
     public int getSelectedIndex() { return selected; }

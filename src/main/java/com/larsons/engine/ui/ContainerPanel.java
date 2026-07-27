@@ -289,7 +289,8 @@ public final class ContainerPanel {
         g.setStroke(new BasicStroke(2f));
         g.drawRoundRect(o[0] - 20, o[1] - 56, gw + 40, gh + 92, 14, 14);
         g.setFont(TITLE_FONT);
-        g.drawString(title, o[0], o[1] - 32);
+        // The title is the block's name, which a creator may have made long.
+        g.drawString(UiText.fit(g.getFontMetrics(), title, gw), o[0], o[1] - 32);
         g.setFont(SMALL_FONT);
         g.setColor(new Color(170, 170, 190));
         g.drawString("Click takes · empty slot / [Q] stashes · [E] close",

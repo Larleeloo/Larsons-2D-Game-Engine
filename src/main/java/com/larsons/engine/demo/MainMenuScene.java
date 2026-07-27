@@ -180,8 +180,10 @@ public class MainMenuScene extends AbstractScene {
         status = "";
         exporting = true;
         exportForm = new ConfigForm("Export Game Type").theme(MenuTheme.dark());
-        exportForm.addToggle("Finalize (levels play-only — recipients can't edit)",
+        exportForm.addToggle("Finalize (recipients can only play)",
                 () -> exportFinalized, v -> exportFinalized = v);
+        exportForm.addNote("A finalized copy plays its levels but cannot be "
+                + "edited, renamed, or re-exported.");
         exportForm.addAction("Export", this::applyExport);
         exportForm.addAction("Cancel", () -> { exporting = false; buildMenu(); });
     }
