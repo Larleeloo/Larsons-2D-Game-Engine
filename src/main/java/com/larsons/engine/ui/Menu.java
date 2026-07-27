@@ -23,8 +23,18 @@ import java.util.List;
  * and a draggable scroll bar down the right edge move the view, keyboard
  * navigation pulls the selection back into view, and off-screen rows are not
  * clickable. A menu that fits shows no bar and is centred as before.
+ *
+ * <p>Titles and items are shortened with an ellipsis when they are wider than
+ * the viewport (see {@link UiText}) — a menu is often titled with a name the
+ * creator typed, so no amount of care over the built-in copy can guarantee the
+ * text fits.
  */
 public class Menu {
+
+    /** Space kept clear either side of the title and subtitle. */
+    private static final int SIDE_MARGIN = 24;
+    /** Space either side of an item, leaving room for the '>' caret and bar. */
+    private static final int ITEM_MARGIN = 48;
     private String title;
     private String subtitle;
     private final List<MenuItem> items = new ArrayList<>();
@@ -40,6 +50,9 @@ public class Menu {
     private int maxScroll;           // items.size() - visibleCount, clamped >= 0
     private final Rectangle scrollTrack = new Rectangle();
     private final Rectangle scrollThumb = new Rectangle();
+    // Where the title and subtitle actually landed, recorded during render.
+    private final Rectangle titleBox = new Rectangle();
+    private final Rectangle subtitleBox = new Rectangle();
     private boolean draggingThumb;
     private int dragGrabOffset;      // cursor offset inside the thumb at grab time
     private boolean followSelection; // bring the selection into view next render
@@ -78,6 +91,12 @@ public class Menu {
 
     /** Scroll-bar thumb hit box (computed during render; 0-size when it fits). */
     public Rectangle scrollThumbBounds() { return scrollThumb; }
+
+    /** Where the title was drawn (computed during render), after any shortening. */
+    public Rectangle titleBounds() { return titleBox; }
+
+    /** Where the subtitle was drawn (0-size when the menu has none). */
+    public Rectangle subtitleBounds() { return subtitleBox; }
 
     public void update(double dt, InputManager input) {
         if (items.isEmpty()) return;
@@ -178,14 +197,13 @@ public class Menu {
         }
 
         // Title + subtitle.
+        int textW = viewportW - 2 * SIDE_MARGIN;
         g.setFont(theme.titleFont);
         g.setColor(theme.title);
-        drawCentered(g, title, viewportW / 2, viewportH / 4);
-        if (subtitle != null) {
-            g.setFont(theme.subtitleFont);
-            g.setColor(theme.item);
-            drawCentered(g, subtitle, viewportW / 2, viewportH / 4 + 42);
-        }
+        drawCentered(g, title, viewportW / 2, viewportH / 4, textW, titleBox);
+        g.setFont(theme.subtitleFont);
+        g.setColor(theme.item);
+        drawCentered(g, subtitle, viewportW / 2, viewportH / 4 + 42, textW, subtitleBox);
 
         // Items — scrolled when they overflow the region below the subtitle.
         g.setFont(theme.itemFont);
@@ -216,7 +234,7 @@ public class Menu {
             it.x = it.y = it.width = it.height = 0;
             if (k < scroll || k >= scroll + visibleCount) continue;
 
-            String label = it.text();
+            String label = UiText.fit(fm, it.text(), viewportW - 2 * ITEM_MARGIN);
             int tw = fm.stringWidth(label);
             int x = viewportW / 2 - tw / 2;
             int y = firstY + (k - scroll) * spacing;
@@ -268,9 +286,17 @@ public class Menu {
         g.fillRoundRect(barX, thumbY, barW, thumbH, barW, barW);
     }
 
-    private void drawCentered(Graphics2D g, String s, int cx, int cy) {
+    /**
+     * Draw {@code s} centred on {@code cx}, shortened to {@code maxW} if it is
+     * wider than that, and record where it landed in {@code box}.
+     */
+    private void drawCentered(Graphics2D g, String s, int cx, int cy, int maxW, Rectangle box) {
+        box.setBounds(0, 0, 0, 0);
         if (s == null) return;
         FontMetrics fm = g.getFontMetrics();
-        g.drawString(s, cx - fm.stringWidth(s) / 2, cy);
+        String shown = UiText.fit(fm, s, maxW);
+        int tw = fm.stringWidth(shown);
+        box.setBounds(cx - tw / 2, cy - fm.getAscent(), tw, fm.getHeight());
+        g.drawString(shown, cx - tw / 2, cy);
     }
 }

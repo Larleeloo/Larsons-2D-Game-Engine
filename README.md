@@ -2326,9 +2326,18 @@ form.addDouble("Max zoom", () -> p.maxZoom, v -> p.maxZoom = v, 0.1, 8.0, 0.1)
 form.addEnum("Format", LevelFormat.values(), () -> LevelFormat.of(p.perspective),
         v -> p.perspective = v.perspective());
 form.addText("Name", () -> p.name, v -> p.name = v, 40);
+form.addNote("Explains the rows around it — wraps, and the selection skips it.");
 form.addAction("Save", () -> store.save(p));
 // in the scene: form.update(dt, input); form.render(g, w, h);
 ```
+
+Rows lay out **control first**: the control is right-aligned in the content
+column and the label gets what's left, shortened with an ellipsis if it has to
+be. So a wordy label, a level name inside a cycler, or a long path typed into a
+field is never drawn over the control beside it, and a text field shows the
+*end* of its value (the part being typed) rather than running off the screen.
+That is a backstop, not a licence to write long labels — put prose in
+`addNote`, which wraps across the column at the theme's smaller note font.
 
 ---
 
@@ -2409,7 +2418,9 @@ be dynamic (e.g. a "Perspective: ISOMETRIC" toggle that updates live). Menus
 with more entries than fit on screen **scroll**: the mouse wheel and a draggable
 scroll bar down the right edge move the view, keyboard navigation keeps the
 selection visible, and a menu that fits shows no bar — so every menu screen
-handles any number of entries.
+handles any number of entries. Titles, subtitles and items are shortened to the
+window when they'd overrun it, which matters because a menu is often titled with
+a name the creator typed.
 
 ### A new scene
 

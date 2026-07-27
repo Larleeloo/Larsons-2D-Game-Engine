@@ -13,6 +13,12 @@ import com.larsons.engine.world.SurfaceDecor;
  * data — so user-created custom blocks/mobs/items describe themselves the
  * same way the built-ins do. Shown as the palette's hover tooltips
  * ({@link CreativeScene}).
+ *
+ * <p>These are tooltips, not documentation, so the phrasing stays clipped:
+ * a description is a lead clause naming what the object <em>is</em> followed
+ * by short clauses for whatever else is true of it. Objects with several
+ * traits (a falling, container, mineable block) would otherwise stack up into
+ * a paragraph beside a 52-pixel icon.
  */
 public final class PaletteInfo {
 
@@ -22,38 +28,35 @@ public final class PaletteInfo {
     public static String describe(Block b) {
         StringBuilder sb = new StringBuilder();
         if (b.liquid()) {
-            sb.append("Liquid — flows, spreads, and can be swum through.");
+            sb.append("Liquid — flows and spreads; swimmable.");
         } else if (b.solid()) {
-            sb.append("Solid block — players and mobs collide with it.");
+            sb.append("Solid — collides with players and mobs.");
         } else {
-            sb.append("Passable — players walk straight through it.");
+            sb.append("Passable — walk straight through it.");
         }
         if (b.emitsLight()) {
-            sb.append(" Emits light in a ").append(trim(b.lightRadius()))
-                    .append("-tile radius.");
+            sb.append(" Casts light ").append(trim(b.lightRadius())).append(" tiles.");
         }
         if (b.damage() > 0) {
-            sb.append(" Hazard: drains ").append(trim(b.damage()))
-                    .append(" health/sec on contact.");
+            sb.append(" Hazard: ").append(trim(b.damage())).append(" health/sec on contact.");
         }
         if (b.falling()) {
-            sb.append(" Falls when nothing solid is underneath (like sand).");
+            sb.append(" Falls when unsupported.");
         }
         if (b.container()) {
-            sb.append(" Stores items — stand next to it and press E in play;"
-                    + " contents save with the level.");
+            sb.append(" Stores items — press E beside it in play.");
         }
         if (b.solid() && !b.liquid()) {
             if (b.hardness() <= 0) {
-                sb.append(" Breaks instantly when mined.");
+                sb.append(" Breaks instantly.");
             } else {
                 sb.append(" Mines in ~").append(trim(b.hardness())).append("s by hand");
-                if (b.tool() != null) sb.append(" (a ").append(b.tool()).append(" is faster)");
+                if (b.tool() != null) sb.append(" (").append(article(b.tool())).append(" is faster)");
                 sb.append('.');
             }
         }
         if (b.drops() != null && !b.drops().isBlank()) {
-            sb.append(" Drops ").append(itemName(b.drops())).append(" when mined.");
+            sb.append(" Drops ").append(itemName(b.drops())).append('.');
         }
         return sb.toString();
     }
@@ -139,14 +142,14 @@ public final class PaletteInfo {
     public static String describe(MobDef d) {
         StringBuilder sb = new StringBuilder();
         switch (d.temperament()) {
-            case HOSTILE -> sb.append("Hostile — chases and attacks players on sight.");
-            case NEUTRAL -> sb.append("Neutral — minds its business, retaliates when hurt.");
+            case HOSTILE -> sb.append("Hostile — chases players on sight.");
+            case NEUTRAL -> sb.append("Neutral — retaliates when hurt.");
             case PASSIVE -> sb.append("Passive — harmless; flees when hurt.");
         }
         sb.append(' ').append(trim(d.maxHealth())).append(" HP");
-        if (d.damage() > 0) sb.append(", deals ").append(trim(d.damage())).append(" damage");
+        if (d.damage() > 0) sb.append(", ").append(trim(d.damage())).append(" damage");
         if (d.flying()) sb.append(", flies");
-        if (d.ranged()) sb.append(", fires ").append(pretty(d.projectile())).append(" from range");
+        if (d.ranged()) sb.append(", fires ").append(pretty(d.projectile())).append(" at range");
         sb.append('.');
         String trick = abilityText(d);
         if (trick != null) sb.append(' ').append(trick);
@@ -170,9 +173,8 @@ public final class PaletteInfo {
 
     /** What this decoration is (purely visual scenery). */
     public static String describe(Decor d) {
-        return "Scenery, about " + trim(d.sizeTiles()) + (d.sizeTiles() == 1
-                ? " tile" : " tiles") + " tall — purely visual, no collision;"
-                + " paints into the background or foreground layer.";
+        return "Scenery ~" + trim(d.sizeTiles()) + (d.sizeTiles() == 1 ? " tile" : " tiles")
+                + " tall — visual only; paints to the background or foreground layer.";
     }
 
     /** What this block-surface detail is and where it can attach. */
@@ -183,8 +185,8 @@ public final class PaletteInfo {
             if (faces.length() > 0) faces.append('/');
             faces.append(f.name().toLowerCase());
         }
-        return "Surface detail — attaches to the " + faces
-                + " face of a block and vanishes with it; purely visual.";
+        return "Surface detail — attaches to a block's " + faces
+                + " face and goes with it; visual only.";
     }
 
     /** "iron_sword" → the registered display name, or a prettified key. */
@@ -196,6 +198,12 @@ public final class PaletteInfo {
     /** "fire_ball" → "fire ball" (a readable fallback for raw keys). */
     private static String pretty(String key) {
         return key == null ? "nothing" : key.replace('_', ' ');
+    }
+
+    /** "axe" → "an axe", "pickaxe" → "a pickaxe". */
+    private static String article(String noun) {
+        if (noun == null || noun.isEmpty()) return "a tool";
+        return ("aeiou".indexOf(Character.toLowerCase(noun.charAt(0))) >= 0 ? "an " : "a ") + noun;
     }
 
     private static String cap(String s) {

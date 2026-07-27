@@ -138,8 +138,10 @@ public final class CraftingPanel {
         g.drawString(title(), x0, y0 + 14);
         g.setFont(SMALL_FONT);
         g.setColor(new Color(170, 170, 190));
-        g.drawString("Click a lit recipe to craft it (consumes the ingredients)"
-                + " · scroll for more · [E]/[Esc] close", x0, y0 + 34);
+        // Crafting consumes the ingredients, which the have/need counts on each
+        // row already show — the hint stays inside the panel instead.
+        g.drawString("Click a lit recipe to craft it · scroll for more · [E]/[Esc] close",
+                x0, y0 + 34);
 
         int listTop = listTop(vh);
         int rows = visibleRows(vh);
@@ -162,9 +164,11 @@ public final class CraftingPanel {
     private void drawHoverTooltip(Graphics2D g, int vw, Inventory inv) {
         if (hoverIdx < 0 || hoverIdx >= recipes.size()) return;
         Recipe r = recipes.get(hoverIdx);
-        String text = recipeText(r);
-        String status = r.canCraft(inv) ? "Click to craft" : "Missing ingredients";
         g.setFont(ROW_FONT);
+        // A many-ingredient recipe of long-named items can read wider than the
+        // window; cut it to what the window holds rather than paint past it.
+        String text = UiText.fit(g.getFontMetrics(), recipeText(r), vw - 48);
+        String status = r.canCraft(inv) ? "Click to craft" : "Missing ingredients";
         int tw = Math.max(g.getFontMetrics().stringWidth(text),
                 g.getFontMetrics().stringWidth(status));
         int tx = Math.max(8, Math.min(vw - tw - 24, hoverX + 16));
@@ -189,6 +193,10 @@ public final class CraftingPanel {
             g.drawRoundRect(x - 6, y, PANEL_W + 12, ROW_H - 6, 8, 8);
         }
 
+        // Ingredients are right-aligned, so the output name gets whatever the
+        // row has left of them — item names are content and can be long.
+        int ix = x + PANEL_W - r.inputs().size() * 74;
+
         // Output icon + name.
         ItemDef out = items.get(r.output());
         drawIcon(g, out, x + 2, y + 4, 26, animClock);
@@ -196,10 +204,9 @@ public final class CraftingPanel {
         g.setColor(can ? Color.WHITE : new Color(150, 150, 165));
         String name = (out != null ? out.name() : r.output())
                 + (r.outputCount() > 1 ? " ×" + r.outputCount() : "");
-        g.drawString(name, x + 34, y + 21);
+        g.drawString(UiText.fit(g.getFontMetrics(), name, ix - (x + 34) - 8), x + 34, y + 21);
 
-        // Ingredients, right-aligned: icon + have/need per stack.
-        int ix = x + PANEL_W - r.inputs().size() * 74;
+        // Ingredients: icon + have/need per stack.
         for (Recipe.Ingredient in : r.inputs()) {
             ItemDef def = items.get(in.key());
             drawIcon(g, def, ix, y + 6, 20, animClock);
