@@ -185,6 +185,13 @@ levels into a folder), exactly like the original engine's features.
 
 > Author: Larson Sonderman
 
+> **Where this is headed:** the engine is a work in progress on the way to a
+> commercial release. **[`STEAM_PLAN.md`](STEAM_PLAN.md)** is the plan of
+> record — an honest inventory of what's built and what isn't, the product
+> strategy (a flagship game with real pixel art and sound, then the creation
+> tool), the launch blockers (packaging, Steamworks, assets, window
+> management), a phased roadmap, and the costs. Read it before planning work.
+
 ---
 
 ## Design goals
@@ -2438,6 +2445,13 @@ engine.scenes().setScene("mine"); // or transitionTo for a fade
 ---
 
 ## Roadmap
+
+The items below are *engine* roadmap items. For the **product** roadmap — the
+path to a Steam release, phased with blockers, costs and risks — see
+**[`STEAM_PLAN.md`](STEAM_PLAN.md)**. Note that the GPU backend below is a
+larger job than it looks: the per-pass GLSL has never been compiled by
+anything, so it is an untested port target rather than ready source
+(see [Appendix A](STEAM_PLAN.md#appendix-a--the-shader-system-precisely)).
 
 - **GPU renderer backend:** an OpenGL (LWJGL) `Renderer` that compiles each
   `ShaderPass.glsl()` into FBO ping-pong passes — the shader library
