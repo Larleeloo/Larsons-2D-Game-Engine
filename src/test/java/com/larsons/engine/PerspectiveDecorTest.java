@@ -2,12 +2,14 @@ package com.larsons.engine;
 
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.DecorPainter;
+import com.larsons.engine.graphics.DepthPass;
 import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.SurfaceDecorPainter;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.sim.PerspectiveSpace;
 import com.larsons.engine.world.SurfaceDecor;
+import com.larsons.engine.world.SurfaceDecorRegistry;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -51,6 +53,12 @@ class PerspectiveDecorTest {
 
     private static final int CANVAS = 320;
     private static final int TILE = 32;
+
+    /** Slack allowed when asking whether a pixel landed on a tile, in pixels. */
+    private static final double EDGE_SLACK = 2.0;
+
+    /** The stand-in an actor is drawn in, in a colour no decoration uses. */
+    private static final Color PLAYER = new Color(255, 0, 255);
 
     @BeforeAll
     static void headless() {
@@ -180,65 +188,185 @@ class PerspectiveDecorTest {
     }
 
     @Test
-    void blockDecorGrowsOutOfItsFaceInEveryPerspective() {
-        for (LevelFormat format : LevelFormat.values()) {
-            for (SurfaceDecor.Face face : SurfaceDecor.Face.values()) {
-                Level lvl = Level.empty("crystals", 30, 30, TILE);
-                lvl.setFormat(format);
-                lvl.setTile(15, 15, lvl.blocks.get("stone").id());
-                lvl.surfaceDecor.add(new SurfaceDecor.Placement(15, 15, face,
-                        "crystal_growth", false, SurfaceDecor.Visibility.ALWAYS));
-
-                Camera cam = camera(lvl);
-                double ax = (15.5 + face.dc * 0.5) * TILE, ay = (15.5 + face.dr * 0.5) * TILE;
-                int[] anchor = project(cam, ax, ay);
-                int[] beyond = project(cam, ax + face.dc * TILE, ay + face.dr * TILE);
-                double outX = beyond[0] - anchor[0], outY = beyond[1] - anchor[1];
-
-                Ink grown = ink(lvl);
-                double reach = ((grown.x() - anchor[0]) * outX + (grown.y() - anchor[1]) * outY)
-                        / Math.hypot(outX, outY);
-                assertTrue(reach > 1, format + " " + face
-                        + ": crystals grow away from the block, not into it (reach "
-                        + reach + ")");
+    void blockDecorSitsOnTheBlockItDecoratesInThePlanViews() {
+        // Seen from above there is no edge to cling to: the block's visible
+        // surface is its top, so every style on every face it allows has to
+        // land on the tile rather than out in the neighbouring cell.
+        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+            for (SurfaceDecor def : SurfaceDecorRegistry.standard().all()) {
+                for (SurfaceDecor.Face face : SurfaceDecor.Face.values()) {
+                    if (!def.allows(face)) continue;
+                    Level lvl = decorated(format, def.key(), face);
+                    Camera cam = camera(lvl);
+                    int onBlock = 0, painted = 0;
+                    for (int[] px : inkPixels(lvl)) {
+                        painted++;
+                        if (onTile(cam, 15, 15, px[0], px[1])) onBlock++;
+                    }
+                    String what = format + " " + def.key() + " on " + face;
+                    assertTrue(painted > 0, what + ": drew nothing at all");
+                    // A blade may lean past a corner — grass does — but the
+                    // detail belongs to the block, so nearly all of it and its
+                    // middle land there. Rooted on the seam and growing into
+                    // the next cell, as the edge-on layout does, neither did.
+                    Ink middle = ink(lvl);
+                    assertTrue(onTile(cam, 15, 15, (int) middle.x(), (int) middle.y()),
+                            what + ": sits on the block, not beside it");
+                    assertTrue(onBlock >= painted * 0.8, what + ": only " + onBlock
+                            + " of " + painted + " pixels landed on the block");
+                }
             }
         }
     }
 
     @Test
-    void aDetailLeansAlongTheProjectedFaceRatherThanDownTheScreen() {
-        // The underside of a block runs down and to the *left* once the
-        // isometric camera has folded the world's axes into the screen, so
-        // what hangs off it must go that way too. Painted down the screen it
-        // used to dangle over the diamond in front instead.
-        Level lvl = Level.empty("moss", 30, 30, TILE);
-        lvl.setFormat(LevelFormat.ISOMETRIC);
-        lvl.setTile(15, 15, lvl.blocks.get("stone").id());
-        lvl.surfaceDecor.add(new SurfaceDecor.Placement(15, 15, SurfaceDecor.Face.DOWN,
-                "hanging_moss", false, SurfaceDecor.Visibility.ALWAYS));
+    void blockDecorStillClingsToTheEdgeOfItsFaceInASideView() {
+        // Edge-on, a face really is the line between two cells, and a detail
+        // straddles it: grass stands above the block it grows on and moss
+        // hangs below the one it clings to. None of that changes.
+        Level grass = decorated(LevelFormat.SIDE_SCROLLER, "grass_tuft",
+                SurfaceDecor.Face.UP);
+        Camera cam = camera(grass);
+        int[] top = project(cam, 15.5 * TILE, 15.0 * TILE);
+        assertTrue(ink(grass).y() < top[1],
+                "a side view's grass stands up off the top of its block");
 
-        Camera cam = camera(lvl);
-        int[] anchor = project(cam, 15.5 * TILE, 16.0 * TILE);
-        Ink moss = ink(lvl);
-        assertTrue(moss.x() < anchor[0] - 4,
-                "isometric moss hangs down-left along the face, x drift "
-                        + (moss.x() - anchor[0]));
-        assertTrue(moss.y() > anchor[1], "…and still downward");
-
-        // The same moss in a side view falls straight down the screen, because
-        // there gravity is in the picture.
-        Level side = Level.empty("moss", 30, 30, TILE);
-        side.setFormat(LevelFormat.SIDE_SCROLLER);
-        side.setTile(15, 15, side.blocks.get("stone").id());
-        side.surfaceDecor.add(new SurfaceDecor.Placement(15, 15, SurfaceDecor.Face.DOWN,
-                "hanging_moss", false, SurfaceDecor.Visibility.ALWAYS));
-        int[] sideAnchor = project(camera(side), 15.5 * TILE, 16.0 * TILE);
-        Ink sideMoss = ink(side);
-        assertTrue(Math.abs(sideMoss.x() - sideAnchor[0]) < 4,
-                "a side view's moss hangs straight down, x drift "
-                        + (sideMoss.x() - sideAnchor[0]));
-        assertTrue(sideMoss.y() > sideAnchor[1] + 4, "…and downward");
+        Level moss = decorated(LevelFormat.SIDE_SCROLLER, "hanging_moss",
+                SurfaceDecor.Face.DOWN);
+        int[] bottom = project(cam, 15.5 * TILE, 16.0 * TILE);
+        assertTrue(ink(moss).y() > bottom[1],
+                "…and its moss hangs down off the underside");
     }
+
+    @Test
+    void heightBecomesALiftUpTheScreenOnAPlane() {
+        // What "up" means on a floor: a standing detail lifts the same way
+        // whichever side of a block it grows on, because it is leaving the
+        // floor rather than the face. A detail lying on the surface has no
+        // such freedom — it runs across the block, so it reverses with the
+        // face it started from.
+        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+            Ink leftUp = liftOff(format, "crystal_growth", SurfaceDecor.Face.LEFT);
+            Ink rightUp = liftOff(format, "crystal_growth", SurfaceDecor.Face.RIGHT);
+            assertTrue(leftUp.y() < 0 && rightUp.y() < 0, format
+                    + ": crystals stand up off the block on either side of it ("
+                    + leftUp.y() + ", " + rightUp.y() + ")");
+
+            Ink leftLay = liftOff(format, "roots", SurfaceDecor.Face.LEFT);
+            Ink rightLay = liftOff(format, "roots", SurfaceDecor.Face.RIGHT);
+            assertTrue(leftLay.x() * rightLay.x() < 0, format
+                    + ": roots creep across the block, away from opposite faces ("
+                    + leftLay.x() + ", " + rightLay.x() + ")");
+        }
+    }
+
+    /** Where a detail's ink sits relative to where the face roots it. */
+    private static Ink liftOff(LevelFormat format, String key, SurfaceDecor.Face face) {
+        Level lvl = decorated(format, key, face);
+        Camera cam = camera(lvl);
+        double lean = 0.2; // FaceFrame.EDGE_LEAN
+        int[] root = project(cam, (15.5 + face.dc * lean) * TILE,
+                (15.5 + face.dr * lean) * TILE);
+        Ink painted = ink(lvl);
+        return new Ink(painted.count(), painted.x() - root[0], painted.y() - root[1]);
+    }
+
+    @Test
+    void crystalsGrowAwayFromTheFaceTheySproutedOnInASideView() {
+        for (SurfaceDecor.Face face : SurfaceDecor.Face.values()) {
+            Level lvl = decorated(LevelFormat.SIDE_SCROLLER, "crystal_growth", face);
+            Camera cam = camera(lvl);
+            double ax = (15.5 + face.dc * 0.5) * TILE, ay = (15.5 + face.dr * 0.5) * TILE;
+            int[] anchor = project(cam, ax, ay);
+            int[] beyond = project(cam, ax + face.dc * TILE, ay + face.dr * TILE);
+            double outX = beyond[0] - anchor[0], outY = beyond[1] - anchor[1];
+
+            Ink grown = ink(lvl);
+            double reach = ((grown.x() - anchor[0]) * outX + (grown.y() - anchor[1]) * outY)
+                    / Math.hypot(outX, outY);
+            assertTrue(reach > 1, face
+                    + ": crystals grow away from the block, not into it (reach "
+                    + reach + ")");
+        }
+    }
+
+    // --- actors among the scenery --------------------------------------------------------
+
+    @Test
+    void aPlayerPassesBehindTheSceneryTheyWalkBehind() {
+        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+            Level lvl = Level.empty("walk", 30, 30, TILE);
+            lvl.setFormat(format);
+            plant(lvl, "decor_bg", "boulder", 15, 15);
+            Camera cam = camera(lvl);
+            int[] feet = project(cam, 15.5 * TILE, 16 * TILE);
+
+            // The same player, drawn over the same pixels, standing a little
+            // north of the boulder and then a little south of it.
+            int hidden = playerPixelsAmongScenery(lvl, cam, feet, feet[1] - 12);
+            int seen = playerPixelsAmongScenery(lvl, cam, feet, feet[1] + 12);
+            assertTrue(seen > 500, format + ": in front of it they are visible, " + seen);
+            assertTrue(hidden < seen / 4, format
+                    + ": behind it the boulder covers them, " + hidden + " vs " + seen);
+        }
+    }
+
+    @Test
+    void aSideScrollersPlayerKeepsItsFixedLayerOrder() {
+        // A side view's layers do not depend on where anyone is standing: the
+        // player is in front of the background scenery full stop, which is
+        // what its pass-through pass preserves.
+        Level lvl = Level.empty("walk", 30, 30, TILE);
+        lvl.setFormat(LevelFormat.SIDE_SCROLLER);
+        plant(lvl, "decor_bg", "boulder", 15, 15);
+        Camera cam = camera(lvl);
+        int[] feet = project(cam, 15.5 * TILE, 16 * TILE);
+
+        assertFalse(DepthPass.of(com.larsons.engine.graphics.Perspective.SIDE_SCROLL)
+                .isSorted(), "the side view draws straight through");
+        assertEquals(playerPixelsAmongScenery(lvl, cam, feet, feet[1] - 12),
+                playerPixelsAmongScenery(lvl, cam, feet, feet[1] + 12),
+                "which side of the boulder they stand on changes nothing");
+    }
+
+    @Test
+    void aDepthPassDrawsBackToFrontAndKeepsTiesInOrder() {
+        StringBuilder order = new StringBuilder();
+        DepthPass sorted = DepthPass.sorted();
+        sorted.at(30, () -> order.append('c'));
+        sorted.at(10, () -> order.append('a'));
+        sorted.at(20, () -> order.append('b'));
+        sorted.at(20, () -> order.append('B')); // same depth, added later
+        assertEquals(0, order.length(), "a sorted pass waits to be flushed");
+        sorted.flush();
+        assertEquals("abBc", order.toString());
+        sorted.flush();
+        assertEquals("abBc", order.toString(), "flushing twice does not redraw");
+
+        StringBuilder now = new StringBuilder();
+        DepthPass immediate = DepthPass.immediate();
+        immediate.at(30, () -> now.append('c'));
+        immediate.at(10, () -> now.append('a'));
+        assertEquals("ca", now.toString(), "a pass-through draws in call order");
+    }
+
+    @Test
+    void depthRunsWithTheWalkInEveryPerspective() {
+        // Everything sharing a pass is ordered on this one number, so it has
+        // to grow as a body walks toward the viewer — south on a plane, and
+        // down the screen in a side view.
+        for (LevelFormat format : LevelFormat.values()) {
+            Level lvl = Level.empty("depth", 30, 30, TILE);
+            lvl.setFormat(format);
+            Camera cam = camera(lvl);
+            int north = cam.worldToScreenY(15.5 * TILE, 14 * TILE);
+            int here = cam.worldToScreenY(15.5 * TILE, 15 * TILE);
+            int south = cam.worldToScreenY(15.5 * TILE, 16 * TILE);
+            assertTrue(north < here && here < south,
+                    format + ": walking south comes toward the viewer");
+        }
+    }
+
 
     @Test
     void blockDecorScalesWithTheProjectedTileNotTheRawTileSize() {
@@ -292,6 +420,93 @@ class PerspectiveDecorTest {
         return lvl;
     }
 
+    /** A level of this format whose one block wears {@code key} on {@code face}. */
+    private static Level decorated(LevelFormat format, String key, SurfaceDecor.Face face) {
+        Level lvl = Level.empty("decorated", 30, 30, TILE);
+        lvl.setFormat(format);
+        lvl.setTile(15, 15, lvl.blocks.get("stone").id());
+        lvl.surfaceDecor.add(new SurfaceDecor.Placement(15, 15, face, key, false,
+                SurfaceDecor.Visibility.ALWAYS));
+        return lvl;
+    }
+
+    /**
+     * Whether a screen pixel lands on the projected tile at (col,row), give or
+     * take a pixel of stroke width and rounding.
+     */
+    private static boolean onTile(Camera cam, int col, int row, int sx, int sy) {
+        double[] xs = new double[4], ys = new double[4];
+        double[][] corners = {{col, row}, {col + 1, row}, {col + 1, row + 1}, {col, row + 1}};
+        double cx = 0, cy = 0;
+        for (int i = 0; i < 4; i++) {
+            int[] pt = project(cam, corners[i][0] * TILE, corners[i][1] * TILE);
+            xs[i] = pt[0];
+            ys[i] = pt[1];
+            cx += xs[i] / 4;
+            cy += ys[i] / 4;
+        }
+        // Grow the quad a couple of pixels so an antialiased edge still counts.
+        for (int i = 0; i < 4; i++) {
+            double dx = xs[i] - cx, dy = ys[i] - cy, len = Math.hypot(dx, dy);
+            if (len > 0) {
+                xs[i] += dx / len * EDGE_SLACK;
+                ys[i] += dy / len * EDGE_SLACK;
+            }
+        }
+        for (int i = 0; i < 4; i++) {
+            int j = (i + 1) % 4;
+            // The projected quad is wound the same way in every perspective,
+            // so every edge must keep the point on the same side.
+            double cross = (xs[j] - xs[i]) * (sy - ys[i]) - (ys[j] - ys[i]) * (sx - xs[i]);
+            if (cross < 0) return false;
+        }
+        return true;
+    }
+
+    /** Pixels the decorations of a level painted, as screen {x, y} pairs. */
+    private static List<int[]> inkPixels(Level lvl) {
+        BufferedImage dressed = paint(lvl, false);
+        BufferedImage plain = paint(bare(lvl), false);
+        List<int[]> pixels = new java.util.ArrayList<>();
+        for (int y = 0; y < CANVAS; y++) {
+            for (int x = 0; x < CANVAS; x++) {
+                if (dressed.getRGB(x, y) != plain.getRGB(x, y)) pixels.add(new int[]{x, y});
+            }
+        }
+        return pixels;
+    }
+
+    /**
+     * How much of a player-sized block of colour survives being drawn among a
+     * level's scenery at {@code depth} — the thing the scenes do when they
+     * hand the player and the trees to the same {@link DepthPass}. The marker
+     * covers the same pixels either way, so only its depth decides.
+     */
+    private static int playerPixelsAmongScenery(Level lvl, Camera cam, int[] feet,
+                                                int depth) {
+        BufferedImage canvas = new BufferedImage(CANVAS, CANVAS, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = canvas.createGraphics();
+        DepthPass standing = DepthPass.of(lvl.perspective);
+        scenery(g, lvl, cam, false, standing);
+        standing.at(depth, () -> {
+            g.setColor(PLAYER);
+            g.fillRect(feet[0] - 14, feet[1] - 28, 28, 28);
+        });
+        standing.flush();
+        g.dispose();
+        return count(canvas, PLAYER, 0);
+    }
+
+    /** The same tiles with none of the decorations. */
+    private static Level bare(Level lvl) {
+        Level plain = Level.empty(lvl.name, lvl.width, lvl.height, lvl.tileSize);
+        plain.perspective = lvl.perspective;
+        for (int r = 0; r < lvl.height; r++) {
+            for (int c = 0; c < lvl.width; c++) plain.setTile(c, r, lvl.tileAt(c, r));
+        }
+        return plain;
+    }
+
     /** The same level holding only its {@code keep}-th decoration. */
     private static Level only(Level lvl, int keep) {
         Level one = Level.empty(lvl.name, lvl.width, lvl.height, lvl.tileSize);
@@ -332,12 +547,8 @@ class PerspectiveDecorTest {
 
     /** {@link #ink} with the layer order forced, to show what the other one does. */
     private static Ink inkWith(Level lvl, boolean sceneryBehind) {
-        Level bare = Level.empty(lvl.name, lvl.width, lvl.height, lvl.tileSize);
-        bare.perspective = lvl.perspective;
-        for (int r = 0; r < lvl.height; r++) {
-            for (int c = 0; c < lvl.width; c++) bare.setTile(c, r, lvl.tileAt(c, r));
-        }
-        BufferedImage dressed = paint(lvl, sceneryBehind), plain = paint(bare, sceneryBehind);
+        BufferedImage dressed = paint(lvl, sceneryBehind);
+        BufferedImage plain = paint(bare(lvl), sceneryBehind);
         long n = 0, sx = 0, sy = 0;
         for (int y = 0; y < CANVAS; y++) {
             for (int x = 0; x < CANVAS; x++) {
@@ -367,9 +578,16 @@ class PerspectiveDecorTest {
     }
 
     private static void scenery(Graphics2D g, Level lvl, Camera cam, boolean foreground) {
-        DecorPainter.draw(g, lvl, cam, foreground, 0.5);
+        DepthPass pass = DepthPass.sorted();
+        scenery(g, lvl, cam, foreground, pass);
+        pass.flush();
+    }
+
+    private static void scenery(Graphics2D g, Level lvl, Camera cam, boolean foreground,
+                                DepthPass into) {
+        DecorPainter.draw(g, lvl, cam, foreground, 0.5, into);
         SurfaceDecorPainter.draw(g, lvl, cam, new int[]{0, 0, lvl.width - 1, lvl.height - 1},
-                foreground, 0.5);
+                foreground, 0.5, into);
     }
 
     /** Opaque tiles, like the scenes' {@code drawTiles} without the trimmings. */

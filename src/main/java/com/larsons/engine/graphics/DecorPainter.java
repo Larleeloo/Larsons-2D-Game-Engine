@@ -7,7 +7,6 @@ import com.larsons.engine.world.DecorRegistry;
 import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -22,13 +21,13 @@ import java.util.List;
  * painter rather than a loop in each scene:
  *
  * <ul>
- *   <li><b>Nearer scenery covers farther scenery.</b> A batch is sorted by how
- *       far down the screen each decoration's <em>feet</em> land, which is the
- *       depth order in every perspective the camera offers: down the screen is
- *       toward the viewer in the side view and in top-down, and it is the
- *       {@code col + row} diagonal once the isometric camera has folded both
- *       world axes into it. Painting in level order instead let whichever tree
- *       happened to be stored last cover the one standing in front of it.</li>
+ *   <li><b>Nearer scenery covers farther scenery.</b> Every decoration is
+ *       handed to a {@link DepthPass} keyed on how far down the screen its
+ *       <em>feet</em> land — the depth order in all three of the camera's
+ *       projections. Painting in level order instead let whichever tree
+ *       happened to be stored last cover the one standing in front of it. On
+ *       a plane that pass is shared with the level's actors, so a player
+ *       walking south past a tree passes behind it and then in front.</li>
  *   <li><b>Off-screen scenery costs nothing.</b> Each decoration is culled
  *       against the viewport by its own projected sprite box, so a generated
  *       overworld with thousands of trees only pays for the ones in view.</li>
@@ -62,18 +61,18 @@ public final class DecorPainter {
     }
 
     /**
-     * Draw one decoration layer of a level.
+     * Draw one decoration layer of a level into {@code into} — its own pass
+     * when the layer stands on its own, or the pass the level's actors share
+     * when a plan view has to decide which of a tree and a player is in front.
      *
      * @param foreground which layer to draw this pass
      * @param animClock  seconds, for animated (sprite-sheet) decoration skins
      */
     public static void draw(Graphics2D g, Level level, Camera camera,
-                            boolean foreground, double animClock) {
-        List<Placed> batch = collect(level, camera, foreground, animClock);
-        if (batch.isEmpty()) return;
-        batch.sort(Comparator.comparingInt(Placed::depth));
-        for (Placed p : batch) {
-            g.drawImage(p.sprite(), p.x(), p.y(), p.size(), p.size(), null);
+                            boolean foreground, double animClock, DepthPass into) {
+        for (Placed p : collect(level, camera, foreground, animClock)) {
+            into.at(p.depth(), () ->
+                    g.drawImage(p.sprite(), p.x(), p.y(), p.size(), p.size(), null));
         }
     }
 
