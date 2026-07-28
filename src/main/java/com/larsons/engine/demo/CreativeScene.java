@@ -36,6 +36,7 @@ import com.larsons.engine.graphics.AssetLoader;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.CutscenePainter;
 import com.larsons.engine.graphics.DecorPainter;
+import com.larsons.engine.graphics.DepthPass;
 import com.larsons.engine.graphics.EntitySprites;
 import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.Perspective;
@@ -4534,12 +4535,22 @@ public class CreativeScene extends AbstractScene {
         // lattice in isometric view — which is exactly where lining blocks
         // up by eye is hardest, so it is worth having there too.
         if (showGrid && !testing) drawGrid(g);
-        if (!sceneryBehind) drawDecorLayer(g, false);
+        // Everything standing on the floor shares one queue on a plane, so
+        // whether the player is in front of a tree or behind it is settled by
+        // where they are standing rather than by a fixed layer order. The side
+        // view's layers are fixed and correct, so its pass draws straight
+        // through in call order.
+        DepthPass standing = DepthPass.of(camera.getPerspective());
+        if (!sceneryBehind) drawDecorLayer(g, false, standing);
         drawWorldBounds(g);
-        drawEntities(g);
+        drawEntities(g, standing);
         drawSpawnMarker(g);
         if (!testing) drawCutsceneMarkers(g);
-        if (testing && testMe != null) drawTestPlayer(g);
+        if (testing && testMe != null) {
+            standing.at(footDepth(testMe.x, testMe.y, profile().playerSize),
+                    () -> drawTestPlayer(g));
+        }
+        standing.flush();
         if (testing && cutsceneDirector != null && cutsceneDirector.active() != null) {
             CutscenePainter.drawActors(g, camera, cutsceneDirector.active());
         }
@@ -4793,12 +4804,30 @@ public class CreativeScene extends AbstractScene {
      * {@link PerspectiveSpace#scenerySitsBehindTerrain()} in {@code render}.
      */
     private void drawDecorLayer(Graphics2D g, boolean foreground) {
-        DecorPainter.draw(g, level, camera, foreground, animClock);
-        SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), foreground, animClock);
+        DepthPass own = DepthPass.sorted();
+        drawDecorLayer(g, foreground, own);
+        own.flush();
+    }
+
+    /** One scenery layer, queued into a pass it shares with something else. */
+    private void drawDecorLayer(Graphics2D g, boolean foreground, DepthPass into) {
+        DecorPainter.draw(g, level, camera, foreground, animClock, into);
+        SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), foreground,
+                animClock, into);
+    }
+
+    /**
+     * The screen row a body standing at this world point puts its feet on —
+     * what everything sharing a {@link DepthPass} is ordered by. {@code x,y}
+     * is a sprite's top-left corner and {@code size} its world extent, the
+     * way the level stores entities.
+     */
+    private int footDepth(double x, double y, double size) {
+        return camera.worldToScreenY(x + size / 2, y + size);
     }
 
     /** Painted mobs/items/doors/markers: level spawns offline, snapshots online. */
-    private void drawEntities(Graphics2D g) {
+    private void drawEntities(Graphics2D g, DepthPass into) {
         MobRegistry mobs = MobRegistry.standard();
         ItemRegistry items = ItemRegistry.standard();
         drawDoors(g);
@@ -4808,23 +4837,31 @@ public class CreativeScene extends AbstractScene {
         }
         if (testing && testWorld != null) {
             for (DroppedItem item : testWorld.items()) {
-                drawItemAt(g, items.get(item.key), item.x, item.y);
+                into.at(footDepth(item.x, item.y, DroppedItem.SIZE), () ->
+                        drawItemAt(g, items.get(item.key), item.x, item.y));
             }
             for (Mob m : testWorld.mobs()) {
-                drawMobAt(g, m.def, m.x, m.y, m.facing, mobStateKey(m));
+                into.at(footDepth(m.x, m.y, m.def.size()), () ->
+                        drawMobAt(g, m.def, m.x, m.y, m.facing, mobStateKey(m)));
             }
             for (Projectile pr : testWorld.projectiles()) {
-                drawProjectileAt(g, pr);
+                into.at(footDepth(pr.x, pr.y, 0), () -> drawProjectileAt(g, pr));
             }
             return;
         }
         if (net != null) {
             Snapshot snap = net.client().latest();
             if (snap != null) {
-                for (EntityView e : snap.items()) drawItemAt(g, items.get(e.key), e.x, e.y);
+                for (EntityView e : snap.items()) {
+                    into.at(footDepth(e.x, e.y, DroppedItem.SIZE), () ->
+                            drawItemAt(g, items.get(e.key), e.x, e.y));
+                }
                 for (EntityView e : snap.mobs()) {
                     MobDef def = mobs.get(e.key);
-                    if (def != null) drawMobAt(g, def, e.x, e.y, e.facing, "idle");
+                    if (def != null) {
+                        into.at(footDepth(e.x, e.y, def.size()), () ->
+                                drawMobAt(g, def, e.x, e.y, e.facing, "idle"));
+                    }
                 }
                 drawNetPlayers(g, snap);
             }
@@ -4836,9 +4873,13 @@ public class CreativeScene extends AbstractScene {
                     MobDef def = mobs.get(e.type);
                     // A painted-but-not-yet-live spawn faces the camera, so
                     // the editor shows the species rather than a profile.
-                    if (def != null) drawMobAt(g, def, e.x, e.y, Facing.SOUTH, "idle");
+                    if (def != null) {
+                        into.at(footDepth(e.x, e.y, def.size()), () ->
+                                drawMobAt(g, def, e.x, e.y, Facing.SOUTH, "idle"));
+                    }
                 }
-                case "item" -> drawItemAt(g, items.get(e.type), e.x, e.y);
+                case "item" -> into.at(footDepth(e.x, e.y, DroppedItem.SIZE), () ->
+                        drawItemAt(g, items.get(e.type), e.x, e.y));
                 default -> { /* doors/decor/markers drawn by their own passes */ }
             }
         }

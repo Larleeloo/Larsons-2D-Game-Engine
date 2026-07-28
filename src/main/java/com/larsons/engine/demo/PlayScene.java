@@ -34,6 +34,7 @@ import com.larsons.engine.fx.Particles;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.CutscenePainter;
 import com.larsons.engine.graphics.DecorPainter;
+import com.larsons.engine.graphics.DepthPass;
 import com.larsons.engine.graphics.EntitySprites;
 import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.ParallaxBackground;
@@ -1710,18 +1711,26 @@ public class PlayScene extends AbstractScene {
         drawTiles(g);
         drawMiningCracks(g);
         if (p.gridVisible) drawGrid(g); // projects to a diamond lattice in isometric
-        if (!sceneryBehind) drawDecorLayer(g, false);
+        // Everything standing on the floor shares one queue on a plane, so
+        // whether the player is in front of a tree or behind it is settled by
+        // where they are standing rather than by a fixed layer order. The side
+        // view's layers are fixed and correct, so its pass draws straight
+        // through in call order.
+        DepthPass standing = DepthPass.of(camera.getPerspective());
+        if (!sceneryBehind) drawDecorLayer(g, false, standing);
         drawDoors(g);
-        drawWorldEntities(g, p);
+        drawWorldEntities(g, p, standing);
         if (mgView != null) MiniGameHud.drawWorld(g, camera, level, mgView, animClock);
-        if (net != null) drawRemotePlayers(g);
+        if (net != null) drawRemotePlayers(g, standing);
         if (mgView != null) {
             MiniGameHud.drawTeamRing(g, camera, me.x + ps() / 2, me.y + ps(),
                     ps(), mgView.teamOf(me.id), camera.zoom);
         }
-        drawPlayer(g, me.x, me.y, me.z, PlayerSprites.directionalFrame(
+        standing.at(footDepth(me.x, me.y), () ->
+                drawPlayer(g, me.x, me.y, me.z, PlayerSprites.directionalFrame(
                         me.characterKey, animState, me.facing, animStateClock,
-                        (int) ps(), character.body), null);
+                        (int) ps(), character.body), null));
+        standing.flush();
         if (swingTime > 0) drawSwing(g);
         if (cutscenes != null && cutscenes.active() != null) {
             CutscenePainter.drawActors(g, camera, cutscenes.active());
@@ -2213,8 +2222,31 @@ public class PlayScene extends AbstractScene {
      * {@link PerspectiveSpace#scenerySitsBehindTerrain()} which it is.
      */
     private void drawDecorLayer(Graphics2D g, boolean foreground) {
-        DecorPainter.draw(g, level, camera, foreground, animClock);
-        SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), foreground, animClock);
+        DepthPass own = DepthPass.sorted();
+        drawDecorLayer(g, foreground, own);
+        own.flush();
+    }
+
+    /** One scenery layer, queued into a pass it shares with something else. */
+    private void drawDecorLayer(Graphics2D g, boolean foreground, DepthPass into) {
+        DecorPainter.draw(g, level, camera, foreground, animClock, into);
+        SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), foreground,
+                animClock, into);
+    }
+
+    /**
+     * The screen row a body standing at this world point puts its feet on —
+     * what everything sharing a {@link DepthPass} is ordered by. {@code x,y}
+     * is a sprite's top-left corner and {@code size} its world extent, the
+     * way the level stores entities.
+     */
+    private int footDepth(double x, double y, double size) {
+        return camera.worldToScreenY(x + size / 2, y + size);
+    }
+
+    /** {@link #footDepth} for a player-sized body. */
+    private int footDepth(double x, double y) {
+        return footDepth(x, y, ps());
     }
 
     /** Painted doors: tinted door shapes anchored at their base. */
@@ -2312,20 +2344,24 @@ public class PlayScene extends AbstractScene {
     }
 
     /** Mobs + items + projectiles + vehicles: the offline world's, or the snapshot's. */
-    private void drawWorldEntities(Graphics2D g, GameProfile p) {
+    private void drawWorldEntities(Graphics2D g, GameProfile p, DepthPass into) {
         if (net == null) {
             for (Vehicle v : world.vehicles()) {
-                drawVehicleSprite(g, v.def, v.x, v.y, v.facingLeft);
+                into.at(footDepth(v.x, v.y, v.def.size()), () ->
+                        drawVehicleSprite(g, v.def, v.x, v.y, v.facingLeft));
             }
             for (DroppedItem item : world.items()) {
-                drawItemSprite(g, item.key, item.x, item.y, item.count);
+                into.at(footDepth(item.x, item.y, DroppedItem.SIZE), () ->
+                        drawItemSprite(g, item.key, item.x, item.y, item.count));
             }
             for (Mob m : world.mobs()) {
-                drawMobSprite(g, m.def, m.x, m.y, m.facing, m.health, m.hurting(),
-                        stateKeyFor(m.state.ordinal(), m.hurting()), m.statusBits());
+                into.at(footDepth(m.x, m.y, m.def.size()), () ->
+                        drawMobSprite(g, m.def, m.x, m.y, m.facing, m.health, m.hurting(),
+                                stateKeyFor(m.state.ordinal(), m.hurting()), m.statusBits()));
             }
             for (Projectile pr : world.projectiles()) {
-                drawProjectileSprite(g, pr.def.key(), pr.x, pr.y, pr.z, pr.vx, pr.vy);
+                into.at(footDepth(pr.x, pr.y, 0), () ->
+                        drawProjectileSprite(g, pr.def.key(), pr.x, pr.y, pr.z, pr.vx, pr.vy));
             }
         } else {
             // Replicated entities interpolate between the two buffered
@@ -2345,33 +2381,41 @@ public class PlayScene extends AbstractScene {
                 if (predictedVehicle != null && v.id == predictedVehicle.id) continue;
                 VehicleDef def = vehicles.get(v.key);
                 if (def != null) {
-                    drawVehicleSprite(g, def, lerpX(old.get(v.id), v, t),
-                            lerpY(old.get(v.id), v, t), v.facingLeft);
+                    double vx = lerpX(old.get(v.id), v, t), vy = lerpY(old.get(v.id), v, t);
+                    into.at(footDepth(vx, vy, def.size()), () ->
+                            drawVehicleSprite(g, def, vx, vy, v.facingLeft));
                 }
             }
             if (predictedVehicle != null) {
-                drawVehicleSprite(g, predictedVehicle.def, predictedVehicle.x,
-                        predictedVehicle.y, predictedVehicle.facingLeft);
+                into.at(footDepth(predictedVehicle.x, predictedVehicle.y,
+                        predictedVehicle.def.size()), () ->
+                        drawVehicleSprite(g, predictedVehicle.def, predictedVehicle.x,
+                                predictedVehicle.y, predictedVehicle.facingLeft));
             }
             old = viewsById(from.items());
             for (EntityView item : to.items()) {
-                drawItemSprite(g, item.key, lerpX(old.get(item.id), item, t),
-                        lerpY(old.get(item.id), item, t), item.count);
+                double ix = lerpX(old.get(item.id), item, t);
+                double iy = lerpY(old.get(item.id), item, t);
+                into.at(footDepth(ix, iy, DroppedItem.SIZE), () ->
+                        drawItemSprite(g, item.key, ix, iy, item.count));
             }
             MobRegistry mobs = MobRegistry.standard();
             old = viewsById(from.mobs());
             for (EntityView mv : to.mobs()) {
                 MobDef def = mobs.get(mv.key);
                 if (def != null) {
-                    drawMobSprite(g, def, lerpX(old.get(mv.id), mv, t),
-                            lerpY(old.get(mv.id), mv, t), mv.facing, mv.health, false,
-                            stateKeyFor(mv.aiState, false), mv.status);
+                    double mx = lerpX(old.get(mv.id), mv, t);
+                    double my = lerpY(old.get(mv.id), mv, t);
+                    into.at(footDepth(mx, my, def.size()), () ->
+                            drawMobSprite(g, def, mx, my, mv.facing, mv.health, false,
+                                    stateKeyFor(mv.aiState, false), mv.status));
                 }
             }
             old = viewsById(from.shots());
             for (EntityView s : to.shots()) {
-                drawProjectileSprite(g, s.key, lerpX(old.get(s.id), s, t),
-                        lerpY(old.get(s.id), s, t), s.z, s.vx, s.vy);
+                double sx = lerpX(old.get(s.id), s, t), sy = lerpY(old.get(s.id), s, t);
+                into.at(footDepth(sx, sy, 0), () ->
+                        drawProjectileSprite(g, s.key, sx, sy, s.z, s.vx, s.vy));
             }
         }
     }
@@ -2589,7 +2633,7 @@ public class PlayScene extends AbstractScene {
      * Draw every other player, interpolated at a fixed delay behind real time
      * between the two buffered snapshots that straddle it.
      */
-    private void drawRemotePlayers(Graphics2D g) {
+    private void drawRemotePlayers(Graphics2D g, DepthPass into) {
         long renderTime = System.nanoTime() - INTERP_DELAY_NANOS;
         Snapshot[] pair = net.client().snapshotPair(renderTime);
         if (pair == null) return;
@@ -2613,7 +2657,7 @@ public class PlayScene extends AbstractScene {
             PlayerSprites.Frame sprite = PlayerSprites.directionalFrame(
                     ps.characterKey, ps.moving ? "walk" : "idle", ps.facing,
                     animClock, (int) size, body);
-            drawPlayer(g, x, y, ps.z, sprite, ps.name);
+            into.at(footDepth(x, y), () -> drawPlayer(g, x, y, ps.z, sprite, ps.name));
         }
     }
 
