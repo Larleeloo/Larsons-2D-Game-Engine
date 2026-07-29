@@ -113,11 +113,13 @@ over in a generic, data-driven form and wired to the same toggles:
   [Texture packs](#texture-packs-drop-in-art).
 - **Stacked blocks (top-down & isometric)** — the plan views build in **two
   layers**, and the stack is their geometry: bare ground is a hole, one layer
-  is a pathway, two is a barrier. A stacked block is drawn standing off its own
-  floor tile and **casts a shadow**, so height is something you can see rather
-  than a colour you have to learn — and it sorts against the players, mobs and
-  scenery around it, so you pass behind the wall to your north and in front of
-  the one to your south. See
+  is a pathway, two is a barrier. Blocks stack by themselves — place one on a
+  cell that already has a block and it goes on top — and a stacked block is
+  drawn standing off its own floor tile, **casting a shadow** in the direction
+  the level's sun is set to, so height is something you can see rather than a
+  colour you have to learn. It sorts against the players, mobs and scenery
+  around it, so you pass behind the wall to your north and in front of the one
+  to your south. See
   [Stacked blocks](#stacked-blocks-the-plan-views-geometry).
 - **Share with friends** — launching from IntelliJ auto-builds a `share/`
   folder with a runnable jar, double-click launch scripts, online-play
@@ -598,12 +600,22 @@ Walking north behind a wall puts the wall in front of you; walking south past
 it puts you in front of the wall — the same rule that already decided whether
 you pass in front of a tree.
 
-Mining takes a stack apart from the top (wall → path → hole) and placing builds
-it back up from the bottom (a hole is floored before anything is stood on it).
-Liquids pool in the stacked layer, so a puddle lies *on* the floor rather than
-eating it. In the editor, **H** (or the sidebar's `Build:` row) switches the
-block brush between building a wall and laying a path, and the cursor preview
-stands up when it is about to build one.
+**Blocks stack by themselves.** Painting (in the editor) or placing (in play)
+drops the block on the floor when the cell is bare and *on top of what is
+already there* when it isn't — so building a wall is painting the same cell
+twice, with no mode to arm first. Mining and erasing take the stack apart from
+the top in the same way: wall → path → hole, one layer per click. Liquids pool
+in the stacked layer, so a puddle lies *on* the floor rather than eating it.
+
+The editor's cursor preview stands at the height the block would land at, so
+hovering a stack outlines the top of it rather than the floor underneath, and
+the mining-crack overlay rises onto the block being chipped.
+
+**The light direction is the level's.** Tools → *Light Direction…* sets the
+sun's bearing, and every stacked block throws its shadow away from it; the
+level redraws live as the slider moves, and the bearing saves with the level
+(`"lightAngle"`). One sun per level, because shadows that disagree stop reading
+as light at all.
 
 **A side-scroller has one layer and is untouched.** Its blocks are drawn
 edge-on, so they already show their own height; solidity comes from the block
@@ -779,7 +791,7 @@ everything the registries know, in categories —
 | Sounds   | the [sound editor](#sound-every-action-state): *Sound Editor…* lists **every place the game makes a noise** (~2,000 of them, custom objects included) with what each currently plays, *Sound Options…* holds the volumes and the fresh-pitch toggle, *Level Music…* picks this level's track, and one entry per family opens the list filtered to it |
 | Cutscenes | the level's scripted cutscenes — paint one to place its trigger marker; *Manage Cutscenes…* (or right-clicking an entry) opens the editor |
 | Mini Game | the *Mini Game Setup…* window plus the objective markers the four team modes are built from: flag bases, stockpile crates, team spawns, escort waypoints |
-| Tools    | player spawn, multiplayer spawn points, eraser, Brush Settings, the Generate button, the Stat Rules editor, the Sound Editor |
+| Tools    | player spawn, multiplayer spawn points, eraser, Brush Settings, the Generate button, **Light Direction…** (where the sun stands, and so which way stacked blocks throw their shadows), the Stat Rules editor, the Sound Editor |
 
 Objects **you** created (via the "+" entries) wear a green corner badge in
 the palette and say "· custom" in the caption, so they're obvious at a
@@ -805,14 +817,13 @@ broken block.
 | Input | Function |
 |-------|----------|
 | Left click / drag | paint the selected entry (grid-snapped for blocks; drag keeps painting) |
-| Right click (canvas) | erase (entities first, then the top of the block stack) |
+| Right click (canvas) | erase — entities first, then **one layer** off the top of the block stack per click |
 | Right click (palette icon) | assign a sprite-sheet texture to that block/item/mob/decoration |
-| Middle click | pick the hovered block into the palette — and how it was built with it |
+| Middle click | pick the hovered block into the palette (the top of the stack) |
 | WASD / arrows | pan the camera |
 | Mouse wheel | zoom (over the canvas) / scroll the palette (over the sidebar) |
 | Tab | next palette category |
 | B | toggle the decoration layer (background / foreground) |
-| H | *(top-down / isometric)* switch the block brush between building a **wall** (stacked) and laying a **path** (floor) — see [stacked blocks](#stacked-blocks-the-plan-views-geometry) |
 | [ / ] | shrink / grow the paint brush (shapes cycle in the sidebar's Brush row) |
 | G | toggle the grid |
 | P | play-test the level in place (terrain restored on exit) |
@@ -895,6 +906,11 @@ setting at all:
 - **A sheet elsewhere** — turn the pack off (or just fill in *Sheet
   elsewhere*, used as the pack's fallback) to point that one object at any
   image on disk.
+
+A **block** picks which of its faces the sheet is for first — *flat* (the one
+sheet a side-scroller draws), *top*, or *side* — so each plan-view face can be
+assigned its own art here, exactly like a mob's action states. A face with no
+sheet of its own falls back to the flat one, then to the built-in colour.
 
 Either way you set frame size, count and fps (0 = static), per action state
 for mobs (idle/walk/attack/hurt); frame settings for a pack texture are
@@ -2467,6 +2483,7 @@ the filesystem. Only `tiles` is required:
   "tileSize": 32,
   "width": 24, "height": 14,
   "background": "#10141e",
+  "lightAngle": 315,
   "palette": ["#785a3c", "#5aa050", "#6e6e78"],
   "spawn": { "x": 64, "y": 96 },
   "tiles": [[0,0,1,...], ...],

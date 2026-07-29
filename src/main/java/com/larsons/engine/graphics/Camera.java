@@ -110,6 +110,19 @@ public class Camera {
         out[1] = (int) Math.round((py - cy) * zoom + viewportHeight / 2.0);
     }
 
+    /**
+     * A world-plane displacement in projected (pre-zoom) screen units — the
+     * projection applied to a direction rather than to a point. A vector on the
+     * floor keeps pointing the same way across the floor when the camera turns
+     * the grid into a diamond, which is what a cast shadow or any other
+     * ground-plane direction needs.
+     */
+    public double[] planarDelta(double dx, double dy) {
+        double[] a = planar(0, 0);
+        double[] b = planar(dx, dy);
+        return new double[]{b[0] - a[0], b[1] - a[1]};
+    }
+
     /** Inverse mapping: screen pixel back to world coordinates. */
     public double[] screenToWorld(int sx, int sy) {
         double[] c = planar(x, y);

@@ -7,6 +7,7 @@ import com.larsons.engine.graphics.TerrainPainter;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelGenerator;
+import com.larsons.engine.level.LevelLoader;
 import com.larsons.engine.world.Block;
 import com.larsons.engine.world.World;
 import org.junit.jupiter.api.BeforeAll;
@@ -221,7 +222,126 @@ class StackedBlockTest {
                 "and you can stand where it spawns you");
     }
 
+    // --- mining feedback --------------------------------------------------------
+
+    /**
+     * The crack overlay has to appear in every projection and on the block
+     * actually being chipped. It used to measure the cell as the gap between
+     * two opposite corners, which is zero in isometric — a diamond's left and
+     * right corners are the other pair — so it drew nothing there at all.
+     */
+    @Test
+    void miningCracksAppearInEveryProjectionAndOnTopOfTheStack() {
+        for (LevelFormat format : LevelFormat.values()) {
+            Level lvl = floored(format);
+            assertTrue(crackPixels(lvl, 15, 15) > 0,
+                    format + ": the crack overlay is drawn");
+        }
+
+        // On a stack they rise with the block they belong to, rather than
+        // staying on the floor beside the wall being mined.
+        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+            Level flat = floored(format);
+            Level wall = floored(format);
+            wall.setUpper(15, 15, wall.blocks.get("stone").id());
+            assertTrue(crackCentreY(wall, 15, 15) < crackCentreY(flat, 15, 15),
+                    format + ": cracks rise onto the stacked block");
+        }
+    }
+
+    // --- the light direction ----------------------------------------------------
+
+    /**
+     * Where the sun stands is the level's to say, and turning it turns every
+     * shadow with it — the point of the setting being that a creator can see
+     * the change rather than take it on trust.
+     */
+    @Test
+    void turningTheSunTurnsTheShadows() {
+        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+            Level northWest = floored(format);
+            northWest.setUpper(15, 15, northWest.blocks.get("stone").id());
+            assertEquals(Level.DEFAULT_LIGHT_ANGLE, northWest.lightAngle);
+
+            Level northEast = floored(format);
+            northEast.setUpper(15, 15, northEast.blocks.get("stone").id());
+            northEast.lightAngle = 45;   // sun swung to the other shoulder
+
+            double[] a = shadowCentre(northWest, 15, 15);
+            double[] b = shadowCentre(northEast, 15, 15);
+            assertTrue(Math.hypot(a[0] - b[0], a[1] - b[1]) > 2, format
+                    + ": the shadow moved with the sun (" + a[0] + "," + a[1]
+                    + " vs " + b[0] + "," + b[1] + ")");
+            // North-west light throws the shadow east; north-east throws it west.
+            assertTrue(a[0] > b[0], format + ": and it swung the right way");
+        }
+    }
+
+    /** The bearing survives a save, because it is a look the level owns. */
+    @Test
+    void theLightDirectionIsSavedWithTheLevel() {
+        Level lvl = LevelFormat.ISOMETRIC.starterLevel("Sun", 20, 12, 32);
+        lvl.lightAngle = 120;
+        assertEquals(120.0, LevelLoader.parse(lvl.toJson()).lightAngle);
+        // A level that never moved its sun says nothing and loads the default.
+        Level plain = LevelFormat.ISOMETRIC.starterLevel("Plain", 20, 12, 32);
+        assertFalse(plain.toJson().contains("lightAngle"));
+        assertEquals(Level.DEFAULT_LIGHT_ANGLE, LevelLoader.parse(plain.toJson()).lightAngle);
+    }
+
     // --- helpers ----------------------------------------------------------------
+
+    /** How many pixels the crack overlay paints over the bare terrain. */
+    private static int crackPixels(Level lvl, int col, int row) {
+        return crackInk(lvl, col, row).size();
+    }
+
+    /** The mean screen row of the crack overlay's pixels. */
+    private static double crackCentreY(Level lvl, int col, int row) {
+        List<int[]> ink = crackInk(lvl, col, row);
+        return ink.stream().mapToInt(p -> p[1]).average().orElse(0);
+    }
+
+    /** The pixels the crack overlay adds to a frame, as {x, y} pairs. */
+    private static List<int[]> crackInk(Level lvl, int col, int row) {
+        BufferedImage plain = paint(lvl);
+        BufferedImage cracked = paint(lvl);
+        Graphics2D g = cracked.createGraphics();
+        TerrainPainter.drawMiningCracks(g, camera(lvl), lvl, col, row, 0.9);
+        g.dispose();
+        return differing(plain, cracked);
+    }
+
+    /** The mean position of the shadow a stacked block casts. */
+    private static double[] shadowCentre(Level lvl, int col, int row) {
+        int stacked = lvl.upperAt(col, row);
+        BufferedImage with = paint(lvl);
+        lvl.setUpper(col, row, 0);
+        BufferedImage without = paint(lvl);
+        lvl.setUpper(col, row, stacked);
+        // Below the block's own tile: only its shadow reaches down there, so
+        // the block and its side faces can't drag the answer around.
+        int[] base = project(camera(lvl), (col + 0.5) * TILE, (row + 1.0) * TILE);
+        long n = 0, sx = 0, sy = 0;
+        for (int[] px : differing(with, without)) {
+            if (px[1] <= base[1]) continue;
+            n++;
+            sx += px[0];
+            sy += px[1];
+        }
+        return n == 0 ? new double[]{0, 0} : new double[]{sx / (double) n, sy / (double) n};
+    }
+
+    /** Pixels where two frames disagree, as {x, y} pairs. */
+    private static List<int[]> differing(BufferedImage a, BufferedImage b) {
+        List<int[]> out = new java.util.ArrayList<>();
+        for (int y = 0; y < CANVAS; y++) {
+            for (int x = 0; x < CANVAS; x++) {
+                if (a.getRGB(x, y) != b.getRGB(x, y)) out.add(new int[]{x, y});
+            }
+        }
+        return out;
+    }
 
     /** A level of this format, floored everywhere so there are no holes in it. */
     private static Level floored(LevelFormat format) {

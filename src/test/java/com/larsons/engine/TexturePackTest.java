@@ -306,16 +306,30 @@ class TexturePackTest {
                 "and the side still falls back to the flat sheet");
     }
 
-    /** A block may declare it has neither plan-view face, and still draw. */
+    /**
+     * The face flags are a <em>declaration</em>, not a gate. They say which
+     * sheets a creator means to draw — the key list asks for those and the
+     * creation form names them — but the face keys exist either way, so a
+     * sheet assigned to one later still renders. A face with no sheet falls
+     * back to the block's flat one at lookup time instead.
+     */
     @Test
-    void aBlockCanDeclareItHasNeitherPlanViewFace() {
+    void theFaceFlagsDeclareWhatToDrawWithoutGatingTheKeys() {
         Block plain = new Block(9001, "plain", "Plain", Color.GRAY, true, 0, null,
                 null, false, 0, 1, null, false, false, false);
-        assertEquals(plain.textureKey(), plain.topTextureKey());
-        assertEquals(plain.textureKey(), plain.sideTextureKey());
+        assertFalse(plain.topTexture() || plain.sideTexture());
+        assertEquals("block/plain/top", plain.topTextureKey());
+        assertEquals("block/plain/side", plain.sideTextureKey());
+        assertEquals("block/plain", plain.textureKey());
+
+        // Declaring none keeps the block out of the pack's face listing…
+        assertFalse(TextureKeys.all().stream()
+                .anyMatch(e -> e.key().equals(plain.topTextureKey())));
+        // …but its face still resolves to the flat sheet's file.
+        assertTrue(TextureKeys.paths(plain.topTextureKey()).contains("blocks/plain"));
 
         Block topOnly = plain.withFaceTextures(true, false);
-        assertEquals("block/plain/top", topOnly.topTextureKey());
-        assertEquals("block/plain", topOnly.sideTextureKey());
+        assertTrue(topOnly.topTexture());
+        assertFalse(topOnly.sideTexture());
     }
 }

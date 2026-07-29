@@ -74,6 +74,23 @@ public class Level {
      * Set in creative mode's sound editor and saved with the level.
      */
     public String music = "";
+    /**
+     * Where the sun stands over a plan-view level, as a compass bearing in
+     * degrees clockwise from north — so {@code 315} (the default) is the
+     * north-west shoulder, and the shadows stacked blocks cast fall away from
+     * it to the south-east.
+     *
+     * <p>It is the level's, not the engine's, because it is a look: a town at
+     * noon and a canyon in late afternoon want their shadows thrown different
+     * ways, and every stacked block in the level agrees on one answer or the
+     * scene stops reading as lit at all. Set in creative mode and saved with
+     * the level; a side-scroller carries it harmlessly and ignores it.
+     */
+    public double lightAngle = DEFAULT_LIGHT_ANGLE;
+
+    /** The sun's default bearing: over the north-west shoulder. */
+    public static final double DEFAULT_LIGHT_ANGLE = 315;
+
     public int tileSize = 32;
     public int width;          // in tiles
     public int height;         // in tiles
@@ -750,6 +767,7 @@ public class Level {
         m.put("format", format().id());
         m.put("perspective", perspective.name());
         if (music != null && !music.isBlank()) m.put("music", music);
+        if (lightAngle != DEFAULT_LIGHT_ANGLE) m.put("lightAngle", lightAngle);
         m.put("tileSize", tileSize);
         m.put("width", width);
         m.put("height", height);

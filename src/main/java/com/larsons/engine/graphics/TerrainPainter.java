@@ -71,6 +71,56 @@ public final class TerrainPainter {
                 * PerspectiveSpace.of(camera.getPerspective()).screenLift());
     }
 
+    /**
+     * The crack overlay on the block being held-mined at (col,row), spreading
+     * with {@code progress} in [0,1].
+     *
+     * <p>Drawn from the block's <em>projected quad</em> rather than from its
+     * world size, for two reasons. A tile's opposite corners land on the same
+     * screen column in isometric — the diamond's left and right corners are the
+     * other pair — so measuring the cell as the gap between them gave a width
+     * of zero there and drew nothing at all. And the block under the tool is
+     * the top of the stack, which stands above its own floor tile, so the
+     * cracks have to rise with it or they appear on the floor beside the wall
+     * being mined.
+     */
+    public static void drawMiningCracks(Graphics2D g, Camera camera, Level level,
+                                        int col, int row, double progress) {
+        if (progress <= 0.01) return;
+        int tileSize = level.tileSize;
+        int[] xs = new int[4], ys = new int[4], corner = new int[2];
+        double wx = col * (double) tileSize, wy = row * (double) tileSize;
+        double[][] cs = {{wx, wy}, {wx + tileSize, wy},
+                {wx + tileSize, wy + tileSize}, {wx, wy + tileSize}};
+        int lift = level.upperAt(col, row) > 0 ? liftPixels(camera, tileSize) : 0;
+        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
+        long sumX = 0, sumY = 0;
+        for (int i = 0; i < 4; i++) {
+            camera.worldToScreen(cs[i][0], cs[i][1], corner);
+            xs[i] = corner[0];
+            ys[i] = corner[1] - lift;
+            minX = Math.min(minX, xs[i]);
+            maxX = Math.max(maxX, xs[i]);
+            sumX += xs[i];
+            sumY += ys[i];
+        }
+        int cx = (int) (sumX / 4), cy = (int) (sumY / 4);
+        int span = Math.max(4, maxX - minX);
+
+        g.setColor(new Color(20, 16, 12, 200));
+        g.setStroke(new BasicStroke(Math.max(1f, span / 22f)));
+        int cracks = 2 + (int) (progress * 6);
+        for (int i = 0; i < cracks; i++) {
+            double a = i * (Math.PI * 2 / 8) + (col * 3 + row * 7) % 7 * 0.4;
+            double len = (0.2 + progress * 0.42) * span;
+            int mx = cx + (int) (Math.cos(a) * len * 0.55);
+            int my = cy + (int) (Math.sin(a) * len * 0.55);
+            g.drawLine(cx, cy, mx, my);
+            g.drawLine(mx, my, mx + (int) (Math.cos(a + 0.6) * len * 0.45),
+                    my + (int) (Math.sin(a + 0.6) * len * 0.45));
+        }
+    }
+
     /** Lets a caller draw over a finished top face (the open container lid). */
     public interface CellDecorator {
         /**
@@ -132,12 +182,20 @@ public final class TerrainPainter {
             // Height is drawn along whichever axis this space lifts things
             // along, so a raised block rises the same way a jumping player does.
             this.lift = liftPixels(camera, tileSize);
-            // The sun sits off the north-west shoulder in both plan views, so
-            // shadows fall down and to the right — away from the camera's read
-            // of "up", and never onto the face the viewer is looking at.
-            double reach = tileSize * SHADOW_REACH * camera.zoom;
-            this.shadowX = iso ? reach : reach * 0.8;
-            this.shadowY = iso ? reach * 0.5 : reach;
+            // Shadows fall away from wherever the level put its sun. The
+            // bearing is a compass direction on the world plane, so it is
+            // projected like anything else on that plane — which is what keeps
+            // a shadow pointing the same way on the ground when the same level
+            // is drawn as a diamond instead of a square.
+            double bearing = Math.toRadians(level.lightAngle);
+            double reach = tileSize * SHADOW_REACH;
+            // North is -y and east is +x on the world plane; the shadow runs
+            // opposite the sun.
+            double awayX = -Math.sin(bearing) * reach;
+            double awayY = Math.cos(bearing) * reach;
+            double[] offset = camera.planarDelta(awayX, awayY);
+            this.shadowX = offset[0] * camera.zoom;
+            this.shadowY = offset[1] * camera.zoom;
         }
 
         void run(int[] bounds, DepthPass raisedPass) {
@@ -165,7 +223,8 @@ public final class TerrainPainter {
             Block block = level.blockAt(col, row);
             Color color = level.colorFor(id);
             BufferedImage skin = block == null ? null
-                    : skin(layered ? block.topTextureKey() : block.textureKey());
+                    : layered ? face(block.topTextureKey(), block.textureKey())
+                    : skin(block.textureKey());
             if (skin != null) {
                 TilePainter.drawTexture(g, skin, xs, ys, !iso);
             } else {
@@ -217,7 +276,7 @@ public final class TerrainPainter {
         private void drawRaised(int col, int row, Block block) {
             project(col, row);
             Color color = block.color();
-            BufferedImage side = skin(block.sideTextureKey());
+            BufferedImage side = face(block.sideTextureKey(), block.textureKey());
             if (iso) {
                 // The diamond's two lower edges face the viewer: the one from
                 // the right corner down to the bottom, and its mirror on the
@@ -229,7 +288,7 @@ public final class TerrainPainter {
                 drawFace(3, 2, side, color);
             }
             for (int i = 0; i < 4; i++) ys[i] -= (int) Math.round(lift);
-            BufferedImage top = skin(block.topTextureKey());
+            BufferedImage top = face(block.topTextureKey(), block.textureKey());
             if (top != null) {
                 TilePainter.drawTexture(g, top, xs, ys, !iso);
             } else {
@@ -287,6 +346,18 @@ public final class TerrainPainter {
             BufferedImage img = Skins.frame(key, animClock);
             skins.put(key, img);
             return img;
+        }
+
+        /**
+         * A plan-view face's frame, falling back to the block's one flat sheet.
+         * Both faces are optional, and the fallback is here rather than in the
+         * key so it catches a sheet assigned by hand as well as one found in
+         * the pack — a block reskinned in the texture dialog looks reskinned
+         * from above too, whether or not it was given faces of its own.
+         */
+        private BufferedImage face(String faceKey, String flatKey) {
+            BufferedImage img = skin(faceKey);
+            return img != null ? img : skin(flatKey);
         }
 
         /** {@code color} scaled toward black, keeping its alpha. */

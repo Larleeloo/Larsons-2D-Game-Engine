@@ -244,7 +244,7 @@ public class CreativeScene extends AbstractScene {
 
     private enum Dialog { NONE, NEW_LEVEL, SAVE, LOAD, CONFIRM_EXIT, GENERATE, DOORS, TEXTURE,
         CUSTOM, RULES, BRUSH, CUTSCENES, CUTSCENE_ACTORS, CUTSCENE_STEPS, MINIGAME,
-        ROSTER, SOUNDS, SOUND, SOUND_OPTIONS, LEVEL_MUSIC }
+        ROSTER, SOUNDS, SOUND, SOUND_OPTIONS, LEVEL_MUSIC, SUNLIGHT }
 
     /** {@code custom} marks user-created objects (badged, deletable). */
     private record Entry(String kind, String key, String name, BufferedImage icon,
@@ -270,14 +270,9 @@ public class CreativeScene extends AbstractScene {
     // Editing state.
     private boolean showGrid = true;
     private boolean decorForeground; // which layer decorations paint into
-    /**
-     * Whether the block brush builds walls or paths in a plan-view level: with
-     * it on a stroke fills both layers, which is what a barrier is; with it off
-     * a stroke lays floor only, which is what you walk along. Meaningless in a
-     * side-scroller, whose levels have one layer — see {@link Level#walkable}.
-     */
-    private boolean paintStacked = true;
     private int lastPaintCol = Integer.MIN_VALUE, lastPaintRow = Integer.MIN_VALUE;
+    /** The cell the held eraser last took a layer off, so it takes only one. */
+    private int lastEraseCol = Integer.MIN_VALUE, lastEraseRow = Integer.MIN_VALUE;
     private int mouseX, mouseY; // sampled in update, used by the render preview
     private String status = "";
     private double statusTime;
@@ -717,6 +712,7 @@ public class CreativeScene extends AbstractScene {
         tools.add(new Entry("eraser", "eraser", "Eraser", eraserIcon()));
         tools.add(new Entry("brush", "brush", "Brush Settings…", brushIcon()));
         tools.add(new Entry("generate", "generate", "Generate Level…", generateIcon()));
+        tools.add(new Entry("sunlight", "sunlight", "Light Direction…", sunlightIcon()));
         tools.add(new Entry("rules", "rules", "Stat Rules…", rulesIcon()));
         tools.add(new Entry("soundeditor", "", "Sound Editor…", soundEditorIcon()));
         palette.put(Category.TOOLS, tools);
@@ -843,12 +839,6 @@ public class CreativeScene extends AbstractScene {
             setStatus("Decorations paint into the "
                     + (decorForeground ? "FOREGROUND" : "BACKGROUND"));
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_H) && level.layered()) {
-            paintStacked = !paintStacked;
-            setStatus(paintStacked
-                    ? "Blocks paint STACKED — a wall, casting a shadow"
-                    : "Blocks paint as FLOOR — a path to walk along");
-        }
         if (input.isKeyJustPressed(KeyEvent.VK_OPEN_BRACKET)) {
             brushSize = Math.max(Brush.MIN_SIZE, brushSize - 1);
             setStatus("Brush: " + Brush.label(brushShape) + " " + brushSize);
@@ -890,6 +880,7 @@ public class CreativeScene extends AbstractScene {
                 handlePaletteRightClick(input.getMouseX(), input.getMouseY());
             }
             lastPaintCol = lastPaintRow = Integer.MIN_VALUE;
+            lastEraseCol = lastEraseRow = Integer.MIN_VALUE;
             return;
         }
 
@@ -914,8 +905,18 @@ public class CreativeScene extends AbstractScene {
         } else {
             lastPaintCol = lastPaintRow = Integer.MIN_VALUE;
         }
+        // Erasing takes one layer off the top per cell, so a held button must
+        // not fire again on the same cell the next frame: a stack would come
+        // apart in a single click, and the floor would go with the wall.
         if (input.isRightMouseDown()) {
-            eraseAt(aim[0], aim[1], col, row);
+            if (input.isRightMouseJustPressed()
+                    || col != lastEraseCol || row != lastEraseRow) {
+                eraseAt(aim[0], aim[1], col, row);
+                lastEraseCol = col;
+                lastEraseRow = row;
+            }
+        } else {
+            lastEraseCol = lastEraseRow = Integer.MIN_VALUE;
         }
 
         particles.update(dt);
@@ -1038,11 +1039,6 @@ public class CreativeScene extends AbstractScene {
                 // hash) among the selected block and the extra mix slots.
                 List<Integer> mix = brushBlockIds(b);
                 boolean painted = false;
-                // In a plan view a block is only half the story: one layer is
-                // the floor you walk along, two is the wall that stops you. A
-                // stacked stroke lays both, so the brush paints a barrier in
-                // one pass instead of asking for two.
-                boolean stack = level.layered() && paintStacked;
                 for (int[] cell : Brush.cells(brushShape, brushSize, col, row)) {
                     if (cell[0] < 0 || cell[1] < 0
                             || cell[0] >= level.width || cell[1] >= level.height) {
@@ -1050,7 +1046,7 @@ public class CreativeScene extends AbstractScene {
                     }
                     int paintId = mix.get(Math.floorMod(
                             cell[0] * 31 + cell[1] * 47, mix.size()));
-                    if (paintCell(cell[0], cell[1], paintId, stack)) painted = true;
+                    if (paintCell(cell[0], cell[1], paintId)) painted = true;
                 }
                 if (painted && net == null) {
                     Sounds.playFirst(1.0, SoundKeys.block(b.key(), "place"),
@@ -1077,6 +1073,9 @@ public class CreativeScene extends AbstractScene {
                     if (net != null) setStatus("Stat rules are edited offline");
                     else openDialog(Dialog.RULES);
                 }
+            }
+            case "sunlight" -> {
+                if (firstClick) openDialog(Dialog.SUNLIGHT);
             }
             case "mob", "item" -> {
                 if (!firstClick) return; // no drag-spraying creatures
@@ -1300,16 +1299,20 @@ public class CreativeScene extends AbstractScene {
      * toggles.
      */
     /**
-     * Paint one cell with {@code id}: the floor alone, or the floor with the
-     * same block stood on it when the stroke is stacking. Online each layer is
-     * a separate authoritative edit, exactly as it is offline.
+     * Where the brush drops a block at (col,row): on the floor when the cell is
+     * bare, and on top of what is already there when it isn't. Blocks stack by
+     * themselves, so building a wall in a plan view is painting the same cell
+     * twice rather than arming a mode first — and painting a full cell replaces
+     * the block on top, which is what repainting a wall should do.
      */
-    private boolean paintCell(int col, int row, int id, boolean stack) {
-        boolean changed = writeLayer(col, row, Level.LAYER_GROUND, id);
-        if (level.layered()) {
-            changed |= writeLayer(col, row, Level.LAYER_UPPER, stack ? id : 0);
-        }
-        return changed;
+    private int paintLayer(int col, int row) {
+        if (!level.layered() || level.tileAt(col, row) == 0) return Level.LAYER_GROUND;
+        return Level.LAYER_UPPER;
+    }
+
+    /** Paint one cell with {@code id}, into whichever layer it lands in. */
+    private boolean paintCell(int col, int row, int id) {
+        return writeLayer(col, row, paintLayer(col, row), id);
     }
 
     /** One layer of one cell, locally or through the server. */
@@ -1433,7 +1436,6 @@ public class CreativeScene extends AbstractScene {
         // wall arms a stacking brush, clicking a path arms a floor one.
         Block b = level.topBlockAt(col, row);
         if (b == null) return;
-        if (level.layered()) paintStacked = level.upperAt(col, row) > 0;
         if (b.isFlow()) b = level.blocks.sourceFor(b);
         if (b == null) return;
         Category target = b.liquid() ? Category.LIQUIDS
@@ -1514,15 +1516,6 @@ public class CreativeScene extends AbstractScene {
             }
         }
         int gridTop = paletteGridTop();
-        // The block brush's wall/path row sits just above the swatch grid.
-        if (showsStackRow() && my >= gridTop - 22 && my < gridTop - 2) {
-            paintStacked = !paintStacked;
-            ctx.sfx(Sfx.CLICK);
-            setStatus(paintStacked
-                    ? "Blocks paint STACKED — a wall, casting a shadow"
-                    : "Blocks paint as FLOOR — a path to walk along");
-            return;
-        }
         // The decor layer toggle row sits just above the swatch grid.
         if (category == Category.DECOR && my >= gridTop - 22 && my < gridTop - 2) {
             decorForeground = !decorForeground;
@@ -1576,6 +1569,7 @@ public class CreativeScene extends AbstractScene {
                     if (net == null) openDialog(Dialog.RULES);
                     else setStatus("Stat rules are edited offline");
                 }
+                case "sunlight" -> openDialog(Dialog.SUNLIGHT);
                 case "mg_settings" -> {
                     if (net == null) openDialog(Dialog.MINIGAME);
                     else setStatus("The mini game is configured before hosting, offline");
@@ -1706,12 +1700,38 @@ public class CreativeScene extends AbstractScene {
         texStates = switch (e.kind) {
             case "mob" -> TextureKeys.MOB_STATES;
             case "character" -> PlayerSprites.ACTION_STATES;
+            // A block is looked at from more than one side. The flat sheet is
+            // what a side-scroller draws and what both plan-view faces fall
+            // back to; the top and side are the faces a top-down or isometric
+            // level actually sees, and each takes a sheet of its own.
+            case "block" -> BLOCK_FACES;
             default -> List.of("default");
         };
         texStateIndex = 0;
         texDirIndex = 0;
         loadTextureFields();
         openDialog(Dialog.TEXTURE);
+    }
+
+    /** The block faces the texture dialog assigns sheets to, flat sheet first. */
+    private static final List<String> BLOCK_FACES = List.of("flat", "top", "side");
+
+    /** What the face/state cycler is called for the object being reskinned. */
+    private String texStateLabel() {
+        return "block".equals(texEntry.kind) ? "Face (top-down / isometric)"
+                : "Action state";
+    }
+
+    /** What the face being edited is used for, so the cycler isn't three words. */
+    private String blockFaceNote() {
+        return switch (texStates.get(Math.min(texStateIndex, texStates.size() - 1))) {
+            case "top" -> "The face a top-down or isometric level looks down at: "
+                    + "floors, and the lid of a stacked block.";
+            case "side" -> "The face a stacked block turns toward the camera — "
+                    + "what gives a wall its height.";
+            default -> "The block's one sheet: what a side-scroller draws, and "
+                    + "what the top and side fall back to when they have none.";
+        };
     }
 
     /** Palette entries that belong to the sound editor rather than the canvas. */
@@ -1786,25 +1806,9 @@ public class CreativeScene extends AbstractScene {
         int top = 34 + Category.values().length * 22 + 10;
         if (category == Category.DECOR) top += 24;
         if (category == Category.SURFACE) top += 68;
-        if (showsStackRow()) top += 24;
         return top;
     }
 
-    /**
-     * Whether the block brush's stack toggle belongs above the swatches — only
-     * in a plan-view level, and only for the categories that paint blocks,
-     * because it is the layer count that makes a wall there.
-     */
-    private boolean showsStackRow() {
-        return level != null && level.layered()
-                && (category == Category.BLOCKS || category == Category.LIQUIDS
-                || category == Category.LIGHTS);
-    }
-
-    /** The stack toggle's label, which is really a description of what it builds. */
-    private String stackRowLabel() {
-        return paintStacked ? "Build: WALL (stacked)" : "Build: PATH (floor)";
-    }
 
     private int sliderPanelTop() {
         return net == null ? viewportHeight - 36 - SLIDER_PANEL_H : viewportHeight - 36;
@@ -2328,7 +2332,7 @@ public class CreativeScene extends AbstractScene {
                 && inReach && level.tileAt(col, row) > 0;
         if (miningNow) {
             swingTime = Math.max(swingTime, 0.1);
-            Block digging = level.blockAt(col, row);
+            Block digging = level.topBlockAt(col, row);
             mineSoundTimer -= dt;
             if (digging != null && mineSoundTimer <= 0) {
                 mineSoundTimer = 0.33;
@@ -2413,14 +2417,19 @@ public class CreativeScene extends AbstractScene {
         if (p.itemsEnabled && (def == null || def.category() != ItemDef.Category.BLOCK)) return;
         String blockKey = def != null ? def.blockKey() : "dirt";
         Block b = level.blocks.get(blockKey);
-        // Liquids accept placement — covering water is how it's removed.
-        if (b == null || (level.tileAt(col, row) != 0 && level.liquidAt(col, row) == null)) {
-            return;
-        }
+        // A stack is built from the bottom up: a hole is floored first, and a
+        // cell that already has a floor gets the block stood on it, so a player
+        // builds walls in a plan view the same way a creator does. Liquids
+        // accept placement either way — covering water is how it's removed.
+        int layer = level.placeLayer(col, row);
+        if (b == null || layer < 0) return;
         double size = p.playerSize;
         boolean overlapsMe = testMe.x + size > col * ts && testMe.x < (col + 1) * ts
                 && testMe.y + size > row * ts && testMe.y < (row + 1) * ts;
-        if (b.solid() && overlapsMe) return;
+        // Flooring a hole under your own feet is not walling yourself in.
+        boolean wouldClose = b.solid()
+                && (!level.layered() || layer == Level.LAYER_UPPER);
+        if (wouldClose && overlapsMe) return;
         if (testWorld.placeBlock(col, row, b.id())) {
             if (p.itemsEnabled) testInv.consumeSelected();
             testStats.add("blocks_placed", 1);
@@ -2600,6 +2609,7 @@ public class CreativeScene extends AbstractScene {
             case SOUND -> buildSoundForm();
             case SOUND_OPTIONS -> buildSoundOptionsForm();
             case LEVEL_MUSIC -> buildLevelMusicForm();
+            case SUNLIGHT -> buildSunlightForm();
             default -> { /* NONE */ }
         }
     }
@@ -2967,7 +2977,11 @@ public class CreativeScene extends AbstractScene {
                     PlayerSprites.characterStateKey(texEntry.key, state) + suffix;
             case "particle" -> Particles.TEXTURE_NAMESPACE + "/" + texEntry.key;
             case "projectile" -> "projectile/" + texEntry.key;
-            default -> "block/" + texEntry.key;
+            // "flat" is the block's one sheet; the other two are the plan-view
+            // faces, which live in their own pools and fall back to it.
+            default -> "flat".equals(state)
+                    ? "block/" + texEntry.key
+                    : "block/" + texEntry.key + "/" + state;
         };
     }
 
@@ -3027,13 +3041,16 @@ public class CreativeScene extends AbstractScene {
     private void buildTextureForm() {
         String key = textureKey();
         if (texStates.size() > 1) {
-            dialogForm.addEnum("Action state", texStates.toArray(new String[0]),
+            dialogForm.addEnum(texStateLabel(), texStates.toArray(new String[0]),
                     () -> texStates.get(texStateIndex),
                     v -> {
                         texStateIndex = Math.max(0, texStates.indexOf(v));
                         loadTextureFields();
                         openDialog(Dialog.TEXTURE); // the pack file row follows the state
                     });
+        }
+        if ("block".equals(texEntry.kind)) {
+            dialogForm.addNote(blockFaceNote());
         }
         // Directional objects can have one sheet per facing. Leaving this on
         // "(every direction)" is the normal case: that sheet draws whichever
@@ -3933,6 +3950,50 @@ public class CreativeScene extends AbstractScene {
                 v -> cSizeTiles = v, 0.5, 8, 0.5);
     }
 
+    /** The eight compass points the sun can be put on, and their bearings. */
+    private static final String[] SUN_COMPASS = {
+            "North", "North-East", "East", "South-East",
+            "South", "South-West", "West", "North-West"};
+
+    /**
+     * Tools &rarr; Light Direction…: where the sun stands over this level, and
+     * so which way every stacked block throws its shadow.
+     *
+     * <p>It is a per-level look rather than an engine constant — a town at noon
+     * and a canyon in late afternoon want their shadows thrown different ways —
+     * and every block agrees on one answer, because shadows that disagree stop
+     * reading as light at all. The slider is live: the level redraws behind the
+     * dialog as it moves, so the angle is chosen by looking at it.
+     */
+    private void buildSunlightForm() {
+        dialogForm.addNote("Where the sun stands over this level. Stacked blocks "
+                + "throw their shadows away from it, which is what makes their "
+                + "height read from above.");
+        dialogForm.addInt("Sun bearing (° clockwise from north)",
+                () -> (int) Math.round(level.lightAngle),
+                v -> level.lightAngle = Math.floorMod(v, 360), 0, 359, 5);
+        dialogForm.addEnum("Or pick a compass point", SUN_COMPASS,
+                () -> SUN_COMPASS[(int) Math.round(level.lightAngle / 45.0) % 8],
+                v -> {
+                    level.lightAngle = List.of(SUN_COMPASS).indexOf(v) * 45.0;
+                    openDialog(Dialog.SUNLIGHT); // the bearing row follows it
+                });
+        if (!level.layered()) {
+            dialogForm.addNote("This is a side-scrolling level: its blocks are "
+                    + "drawn edge-on and cast no shadow, so the setting is saved "
+                    + "but does nothing here.");
+        }
+        dialogForm.addAction("Reset (north-west)", () -> {
+            level.lightAngle = Level.DEFAULT_LIGHT_ANGLE;
+            openDialog(Dialog.SUNLIGHT);
+        });
+        dialogForm.addAction("Done", () -> {
+            closeDialog();
+            setStatus("Sun at " + (int) Math.round(level.lightAngle)
+                    + "° — save the level to keep it");
+        });
+    }
+
     /** "+ New Block Decor": a custom face-attached surface detail. */
     private void buildCustomSurfaceFields() {
         addColorSliders("Primary", false);
@@ -4732,27 +4793,7 @@ public class CreativeScene extends AbstractScene {
         int[] cell = testWorld.miningCell();
         double progress = testWorld.miningProgress();
         if (cell == null || progress <= 0.01) return;
-        projectCell(cell[0], cell[1], level.tileSize);
-        // The cracks belong on the block being chipped, and a stacked one
-        // stands above its own floor tile.
-        if (level.upperAt(cell[0], cell[1]) > 0) {
-            raiseQuad(TerrainPainter.liftPixels(camera, level.tileSize));
-        }
-        int x = Math.min(pxs[0], pxs[2]), y = Math.min(pys[0], pys[2]);
-        int w = Math.abs(pxs[2] - pxs[0]), h = Math.abs(pys[2] - pys[0]);
-        int cx = x + w / 2, cy = y + h / 2;
-        g.setColor(new Color(20, 16, 12, 200));
-        g.setStroke(new BasicStroke(Math.max(1f, w / 22f)));
-        int cracks = 2 + (int) (progress * 6);
-        for (int i = 0; i < cracks; i++) {
-            double a = i * (Math.PI * 2 / 8) + (cell[0] * 3 + cell[1] * 7) % 7 * 0.4;
-            double len = (0.2 + progress * 0.42) * w;
-            int mx = cx + (int) (Math.cos(a) * len * 0.55);
-            int my = cy + (int) (Math.sin(a) * len * 0.55);
-            g.drawLine(cx, cy, mx, my);
-            g.drawLine(mx, my, mx + (int) (Math.cos(a + 0.6) * len * 0.45),
-                    my + (int) (Math.sin(a + 0.6) * len * 0.45));
-        }
+        TerrainPainter.drawMiningCracks(g, camera, level, cell[0], cell[1], progress);
     }
 
     /** The editor is always daylit; play-test uses the game type's lighting. */
@@ -4850,6 +4891,18 @@ public class CreativeScene extends AbstractScene {
     private void raiseQuad(int px) {
         if (px == 0) return;
         for (int i = 0; i < pys.length; i++) pys[i] -= px;
+    }
+
+    /** How high the brush's preview stands at (col,row): where the block lands. */
+    private int previewLift(int col, int row) {
+        return paintLayer(col, row) == Level.LAYER_UPPER
+                ? TerrainPainter.liftPixels(camera, level.tileSize) : 0;
+    }
+
+    /** How high the top-most block at (col,row) is drawn — what a hover marks. */
+    private int topBlockLift(int col, int row) {
+        return level.upperAt(col, row) > 0
+                ? TerrainPainter.liftPixels(camera, level.tileSize) : 0;
     }
 
     private void projectCell(int c, int r, int ts) {
@@ -5382,19 +5435,18 @@ public class CreativeScene extends AbstractScene {
             case "block" -> {
                 Block b = level.blocks.get(entry.key);
                 if (b != null) {
-                    // A stacking brush previews standing up, so a creator sees
-                    // the wall they are about to build rather than a flat
-                    // square that turns out to be one.
-                    int lift = level.layered() && paintStacked
-                            ? TerrainPainter.liftPixels(camera, ts) : 0;
+                    // The preview stands where the block would land — on the
+                    // floor of a bare cell, on top of whatever is already in a
+                    // full one — so a creator sees the wall they are about to
+                    // build rather than a flat square that turns out to be one.
                     for (int[] cell : Brush.cells(brushShape, brushSize, col, row)) {
                         projectCell(cell[0], cell[1], ts);
-                        raiseQuad(lift);
+                        raiseQuad(previewLift(cell[0], cell[1]));
                         g.setColor(b.color());
                         g.fillPolygon(pxs, pys, 4);
                     }
                     projectCell(col, row, ts);
-                    raiseQuad(lift);
+                    raiseQuad(previewLift(col, row));
                     g.setColor(Color.WHITE);
                     g.drawPolygon(pxs, pys, 4);
                 }
@@ -5448,6 +5500,9 @@ public class CreativeScene extends AbstractScene {
                 g.setStroke(new BasicStroke(2f));
                 for (int[] cell : Brush.cells(brushShape, brushSize, col, row)) {
                     projectCell(cell[0], cell[1], ts);
+                    // Outline the block that would actually come off — the top
+                    // of the stack, which is the one standing up.
+                    raiseQuad(topBlockLift(cell[0], cell[1]));
                     g.drawPolygon(pxs, pys, 4);
                 }
             }
@@ -5519,14 +5574,6 @@ public class CreativeScene extends AbstractScene {
         }
 
         int gridTop = paletteGridTop();
-        // The block brush's wall/path row.
-        if (showsStackRow()) {
-            g.setColor(new Color(255, 255, 255, 22));
-            g.fillRoundRect(6, gridTop - 22, SIDEBAR_W - 12, 20, 6, 6);
-            g.setFont(SMALL_FONT);
-            g.setColor(paintStacked ? new Color(255, 190, 120) : new Color(150, 230, 170));
-            g.drawString(stackRowLabel() + "  (click / H)", 14, gridTop - 8);
-        }
         // Decor layer toggle row.
         if (category == Category.DECOR) {
             g.setColor(new Color(255, 255, 255, 22));
@@ -5786,6 +5833,10 @@ public class CreativeScene extends AbstractScene {
                 return "Opens Stat Rules: programmable triggers over tracked stats"
                         + " (\"mined 50 blocks → reward…\") that run in play.";
             }
+            case "sunlight" -> {
+                return "Sets where the sun stands over this level, and so which"
+                        + " way every stacked block throws its shadow.";
+            }
             case "managedoors" -> {
                 return "Opens the door manager: name doors and link each to another"
                         + " level of this game type.";
@@ -5877,21 +5928,17 @@ public class CreativeScene extends AbstractScene {
         // The editor is one creative mode per level format, so the bar leads
         // with which one is open.
         String mode = format().displayName().toUpperCase();
-        // In a plan view the brush builds walls or paths, and which it is doing
-        // matters enough to say out loud rather than leave in the sidebar.
-        String stackHint = level.layered() ? " · [H] " + stackRowLabel() : "";
         if (testing) {
             bar = "PLAY-TEST (" + mode + ") — " + level.name + chunkInfo
                     + "   ·   WASD move · Shift sprint · hold click to mine · right-click place"
                     + " · 1-5 hotbar · [I] inventory · [E] doors/stations · [P]/[Esc] editor";
         } else if (net != null) {
             bar = mode + " CREATIVE (ONLINE) — painting the server's world   ·   [Tab] category"
-                    + " · right-click erase" + stackHint + " · [G] grid · [Esc] back to game";
+                    + " · right-click erase · [G] grid · [Esc] back to game";
         } else {
             bar = mode + " CREATIVE — " + level.name + " (" + level.width + "x" + level.height + ")"
                     + chunkInfo
                     + "   ·   [Tab] category · right-click erase · middle pick · [B] layer"
-                    + stackHint
                     + " · [ ] brush · [G] grid · [P] test · [Ctrl+S] save · [L] load · [N] new · [Esc] menu";
         }
         g.drawString(bar, x0 + 12, 19);
@@ -6485,6 +6532,28 @@ public class CreativeScene extends AbstractScene {
     }
 
     /** Stat Rules… icon: bars rising over a baseline. */
+    /** A sun with a block casting its shadow — the light-direction tool. */
+    private static BufferedImage sunlightIcon() {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(new Color(255, 220, 120));
+        g.fillOval(4, 4, 12, 12);
+        g.setStroke(new BasicStroke(1.6f));
+        for (int i = 0; i < 8; i++) {
+            double a = i * Math.PI / 4;
+            g.drawLine(10 + (int) (Math.cos(a) * 8), 10 + (int) (Math.sin(a) * 8),
+                    10 + (int) (Math.cos(a) * 11), 10 + (int) (Math.sin(a) * 11));
+        }
+        g.setColor(new Color(0, 0, 0, 110));
+        g.fillPolygon(new int[]{22, 36, 36, 22}, new int[]{30, 30, 36, 36}, 4);
+        g.setColor(new Color(150, 160, 180));
+        g.fillRect(18, 20, 12, 12);
+        g.dispose();
+        return img;
+    }
+
     private static BufferedImage rulesIcon() {
         BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();

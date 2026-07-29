@@ -1132,7 +1132,9 @@ public class PlayScene extends AbstractScene {
             netMineRow = row;
             netMineProgress = 0;
         }
-        Block b = level.blockAt(col, row);
+        // The client predicts against the block the server will bite into:
+        // the top of the stack, not the floor beneath it.
+        Block b = level.topBlockAt(col, row);
         double hardness = b == null || b.liquid() ? 0 : b.hardness();
         if (hardness <= 0) {
             netMineProgress = 1;
@@ -1788,29 +1790,8 @@ public class PlayScene extends AbstractScene {
             cell = world.miningCell();
             progress = world.miningProgress();
         }
-        if (cell == null || progress <= 0.01) return;
-        double ts = ts();
-        camera.worldToScreen(cell[0] * ts, cell[1] * ts, corner);
-        int x = corner[0], y = corner[1];
-        camera.worldToScreen((cell[0] + 1) * ts, (cell[1] + 1) * ts, corner);
-        int w = Math.abs(corner[0] - x), h = Math.abs(corner[1] - y);
-        // The cracks belong on the block being chipped, and a stacked one
-        // stands above its own floor tile.
-        int lift = level.upperAt(cell[0], cell[1]) > 0
-                ? TerrainPainter.liftPixels(camera, (int) ts) : 0;
-        int cx = x + w / 2, cy = y + h / 2 - lift;
-        g.setColor(new Color(20, 16, 12, 200));
-        g.setStroke(new BasicStroke(Math.max(1f, w / 22f)));
-        int cracks = 2 + (int) (progress * 6);
-        for (int i = 0; i < cracks; i++) {
-            double a = i * (Math.PI * 2 / 8) + (cell[0] * 3 + cell[1] * 7) % 7 * 0.4;
-            double len = (0.2 + progress * 0.42) * w;
-            int mx = cx + (int) (Math.cos(a) * len * 0.55);
-            int my = cy + (int) (Math.sin(a) * len * 0.55);
-            g.drawLine(cx, cy, mx, my);
-            g.drawLine(mx, my, mx + (int) (Math.cos(a + 0.6) * len * 0.45),
-                    my + (int) (Math.sin(a + 0.6) * len * 0.45));
-        }
+        if (cell == null) return;
+        TerrainPainter.drawMiningCracks(g, camera, level, cell[0], cell[1], progress);
     }
 
     /** Stamina (green) and mana (blue) bars stacked above the health bar. */
