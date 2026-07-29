@@ -225,17 +225,37 @@ class StackedBlockTest {
     // --- mining feedback --------------------------------------------------------
 
     /**
-     * The crack overlay has to appear in every projection and on the block
-     * actually being chipped. It used to measure the cell as the gap between
-     * two opposite corners, which is zero in isometric — a diamond's left and
-     * right corners are the other pair — so it drew nothing there at all.
+     * The crack overlay has to survive the frame it is drawn in.
+     *
+     * <p>Two things used to eat it. It measured a cell as the gap between two
+     * opposite corners, which is zero in isometric — a diamond's left and right
+     * corners are the other pair — so it drew nothing there at all. And it was
+     * painted outside the depth queue, before that queue was flushed, so every
+     * stacked block landed on top of it: in a top-down level the mined block
+     * covered its own cracks, and in an isometric one the walls to the south
+     * stood up over the cell to their north-west and covered even a floor
+     * tile's. So this asks the whole render — queue and flush — not the
+     * overlay in isolation.
      */
     @Test
-    void miningCracksAppearInEveryProjectionAndOnTopOfTheStack() {
+    void miningCracksSurviveTheFrameInEveryProjection() {
         for (LevelFormat format : LevelFormat.values()) {
-            Level lvl = floored(format);
-            assertTrue(crackPixels(lvl, 15, 15) > 0,
-                    format + ": the crack overlay is drawn");
+            // Mining a floor tile in the open: nothing stands over it, so the
+            // overlay has only itself to fail at — which is what the zero-width
+            // isometric cell did.
+            assertTrue(crackPixelsOnBlock(floored(format), 15, 15) > 20,
+                    format + ": the crack overlay is drawn at all");
+
+            // Mining a wall, with more walls around it — a plan-view level
+            // being mined looks like this, and the mined block is the one that
+            // used to paint over its own cracks.
+            Level walls = floored(format);
+            int stone = walls.blocks.get("stone").id();
+            for (int r = 14; r <= 16; r++) {
+                for (int c = 14; c <= 16; c++) walls.setUpper(c, r, stone);
+            }
+            assertTrue(crackPixelsOnBlock(walls, 15, 15) > 20, format
+                    + ": a stacked block's cracks are not covered by the stack itself");
         }
 
         // On a stack they rise with the block they belong to, rather than
@@ -291,9 +311,29 @@ class StackedBlockTest {
 
     // --- helpers ----------------------------------------------------------------
 
-    /** How many pixels the crack overlay paints over the bare terrain. */
-    private static int crackPixels(Level lvl, int col, int row) {
-        return crackInk(lvl, col, row).size();
+    /**
+     * How many crack pixels land on the mined block <em>itself</em> — within a
+     * quarter-tile of where that block is drawn.
+     *
+     * <p>Counting the whole overlay would not do: the cracks radiate a little
+     * past the tile onto its neighbours, so even an overlay completely painted
+     * over still leaves a fringe. What says the overlay is working is ink at
+     * the middle of the block being mined, which is exactly what a block drawn
+     * on top of it takes away.
+     */
+    private static int crackPixelsOnBlock(Level lvl, int col, int row) {
+        Camera cam = camera(lvl);
+        int lift = lvl.upperAt(col, row) > 0 ? TerrainPainter.liftPixels(cam, TILE) : 0;
+        int[] centre = project(cam, (col + 0.5) * TILE, (row + 0.5) * TILE);
+        centre[1] -= lift;
+        int[] edge = project(cam, (col + 1.0) * TILE, (row + 0.5) * TILE);
+        double radius = Math.max(4, Math.hypot(edge[0] - centre[0],
+                edge[1] - (centre[1] + lift)) * 0.5);
+        int on = 0;
+        for (int[] px : crackInk(lvl, col, row)) {
+            if (Math.hypot(px[0] - centre[0], px[1] - centre[1]) <= radius) on++;
+        }
+        return on;
     }
 
     /** The mean screen row of the crack overlay's pixels. */
@@ -302,14 +342,15 @@ class StackedBlockTest {
         return ink.stream().mapToInt(p -> p[1]).average().orElse(0);
     }
 
-    /** The pixels the crack overlay adds to a frame, as {x, y} pairs. */
+    /**
+     * The pixels the crack overlay adds to a <em>finished</em> frame, as
+     * {x, y} pairs — the whole terrain render with the stroke in it, against
+     * the same render without, so anything the pass draws over the cracks
+     * counts against them the way it does on screen.
+     */
     private static List<int[]> crackInk(Level lvl, int col, int row) {
-        BufferedImage plain = paint(lvl);
-        BufferedImage cracked = paint(lvl);
-        Graphics2D g = cracked.createGraphics();
-        TerrainPainter.drawMiningCracks(g, camera(lvl), lvl, col, row, 0.9);
-        g.dispose();
-        return differing(plain, cracked);
+        return differing(paint(lvl, null),
+                paint(lvl, new TerrainPainter.Mining(col, row, 0.9)));
     }
 
     /** The mean position of the shadow a stacked block casts. */
@@ -369,12 +410,20 @@ class StackedBlockTest {
 
     /** The level's terrain, drawn the way the scenes draw it. */
     private static BufferedImage paint(Level lvl) {
+        return paint(lvl, null);
+    }
+
+    /**
+     * The level's terrain the way the scenes draw it — one depth pass, queued
+     * and then flushed — optionally with a hold-to-mine stroke in it.
+     */
+    private static BufferedImage paint(Level lvl, TerrainPainter.Mining mining) {
         Camera cam = camera(lvl);
         BufferedImage canvas = new BufferedImage(CANVAS, CANVAS, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = canvas.createGraphics();
         DepthPass standing = DepthPass.of(lvl.perspective);
         TerrainPainter.draw(g, lvl, cam, new int[]{0, 0, lvl.width - 1, lvl.height - 1},
-                0.5, standing, null);
+                0.5, standing, null, mining);
         standing.flush();
         g.dispose();
         return canvas;
