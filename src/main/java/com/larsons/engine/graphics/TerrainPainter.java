@@ -75,14 +75,17 @@ public final class TerrainPainter {
      * The crack overlay on the block being held-mined at (col,row), spreading
      * with {@code progress} in [0,1].
      *
-     * <p>Drawn from the block's <em>projected quad</em> rather than from its
-     * world size, for two reasons. A tile's opposite corners land on the same
-     * screen column in isometric — the diamond's left and right corners are the
-     * other pair — so measuring the cell as the gap between them gave a width
-     * of zero there and drew nothing at all. And the block under the tool is
-     * the top of the stack, which stands above its own floor tile, so the
-     * cracks have to rise with it or they appear on the floor beside the wall
-     * being mined.
+     * <p>Sized and placed from the block's <em>projected quad</em> rather than
+     * from its world size, because a block on screen is neither the shape nor
+     * the size its tile is in the world. A tile's opposite corners land on the
+     * same screen column in isometric — the diamond's left and right corners
+     * are the other pair — so measuring the cell as the gap between them gave
+     * a width of zero there; and the diamond is twice as wide as it is tall, so
+     * measuring it along one axis and spreading the cracks evenly gave a
+     * pattern at twice the block's height. Both extents are taken separately.
+     * The block under the tool is also the top of the stack, which stands above
+     * its own floor tile, so the cracks rise with it rather than appearing on
+     * the floor beside the wall being mined.
      */
     public static void drawMiningCracks(Graphics2D g, Camera camera, Level level,
                                         int col, int row, double progress) {
@@ -94,6 +97,7 @@ public final class TerrainPainter {
                 {wx + tileSize, wy + tileSize}, {wx, wy + tileSize}};
         int lift = level.upperAt(col, row) > 0 ? liftPixels(camera, tileSize) : 0;
         int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
+        int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
         long sumX = 0, sumY = 0;
         for (int i = 0; i < 4; i++) {
             camera.worldToScreen(cs[i][0], cs[i][1], corner);
@@ -101,23 +105,33 @@ public final class TerrainPainter {
             ys[i] = corner[1] - lift;
             minX = Math.min(minX, xs[i]);
             maxX = Math.max(maxX, xs[i]);
+            minY = Math.min(minY, ys[i]);
+            maxY = Math.max(maxY, ys[i]);
             sumX += xs[i];
             sumY += ys[i];
         }
         int cx = (int) (sumX / 4), cy = (int) (sumY / 4);
-        int span = Math.max(4, maxX - minX);
+        // The cracks are measured along each screen axis separately, because a
+        // block is not the same size along both: an isometric tile projects to
+        // a diamond twice as wide as it is tall, and a pattern scaled to that
+        // width alone came out at twice the block's height. Spreading it over
+        // the quad's own half-extents keeps it inside whatever shape the
+        // projection made of the block — a circle on a square tile, a diamond's
+        // ellipse on a diamond — at the same proportions in both.
+        double halfW = Math.max(2, (maxX - minX) / 2.0);
+        double halfH = Math.max(2, (maxY - minY) / 2.0);
 
         g.setColor(new Color(20, 16, 12, 200));
-        g.setStroke(new BasicStroke(Math.max(1f, span / 22f)));
+        g.setStroke(new BasicStroke((float) Math.max(1, Math.min(halfW, halfH) / 11)));
         int cracks = 2 + (int) (progress * 6);
         for (int i = 0; i < cracks; i++) {
             double a = i * (Math.PI * 2 / 8) + (col * 3 + row * 7) % 7 * 0.4;
-            double len = (0.2 + progress * 0.42) * span;
-            int mx = cx + (int) (Math.cos(a) * len * 0.55);
-            int my = cy + (int) (Math.sin(a) * len * 0.55);
+            double reach = 0.2 + progress * 0.42;
+            int mx = cx + (int) (Math.cos(a) * reach * halfW * 1.1);
+            int my = cy + (int) (Math.sin(a) * reach * halfH * 1.1);
             g.drawLine(cx, cy, mx, my);
-            g.drawLine(mx, my, mx + (int) (Math.cos(a + 0.6) * len * 0.45),
-                    my + (int) (Math.sin(a + 0.6) * len * 0.45));
+            g.drawLine(mx, my, mx + (int) (Math.cos(a + 0.6) * reach * halfW * 0.9),
+                    my + (int) (Math.sin(a + 0.6) * reach * halfH * 0.9));
         }
     }
 
