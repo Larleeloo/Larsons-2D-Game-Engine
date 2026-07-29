@@ -44,6 +44,7 @@ import com.larsons.engine.graphics.PlayerSprites;
 import com.larsons.engine.graphics.SkinDef;
 import com.larsons.engine.graphics.SkinStore;
 import com.larsons.engine.graphics.Skins;
+import com.larsons.engine.graphics.SpriteCanvas;
 import com.larsons.engine.graphics.SurfaceDecorPainter;
 import com.larsons.engine.graphics.TerrainPainter;
 import com.larsons.engine.graphics.TextureKeys;
@@ -77,6 +78,7 @@ import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.ContainerPanel;
 import com.larsons.engine.ui.CraftingPanel;
 import com.larsons.engine.ui.MenuTheme;
+import com.larsons.engine.ui.SpriteEditorPanel;
 import com.larsons.engine.ui.UiText;
 import com.larsons.engine.world.Block;
 import com.larsons.engine.world.Decor;
@@ -193,6 +195,16 @@ import java.util.Map;
  * pack's own {@code texturepack.json}. The Tools palette's Player Skin… entry
  * does the same for the player character, with one animation per action state
  * (idle/walk/run/jump/fall/swim) played back in play-test and play.
+ *
+ * <p><b>Create texture:</b> the same dialog's "✎ Create texture" opens a
+ * paint window ({@link SpriteEditorPanel}) over the editor — pencil, eraser,
+ * fill, line, rectangle, eyedropper, a palette and undo, with a frame strip
+ * that builds an animation frame by frame (each new frame starting as a copy
+ * of the last, the previous one showing through as an onion skin) and a
+ * preview playing at the chosen rate. It is offered for every skinnable
+ * object, built-in or custom, and the "+ New …" form opens it straight after
+ * creating one. Saving writes the sheet into the texture pack under that
+ * object's own file name, so drawn art and dropped-in art are the same thing.
  *
  * <p><b>Generate:</b> the Tools palette's Generate button builds a large
  * Perlin-noise level — Minecraft-style terrain/caves/ores/liquids fused with
@@ -322,8 +334,12 @@ public class CreativeScene extends AbstractScene {
      * build with in a top-down or isometric level shows both.
      */
     private boolean cTopTexture = true, cSideTexture = true;
-    /** The block "+ New Block" just made, so the status line can name its sheets. */
-    private String createdBlockKey;
+    /**
+     * What "+ New …" just made — its palette kind and key — so the status line
+     * can name the sheets a new block wants, and "Create &amp; draw its
+     * texture" knows which texture key to open the paint window on.
+     */
+    private String createdKind = "", createdKey = "";
     private int cLightRadius, cLightR = 255, cLightG = 220, cLightB = 160;
     private int cDamage;
     private double cHardness = 1.0, cSizeTiles = 2.0;
@@ -398,6 +414,13 @@ public class CreativeScene extends AbstractScene {
     private int texDirIndex;
     /** Per-object texture pack switch; on by default (built-in art falls back). */
     private boolean texUsePack = true;
+
+    // --- "Create texture": the sprite-sheet editor window ----------------------------
+
+    /** The paint window, open over everything else, or {@code null}. */
+    private SpriteEditorPanel spriteEditor;
+    /** The texture key the open window is drawing, and what to call it. */
+    private String spriteKey = "", spriteLabel = "";
 
     // --- sound editor state -----------------------------------------------------
     /** Which family of sounds the list shows ("" = every sound in the game). */
@@ -475,6 +498,7 @@ public class CreativeScene extends AbstractScene {
         net = ctx.session();
         testing = false;
         dialog = Dialog.NONE;
+        spriteEditor = null;
         doors = new DoorDirectory(profile().name);
         // Custom objects created with the "+" palette entries must be
         // registered before any level referencing them loads.
@@ -786,6 +810,13 @@ public class CreativeScene extends AbstractScene {
         // rain down the screen — in the editor exactly as in play.
         particles.setSpace(PerspectiveSpace.of(camera.getPerspective()));
 
+        // The paint window is the top layer: while it is open every click and
+        // keystroke is a brush stroke or a button in it, so a stroke that runs
+        // off its canvas can never paint the level behind it.
+        if (spriteEditor != null) {
+            spriteEditor.update(dt, input, viewportWidth, viewportHeight);
+            return;
+        }
         if (testing) {
             updateTest(dt, input);
             return;
@@ -2966,23 +2997,43 @@ public class CreativeScene extends AbstractScene {
     private String textureKey() {
         String state = texStates.get(Math.min(texStateIndex, texStates.size() - 1));
         Facing dir = directional(texEntry.kind) ? texFacing() : null;
+        return textureKey(texEntry.kind, texEntry.key, state, dir);
+    }
+
+    /**
+     * The {@link Skins} key one object's sheet is filed under, for a palette
+     * kind, the object's key, the action state or block face being drawn, and
+     * the facing (null = the one sheet every direction uses).
+     */
+    private static String textureKey(String kind, String key, String state, Facing dir) {
         String suffix = dir == null ? "" : "/" + dir.key();
-        return switch (texEntry.kind) {
-            case "mob" -> "mob/" + texEntry.key + "/" + state + suffix;
-            case "item" -> "item/" + texEntry.key;
-            case "decor" -> "decor/" + texEntry.key;
-            case "surface" -> "surface/" + texEntry.key;
+        return switch (kind) {
+            case "mob" -> "mob/" + key + "/" + state + suffix;
+            case "item" -> "item/" + key;
+            case "decor" -> "decor/" + key;
+            case "surface" -> "surface/" + key;
             case "playerskin" -> PlayerSprites.stateKey(state) + suffix;
-            case "character" ->
-                    PlayerSprites.characterStateKey(texEntry.key, state) + suffix;
-            case "particle" -> Particles.TEXTURE_NAMESPACE + "/" + texEntry.key;
-            case "projectile" -> "projectile/" + texEntry.key;
+            case "character" -> PlayerSprites.characterStateKey(key, state) + suffix;
+            case "particle" -> Particles.TEXTURE_NAMESPACE + "/" + key;
+            case "projectile" -> "projectile/" + key;
             // "flat" is the block's one sheet; the other two are the plan-view
             // faces, which live in their own pools and fall back to it.
-            default -> "flat".equals(state)
-                    ? "block/" + texEntry.key
-                    : "block/" + texEntry.key + "/" + state;
+            default -> "flat".equals(state) ? "block/" + key : "block/" + key + "/" + state;
         };
+    }
+
+    /**
+     * The key an object's <em>first</em> sheet goes under — the one a creator
+     * who just made the object should draw: the flat face of a block, the idle
+     * pose of anything animated, the single sheet of everything else.
+     */
+    private static String defaultTextureKey(String kind, String key) {
+        String state = switch (kind) {
+            case "block" -> "flat";
+            case "mob", "character", "playerskin" -> "idle";
+            default -> "default";
+        };
+        return textureKey(kind, key, state, null);
     }
 
     /**
@@ -3076,6 +3127,13 @@ public class CreativeScene extends AbstractScene {
         dialogForm.addAction(TexturePack.fileNameFor(key)
                 + (packFile != null ? "  ✓ found" : "  — rescan"),
                 this::rescanTexturePack).enabledWhen(() -> texUsePack);
+        // Draw the sheet here instead of going and finding a paint program.
+        // Available for every object, built-in or custom — what comes out is
+        // a file in the pack like any other.
+        dialogForm.addAction(packFile != null
+                        ? "✎ Create texture — edit this sheet…"
+                        : "✎ Create texture — draw it here…",
+                () -> openSpriteEditor(key, texEntry.name));
         // Where that folder is: blank = beside the jar (share/textures in the
         // IDE), which is what a pack shipped with the game uses.
         dialogForm.addNote("Leave the pack folder blank to use the one beside "
@@ -3149,6 +3207,95 @@ public class CreativeScene extends AbstractScene {
             setStatus(texEntry.name + " now uses " + showing.sheet + " ("
                     + showing.frameCount + " frames @ " + trimNumber(showing.fps) + " fps)");
         }
+    }
+
+    // --- "Create texture": drawing a sheet in game -----------------------------------
+
+    /**
+     * Open the sprite-sheet editor on a texture key. Whatever already draws
+     * that key is what opens — the pack's sheet, or an assigned one — so
+     * "Create texture" on an object that has art is an <em>edit</em>, and on
+     * one that hasn't is a blank canvas at the pack's frame size.
+     *
+     * <p>The window floats over the dialog that opened it and owns the input
+     * while it is up; saving files the sheet into the texture pack under this
+     * key's own file name (see {@link #saveSpriteSheet}).
+     */
+    private void openSpriteEditor(String key, String label) {
+        TexturePack.Frames packFrames = TexturePack.framesFor(key);
+        SkinDef showing = Skins.effective(key);
+        int w = showing != null ? showing.frameWidth : packFrames.width();
+        int h = showing != null ? showing.frameHeight : packFrames.height();
+        double fps = showing != null ? showing.fps : packFrames.fps();
+        // Beyond the canvas's limit this would open the sheet sliced at the
+        // wrong size, which is worse than saying so.
+        if (Math.max(w, h) > SpriteCanvas.MAX_SIZE) {
+            setStatus(label + "'s frames are " + w + "x" + h + " — bigger than the "
+                    + SpriteCanvas.MAX_SIZE + " px the texture editor draws at."
+                    + " Edit that sheet in a paint program, or lower its frame size here first.");
+            return;
+        }
+        SpriteCanvas canvas = showing == null ? null
+                : SpriteCanvas.load(showing.sheet, w, h, showing.frameCount, fps);
+        // Nothing to edit: one blank frame, and the creator adds the rest.
+        if (canvas == null) canvas = new SpriteCanvas(w, h, fps);
+
+        spriteKey = key;
+        spriteLabel = label;
+        spriteEditor = new SpriteEditorPanel("Create Texture — " + label,
+                TexturePack.fileNameFor(key), canvas);
+        spriteEditor.onSave(c -> saveSpriteSheet(key, label, c));
+        spriteEditor.onCancel(() -> {
+            spriteEditor = null;
+            setStatus(spriteLabel + " left as it was — nothing written to "
+                    + TexturePack.root().resolve(TexturePack.fileNameFor(spriteKey)));
+        });
+        spriteEditor.setStatus(canvas.frameCount() > 1
+                ? "Editing " + TexturePack.fileNameFor(key) + " — "
+                + canvas.frameCount() + " frames"
+                : "Draw the first frame, then \"+ Frame\" to carry it forward and animate");
+    }
+
+    /**
+     * Save the drawn sheet <em>into the texture pack</em>: written under the
+     * file name this key is looked up by, with the frame size/length/rate it
+     * was drawn at recorded as this texture's exception to the pack's
+     * universal spec. That is all it takes for the object to draw with it —
+     * and because it is now a file in the pack folder, it travels with the
+     * game like any hand-made sheet.
+     */
+    private void saveSpriteSheet(String key, String label, SpriteCanvas canvas) {
+        Path file;
+        try {
+            file = TexturePack.writeSheet(key, canvas.toSheet());
+            TexturePack.setOverride(key, canvas.width(), canvas.height(),
+                    canvas.frameCount(), canvas.fps());
+        } catch (IOException | RuntimeException e) {
+            // The window stays open, so a failed write never loses the drawing.
+            spriteEditor.setStatus("Couldn't write into " + TexturePack.root()
+                    + ": " + e.getMessage());
+            return;
+        }
+        // An object explicitly told to ignore the pack would not show what was
+        // just drawn for it, so drawing a texture turns its pack switch on.
+        SkinDef stored = Skins.get(key);
+        if (stored != null && !stored.usePack) {
+            Skins.put(new SkinDef(key, stored.sheet, canvas.width(), canvas.height(),
+                    canvas.frameCount(), canvas.fps(), true));
+            persistSkins();
+        }
+        canvas.markSaved();
+        Skins.clearCache();
+        buildPalette();
+        spriteEditor = null;
+        if (dialog == Dialog.TEXTURE) {
+            loadTextureFields();
+            openDialog(Dialog.TEXTURE); // the pack file row now reads "found"
+        }
+        setStatus(label + " now draws from " + file + " — " + canvas.frameCount()
+                + " frame" + (canvas.frameCount() == 1 ? "" : "s") + " of "
+                + canvas.width() + "x" + canvas.height() + " @ "
+                + trimNumber(canvas.fps()) + " fps, saved into the texture pack");
     }
 
     /** Pick up sheets added to the texture pack folder since the last look. */
@@ -3742,6 +3889,9 @@ public class CreativeScene extends AbstractScene {
             default -> buildCustomBlockFields();
         }
         dialogForm.addAction("Create", this::createCustomObject);
+        // The other half of "+ New …": make it, then draw what it looks like,
+        // without a detour through a paint program and the file system.
+        dialogForm.addAction("Create & draw its texture…", () -> createCustomObject(true));
         dialogForm.addAction("Cancel", this::closeDialog);
     }
 
@@ -4015,8 +4165,19 @@ public class CreativeScene extends AbstractScene {
     }
 
     private void createCustomObject() {
+        createCustomObject(false);
+    }
+
+    /**
+     * Register + persist the object the "+ New …" form describes.
+     *
+     * @param drawTexture whether to go straight into the sprite-sheet editor
+     *                    for the new object's first sheet
+     */
+    private void createCustomObject(boolean drawTexture) {
         String name = cName.isBlank() ? "Custom " + customKindName() : cName.trim();
-        createdBlockKey = null;
+        createdKind = "";
+        createdKey = "";
         try {
             switch (customCategory) {
                 case CHARACTERS -> {
@@ -4039,6 +4200,8 @@ public class CreativeScene extends AbstractScene {
                     // A brand-new character joins this level's roster, unless
                     // the roster is empty (which already means "everyone").
                     if (!level.characters.isEmpty()) level.characters.add(c.key);
+                    createdKind = "character";
+                    createdKey = c.key;
                 }
                 case MOBS -> {
                     String key = CustomContentStore.keyFor(name,
@@ -4048,6 +4211,8 @@ public class CreativeScene extends AbstractScene {
                             cSize, cSpeed, cHp, cMobDamage,
                             MobDef.Temperament.values()[cTemperIndex],
                             cDetect, cAttack, cFlying));
+                    createdKind = "mob";
+                    createdKey = key;
                 }
                 case ITEMS -> {
                     String key = CustomContentStore.keyFor(name,
@@ -4061,6 +4226,8 @@ public class CreativeScene extends AbstractScene {
                             null, null, null,
                             isTool && cToolIndex > 0 ? TOOL_CLASSES[cToolIndex] : null,
                             isTool && cToolIndex > 0 ? cToolPower : 0));
+                    createdKind = "item";
+                    createdKey = key;
                 }
                 case DECOR -> {
                     String key = CustomContentStore.keyFor(name,
@@ -4068,6 +4235,8 @@ public class CreativeScene extends AbstractScene {
                     customContent.addDecor(new Decor(key, name,
                             Decor.Shape.values()[cShapeIndex],
                             new Color(cR, cG, cB), new Color(cR2, cG2, cB2), cSizeTiles));
+                    createdKind = "decor";
+                    createdKey = key;
                 }
                 case SURFACE -> {
                     String key = CustomContentStore.keyFor(name,
@@ -4082,6 +4251,8 @@ public class CreativeScene extends AbstractScene {
                             SurfaceDecor.Style.values()[cSurfStyleIndex],
                             new Color(cR, cG, cB), new Color(cR2, cG2, cB2),
                             faces, cSurfForeground));
+                    createdKind = "surface";
+                    createdKey = key;
                 }
                 default -> {
                     boolean liquid = customCategory == Category.LIQUIDS;
@@ -4094,7 +4265,8 @@ public class CreativeScene extends AbstractScene {
                             solid ? key : null, liquid, cDamage, cHardness,
                             cToolIndex > 0 ? TOOL_CLASSES[cToolIndex] : null,
                             !liquid && cFalling, cTopTexture, cSideTexture));
-                    createdBlockKey = key;
+                    createdKind = "block";
+                    createdKey = key;
                 }
             }
         } catch (RuntimeException e) {
@@ -4104,11 +4276,16 @@ public class CreativeScene extends AbstractScene {
         buildPalette();
         selectNewest(name);
         closeDialog();
+        if (drawTexture && !createdKey.isEmpty()) {
+            openSpriteEditor(defaultTextureKey(createdKind, createdKey), name);
+            return; // the paint window says the rest
+        }
         // A new block leaves with its homework: the exact sheets to draw for
         // the faces it just said it has.
-        String faces = createdBlockKey == null ? "" : faceTextureHint(createdBlockKey);
+        String faces = "block".equals(createdKind) ? faceTextureHint(createdKey) : "";
         setStatus("Added custom " + customKindName().toLowerCase() + " \"" + name
-                + "\" — saved to " + customContent.file() + faces);
+                + "\" — saved to " + customContent.file() + faces
+                + " · right-click it for \"Create texture\"");
     }
 
     /** " · draw blocks_top/x.png, blocks_side/x.png" — or nothing to draw. */
@@ -4784,6 +4961,9 @@ public class CreativeScene extends AbstractScene {
         drawStatus(g);
 
         if (dialog != Dialog.NONE) drawDialog(g);
+        // "Create texture" floats over the dialog that opened it, so closing
+        // the paint window puts the creator back in that dialog.
+        if (spriteEditor != null) spriteEditor.render(g, viewportWidth, viewportHeight);
     }
 
     /** Crack overlay on the block being held-mined, scaled by progress. */
