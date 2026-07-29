@@ -269,6 +269,34 @@ class StackedBlockTest {
         }
     }
 
+    /**
+     * The overlay has to be the size of the block it is on. A block is not the
+     * same size along both screen axes — an isometric tile projects to a
+     * diamond twice as wide as it is tall — so a pattern measured along the
+     * width alone came out at twice the block's height there, spilling over the
+     * tiles around it.
+     */
+    @Test
+    void miningCracksAreTheSizeOfTheBlockTheyAreOn() {
+        for (LevelFormat format : LevelFormat.values()) {
+            Level lvl = floored(format);
+            int[] ink = inkBounds(crackInk(lvl, 15, 15));
+            int[] tile = tileBounds(camera(lvl), 15, 15);
+
+            // Cracks spider a little past the edge of what they are breaking,
+            // which is the look; twice its size is not.
+            double wide = ink[2] / (double) tile[2];
+            double tall = ink[3] / (double) tile[3];
+            assertTrue(wide < 1.4, format + ": the overlay is "
+                    + Math.round(wide * 100) + "% of the block's width");
+            assertTrue(tall < 1.4, format + ": the overlay is "
+                    + Math.round(tall * 100) + "% of the block's height");
+            // …and it is not so small it has stopped reading as a break.
+            assertTrue(wide > 0.5 && tall > 0.5,
+                    format + ": the overlay still covers the block");
+        }
+    }
+
     // --- the light direction ----------------------------------------------------
 
     /**
@@ -371,6 +399,28 @@ class StackedBlockTest {
             sy += px[1];
         }
         return n == 0 ? new double[]{0, 0} : new double[]{sx / (double) n, sy / (double) n};
+    }
+
+    /** {@code {x, y, width, height}} of a set of screen pixels. */
+    private static int[] inkBounds(List<int[]> ink) {
+        int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
+        int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+        for (int[] px : ink) {
+            minX = Math.min(minX, px[0]);
+            maxX = Math.max(maxX, px[0]);
+            minY = Math.min(minY, px[1]);
+            maxY = Math.max(maxY, px[1]);
+        }
+        return ink.isEmpty() ? new int[]{0, 0, 0, 0}
+                : new int[]{minX, minY, maxX - minX + 1, maxY - minY + 1};
+    }
+
+    /** {@code {x, y, width, height}} of the tile at (col,row) as projected. */
+    private static int[] tileBounds(Camera cam, int col, int row) {
+        List<int[]> corners = new java.util.ArrayList<>(4);
+        double[][] cs = {{col, row}, {col + 1, row}, {col + 1, row + 1}, {col, row + 1}};
+        for (double[] c : cs) corners.add(project(cam, c[0] * TILE, c[1] * TILE));
+        return inkBounds(corners);
     }
 
     /** Pixels where two frames disagree, as {x, y} pairs. */
