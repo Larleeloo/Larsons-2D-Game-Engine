@@ -42,8 +42,40 @@ public final class LiquidSim {
     /** Cells of downward fall applied per tick (fast, like pouring). */
     private static final int FALL_ROUNDS = 3;
 
-    /** One changed cell, for feedback/broadcast. */
-    public record Change(int col, int row, int id) {}
+    /**
+     * One changed cell, for feedback/broadcast. {@code layer} is which of the
+     * level's layers it changed ({@link Level#LAYER_GROUND} /
+     * {@link Level#LAYER_UPPER}), because a plan-view pool sits on the floor
+     * rather than replacing it and a listener applying the change elsewhere
+     * has to put it in the same place.
+     */
+    public record Change(int col, int row, int id, int layer) {
+        /** A change to the only layer a side-scrolling level has. */
+        public Change(int col, int row, int id) {
+            this(col, row, id, Level.LAYER_GROUND);
+        }
+    }
+
+    /**
+     * The layer liquids and falling blocks live in, and the reads and writes
+     * that reach it. In a side-scroller that is the level's one grid; in a
+     * plan view it is the stacked layer, because there the ground layer is the
+     * floor itself — a pool spreading across a room lies <em>on</em> the floor,
+     * and a stream that replaced it would eat the room.
+     */
+    private record Cells(Level level, int layer) {
+        static Cells of(Level level) {
+            return new Cells(level, level.surfaceLayer());
+        }
+
+        int get(int col, int row) {
+            return level.tileAt(col, row, layer);
+        }
+
+        boolean set(int col, int row, int id) {
+            return level.setTile(col, row, layer, id);
+        }
+    }
 
     private double accumulator;
 
@@ -80,12 +112,13 @@ public final class LiquidSim {
 
     private void tick(Level level, boolean gravityOn, List<Change> changes) {
         BlockRegistry blocks = level.blocks;
+        Cells cells = Cells.of(level);
         // One cheap presence scan gates the expensive passes. Most levels
         // carry no liquids or falling blocks at all, but the cellular passes
         // below allocate whole-grid BFS buffers and rescan the map several
         // times each — on a big custom level that regularly blew the 60 Hz
         // multiplayer server's tick budget and stuttered everyone's game.
-        Set<Integer> present = presentTileIds(level);
+        Set<Integer> present = presentTileIds(level, cells);
         boolean anyFalling = false;
         for (int id : present) {
             Block b = blocks.get(id);
@@ -94,10 +127,10 @@ public final class LiquidSim {
                 break;
             }
         }
-        if (gravityOn && anyFalling) fallBlocks(level, changes);
+        if (gravityOn && anyFalling) fallBlocks(level, cells, changes);
         if (containsAny(blocks, present, "lava", "lava_flow")
                 && containsAny(blocks, present, "water", "water_flow")) {
-            quenchLava(level, changes);
+            quenchLava(level, cells, changes);
         }
         // One pass per distinct liquid family that has a flow twin and is
         // actually on the map.
@@ -105,17 +138,18 @@ public final class LiquidSim {
             if (b.liquid() && !b.isFlow() && blocks.flowFor(b) != null
                     && (present.contains(b.id())
                     || present.contains(blocks.flowFor(b).id()))) {
-                flowFamily(level, b, gravityOn, changes);
+                flowFamily(level, cells, b, gravityOn, changes);
             }
         }
     }
 
-    /** The distinct non-empty tile ids on the grid (one fast scan). */
-    private static Set<Integer> presentTileIds(Level level) {
+    /** The distinct non-empty tile ids in the liquid layer (one fast scan). */
+    private static Set<Integer> presentTileIds(Level level, Cells cells) {
         Set<Integer> present = new HashSet<>();
         int last = 0;
-        for (int[] row : level.tiles) {
-            for (int id : row) {
+        for (int r = 0; r < level.height; r++) {
+            for (int c = 0; c < level.width; c++) {
+                int id = cells.get(c, r);
                 if (id != 0 && id != last) {
                     present.add(id);
                     last = id;
@@ -139,17 +173,17 @@ public final class LiquidSim {
      * customs): unsupported ones drop a cell per tick, displacing liquids —
      * the same bottom-up sweep sand towers collapse with in the original.
      */
-    private void fallBlocks(Level level, List<Change> changes) {
+    private void fallBlocks(Level level, Cells cells, List<Change> changes) {
         BlockRegistry blocks = level.blocks;
         int w = level.width, h = level.height;
         for (int r = h - 2; r >= 0; r--) {
             for (int c = 0; c < w; c++) {
-                Block b = blocks.get(level.tiles[r][c]);
+                Block b = blocks.get(cells.get(c, r));
                 if (b == null || !b.falling()) continue;
-                Block below = blocks.get(level.tiles[r + 1][c]);
-                if (level.tiles[r + 1][c] == 0 || (below != null && below.liquid())) {
-                    setCell(level, c, r + 1, b.id(), changes);
-                    setCell(level, c, r, 0, changes);
+                Block below = blocks.get(cells.get(c, r + 1));
+                if (cells.get(c, r + 1) == 0 || (below != null && below.liquid())) {
+                    setCell(cells, c, r + 1, b.id(), changes);
+                    setCell(cells, c, r, 0, changes);
                 }
             }
         }
@@ -164,20 +198,21 @@ public final class LiquidSim {
         };
     }
 
-    private void flowFamily(Level level, Block source, boolean gravityOn, List<Change> changes) {
+    private void flowFamily(Level level, Cells cells, Block source, boolean gravityOn,
+                            List<Change> changes) {
         BlockRegistry blocks = level.blocks;
         Block flow = blocks.flowFor(source);
         int w = level.width, h = level.height;
         int srcId = source.id(), flowId = flow.id();
         int range = spreadRange(source);
 
-        int[] best = reachable(level, srcId, flowId, range, gravityOn);
+        int[] best = reachable(level, cells, srcId, flowId, range, gravityOn);
 
         // Drain: flow cells no longer fed by a source disappear at once.
         for (int r = 0; r < h; r++) {
             for (int c = 0; c < w; c++) {
-                if (level.tiles[r][c] == flowId && best[r * w + c] < 0) {
-                    setCell(level, c, r, 0, changes);
+                if (cells.get(c, r) == flowId && best[r * w + c] < 0) {
+                    setCell(cells, c, r, 0, changes);
                 }
             }
         }
@@ -190,25 +225,25 @@ public final class LiquidSim {
             List<int[]> adds = new ArrayList<>();
             for (int r = 0; r < h; r++) {
                 for (int c = 0; c < w; c++) {
-                    if (level.tiles[r][c] != 0 || best[r * w + c] < 0) continue;
+                    if (cells.get(c, r) != 0 || best[r * w + c] < 0) continue;
                     boolean fed;
                     if (gravityOn) {
                         // Each round fills air under a liquid cell; the first
                         // round also fills cells beside one.
-                        fed = (r > 0 && isFamily(level, c, r - 1, srcId, flowId))
+                        fed = (r > 0 && isFamily(cells, c, r - 1, srcId, flowId))
                                 || (round == 0
-                                && ((c > 0 && isFamily(level, c - 1, r, srcId, flowId))
-                                || (c + 1 < w && isFamily(level, c + 1, r, srcId, flowId))));
+                                && ((c > 0 && isFamily(cells, c - 1, r, srcId, flowId))
+                                || (c + 1 < w && isFamily(cells, c + 1, r, srcId, flowId))));
                     } else {
-                        fed = (r > 0 && isFamily(level, c, r - 1, srcId, flowId))
-                                || (r + 1 < h && isFamily(level, c, r + 1, srcId, flowId))
-                                || (c > 0 && isFamily(level, c - 1, r, srcId, flowId))
-                                || (c + 1 < w && isFamily(level, c + 1, r, srcId, flowId));
+                        fed = (r > 0 && isFamily(cells, c, r - 1, srcId, flowId))
+                                || (r + 1 < h && isFamily(cells, c, r + 1, srcId, flowId))
+                                || (c > 0 && isFamily(cells, c - 1, r, srcId, flowId))
+                                || (c + 1 < w && isFamily(cells, c + 1, r, srcId, flowId));
                     }
                     if (fed) adds.add(new int[]{c, r});
                 }
             }
-            for (int[] a : adds) setCell(level, a[0], a[1], flowId, changes);
+            for (int[] a : adds) setCell(cells, a[0], a[1], flowId, changes);
             if (adds.isEmpty()) break;
         }
     }
@@ -221,15 +256,15 @@ public final class LiquidSim {
      * diamond around each source. Cells are "passable" when they are air or
      * already hold this liquid family.
      */
-    private static int[] reachable(Level level, int srcId, int flowId, int range,
-                                   boolean gravityOn) {
+    private static int[] reachable(Level level, Cells cells, int srcId, int flowId,
+                                   int range, boolean gravityOn) {
         int w = level.width, h = level.height;
         int[] best = new int[w * h];
         java.util.Arrays.fill(best, -1);
         ArrayDeque<int[]> queue = new ArrayDeque<>();
         for (int r = 0; r < h; r++) {
             for (int c = 0; c < w; c++) {
-                if (level.tiles[r][c] == srcId) {
+                if (cells.get(c, r) == srcId) {
                     best[r * w + c] = range;
                     queue.add(new int[]{c, r, range});
                 }
@@ -239,7 +274,7 @@ public final class LiquidSim {
             int[] cur = queue.poll();
             int c = cur[0], r = cur[1], b = cur[2];
             if (gravityOn) {
-                boolean belowOpen = r + 1 < h && passable(level, c, r + 1, srcId, flowId);
+                boolean belowOpen = r + 1 < h && passable(cells, c, r + 1, srcId, flowId);
                 if (belowOpen && best[(r + 1) * w + c] < range) {
                     best[(r + 1) * w + c] = range;
                     queue.add(new int[]{c, r + 1, range});
@@ -248,7 +283,7 @@ public final class LiquidSim {
                 for (int dc = -1; dc <= 1; dc += 2) {
                     int nc = c + dc;
                     if (nc < 0 || nc >= w) continue;
-                    if (passable(level, nc, r, srcId, flowId) && best[r * w + nc] < b - 1) {
+                    if (passable(cells, nc, r, srcId, flowId) && best[r * w + nc] < b - 1) {
                         best[r * w + nc] = b - 1;
                         queue.add(new int[]{nc, r, b - 1});
                     }
@@ -258,7 +293,7 @@ public final class LiquidSim {
                 for (int[] d : PLANE_NEIGHBOURS) {
                     int nc = c + d[0], nr = r + d[1];
                     if (nc < 0 || nc >= w || nr < 0 || nr >= h) continue;
-                    if (passable(level, nc, nr, srcId, flowId) && best[nr * w + nc] < b - 1) {
+                    if (passable(cells, nc, nr, srcId, flowId) && best[nr * w + nc] < b - 1) {
                         best[nr * w + nc] = b - 1;
                         queue.add(new int[]{nc, nr, b - 1});
                     }
@@ -271,18 +306,18 @@ public final class LiquidSim {
     /** The four plan-view spread directions (no "down" to pour along). */
     private static final int[][] PLANE_NEIGHBOURS = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
 
-    private static boolean passable(Level level, int c, int r, int srcId, int flowId) {
-        int id = level.tiles[r][c];
+    private static boolean passable(Cells cells, int c, int r, int srcId, int flowId) {
+        int id = cells.get(c, r);
         return id == 0 || id == srcId || id == flowId;
     }
 
-    private static boolean isFamily(Level level, int c, int r, int srcId, int flowId) {
-        int id = level.tiles[r][c];
+    private static boolean isFamily(Cells cells, int c, int r, int srcId, int flowId) {
+        int id = cells.get(c, r);
         return id == srcId || id == flowId;
     }
 
     /** Water beside/above lava: flowing lava → stone, source lava → obsidian. */
-    private void quenchLava(Level level, List<Change> changes) {
+    private void quenchLava(Level level, Cells cells, List<Change> changes) {
         BlockRegistry blocks = level.blocks;
         Block water = blocks.get("water");
         Block waterFlow = blocks.get("water_flow");
@@ -300,26 +335,26 @@ public final class LiquidSim {
         List<int[]> hits = new ArrayList<>();
         for (int r = 0; r < h; r++) {
             for (int c = 0; c < w; c++) {
-                int id = level.tiles[r][c];
+                int id = cells.get(c, r);
                 if (id != lavaId && id != lavaFlowId) continue;
-                boolean touched = touches(level, c, r, waterId)
-                        || (waterFlowId > 0 && touches(level, c, r, waterFlowId));
+                boolean touched = touches(cells, c, r, waterId)
+                        || (waterFlowId > 0 && touches(cells, c, r, waterFlowId));
                 if (touched) hits.add(new int[]{c, r, id});
             }
         }
         for (int[] hit : hits) {
             int replacement = hit[2] == lavaId && obsidian != null
                     ? obsidian.id() : stone.id();
-            setCell(level, hit[0], hit[1], replacement, changes);
+            setCell(cells, hit[0], hit[1], replacement, changes);
         }
     }
 
-    private static boolean touches(Level level, int c, int r, int id) {
-        return level.tileAt(c - 1, r) == id || level.tileAt(c + 1, r) == id
-                || level.tileAt(c, r - 1) == id || level.tileAt(c, r + 1) == id;
+    private static boolean touches(Cells cells, int c, int r, int id) {
+        return cells.get(c - 1, r) == id || cells.get(c + 1, r) == id
+                || cells.get(c, r - 1) == id || cells.get(c, r + 1) == id;
     }
 
-    private static void setCell(Level level, int c, int r, int id, List<Change> changes) {
-        if (level.setTile(c, r, id)) changes.add(new Change(c, r, id));
+    private static void setCell(Cells cells, int c, int r, int id, List<Change> changes) {
+        if (cells.set(c, r, id)) changes.add(new Change(c, r, id, cells.layer()));
     }
 }

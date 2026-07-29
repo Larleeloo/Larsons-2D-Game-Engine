@@ -437,14 +437,26 @@ class NetworkTest {
 
     @Test
     void blockBatchesRoundTrip() {
+        // Flat col,row,id,layer quadruples: the layer rides along so a
+        // plan-view level's stacked blocks land in the layer they changed in.
         String line = Protocol.blockBatch(java.util.List.of(
-                new int[]{1, 2, 7}, new int[]{3, 4, 0}));
+                new int[]{1, 2, 7, 0}, new int[]{3, 4, 0, 1}));
         Map<String, Object> msg = Protocol.decode(line);
         assertEquals("blocks", Protocol.type(msg));
         java.util.List<Object> flat = com.larsons.engine.util.Json.asArray(msg.get("l"));
-        assertEquals(6, flat.size());
+        assertEquals(8, flat.size());
         assertEquals(7, ((Number) flat.get(2)).intValue());
-        assertEquals(0, ((Number) flat.get(5)).intValue());
+        assertEquals(0, ((Number) flat.get(3)).intValue());
+        assertEquals(0, ((Number) flat.get(6)).intValue());
+        assertEquals(1, ((Number) flat.get(7)).intValue());
+
+        // A caller that still speaks in triples means the ground layer.
+        Map<String, Object> legacy = Protocol.decode(
+                Protocol.blockBatch(java.util.List.of(new int[]{5, 6, 9})));
+        java.util.List<Object> legacyFlat =
+                com.larsons.engine.util.Json.asArray(legacy.get("l"));
+        assertEquals(4, legacyFlat.size());
+        assertEquals(0, ((Number) legacyFlat.get(3)).intValue());
     }
 
     private static void sleep(long millis) {

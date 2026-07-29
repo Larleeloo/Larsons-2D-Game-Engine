@@ -64,7 +64,6 @@ class ConfigFeatureTest {
     void gameProfileJsonRoundTrips() {
         GameProfile p = new GameProfile("My Type");
         p.perspective = Perspective.ISOMETRIC;
-        p.perspectiveSwitchingEnabled = true;
         p.zoomEnabled = false;
         p.maxZoom = 3.5;
         p.maxFps = 144;
@@ -73,7 +72,6 @@ class ConfigFeatureTest {
         GameProfile q = GameProfile.fromJson(p.toJson());
         assertEquals("My Type", q.name);
         assertEquals(Perspective.ISOMETRIC, q.perspective);
-        assertTrue(q.perspectiveSwitchingEnabled);
         assertFalse(q.zoomEnabled);
         assertEquals(3.5, q.maxZoom);
         assertEquals(144, q.maxFps);

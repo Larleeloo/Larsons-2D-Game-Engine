@@ -66,6 +66,18 @@ public final class TextureKeys {
     public static final String BLOCKS = "blocks";
     public static final String LIQUIDS = "liquids";
     public static final String LIGHTS = "lights";
+    /**
+     * The plan-view block pool: the face a top-down or isometric level looks
+     * down at. Separate from {@link #BLOCKS} because a side-scroller and a plan
+     * view see different faces of the same block — one sheet cannot be both a
+     * wall seen edge-on and a floor seen from above.
+     */
+    public static final String BLOCKS_TOP = "blocks_top";
+    /**
+     * The plan-view block pool's other half: the face a stacked block turns
+     * toward the camera, which is what gives a barrier its height.
+     */
+    public static final String BLOCKS_SIDE = "blocks_side";
     public static final String MOBS = "mobs";
     public static final String ITEMS = "items";
     public static final String DECOR = "decor";
@@ -118,10 +130,15 @@ public final class TextureKeys {
 
     private TextureKeys() {}
 
+    /** The plan-view block faces, as key suffix and pack folder. */
+    public static final String TOP_FACE = "top";
+    public static final String SIDE_FACE = "side";
+
     /** Every pack folder, in the order the key list documents them. */
     public static List<String> folders() {
-        return List.of(BLOCKS, LIQUIDS, LIGHTS, MOBS, ITEMS, DECOR, BLOCK_DECOR,
-                PLAYER, UNITS, PROJECTILES, PARTICLES, BOARD);
+        return List.of(BLOCKS, BLOCKS_TOP, BLOCKS_SIDE, LIQUIDS, LIGHTS, MOBS,
+                ITEMS, DECOR, BLOCK_DECOR, PLAYER, UNITS, PROJECTILES, PARTICLES,
+                BOARD);
     }
 
     /**
@@ -137,8 +154,10 @@ public final class TextureKeys {
         String rest = join(parts, 1, parts.length);      // "slime_walk_e" / "dirt"
         return switch (parts[0]) {
             // Liquids and lights are blocks; accept all three palette folders.
-            case "block" -> List.of(BLOCKS + "/" + rest, LIQUIDS + "/" + rest,
-                    LIGHTS + "/" + rest);
+            // A plan-view face (block/dirt/top) looks in its own pool first and
+            // then falls back to the block's single side-scroll sheet, so a pack
+            // that supplies only blocks/dirt.png still dresses every format.
+            case "block" -> blockPaths(parts);
             // Nested namespaces drop one segment at a time, so a single sheet
             // covers every state and direction until finer ones are supplied.
             case "mob" -> progressive(MOBS, parts);
@@ -155,6 +174,31 @@ public final class TextureKeys {
             case "board" -> List.of(BOARD + "/" + rest);
             default -> List.of(OTHER + "/" + key.replace('/', '_'));
         };
+    }
+
+    /**
+     * The pack paths a block key accepts. A bare {@code block/<key>} is the
+     * one sheet a side-scroller draws it with, found in whichever of the three
+     * palette folders its category is. A face key ({@code block/<key>/top},
+     * {@code block/<key>/side}) leads with the matching plan-view pool and then
+     * falls through to that same single sheet, so supplying a face is an
+     * upgrade rather than a requirement.
+     */
+    private static List<String> blockPaths(String[] parts) {
+        String blockKey = parts[1];
+        List<String> flat = List.of(BLOCKS + "/" + blockKey, LIQUIDS + "/" + blockKey,
+                LIGHTS + "/" + blockKey);
+        if (parts.length < 3) return flat;
+        String pool = switch (parts[2]) {
+            case TOP_FACE -> BLOCKS_TOP;
+            case SIDE_FACE -> BLOCKS_SIDE;
+            default -> null;
+        };
+        if (pool == null) return flat;
+        List<String> out = new ArrayList<>(flat.size() + 1);
+        out.add(pool + "/" + blockKey);
+        out.addAll(flat);
+        return out;
     }
 
     /**
@@ -188,6 +232,19 @@ public final class TextureKeys {
             String category = b.liquid() ? "Liquids" : b.emitsLight() ? "Lights" : "Blocks";
             out.add(new Entry(category, folder, "block/" + b.key(), b.key(),
                     b.displayName(), List.of()));
+            // The plan-view faces this block says it has. Both are optional —
+            // an absent face falls back to the sheet above — so only the ones
+            // a creator asked for are listed as files to draw.
+            if (b.topTexture()) {
+                out.add(new Entry("Block tops (top-down / isometric)", BLOCKS_TOP,
+                        b.topTextureKey(), b.key(), b.displayName() + " — top face",
+                        List.of()));
+            }
+            if (b.sideTexture()) {
+                out.add(new Entry("Block sides (top-down / isometric)", BLOCKS_SIDE,
+                        b.sideTextureKey(), b.key(), b.displayName() + " — side face",
+                        List.of()));
+            }
         }
         for (MobDef d : MobRegistry.standard().all()) {
             out.add(new Entry("Mobs", MOBS, "mob/" + d.key() + "/idle", d.key(),

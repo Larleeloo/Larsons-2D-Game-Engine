@@ -80,6 +80,18 @@ public class Level {
     public int[][] tiles;      // [row][col], 0 = empty; null in chunked mode
     /** Sparse chunk storage for giant levels; {@code null} in dense mode. */
     public ChunkedTiles chunked;
+    /**
+     * The second layer of blocks stacked on the ground layer, in the plan-view
+     * formats only ({@link LevelFormat#layered()}); {@code null} until the
+     * level has one. Same storage shape as {@link #tiles}/{@link #chunked}, so
+     * a layered level carries either two dense grids or two chunk maps.
+     *
+     * <p>This layer is what a top-down or isometric level says <em>height</em>
+     * with, and height is the whole of its geometry: see {@link #walkable}.
+     */
+    public int[][] upper;
+    /** Sparse chunk storage for the upper layer of a giant layered level. */
+    public ChunkedTiles upperChunked;
     public Color background = new Color(24, 28, 38);
     public Color[] palette = defaultPalette();
     public double spawnX, spawnY;   // world pixels
@@ -189,6 +201,16 @@ public class Level {
     }
 
     /**
+     * Whether blocks stack two deep here, and so whether {@link #walkable}
+     * rather than the block's own {@code solid} flag decides what stops a
+     * body. True in the plan views, and only for registry-mode levels —
+     * legacy palette levels have no block definitions to stack.
+     */
+    public boolean layered() {
+        return registryTiles && format().layered();
+    }
+
+    /**
      * Snapshot {@code profile}'s feature toggles as this level's own
      * {@link #settings} — what saving a level does.
      *
@@ -246,11 +268,81 @@ public class Level {
         return tiles[row][col];
     }
 
+    /** The layer index of the floor — the only layer a side-scroller has. */
+    public static final int LAYER_GROUND = 0;
+    /** The layer index of the blocks stacked on the floor (plan views only). */
+    public static final int LAYER_UPPER = 1;
+
     /**
-     * Whether the tile at (col,row) blocks movement. Registry mode asks the
-     * block definition; palette mode keeps the legacy "any tile is solid".
+     * The layer things placed <em>on</em> the floor go into: the stacked layer
+     * where the level has one, the single layer otherwise. Liquids pool here,
+     * blocks are mined from here down, and it is the layer a block edit means
+     * when it doesn't say.
+     */
+    public int surfaceLayer() {
+        return layered() ? LAYER_UPPER : LAYER_GROUND;
+    }
+
+    /** The tile at (col,row) in one layer — {@link #tileAt}/{@link #upperAt}. */
+    public int tileAt(int col, int row, int layer) {
+        return layer == LAYER_UPPER ? upperAt(col, row) : tileAt(col, row);
+    }
+
+    /** Set the tile at (col,row) in one layer; returns whether it changed. */
+    public boolean setTile(int col, int row, int layer, int id) {
+        return layer == LAYER_UPPER ? setUpper(col, row, id) : setTile(col, row, id);
+    }
+
+    /** The block stacked on the ground layer at (col,row); 0 = nothing there. */
+    public int upperAt(int col, int row) {
+        if (upperChunked != null) return upperChunked.get(col, row);
+        if (upper == null || row < 0 || row >= upper.length
+                || col < 0 || col >= upper[row].length) {
+            return 0;
+        }
+        return upper[row][col];
+    }
+
+    /**
+     * How many blocks deep the stack at (col,row) is: {@code 0} bare ground,
+     * {@code 1} a floor to walk on, {@code 2} a wall. Only meaningful in a
+     * {@link #layered()} level; a side-scroller answers 0 or 1.
+     */
+    public int stackHeight(int col, int row) {
+        int floor = tileAt(col, row);
+        if (floor <= 0) return 0;
+        return upperAt(col, row) > 0 ? 2 : 1;
+    }
+
+    /**
+     * Whether a body may stand at (col,row) in a {@link #layered()} level.
+     *
+     * <p>On a plane the block grid <em>is</em> the floor, so what stops you is
+     * the shape of that floor rather than any property of one block:
+     * <ul>
+     *   <li><b>Bare ground</b> — nothing painted, or outside the level — is a
+     *       hole. There is no "down" to fall along in a plan view, so a gap in
+     *       the floor is simply somewhere you cannot go.</li>
+     *   <li><b>One layer</b> is the pathway: a floor tile you walk across.</li>
+     *   <li><b>Two layers</b> is a barrier — the stacked block stands up out of
+     *       the floor and reads as a wall, which is what its cast shadow shows.
+     *       A non-solid block stacked on a path (a torch, a flower) is dressing
+     *       rather than a wall, so it leaves the path open.</li>
+     * </ul>
+     */
+    public boolean walkable(int col, int row) {
+        if (tileAt(col, row) <= 0) return false;
+        Block up = upperBlockAt(col, row);
+        return up == null || !up.solid();
+    }
+
+    /**
+     * Whether the tile at (col,row) blocks movement. Layered plan-view levels
+     * ask the stack ({@link #walkable}); the side-scroller asks the block
+     * definition, and palette mode keeps the legacy "any tile is solid".
      */
     public boolean solidAt(int col, int row) {
+        if (layered()) return !walkable(col, row);
         int id = tileAt(col, row);
         if (id <= 0) return false;
         return !registryTiles || blocks.isSolid(id);
@@ -262,8 +354,50 @@ public class Level {
         return blocks.get(tileAt(col, row));
     }
 
-    /** The liquid occupying (col,row), or {@code null} (swim/damage checks). */
+    /** The stacked block at (col,row), or {@code null} when nothing is stacked. */
+    public Block upperBlockAt(int col, int row) {
+        if (!registryTiles) return null;
+        return blocks.get(upperAt(col, row));
+    }
+
+    /**
+     * The block a player interacts with at (col,row) — the stacked one when
+     * there is one, else the floor. Mining takes the stack apart from the top
+     * down, which is what makes a wall become a path and then a hole.
+     */
+    public Block topBlockAt(int col, int row) {
+        Block up = upperBlockAt(col, row);
+        return up != null ? up : blockAt(col, row);
+    }
+
+    /**
+     * The layer a block placed at (col,row) would land in, or {@code -1} when
+     * the cell has no room for one.
+     *
+     * <p>A stack is built from the bottom up, so a hole is floored before
+     * anything is stood on it and a placed block never buries the one already
+     * there. A liquid is the exception in both layers: covering a pool is how
+     * pools are removed, since liquids cannot be mined.
+     */
+    public int placeLayer(int col, int row) {
+        if (col < 0 || row < 0 || col >= width || row >= height) return -1;
+        if (tileAt(col, row) == 0) return LAYER_GROUND;
+        if (!layered()) {
+            return liquidAt(col, row) != null ? LAYER_GROUND : -1;
+        }
+        Block up = upperBlockAt(col, row);
+        if (up == null) return LAYER_UPPER;
+        return up.liquid() ? LAYER_UPPER : -1;
+    }
+
+    /**
+     * The liquid occupying (col,row), or {@code null} (swim/damage checks).
+     * A pool in a layered level sits on the floor rather than replacing it, so
+     * the stacked layer is looked at first and the floor is the fallback.
+     */
     public Block liquidAt(int col, int row) {
+        Block up = upperBlockAt(col, row);
+        if (up != null && up.liquid()) return up;
         Block b = blockAt(col, row);
         return b != null && b.liquid() ? b : null;
     }
@@ -302,26 +436,18 @@ public class Level {
         if (chunked != null) {
             // Chunked levels resize in place: chunks outside the bounds unload.
             chunked.resize(newWidth, newHeight);
+            if (upperChunked != null) upperChunked.resize(newWidth, newHeight);
         } else if ((long) newWidth * newHeight > DENSE_TILE_LIMIT) {
             // Growing past the dense limit converts to chunked storage.
-            ChunkedTiles next = new ChunkedTiles(newWidth, newHeight);
-            if (tiles != null) {
-                for (int r = 0; r < Math.min(height, newHeight); r++) {
-                    for (int c = 0; c < Math.min(width, newWidth); c++) {
-                        if (tiles[r][c] != 0) next.set(c, r, tiles[r][c]);
-                    }
-                }
-            }
+            chunked = toChunked(tiles, newWidth, newHeight);
+            upperChunked = upper == null ? null : toChunked(upper, newWidth, newHeight);
             tiles = null;
-            chunked = next;
+            upper = null;
         } else {
-            int[][] next = new int[newHeight][newWidth];
-            if (tiles != null) {
-                for (int r = 0; r < Math.min(height, newHeight); r++) {
-                    System.arraycopy(tiles[r], 0, next[r], 0, Math.min(width, newWidth));
-                }
-            }
-            tiles = next;
+            int[][] nextTiles = resized(tiles, newWidth, newHeight);
+            int[][] nextUpper = upper == null ? null : resized(upper, newWidth, newHeight);
+            tiles = nextTiles;
+            upper = nextUpper;
         }
         width = newWidth;
         height = newHeight;
@@ -333,6 +459,30 @@ public class Level {
         surfaceDecor.removeIf(sd -> sd.col() >= width || sd.row() >= height);
         containers.keySet().removeIf(k ->
                 (k & 0xFFFFFFFFL) >= width || (k >>> 32) >= height);
+    }
+
+    /** One layer, re-cut to new bounds, keeping the overlapping region. */
+    private int[][] resized(int[][] layer, int newWidth, int newHeight) {
+        int[][] next = new int[newHeight][newWidth];
+        if (layer != null) {
+            for (int r = 0; r < Math.min(height, newHeight); r++) {
+                System.arraycopy(layer[r], 0, next[r], 0, Math.min(width, newWidth));
+            }
+        }
+        return next;
+    }
+
+    /** One dense layer converted to chunked storage at the new bounds. */
+    private ChunkedTiles toChunked(int[][] layer, int newWidth, int newHeight) {
+        ChunkedTiles next = new ChunkedTiles(newWidth, newHeight);
+        if (layer != null) {
+            for (int r = 0; r < Math.min(height, newHeight); r++) {
+                for (int c = 0; c < Math.min(width, newWidth); c++) {
+                    if (layer[r][c] != 0) next.set(c, r, layer[r][c]);
+                }
+            }
+        }
+        return next;
     }
 
     /**
@@ -388,8 +538,86 @@ public class Level {
         return true;
     }
 
+    /**
+     * Set the stacked block at (col,row), returns {@code true} if it changed.
+     * Only layered levels have somewhere to put it, and the storage for it is
+     * allocated the first time something is actually stacked — a plan-view
+     * level with no walls in it costs no second grid.
+     */
+    public boolean setUpper(int col, int row, int id) {
+        if (id < 0 || !layered()) return false;
+        if (id != 0 && blocks.get(id) == null) return false;
+        if (col < 0 || row < 0 || col >= width || row >= height) return false;
+        if (id != 0) ensureUpperStorage();
+        if (upperChunked != null) return upperChunked.set(col, row, id);
+        if (upper == null) return false;  // clearing a layer that never existed
+        if (upper[row][col] == id) return false;
+        upper[row][col] = id;
+        return true;
+    }
+
+    /**
+     * Paint a whole stack at (col,row): the block as floor <em>and</em> stacked
+     * on itself, which is what a wall is. In an unlayered level it just sets
+     * the tile.
+     */
+    public boolean stackTile(int col, int row, int id) {
+        boolean changed = setTile(col, row, id);
+        return setUpper(col, row, id) || changed;
+    }
+
+    /**
+     * Lay {@code id} across the ground layer, so a plan-view canvas is floor
+     * rather than holes. Dense levels are filled outright; a giant level takes
+     * a generator instead, which fills each chunk as the camera reaches it.
+     */
+    public void fillFloor(int id) {
+        if (id <= 0) return;
+        if (chunked != null) {
+            chunked.setGenerator(flatGenerator(id));
+            return;
+        }
+        if (tiles == null) return;
+        for (int[] row : tiles) java.util.Arrays.fill(row, id);
+    }
+
+    /** A {@link ChunkGenerator} that lays one block id everywhere. */
+    public static ChunkGenerator flatGenerator(int id) {
+        return new FlatChunks(id);
+    }
+
+    /**
+     * The floor under a giant plan-view level. Its "seed" is the block id it
+     * lays, so a save carries everything needed to rebuild it — and it is a
+     * named type rather than a lambda so {@link #toMap()} can tell it apart
+     * from the terrain generator and write down which one to restore.
+     */
+    public record FlatChunks(int blockId) implements ChunkGenerator {
+        @Override
+        public void generate(int cx, int cy, int[] out) {
+            java.util.Arrays.fill(out, blockId);
+        }
+
+        @Override
+        public long seed() {
+            return blockId;
+        }
+    }
+
+    /** Allocate the upper layer's storage, matching the ground layer's shape. */
+    private void ensureUpperStorage() {
+        if (chunked != null) {
+            if (upperChunked == null) upperChunked = new ChunkedTiles(width, height);
+        } else if (upper == null && tiles != null) {
+            upper = new int[height][width];
+        }
+    }
+
     /** Cell data that follows its block: clearing the cell drops it too. */
     private void clearCellAttachments(int col, int row) {
+        // The floor going means the stack goes with it — there is nothing left
+        // to hold a block up, and a stacked block over a hole reads as neither.
+        setUpper(col, row, 0);
         removeSurfaceDecorAt(col, row);
         if (!containers.isEmpty()) containers.remove(cellKey(col, row));
     }
@@ -400,6 +628,58 @@ public class Level {
         surfaceDecor.removeIf(sd -> sd.col() == col && sd.row() == row);
     }
 
+    // --- legacy plan-view levels -----------------------------------------------
+
+    /**
+     * Rebuild a plan-view level written before blocks stacked, so it plays the
+     * way its creator drew it.
+     *
+     * <p>The old rule was the side view's — a solid block stopped you and
+     * everything else, air included, was open floor. The new rule reads the
+     * <em>stack</em>, which inverts exactly the case those levels are mostly
+     * made of: their corridors are air, and air is now a hole. So each cell is
+     * re-cut into the layers that mean what it used to:
+     *
+     * <ul>
+     *   <li>a solid block becomes a stack of itself — floor with the same block
+     *       standing on it, which is the barrier it always was;</li>
+     *   <li>a passable block (a path marking, a torch, a flower) stays one
+     *       layer, the pathway it always was;</li>
+     *   <li>air becomes plain floor, because it was somewhere you could walk.</li>
+     * </ul>
+     *
+     * <p>Giant chunked levels are laid with a floor generator instead of being
+     * walked cell by cell; their saved chunks are converted in place.
+     */
+    public void liftSolidsToUpperLayer() {
+        if (!layered()) return;
+        Block floor = LevelFormat.floorBlock(blocks);
+        int floorId = floor != null ? floor.id() : 0;
+        if (floorId <= 0) return;
+        if (chunked != null) {
+            chunked.setGenerator(flatGenerator(floorId));
+            chunked.forEachLoadedCell((col, row, id) -> {
+                if (blocks.isSolid(id)) {
+                    setUpper(col, row, id);
+                } else if (id == 0) {
+                    chunked.set(col, row, floorId);
+                }
+            });
+            return;
+        }
+        if (tiles == null) return;
+        for (int r = 0; r < height; r++) {
+            for (int c = 0; c < width; c++) {
+                int id = tileAt(c, r);
+                if (id == 0) {
+                    setTile(c, r, floorId);
+                } else if (blocks.isSolid(id)) {
+                    setUpper(c, r, id);
+                }
+            }
+        }
+    }
+
     // --- play-test terrain snapshots -------------------------------------------
 
     /**
@@ -408,20 +688,42 @@ public class Level {
      * {@link #restoreTiles} puts it back afterwards.
      */
     public Object snapshotTiles() {
-        if (chunked != null) return chunked.snapshot();
-        if (tiles == null) return null;
-        int[][] copy = new int[tiles.length][];
-        for (int r = 0; r < tiles.length; r++) copy[r] = tiles[r].clone();
-        return copy;
+        return new TerrainSnapshot(snapshotLayer(chunked, tiles),
+                snapshotLayer(upperChunked, upper));
     }
 
     /** Restore terrain saved by {@link #snapshotTiles} (no-op on mismatch). */
     public void restoreTiles(Object snapshot) {
-        if (chunked != null && snapshot instanceof ChunkedTiles.Snapshot s) {
-            chunked.restore(s);
-        } else if (tiles != null && snapshot instanceof int[][] saved) {
-            for (int r = 0; r < saved.length && r < tiles.length; r++) {
-                tiles[r] = saved[r].clone();
+        if (snapshot instanceof TerrainSnapshot both) {
+            restoreLayer(chunked, tiles, both.ground());
+            if (both.stacked() != null) ensureUpperStorage();
+            restoreLayer(upperChunked, upper, both.stacked());
+        } else {
+            // A snapshot from before the second layer existed: ground only.
+            restoreLayer(chunked, tiles, snapshot);
+        }
+    }
+
+    /** Both layers of a play-test terrain snapshot; either half may be null. */
+    private record TerrainSnapshot(Object ground, Object stacked) {}
+
+    /** Deep copy of one layer, whichever storage it uses. */
+    private static Object snapshotLayer(ChunkedTiles sparse, int[][] dense) {
+        if (sparse != null) return sparse.snapshot();
+        if (dense == null) return null;
+        int[][] copy = new int[dense.length][];
+        for (int r = 0; r < dense.length; r++) copy[r] = dense[r].clone();
+        return copy;
+    }
+
+    /** Put one layer back; a snapshot that doesn't match the storage is ignored. */
+    private static void restoreLayer(ChunkedTiles sparse, int[][] dense, Object snapshot) {
+        if (sparse != null && snapshot instanceof ChunkedTiles.Snapshot s) {
+            sparse.restore(s);
+        } else if (dense != null && snapshot instanceof int[][] saved) {
+            for (int r = 0; r < saved.length && r < dense.length; r++) {
+                System.arraycopy(saved[r], 0, dense[r], 0,
+                        Math.min(saved[r].length, dense[r].length));
             }
         }
     }
@@ -475,10 +777,19 @@ public class Level {
             m.put("chunkSize", ChunkedTiles.CHUNK);
             if (chunked.generator() != null) {
                 m.put("generatorSeed", chunked.generator().seed());
+                // Which generator, not just its seed: a plan view's chunks are
+                // floor, and rebuilding them as side-scrolling terrain would
+                // hand the level back full of holes and hills.
+                if (chunked.generator() instanceof FlatChunks) m.put("generator", "flat");
             }
             Map<String, Object> chunkMap = new LinkedHashMap<>();
             chunkMap.putAll(chunked.dirtyChunksRle());
             m.put("chunks", chunkMap);
+            if (upperChunked != null) {
+                Map<String, Object> upperMap = new LinkedHashMap<>();
+                upperMap.putAll(upperChunked.dirtyChunksRle());
+                if (!upperMap.isEmpty()) m.put("upperChunks", upperMap);
+            }
         } else {
             // Run-length encoded, row-major over the whole grid: pairs of
             // (tileId, runLength). Levels are mostly runs of air and terrain,
@@ -486,7 +797,12 @@ public class Level {
             // old row-of-arrays form — which matters both for saves and for
             // the multiplayer welcome message that carries the level as one
             // line. LevelLoader still reads the legacy "tiles" shape.
-            m.put("tilesRle", rleTiles());
+            m.put("tilesRle", rleOf(tiles));
+            // The stacked layer rides alongside in the same encoding. It is
+            // absent in a side-scroller and in a plan-view level nobody has
+            // built anything up in yet, which is also how a reader tells a
+            // pre-layer level apart from a deliberately flat one.
+            if (upper != null) m.put("upperRle", rleOf(upper));
         }
         if (!surfaceDecor.isEmpty()) {
             List<Object> sds = new ArrayList<>(surfaceDecor.size());
@@ -555,17 +871,17 @@ public class Level {
     }
 
     /**
-     * RLE runs (id, length, id, length, …) over the dense grid, row-major.
+     * RLE runs (id, length, id, length, …) over one dense layer, row-major.
      * Emitted against the level bounds (ragged legacy rows pad with air) so
      * the decoder can rebuild rows from {@code width} alone.
      */
-    private List<Object> rleTiles() {
+    private List<Object> rleOf(int[][] layer) {
         List<Object> runs = new ArrayList<>();
-        if (tiles == null) return runs;
+        if (layer == null) return runs;
         int runId = 0, runLen = 0;
         for (int r = 0; r < height; r++) {
             for (int c = 0; c < width; c++) {
-                int id = tileAt(c, r);
+                int id = r < layer.length && c < layer[r].length ? layer[r][c] : 0;
                 if (runLen > 0 && id == runId) {
                     runLen++;
                 } else {

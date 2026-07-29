@@ -1,7 +1,6 @@
 {
   "name": "Platformer",
   "perspective": "SIDE_SCROLL",
-  "perspectiveSwitchingEnabled": false,
   "zoomEnabled": true,
   "minZoom": 0.5,
   "maxZoom": 2.0,

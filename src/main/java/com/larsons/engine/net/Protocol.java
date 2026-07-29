@@ -29,8 +29,8 @@ import java.util.Map;
  *   client -> server   {"t":"ping","p":123456}    ->    {"t":"pong","p":123456}
  *
  *   // world editing (creative painting + play-mode mining/placing):
- *   client -> server   {"t":"edit","c":col,"r":row,"b":blockId,"m":"paint"|"play"}
- *   server -> all      {"t":"block","c":col,"r":row,"b":blockId}   (authoritative result)
+ *   client -> server   {"t":"edit","c":col,"r":row,"b":blockId,"m":"paint"|"play","y":layer}
+ *   server -> all      {"t":"block","c":col,"r":row,"b":blockId,"y":layer}  (authoritative)
  *   client -> server   {"t":"paint","k":"mob"|"item","e":"zombie","x":..,"y":..}
  *   client -> server   {"t":"erase","id":entityId}
  *
@@ -197,24 +197,31 @@ public final class Protocol {
         return encode(m);
     }
 
-    /** Client asks to change a block; {@code mode} is "paint" or "play". */
-    public static String blockEdit(int col, int row, int blockId, String mode) {
+    /**
+     * Client asks to change a block; {@code mode} is "paint" or "play" and
+     * {@code layer} is which of a plan-view level's two layers it means
+     * ({@code "y"}, absent = the ground layer, which is all a side-scroller
+     * has). See {@link com.larsons.engine.level.Level#LAYER_UPPER}.
+     */
+    public static String blockEdit(int col, int row, int blockId, String mode, int layer) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("t", "edit");
         m.put("c", col);
         m.put("r", row);
         m.put("b", blockId);
         m.put("m", mode);
+        if (layer != 0) m.put("y", layer);
         return encode(m);
     }
 
     /** Server tells everyone a block changed (the authoritative result). */
-    public static String blockSet(int col, int row, int blockId) {
+    public static String blockSet(int col, int row, int blockId, int layer) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("t", "block");
         m.put("c", col);
         m.put("r", row);
         m.put("b", blockId);
+        if (layer != 0) m.put("y", layer);
         return encode(m);
     }
 
@@ -222,19 +229,25 @@ public final class Protocol {
      * Server tells everyone many blocks changed at once — one message instead
      * of one per tile, so a liquid tick that pours hundreds of cells can't
      * flood (and overflow) every client's outbound queue. {@code changes} is a
-     * flat list of {@code col,row,blockId} triples.
+     * flat list of {@code col,row,blockId,layer} quadruples.
      */
     public static String blockBatch(List<int[]> changes) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("t", "blocks");
-        List<Object> flat = new ArrayList<>(changes.size() * 3);
+        List<Object> flat = new ArrayList<>(changes.size() * 4);
         for (int[] c : changes) {
             flat.add(c[0]);
             flat.add(c[1]);
             flat.add(c[2]);
+            flat.add(c.length > 3 ? c[3] : 0);
         }
         m.put("l", flat);
         return encode(m);
+    }
+
+    /** The layer a block message names; the ground layer when it names none. */
+    public static int layerOf(Map<String, Object> msg) {
+        return msg.get("y") instanceof Number n ? n.intValue() : 0;
     }
 
     /** Client paints an entity (creative mode): kind "mob" or "item". */

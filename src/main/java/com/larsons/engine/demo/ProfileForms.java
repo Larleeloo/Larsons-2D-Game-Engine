@@ -18,14 +18,14 @@ final class ProfileForms {
     private ProfileForms() {}
 
     static void addFeatureOptions(ConfigForm form, GameProfile p) {
-        // A level's own format decides how it is built and played; this is the
-        // format new levels start in (see LevelFormat and the creative-mode
-        // picker), which is why it reads as a default rather than a switch.
+        // A level's own format decides how it is built and played, and it keeps
+        // that format for life: the three are different worlds, not three views
+        // of one, so there is no "switch perspective" toggle to offer. This is
+        // only the format new levels start in (see LevelFormat and the
+        // creative-mode picker), which is why it reads as a default.
         form.addEnum("Default level format", LevelFormat.values(),
                 () -> LevelFormat.of(p.perspective),
                 v -> p.perspective = v.perspective());
-        form.addToggle("Switch perspective in-game",
-                () -> p.perspectiveSwitchingEnabled, v -> p.perspectiveSwitchingEnabled = v);
 
         form.addToggle("Zoom enabled", () -> p.zoomEnabled, v -> p.zoomEnabled = v);
         form.addDouble("Min zoom", () -> p.minZoom, v -> p.minZoom = v, 0.1, 4.0, 0.1)

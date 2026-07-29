@@ -277,13 +277,14 @@ public final class GameServer {
         if (changes.isEmpty()) return;
         if (changes.size() <= 3) {
             for (LiquidSim.Change change : changes) {
-                broadcast(Protocol.blockSet(change.col(), change.row(), change.id()));
+                broadcast(Protocol.blockSet(change.col(), change.row(), change.id(),
+                        change.layer()));
             }
             return;
         }
         List<int[]> flat = new ArrayList<>(changes.size());
         for (LiquidSim.Change change : changes) {
-            flat.add(new int[]{change.col(), change.row(), change.id()});
+            flat.add(new int[]{change.col(), change.row(), change.id(), change.layer()});
         }
         broadcast(Protocol.blockBatch(flat));
     }
@@ -469,7 +470,9 @@ public final class GameServer {
             c.resetMining();
             return;
         }
-        Block b = level.blockAt(col, row);
+        // A stack comes apart from the top: the block under the tool is the
+        // one standing on the floor, or the floor itself when nothing is.
+        Block b = level.topBlockAt(col, row);
         if (b != null && b.liquid()) { // liquids aren't minable
             c.resetMining();
             return;
@@ -490,10 +493,11 @@ public final class GameServer {
             if (c.mineProgress < 1) return;
         }
         c.resetMining();
+        int layer = world.mineLayer(col, row);
         Block mined = world.mineBlock(col, row, profile.itemsEnabled);
-        boolean changed = mined != null || level.setTile(col, row, 0);
+        boolean changed = mined != null || level.setTile(col, row, layer, 0);
         if (!changed) return;
-        broadcast(Protocol.blockSet(col, row, level.tileAt(col, row)));
+        broadcast(Protocol.blockSet(col, row, level.tileAt(col, row, layer), layer));
         // Finished blocks wear the held tool, as offline (it may break).
         if (mined != null && held != null && held.toolClass() != null && profile.itemsEnabled) {
             if (c.inventory.damageSelected(1)) {
@@ -501,6 +505,17 @@ public final class GameServer {
             }
             sendInventory(c);
         }
+    }
+
+    /**
+     * Creative erase of one layer. Clearing a stacked block leaves its floor;
+     * clearing the floor takes the whole cell with it, because a block with
+     * nothing under it is neither a wall nor a path.
+     */
+    private boolean eraseLayer(int col, int row, int layer) {
+        if (layer == Level.LAYER_UPPER) return level.setTile(col, row, layer, 0);
+        Block mined = world.mineBlock(col, row, false);
+        return mined != null || level.setTile(col, row, 0);
     }
 
     private List<PlayerState> joinedPlayers() {
@@ -532,20 +547,26 @@ public final class GameServer {
                     boolean paint = "paint".equals(msg.get("m"));
                     if (paint ? !profile.creativeEnabled : !profile.blockEditingEnabled) continue;
                     boolean changed;
+                    // Creative painting names the layer it means; play-mode
+                    // placing lets the world choose (a hole is floored before
+                    // anything is stood on it).
+                    int layer = paint ? Protocol.layerOf(msg) : world.placeLayer(col, row);
                     if (id == 0) {
                         // Creative erase only. Play-mode mining is hold-to-mine
                         // via the input command (see stepMining), so blocks
                         // keep their durability online — a bare "break this"
                         // request would bypass it.
                         if (!paint) continue;
-                        Block mined = world.mineBlock(col, row, false);
-                        changed = mined != null || level.setTile(col, row, 0);
+                        changed = eraseLayer(col, row, layer);
                     } else if (paint) {
-                        changed = level.setTile(col, row, id);
+                        changed = level.setTile(col, row, layer, id);
                     } else {
-                        changed = placeFromInventory(conn, col, row, id);
+                        changed = layer >= 0 && placeFromInventory(conn, col, row, id);
                     }
-                    if (changed) broadcast(Protocol.blockSet(col, row, level.tileAt(col, row)));
+                    if (changed) {
+                        broadcast(Protocol.blockSet(col, row,
+                                level.tileAt(col, row, layer), layer));
+                    }
                 }
                 case "paint" -> {
                     if (!profile.creativeEnabled) continue;

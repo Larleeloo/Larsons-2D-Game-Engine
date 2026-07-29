@@ -929,10 +929,12 @@ public final class World {
             for (int c = c0; c <= c1; c++) {
                 double d = Math.hypot((c + 0.5) * ts - wx, (r + 0.5) * ts - wy);
                 if (d > radius) continue;
-                Block b = level.blockAt(c, r);
+                // A blast takes the top of the stack, like a tool does.
+                Block b = level.topBlockAt(c, r);
                 if (b == null || b.liquid()) continue;
+                int layer = mineLayer(c, r);
                 if (mineBlock(c, r, withDrops) != null) {
-                    blockChanges.add(new LiquidSim.Change(c, r, 0));
+                    blockChanges.add(new LiquidSim.Change(c, r, 0, layer));
                     broken++;
                 }
             }
@@ -1397,10 +1399,11 @@ public final class World {
     }
 
     private void drillTile(int col, int row, boolean withDrops) {
-        Block b = level.blockAt(col, row);
+        Block b = level.topBlockAt(col, row);
         if (b == null || b.liquid()) return;
+        int layer = mineLayer(col, row);
         if (mineBlock(col, row, withDrops) != null) {
-            blockChanges.add(new LiquidSim.Change(col, row, 0));
+            blockChanges.add(new LiquidSim.Change(col, row, 0, layer));
             impacts.add(new Impact("tremor", (col + 0.5) * level.tileSize,
                     (row + 0.5) * level.tileSize, false));
         }
@@ -1459,7 +1462,7 @@ public final class World {
      * {@code null} while still chipping away.
      */
     public Block continueMining(int col, int row, ItemDef held, boolean withDrops, double dt) {
-        Block b = level.blockAt(col, row);
+        Block b = level.topBlockAt(col, row);
         if (b == null || b.liquid()) {
             // Liquids can't be mined away — displace them by placing a block
             // over them instead (see placeBlock).
@@ -1501,16 +1504,28 @@ public final class World {
     }
 
     /**
-     * Mine the block at (col,row). When {@code withDrops}, the block's drop
-     * item pops out with a little kick (side-scroller behaviour); creative
-     * painting passes {@code false}. Returns the mined block, or {@code null}.
+     * Which layer of (col,row) a tool bites into: the stacked block when one is
+     * standing there, else the floor. A stack comes apart from the top down, so
+     * mining a wall in a plan view turns it into a path, and mining that path
+     * leaves the hole nobody can cross.
+     */
+    public int mineLayer(int col, int row) {
+        return level.upperAt(col, row) > 0 ? Level.LAYER_UPPER : Level.LAYER_GROUND;
+    }
+
+    /**
+     * Mine the block at (col,row) — the stacked one first, where a level
+     * stacks. When {@code withDrops}, the block's drop item pops out with a
+     * little kick (side-scroller behaviour); creative painting passes
+     * {@code false}. Returns the mined block, or {@code null}.
      */
     public Block mineBlock(int col, int row, boolean withDrops) {
-        Block b = level.blockAt(col, row);
+        int layer = mineLayer(col, row);
+        Block b = level.blocks.get(level.tileAt(col, row, layer));
         if (b == null || b.liquid()) return null; // liquids aren't minable
         // Storage blocks spill their second inventory when broken.
         List<ItemStack> stored = b.container() ? level.removeContainer(col, row) : null;
-        if (!level.setTile(col, row, 0)) return null;
+        if (!level.setTile(col, row, layer, 0)) return null;
         double ts = level.tileSize;
         if (withDrops && b.drops() != null && itemTypes.get(b.drops()) != null) {
             spawnItem(b.drops(), 1,
@@ -1530,10 +1545,21 @@ public final class World {
         return b;
     }
 
-    /** Place block {@code id} at (col,row) if the cell is empty (or liquid). */
+    /**
+     * Place block {@code id} at (col,row) if there is room for it. A stack is
+     * built from the bottom up: a hole is floored first, and only a cell that
+     * already has a floor gets a block stood on it. Liquids are displaced
+     * either way, which is how a pool is filled in.
+     */
     public boolean placeBlock(int col, int row, int id) {
-        if (level.tileAt(col, row) != 0 && level.liquidAt(col, row) == null) return false;
-        return level.setTile(col, row, id);
+        int layer = level.placeLayer(col, row);
+        if (layer < 0) return false;
+        return level.setTile(col, row, layer, id);
+    }
+
+    /** {@link Level#placeLayer} — the layer a placed block would land in. */
+    public int placeLayer(int col, int row) {
+        return level.placeLayer(col, row);
     }
 
     /** Species-specific loot (elemental essences, trinkets); key -> {item, count}. */

@@ -36,9 +36,16 @@ import java.util.Map;
  *   "palette": ["#785a3c", "#5aa050", "#6e6e78"],
  *   "spawn": { "x": 64, "y": 96 },
  *   "tiles": [[0,0,1,...], ...],
+ *   "upperRle": [id,runLength, ...],
  *   "entities": [ { "type": "player", "x": 64, "y": 96 } ]
  * }
  * </pre>
+ *
+ * <p>{@code upperRle} (or {@code upperChunks} on a giant level) carries the
+ * second layer of blocks the plan-view formats stack — see
+ * {@link Level#walkable}. A top-down or isometric level written before that
+ * layer existed has neither key, and is converted on load by
+ * {@link Level#liftSolidsToUpperLayer()} so it still plays as drawn.
  */
 public final class LevelLoader {
 
@@ -89,26 +96,26 @@ public final class LevelLoader {
             lvl.palette = colors;
         }
 
+        // Whether the file describes the stacked layer at all. A plan-view
+        // level that doesn't is from before blocks stacked and is converted
+        // below; one that does is taken exactly as written, empty layer and all.
+        boolean hasUpperLayer = root.containsKey("upperRle") || root.containsKey("upperChunks");
+
         if (Boolean.TRUE.equals(root.get("chunked"))) {
             // Giant chunked level: bounds + edited chunks + optional generator.
             lvl.width = intOf(root.get("width"), 1024);
             lvl.height = intOf(root.get("height"), 1024);
             lvl.chunked = new ChunkedTiles(lvl.width, lvl.height);
             if (root.get("generatorSeed") instanceof Number seed) {
-                lvl.chunked.setGenerator(LevelGenerator.chunkGenerator(
-                        seed.longValue(), lvl.width, lvl.height));
+                lvl.chunked.setGenerator("flat".equals(root.get("generator"))
+                        ? Level.flatGenerator(seed.intValue())
+                        : LevelGenerator.chunkGenerator(seed.longValue(),
+                        lvl.width, lvl.height));
             }
-            if (root.get("chunks") instanceof Map<?, ?> chunks) {
-                for (Map.Entry<?, ?> e : chunks.entrySet()) {
-                    String[] cc = String.valueOf(e.getKey()).split(",");
-                    if (cc.length != 2 || !(e.getValue() instanceof List<?> runs)) continue;
-                    try {
-                        lvl.chunked.putSavedChunk(Integer.parseInt(cc[0].trim()),
-                                Integer.parseInt(cc[1].trim()), Json.asArray(runs));
-                    } catch (NumberFormatException ignored) {
-                        // skip malformed chunk keys
-                    }
-                }
+            readChunks(root.get("chunks"), lvl.chunked);
+            if (root.get("upperChunks") instanceof Map<?, ?>) {
+                lvl.upperChunked = new ChunkedTiles(lvl.width, lvl.height);
+                readChunks(root.get("upperChunks"), lvl.upperChunked);
             }
         } else if (root.get("tilesRle") instanceof List<?> rle) {
             // Run-length encoded grid (what Level.toMap writes): pairs of
@@ -118,20 +125,12 @@ public final class LevelLoader {
             if (width <= 0 || height <= 0) {
                 throw new IllegalArgumentException("RLE level needs width and height");
             }
-            int[][] tiles = new int[height][width];
-            int cell = 0;
-            long total = (long) width * height;
-            List<Object> runs = Json.asArray(rle);
-            for (int k = 0; k + 1 < runs.size() && cell < total; k += 2) {
-                int id = intOf(runs.get(k), 0);
-                int len = intOf(runs.get(k + 1), 0);
-                for (int j = 0; j < len && cell < total; j++, cell++) {
-                    tiles[cell / width][cell % width] = id;
-                }
-            }
-            lvl.tiles = tiles;
+            lvl.tiles = readRle(rle, width, height);
             lvl.width = width;
             lvl.height = height;
+            if (root.get("upperRle") instanceof List<?> upperRle) {
+                lvl.upper = readRle(upperRle, width, height);
+            }
         } else {
             Object tilesObj = root.get("tiles");
             if (!(tilesObj instanceof List)) {
@@ -241,7 +240,43 @@ public final class LevelLoader {
                 }
             }
         }
+
+        // A plan-view level from before blocks stacked reads its geometry the
+        // other way round — its corridors are air, which is a hole now — so it
+        // is re-cut into layers that mean what its author drew.
+        if (!hasUpperLayer) lvl.liftSolidsToUpperLayer();
         return lvl;
+    }
+
+    /** Decode one RLE layer ({@code id, runLength, …}) into a dense grid. */
+    private static int[][] readRle(List<?> rle, int width, int height) {
+        int[][] cells = new int[height][width];
+        int cell = 0;
+        long total = (long) width * height;
+        List<Object> runs = Json.asArray(rle);
+        for (int k = 0; k + 1 < runs.size() && cell < total; k += 2) {
+            int id = intOf(runs.get(k), 0);
+            int len = intOf(runs.get(k + 1), 0);
+            for (int j = 0; j < len && cell < total; j++, cell++) {
+                cells[cell / width][cell % width] = id;
+            }
+        }
+        return cells;
+    }
+
+    /** Install the saved {@code "cx,cy" -> runs} chunks of one layer. */
+    private static void readChunks(Object saved, ChunkedTiles into) {
+        if (!(saved instanceof Map<?, ?> chunks)) return;
+        for (Map.Entry<?, ?> e : chunks.entrySet()) {
+            String[] cc = String.valueOf(e.getKey()).split(",");
+            if (cc.length != 2 || !(e.getValue() instanceof List<?> runs)) continue;
+            try {
+                into.putSavedChunk(Integer.parseInt(cc[0].trim()),
+                        Integer.parseInt(cc[1].trim()), Json.asArray(runs));
+            } catch (NumberFormatException ignored) {
+                // skip malformed chunk keys
+            }
+        }
     }
 
     /**

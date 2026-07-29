@@ -45,6 +45,7 @@ import com.larsons.engine.graphics.SkinDef;
 import com.larsons.engine.graphics.SkinStore;
 import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.SurfaceDecorPainter;
+import com.larsons.engine.graphics.TerrainPainter;
 import com.larsons.engine.graphics.TextureKeys;
 import com.larsons.engine.graphics.TexturePack;
 import com.larsons.engine.input.InputManager;
@@ -269,6 +270,13 @@ public class CreativeScene extends AbstractScene {
     // Editing state.
     private boolean showGrid = true;
     private boolean decorForeground; // which layer decorations paint into
+    /**
+     * Whether the block brush builds walls or paths in a plan-view level: with
+     * it on a stroke fills both layers, which is what a barrier is; with it off
+     * a stroke lays floor only, which is what you walk along. Meaningless in a
+     * side-scroller, whose levels have one layer — see {@link Level#walkable}.
+     */
+    private boolean paintStacked = true;
     private int lastPaintCol = Integer.MIN_VALUE, lastPaintRow = Integer.MIN_VALUE;
     private int mouseX, mouseY; // sampled in update, used by the render preview
     private String status = "";
@@ -313,6 +321,14 @@ public class CreativeScene extends AbstractScene {
     private int cR = 150, cG = 150, cB = 150;      // primary colour
     private int cR2 = 90, cG2 = 90, cB2 = 90;      // accent colour
     private boolean cSolid = true, cFlying, cFalling;
+    /**
+     * Which plan-view faces a new block comes with — the question the block
+     * form always asks. Both on by default, because a block a creator means to
+     * build with in a top-down or isometric level shows both.
+     */
+    private boolean cTopTexture = true, cSideTexture = true;
+    /** The block "+ New Block" just made, so the status line can name its sheets. */
+    private String createdBlockKey;
     private int cLightRadius, cLightR = 255, cLightG = 220, cLightB = 160;
     private int cDamage;
     private double cHardness = 1.0, cSizeTiles = 2.0;
@@ -547,17 +563,16 @@ public class CreativeScene extends AbstractScene {
 
     /**
      * Fill the palette for this creative mode. Everything the engine can paint
-     * — mobs, items, decorations, block details, lights, liquids, doors,
-     * cutscenes, mini-game markers, tools — is offered in all three formats and
-     * works in all three. The one format-specific part is the block list: the
-     * path and wall families read as plan-view geometry, so they appear only
-     * while building a top-down or isometric level
-     * ({@link LevelFormat#allowsBlock}). A level that already contains them
-     * keeps rendering and colliding with them either way.
+     * — blocks, mobs, items, decorations, block details, lights, liquids,
+     * doors, cutscenes, mini-game markers, tools — is offered in all three
+     * formats and works in all three. Blocks used to be filtered by format,
+     * back when a handful of wall and path families carried the plan views'
+     * geometry on their own; the plan views say that with the
+     * {@linkplain Level#walkable stack} now, so every block builds floor at one
+     * layer and a wall at two, and the palette has nothing to hide.
      */
     private void buildPalette() {
         palette.clear();
-        LevelFormat format = format();
         // Every creatable category leads with its "+" entry: click it to add a
         // fully customizable object of that kind to the game engine.
         List<Entry> blocks = newList("+ New Block");
@@ -565,7 +580,6 @@ public class CreativeScene extends AbstractScene {
         List<Entry> lights = newList("+ New Light");
         for (Block b : com.larsons.engine.world.BlockRegistry.standard().all()) {
             if (b.isFlow()) continue; // the sim's hidden flow twins
-            if (!format.allowsBlock(b.key())) continue; // format-specific family
             Entry e = new Entry("block", b.key(), b.displayName(),
                     swatch("block/" + b.key(), EntitySprites.block(b, 40)),
                     customContent.isCustom("block", b.key()));
@@ -829,6 +843,12 @@ public class CreativeScene extends AbstractScene {
             setStatus("Decorations paint into the "
                     + (decorForeground ? "FOREGROUND" : "BACKGROUND"));
         }
+        if (input.isKeyJustPressed(KeyEvent.VK_H) && level.layered()) {
+            paintStacked = !paintStacked;
+            setStatus(paintStacked
+                    ? "Blocks paint STACKED — a wall, casting a shadow"
+                    : "Blocks paint as FLOOR — a path to walk along");
+        }
         if (input.isKeyJustPressed(KeyEvent.VK_OPEN_BRACKET)) {
             brushSize = Math.max(Brush.MIN_SIZE, brushSize - 1);
             setStatus("Brush: " + Brush.label(brushShape) + " " + brushSize);
@@ -1018,6 +1038,11 @@ public class CreativeScene extends AbstractScene {
                 // hash) among the selected block and the extra mix slots.
                 List<Integer> mix = brushBlockIds(b);
                 boolean painted = false;
+                // In a plan view a block is only half the story: one layer is
+                // the floor you walk along, two is the wall that stops you. A
+                // stacked stroke lays both, so the brush paints a barrier in
+                // one pass instead of asking for two.
+                boolean stack = level.layered() && paintStacked;
                 for (int[] cell : Brush.cells(brushShape, brushSize, col, row)) {
                     if (cell[0] < 0 || cell[1] < 0
                             || cell[0] >= level.width || cell[1] >= level.height) {
@@ -1025,13 +1050,7 @@ public class CreativeScene extends AbstractScene {
                     }
                     int paintId = mix.get(Math.floorMod(
                             cell[0] * 31 + cell[1] * 47, mix.size()));
-                    if (level.tileAt(cell[0], cell[1]) == paintId) continue;
-                    if (net != null) {
-                        net.client().sendBlockEdit(cell[0], cell[1], paintId, "paint");
-                        painted = true;
-                    } else if (level.setTile(cell[0], cell[1], paintId)) {
-                        painted = true;
-                    }
+                    if (paintCell(cell[0], cell[1], paintId, stack)) painted = true;
                 }
                 if (painted && net == null) {
                     Sounds.playFirst(1.0, SoundKeys.block(b.key(), "place"),
@@ -1280,6 +1299,29 @@ public class CreativeScene extends AbstractScene {
      * open/closed visibility condition and bg/fg layer come from the other two
      * toggles.
      */
+    /**
+     * Paint one cell with {@code id}: the floor alone, or the floor with the
+     * same block stood on it when the stroke is stacking. Online each layer is
+     * a separate authoritative edit, exactly as it is offline.
+     */
+    private boolean paintCell(int col, int row, int id, boolean stack) {
+        boolean changed = writeLayer(col, row, Level.LAYER_GROUND, id);
+        if (level.layered()) {
+            changed |= writeLayer(col, row, Level.LAYER_UPPER, stack ? id : 0);
+        }
+        return changed;
+    }
+
+    /** One layer of one cell, locally or through the server. */
+    private boolean writeLayer(int col, int row, int layer, int id) {
+        if (level.tileAt(col, row, layer) == id) return false;
+        if (net != null) {
+            net.client().sendBlockEdit(col, row, id, "paint", layer);
+            return true;
+        }
+        return level.setTile(col, row, layer, id);
+    }
+
     private void paintSurfaceDecor(Entry entry, double wx, double wy, int col, int row) {
         SurfaceDecor def = SurfaceDecorRegistry.standard().get(entry.key);
         if (def == null) return;
@@ -1355,10 +1397,7 @@ public class CreativeScene extends AbstractScene {
             }
             boolean broke = false;
             for (int[] cell : Brush.cells(brushShape, brushSize, col, row)) {
-                if (level.tileAt(cell[0], cell[1]) != 0
-                        && level.setTile(cell[0], cell[1], 0)) {
-                    broke = true;
-                }
+                if (eraseCell(cell[0], cell[1])) broke = true;
             }
             if (broke) ctx.sound(SoundKeys.ui("erase"));
         } else {
@@ -1367,15 +1406,34 @@ public class CreativeScene extends AbstractScene {
                 net.client().sendEntityErase(near.id);
                 return;
             }
-            if (level.tileAt(col, row) != 0) {
-                net.client().sendBlockEdit(col, row, 0, "paint");
+            int layer = eraseLayer(col, row);
+            if (level.tileAt(col, row, layer) != 0) {
+                net.client().sendBlockEdit(col, row, 0, "paint", layer);
             }
         }
     }
 
+    /**
+     * The layer the eraser bites into: a stack comes apart from the top, so
+     * the first stroke takes the wall down to a path and the second takes the
+     * path away, leaving the hole.
+     */
+    private int eraseLayer(int col, int row) {
+        return level.upperAt(col, row) > 0 ? Level.LAYER_UPPER : Level.LAYER_GROUND;
+    }
+
+    /** Erase the topmost block of one cell. */
+    private boolean eraseCell(int col, int row) {
+        int layer = eraseLayer(col, row);
+        return level.tileAt(col, row, layer) != 0 && level.setTile(col, row, layer, 0);
+    }
+
     private void pickBlock(int col, int row) {
-        Block b = level.blockAt(col, row);
+        // Pick what is on top, and pick up how it was built with it: clicking a
+        // wall arms a stacking brush, clicking a path arms a floor one.
+        Block b = level.topBlockAt(col, row);
         if (b == null) return;
+        if (level.layered()) paintStacked = level.upperAt(col, row) > 0;
         if (b.isFlow()) b = level.blocks.sourceFor(b);
         if (b == null) return;
         Category target = b.liquid() ? Category.LIQUIDS
@@ -1456,6 +1514,15 @@ public class CreativeScene extends AbstractScene {
             }
         }
         int gridTop = paletteGridTop();
+        // The block brush's wall/path row sits just above the swatch grid.
+        if (showsStackRow() && my >= gridTop - 22 && my < gridTop - 2) {
+            paintStacked = !paintStacked;
+            ctx.sfx(Sfx.CLICK);
+            setStatus(paintStacked
+                    ? "Blocks paint STACKED — a wall, casting a shadow"
+                    : "Blocks paint as FLOOR — a path to walk along");
+            return;
+        }
         // The decor layer toggle row sits just above the swatch grid.
         if (category == Category.DECOR && my >= gridTop - 22 && my < gridTop - 2) {
             decorForeground = !decorForeground;
@@ -1719,7 +1786,24 @@ public class CreativeScene extends AbstractScene {
         int top = 34 + Category.values().length * 22 + 10;
         if (category == Category.DECOR) top += 24;
         if (category == Category.SURFACE) top += 68;
+        if (showsStackRow()) top += 24;
         return top;
+    }
+
+    /**
+     * Whether the block brush's stack toggle belongs above the swatches — only
+     * in a plan-view level, and only for the categories that paint blocks,
+     * because it is the layer count that makes a wall there.
+     */
+    private boolean showsStackRow() {
+        return level != null && level.layered()
+                && (category == Category.BLOCKS || category == Category.LIQUIDS
+                || category == Category.LIGHTS);
+    }
+
+    /** The stack toggle's label, which is really a description of what it builds. */
+    private String stackRowLabel() {
+        return paintStacked ? "Build: WALL (stacked)" : "Build: PATH (floor)";
     }
 
     private int sliderPanelTop() {
@@ -3744,6 +3828,7 @@ public class CreativeScene extends AbstractScene {
             cFalling = false;
         }
         addColorSliders("Colour", false);
+        addFaceTextureFields();
         if (!liquid) {
             dialogForm.addToggle("Solid (collides)", () -> cSolid, v -> cSolid = v);
             dialogForm.addToggle("Falls like sand/gravel", () -> cFalling,
@@ -3760,6 +3845,43 @@ public class CreativeScene extends AbstractScene {
         dialogForm.addEnum("Best tool", TOOL_CLASSES,
                 () -> TOOL_CLASSES[cToolIndex],
                 v -> cToolIndex = Math.max(0, List.of(TOOL_CLASSES).indexOf(v)));
+    }
+
+    /**
+     * The question every new block is asked: which of the plan-view faces it
+     * comes with. A side-scroller only ever sees a block edge-on, but top-down
+     * and isometric levels look down at its top and — once it is stacked into a
+     * wall — across at its side, and those are different pictures. Each face
+     * ticked here is a file the creator means to draw; a face left off falls
+     * back to the block's one flat sheet, and then to its colour, so answering
+     * "neither" is a real answer rather than a broken block.
+     */
+    private void addFaceTextureFields() {
+        dialogForm.addToggle("Has a TOP texture (top-down / isometric)",
+                () -> cTopTexture, v -> cTopTexture = v);
+        dialogForm.addToggle("Has a SIDE texture (stacked into a wall)",
+                () -> cSideTexture, v -> cSideTexture = v);
+        dialogForm.addNote(faceTextureNote());
+    }
+
+    /** What the face answers mean, spelled out in the files they ask for. */
+    private String faceTextureNote() {
+        String key = cName.isBlank() ? "<key>"
+                : CustomContentStore.keyFor(cName.trim(), k -> false);
+        if (cTopTexture && cSideTexture) {
+            return "Draw textures/" + TextureKeys.BLOCKS_TOP + "/" + key + ".png and "
+                    + TextureKeys.BLOCKS_SIDE + "/" + key + ".png";
+        }
+        if (cTopTexture) {
+            return "Draw textures/" + TextureKeys.BLOCKS_TOP + "/" + key
+                    + ".png; stacked sides fall back to the flat sheet";
+        }
+        if (cSideTexture) {
+            return "Draw textures/" + TextureKeys.BLOCKS_SIDE + "/" + key
+                    + ".png; floors fall back to the flat sheet";
+        }
+        return "No plan-view faces: textures/blocks/" + key
+                + ".png dresses every view, or the colour above does";
     }
 
     private void buildCustomMobFields() {
@@ -3833,6 +3955,7 @@ public class CreativeScene extends AbstractScene {
 
     private void createCustomObject() {
         String name = cName.isBlank() ? "Custom " + customKindName() : cName.trim();
+        createdBlockKey = null;
         try {
             switch (customCategory) {
                 case CHARACTERS -> {
@@ -3909,7 +4032,8 @@ public class CreativeScene extends AbstractScene {
                             cLightRadius, new Color(cLightR, cLightG, cLightB),
                             solid ? key : null, liquid, cDamage, cHardness,
                             cToolIndex > 0 ? TOOL_CLASSES[cToolIndex] : null,
-                            !liquid && cFalling));
+                            !liquid && cFalling, cTopTexture, cSideTexture));
+                    createdBlockKey = key;
                 }
             }
         } catch (RuntimeException e) {
@@ -3919,8 +4043,20 @@ public class CreativeScene extends AbstractScene {
         buildPalette();
         selectNewest(name);
         closeDialog();
+        // A new block leaves with its homework: the exact sheets to draw for
+        // the faces it just said it has.
+        String faces = createdBlockKey == null ? "" : faceTextureHint(createdBlockKey);
         setStatus("Added custom " + customKindName().toLowerCase() + " \"" + name
-                + "\" — saved to " + customContent.file());
+                + "\" — saved to " + customContent.file() + faces);
+    }
+
+    /** " · draw blocks_top/x.png, blocks_side/x.png" — or nothing to draw. */
+    private String faceTextureHint(String key) {
+        List<String> files = new ArrayList<>(2);
+        if (cTopTexture) files.add(TextureKeys.BLOCKS_TOP + "/" + key + ".png");
+        if (cSideTexture) files.add(TextureKeys.BLOCKS_SIDE + "/" + key + ".png");
+        if (files.isEmpty()) return "";
+        return " · drop " + String.join(" and ", files) + " into the texture pack";
     }
 
     /** Select the just-created object in its palette category. */
@@ -4529,18 +4665,18 @@ public class CreativeScene extends AbstractScene {
         boolean sceneryBehind = PerspectiveSpace.of(camera.getPerspective())
                 .scenerySitsBehindTerrain();
         if (sceneryBehind) drawDecorLayer(g, false);
-        drawTiles(g);
+        // Everything standing on the floor shares one queue on a plane, so
+        // whether the player is in front of a tree — or of a wall — is settled
+        // by where they are standing rather than by a fixed layer order. The
+        // side view's layers are fixed and correct, so its pass draws straight
+        // through in call order.
+        DepthPass standing = DepthPass.of(camera.getPerspective());
+        drawTiles(g, standing);
         if (testing) drawMiningCracks(g);
         // The grid is drawn through the camera, so it lands as a diamond
         // lattice in isometric view — which is exactly where lining blocks
         // up by eye is hardest, so it is worth having there too.
         if (showGrid && !testing) drawGrid(g);
-        // Everything standing on the floor shares one queue on a plane, so
-        // whether the player is in front of a tree or behind it is settled by
-        // where they are standing rather than by a fixed layer order. The side
-        // view's layers are fixed and correct, so its pass draws straight
-        // through in call order.
-        DepthPass standing = DepthPass.of(camera.getPerspective());
         if (!sceneryBehind) drawDecorLayer(g, false, standing);
         drawWorldBounds(g);
         drawEntities(g, standing);
@@ -4597,6 +4733,11 @@ public class CreativeScene extends AbstractScene {
         double progress = testWorld.miningProgress();
         if (cell == null || progress <= 0.01) return;
         projectCell(cell[0], cell[1], level.tileSize);
+        // The cracks belong on the block being chipped, and a stacked one
+        // stands above its own floor tile.
+        if (level.upperAt(cell[0], cell[1]) > 0) {
+            raiseQuad(TerrainPainter.liftPixels(camera, level.tileSize));
+        }
         int x = Math.min(pxs[0], pxs[2]), y = Math.min(pys[0], pys[2]);
         int w = Math.abs(pxs[2] - pxs[0]), h = Math.abs(pys[2] - pys[0]);
         int cx = x + w / 2, cy = y + h / 2;
@@ -4685,66 +4826,30 @@ public class CreativeScene extends AbstractScene {
     private final int[] pxs = new int[4];
     private final int[] pys = new int[4];
     private final int[] pcorner = new int[2];
-    // Per-frame cache: block id -> skin frame (or null = draw procedural colour).
-    private final Map<Integer, BufferedImage> tileSkins = new HashMap<>();
 
-    private void drawTiles(Graphics2D g) {
-        int ts = level.tileSize;
-        int[] b = visibleTileBounds();
-        boolean flat = camera.getPerspective() != Perspective.ISOMETRIC;
-        tileSkins.clear();
-        for (int r = b[1]; r <= b[3]; r++) {
-            for (int c = b[0]; c <= b[2]; c++) {
-                int id = level.tileAt(c, r);
-                if (id <= 0) continue;
-                Block block = level.blockAt(c, r);
-                projectCell(c, r, ts);
-
-                // The open chest/barrel gets an animated lid drawn over it.
-                boolean openLid = containerPanel != null && block != null
-                        && block.container()
-                        && c == containerPanel.col() && r == containerPanel.row();
-
-                if (block != null) {
-                    // Isometric view warps the same texture into the diamond.
-                    BufferedImage skin = tileSkinFor(id, block);
-                    if (skin != null) {
-                        com.larsons.engine.graphics.TilePainter.drawTexture(
-                                g, skin, pxs, pys, flat);
-                        if (openLid) {
-                            ContainerPanel.drawLid(g, pxs, pys,
-                                    containerPanel.openness(), level.colorFor(id));
-                        }
-                        continue;
-                    }
-                }
-
-                Color col = level.colorFor(id);
-                g.setColor(col);
-                g.fillPolygon(pxs, pys, 4);
-                if (block != null && block.liquid()) {
-                    // Liquids: no hard outline; a lighter surface line where
-                    // the cell above is open makes pools read at a glance.
-                    if (level.liquidAt(c, r - 1) == null) {
-                        g.setColor(new Color(255, 255, 255, 90));
-                        g.drawLine(pxs[0], pys[0], pxs[1], pys[1]);
-                    }
-                } else {
-                    g.setColor(col.darker());
-                    g.drawPolygon(pxs, pys, 4);
-                }
-                if (openLid) {
-                    ContainerPanel.drawLid(g, pxs, pys, containerPanel.openness(), col);
-                }
-            }
-        }
+    /**
+     * The level's terrain, painted by the same {@link TerrainPainter} the play
+     * scene uses, so what a creator is looking at while building is what the
+     * level plays like — including which way its walls stand and where their
+     * shadows fall.
+     */
+    private void drawTiles(Graphics2D g, DepthPass standing) {
+        TerrainPainter.draw(g, level, camera, visibleTileBounds(), animClock,
+                standing, this::drawOpenLid);
     }
 
-    private BufferedImage tileSkinFor(int id, Block block) {
-        if (tileSkins.containsKey(id)) return tileSkins.get(id);
-        BufferedImage img = Skins.frame("block/" + block.key(), animClock);
-        tileSkins.put(id, img);
-        return img;
+    /** The animated lid on the chest or barrel whose panel is open. */
+    private void drawOpenLid(Graphics2D g, int col, int row, int[] quadX, int[] quadY,
+                             Block block, Color color) {
+        if (containerPanel == null || block == null || !block.container()) return;
+        if (col != containerPanel.col() || row != containerPanel.row()) return;
+        ContainerPanel.drawLid(g, quadX, quadY, containerPanel.openness(), color);
+    }
+
+    /** Lift the projected quad in {@link #pys} off the floor by {@code px}. */
+    private void raiseQuad(int px) {
+        if (px == 0) return;
+        for (int i = 0; i < pys.length; i++) pys[i] -= px;
     }
 
     private void projectCell(int c, int r, int ts) {
@@ -5277,12 +5382,19 @@ public class CreativeScene extends AbstractScene {
             case "block" -> {
                 Block b = level.blocks.get(entry.key);
                 if (b != null) {
+                    // A stacking brush previews standing up, so a creator sees
+                    // the wall they are about to build rather than a flat
+                    // square that turns out to be one.
+                    int lift = level.layered() && paintStacked
+                            ? TerrainPainter.liftPixels(camera, ts) : 0;
                     for (int[] cell : Brush.cells(brushShape, brushSize, col, row)) {
                         projectCell(cell[0], cell[1], ts);
+                        raiseQuad(lift);
                         g.setColor(b.color());
                         g.fillPolygon(pxs, pys, 4);
                     }
                     projectCell(col, row, ts);
+                    raiseQuad(lift);
                     g.setColor(Color.WHITE);
                     g.drawPolygon(pxs, pys, 4);
                 }
@@ -5407,6 +5519,14 @@ public class CreativeScene extends AbstractScene {
         }
 
         int gridTop = paletteGridTop();
+        // The block brush's wall/path row.
+        if (showsStackRow()) {
+            g.setColor(new Color(255, 255, 255, 22));
+            g.fillRoundRect(6, gridTop - 22, SIDEBAR_W - 12, 20, 6, 6);
+            g.setFont(SMALL_FONT);
+            g.setColor(paintStacked ? new Color(255, 190, 120) : new Color(150, 230, 170));
+            g.drawString(stackRowLabel() + "  (click / H)", 14, gridTop - 8);
+        }
         // Decor layer toggle row.
         if (category == Category.DECOR) {
             g.setColor(new Color(255, 255, 255, 22));
@@ -5757,17 +5877,21 @@ public class CreativeScene extends AbstractScene {
         // The editor is one creative mode per level format, so the bar leads
         // with which one is open.
         String mode = format().displayName().toUpperCase();
+        // In a plan view the brush builds walls or paths, and which it is doing
+        // matters enough to say out loud rather than leave in the sidebar.
+        String stackHint = level.layered() ? " · [H] " + stackRowLabel() : "";
         if (testing) {
             bar = "PLAY-TEST (" + mode + ") — " + level.name + chunkInfo
                     + "   ·   WASD move · Shift sprint · hold click to mine · right-click place"
                     + " · 1-5 hotbar · [I] inventory · [E] doors/stations · [P]/[Esc] editor";
         } else if (net != null) {
             bar = mode + " CREATIVE (ONLINE) — painting the server's world   ·   [Tab] category"
-                    + " · right-click erase · [G] grid · [Esc] back to game";
+                    + " · right-click erase" + stackHint + " · [G] grid · [Esc] back to game";
         } else {
             bar = mode + " CREATIVE — " + level.name + " (" + level.width + "x" + level.height + ")"
                     + chunkInfo
                     + "   ·   [Tab] category · right-click erase · middle pick · [B] layer"
+                    + stackHint
                     + " · [ ] brush · [G] grid · [P] test · [Ctrl+S] save · [L] load · [N] new · [Esc] menu";
         }
         g.drawString(bar, x0 + 12, 19);

@@ -305,6 +305,10 @@ public final class CustomContentStore {
         m.put("hardness", b.hardness());
         if (b.tool() != null) m.put("tool", b.tool());
         if (b.falling()) m.put("falling", true);
+        // Which plan-view faces the creator said this block has, so the key
+        // list keeps asking for the same sheets across sessions.
+        m.put("topTexture", b.topTexture());
+        m.put("sideTexture", b.sideTexture());
         return m;
     }
 
@@ -318,7 +322,10 @@ public final class CustomContentStore {
                     m.get("drops") instanceof String s ? s : null,
                     Boolean.TRUE.equals(m.get("liquid")), dbl(m.get("damage"), 0),
                     dbl(m.get("hardness"), 1), m.get("tool") instanceof String t ? t : null,
-                    Boolean.TRUE.equals(m.get("falling")));
+                    Boolean.TRUE.equals(m.get("falling")),
+                    // Blocks saved before the faces were asked about accept
+                    // both, which is what they already effectively did.
+                    bool(m.get("topTexture"), true), bool(m.get("sideTexture"), true));
         } catch (RuntimeException e) {
             System.err.println("CustomContentStore: bad block entry: " + e.getMessage());
             return null;
@@ -490,6 +497,10 @@ public final class CustomContentStore {
 
     private static String str(Object o) {
         return String.valueOf(o);
+    }
+
+    private static boolean bool(Object o, boolean def) {
+        return o instanceof Boolean b ? b : def;
     }
 
     private static int num(Object o, int def) {

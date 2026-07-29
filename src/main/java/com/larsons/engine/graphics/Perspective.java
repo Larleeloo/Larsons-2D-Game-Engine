@@ -9,7 +9,11 @@ package com.larsons.engine.graphics;
  * {@link #ISOMETRIC} projects a square tile grid into a diamond.
  *
  * <p>The {@link Camera} consumes this enum to choose how world coordinates map
- * to the screen, so a game can switch perspective at runtime.
+ * to the screen. A level's projection is fixed for the life of that level: a
+ * {@code com.larsons.engine.level.LevelFormat} is not a view of a world but a
+ * kind of world, differing in which axis is up and in how many layers of blocks
+ * its geometry is written in. Walking through a door into a level of another
+ * format is how a game changes perspective.
  *
  * <p>This enum is only about <em>projection</em>. The matching physical space —
  * which axis is up, where gravity pulls, how height is drawn — is
@@ -19,11 +23,5 @@ package com.larsons.engine.graphics;
 public enum Perspective {
     SIDE_SCROLL,
     TOP_DOWN,
-    ISOMETRIC;
-
-    /** Next perspective in declaration order (wraps). Handy for demos/toggles. */
-    public Perspective next() {
-        Perspective[] v = values();
-        return v[(ordinal() + 1) % v.length];
-    }
+    ISOMETRIC
 }

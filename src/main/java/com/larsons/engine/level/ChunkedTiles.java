@@ -139,6 +139,33 @@ public final class ChunkedTiles {
         return dirty.size();
     }
 
+    /**
+     * Visit every cell — empty ones included — of every chunk currently
+     * resident. This is the only bounded way to sweep a giant level: it
+     * touches what has been generated or saved rather than the 65536&sup2; the
+     * bounds allow, so it suits one-off conversions of stored terrain, not
+     * per-frame work.
+     */
+    public void forEachLoadedCell(CellVisitor visitor) {
+        // Snapshot the keys: a visitor is free to write back into the storage,
+        // which may materialize further chunks.
+        for (long k : new ArrayList<>(chunks.keySet())) {
+            int[] chunk = chunks.get(k);
+            if (chunk == null) continue;
+            int baseCol = ((int) (k >> 32)) << 6, baseRow = ((int) (long) k) << 6;
+            for (int i = 0; i < chunk.length; i++) {
+                int col = baseCol + (i & (CHUNK - 1));
+                int row = baseRow + (i / CHUNK);
+                if (col < width && row < height) visitor.visit(col, row, chunk[i]);
+            }
+        }
+    }
+
+    /** Callback for {@link #forEachLoadedCell}. */
+    public interface CellVisitor {
+        void visit(int col, int row, int id);
+    }
+
     /** Shrink/grow the bounds; chunks fully outside the new bounds unload. */
     public void resize(int newWidth, int newHeight) {
         width = Math.max(1, newWidth);

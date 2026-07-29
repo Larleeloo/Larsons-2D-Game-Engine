@@ -149,44 +149,161 @@ class LevelFormatTest {
 
     // --- the creative palettes --------------------------------------------------
 
+    /**
+     * Only the plan views stack, and only they read geometry off the stack.
+     * A side-scroller has the one layer it always had.
+     */
     @Test
-    void pathsAndWallsBelongToThePlanViewFormatsOnly() {
-        for (String key : LevelFormat.planViewBlocks()) {
-            assertNotNull(BlockRegistry.standard().get(key), key + " must be a real block");
-            assertFalse(LevelFormat.SIDE_SCROLLER.allowsBlock(key),
-                    key + " is plan-view geometry");
-            assertTrue(LevelFormat.TOP_DOWN.allowsBlock(key));
-            assertTrue(LevelFormat.ISOMETRIC.allowsBlock(key));
-        }
-        assertTrue(LevelFormat.planViewBlocks().contains("stone_path"));
-        assertTrue(LevelFormat.planViewBlocks().contains("hedge_wall"));
+    void onlyThePlanViewFormatsStackBlocks() {
+        assertFalse(LevelFormat.SIDE_SCROLLER.layered());
+        assertTrue(LevelFormat.TOP_DOWN.layered());
+        assertTrue(LevelFormat.ISOMETRIC.layered());
+
+        Level side = LevelFormat.SIDE_SCROLLER.starterLevel("Side", 20, 12, 32);
+        assertFalse(side.layered());
+        assertFalse(side.setUpper(5, 5, side.blocks.get("stone").id()),
+                "a side-scroller has nowhere to stack a block");
     }
 
     /**
-     * Only the path/wall families are format-specific: every other block — and
-     * so every mob, item, decoration and light built on the same palette — is
-     * offered in all three creative modes.
+     * Every block builds in every format now. The wall and path families used
+     * to be the plan views' geometry all by themselves and were hidden from
+     * the side-scroller's palette for it; a plan view says wall or path with
+     * the stack, so any block can be either and no block needs hiding.
      */
     @Test
-    void everyOtherBlockIsPaintableInEveryFormat() {
+    void everyBlockIsPaintableInEveryFormat() {
         for (Block b : BlockRegistry.standard().all()) {
-            if (LevelFormat.planViewBlocks().contains(b.key())) continue;
-            for (LevelFormat format : LevelFormat.values()) {
-                assertTrue(format.allowsBlock(b.key()),
-                        b.key() + " should paint in " + format);
-            }
+            if (b.isFlow()) continue; // the sim's hidden twins are never painted
+            assertNotNull(BlockRegistry.standard().get(b.key()));
+        }
+        for (String key : List.of("stone_path", "hedge_wall", "grass", "dirt")) {
+            assertNotNull(BlockRegistry.standard().get(key), key + " must be a real block");
         }
     }
 
-    /** Hiding a family from a palette must not stop a level from using it. */
+    /** In the plan views the stack is the geometry, not the block's own flag. */
     @Test
-    void aSideScrollerStillRendersAndCollidesWithWallsItAlreadyHas() {
+    void oneLayerIsAPathTwoIsAWallAndBareGroundIsAHole() {
+        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+            Level lvl = format.starterLevel("Stacks", 20, 12, 32);
+            int grass = lvl.blocks.get("grass").id();   // a solid block…
+            int path = lvl.blocks.get("stone_path").id(); // …and a passable one
+
+            // One layer of either is floor you can walk on, whatever the
+            // block's own solid flag says.
+            assertTrue(lvl.setTile(5, 5, grass));
+            assertEquals(0, lvl.upperAt(5, 5), "nothing stacked there yet");
+            assertTrue(lvl.walkable(5, 5), "one layer of grass is a path in " + format);
+            assertFalse(lvl.solidAt(5, 5));
+            assertEquals(1, lvl.stackHeight(5, 5));
+
+            // Two layers is a wall.
+            assertTrue(lvl.setUpper(5, 5, grass));
+            assertFalse(lvl.walkable(5, 5), "a stack is a wall in " + format);
+            assertTrue(lvl.solidAt(5, 5));
+            assertEquals(2, lvl.stackHeight(5, 5));
+
+            // A passable block stacked on a path is dressing, not a wall.
+            assertTrue(lvl.setUpper(5, 5, path));
+            assertTrue(lvl.walkable(5, 5), "a torch on a path leaves it open");
+
+            // Bare ground is a hole, and so is anywhere off the map.
+            assertTrue(lvl.setTile(5, 5, 0));
+            assertEquals(0, lvl.stackHeight(5, 5));
+            assertFalse(lvl.walkable(5, 5), "bare ground is a hole in " + format);
+            assertTrue(lvl.solidAt(5, 5));
+            assertTrue(lvl.solidAt(-1, 5), "and so is off the edge");
+        }
+    }
+
+    /** Clearing a floor takes what stood on it: a block over a hole is neither. */
+    @Test
+    void clearingTheFloorClearsWhatStoodOnIt() {
+        Level lvl = LevelFormat.TOP_DOWN.starterLevel("Stacks", 20, 12, 32);
+        int stone = lvl.blocks.get("stone").id();
+        assertTrue(lvl.stackTile(5, 5, stone));
+        assertEquals(2, lvl.stackHeight(5, 5));
+        assertTrue(lvl.setTile(5, 5, 0));
+        assertEquals(0, lvl.upperAt(5, 5), "the stacked block went with the floor");
+    }
+
+    /** A side-scroller still reads solidity off the block, exactly as before. */
+    @Test
+    void aSideScrollerStillRendersAndCollidesWithSolidBlocks() {
         Level lvl = LevelFormat.SIDE_SCROLLER.starterLevel("Has Walls", 20, 12, 32);
         int wall = lvl.blocks.get("stone_wall").id();
         assertTrue(lvl.setTile(5, 5, wall));
         assertTrue(lvl.solidAt(5, 5));
+        assertFalse(lvl.solidAt(5, 4), "and air is still air");
         assertNotNull(lvl.colorFor(wall));
         assertEquals(LevelFormat.SIDE_SCROLLER, LevelLoader.parse(lvl.toJson()).format());
+    }
+
+    /** Both layers survive a save, and a plan-view level's geometry with them. */
+    @Test
+    void theStackedLayerSurvivesTheSaveFileRoundTrip() {
+        Level lvl = LevelFormat.ISOMETRIC.starterLevel("Town", 20, 12, 32);
+        int stone = lvl.blocks.get("stone").id();
+        lvl.stackTile(5, 5, stone);
+        lvl.setTile(6, 5, stone);
+
+        Level loaded = LevelLoader.parse(lvl.toJson());
+        assertEquals(2, loaded.stackHeight(5, 5), "the wall came back a wall");
+        assertEquals(1, loaded.stackHeight(6, 5), "and the path a path");
+        assertTrue(loaded.solidAt(5, 5));
+        assertTrue(loaded.walkable(6, 5));
+    }
+
+    /**
+     * A plan-view level written before blocks stacked reads its geometry the
+     * other way round — solid blocks stopped you and air was open floor — so
+     * loading one has to re-cut it into layers that mean the same thing.
+     */
+    @Test
+    void planViewLevelsFromBeforeStackingAreConvertedOnLoad() {
+        int wall = BlockRegistry.standard().get("stone_wall").id();
+        Level legacy = LevelLoader.parse("""
+                { "format": "top_down", "tileset": "registry", "tileSize": 32,
+                  "width": 3, "height": 1, "tilesRle": [0, 1, %d, 1, 0, 1] }
+                """.formatted(wall));
+
+        assertEquals(2, legacy.stackHeight(1, 0), "the wall became a stack");
+        assertTrue(legacy.solidAt(1, 0), "and still stops you");
+        assertEquals(1, legacy.stackHeight(0, 0), "the open corridor became floor");
+        assertTrue(legacy.walkable(0, 0), "and is still walkable");
+        assertTrue(legacy.walkable(2, 0));
+    }
+
+    /**
+     * A giant plan-view level is floored by a generator rather than by
+     * materializing every chunk, and a save has to say <em>which</em>
+     * generator: rebuilt as side-scrolling terrain, a level whose floor is its
+     * geometry would come back full of holes and hills.
+     */
+    @Test
+    void aGiantPlanViewLevelKeepsItsFloorAcrossASave() {
+        Level giant = LevelFormat.TOP_DOWN.starterLevel("Giant", 2048, 2048, 32);
+        assertTrue(giant.isChunked(), "a level this size is chunked");
+        assertTrue(giant.walkable(1500, 1500), "its floor reaches everywhere");
+
+        Level loaded = LevelLoader.parse(giant.toJson());
+        assertTrue(loaded.isChunked());
+        assertTrue(loaded.walkable(1500, 1500),
+                "and comes back floored, not as side-scrolling terrain");
+        assertEquals(giant.tileAt(1500, 1500), loaded.tileAt(1500, 1500));
+        assertTrue(loaded.solidAt(0, 500), "with its stacked wall border intact");
+    }
+
+    /** A level that says it has an empty stacked layer is taken at its word. */
+    @Test
+    void aLevelThatDeclaresItsStackedLayerIsNotConverted() {
+        Level flat = LevelLoader.parse("""
+                { "format": "top_down", "tileset": "registry", "tileSize": 32,
+                  "width": 2, "height": 1, "tilesRle": [0, 2], "upperRle": [0, 2] }
+                """);
+        assertEquals(0, flat.stackHeight(0, 0), "an authored hole stays a hole");
+        assertFalse(flat.walkable(0, 0));
     }
 
     // --- starter canvases & generators ------------------------------------------
@@ -268,21 +385,24 @@ class LevelFormatTest {
         assertFalse(isWater(side, 9, 2), "gravity pulls the stream down, not sideways in mid-air");
         assertTrue(isWater(side, 10, 3), "it falls");
 
+        // On a plane a pool lies *on* the floor rather than replacing it, so
+        // its source goes into the level's surface layer — the stacked one.
         Level plan = openLevel(LevelFormat.TOP_DOWN);
-        plan.setTile(10, 2, water);
+        plan.setTile(10, 2, plan.surfaceLayer(), water);
         settleLiquids(plan, false);
         assertTrue(isWater(plan, 9, 2) && isWater(plan, 11, 2),
                 "a plan-view source spreads along both sides");
         assertTrue(isWater(plan, 10, 1) && isWater(plan, 10, 3),
                 "and up and down the plane");
+        assertTrue(plan.walkable(10, 2), "and the floor is still under it");
     }
 
     @Test
     void wallsStopAPlanViewLiquidFromSpreadingThrough() {
         Level plan = openLevel(LevelFormat.TOP_DOWN);
         int wall = plan.blocks.get("stone_wall").id();
-        for (int r = 0; r < plan.height; r++) plan.setTile(12, r, wall);
-        plan.setTile(10, 5, plan.blocks.get("water").id());
+        for (int r = 0; r < plan.height; r++) plan.stackTile(12, r, wall);
+        plan.setTile(10, 5, plan.surfaceLayer(), plan.blocks.get("water").id());
         settleLiquids(plan, false);
         assertTrue(isWater(plan, 11, 5), "it reaches the wall");
         assertFalse(isWater(plan, 13, 5), "and stops there");
@@ -420,10 +540,19 @@ class LevelFormatTest {
         return new World(lvl);
     }
 
-    /** An empty (unwalled) canvas, so spreading isn't confined by the border. */
+    /**
+     * An open (unwalled) canvas, so spreading isn't confined by a border. The
+     * plan views get a floor laid across theirs, because bare ground is a hole
+     * there rather than open space — an empty plan-view canvas is a level with
+     * nowhere to stand.
+     */
     private static Level openLevel(LevelFormat format) {
         Level lvl = Level.empty("Open", 20, 12, 32);
         lvl.setFormat(format);
+        if (format.layered()) {
+            Block floor = LevelFormat.floorBlock(lvl.blocks);
+            lvl.fillFloor(floor.id());
+        }
         return lvl;
     }
 
@@ -433,7 +562,7 @@ class LevelFormatTest {
     }
 
     private static boolean isWater(Level level, int col, int row) {
-        Block b = level.blockAt(col, row);
-        return b != null && b.liquid() && "water".equals(level.blocks.sourceFor(b).key());
+        Block b = level.liquidAt(col, row);
+        return b != null && "water".equals(level.blocks.sourceFor(b).key());
     }
 }
