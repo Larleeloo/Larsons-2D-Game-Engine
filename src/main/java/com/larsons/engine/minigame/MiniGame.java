@@ -348,19 +348,29 @@ public final class MiniGame implements World.PvpRule {
 
     /**
      * Resolve a melee swing against enemy players, mirroring
-     * {@link World#playerAttack}'s geometry: the nearest hittable enemy within
+     * {@link World#meleeStrike}'s geometry: the nearest hittable enemy within
      * reach of the aim point. Returns the victim, or {@code null} on a whiff —
-     * the caller applies damage and reports it via {@link #damaged}.
+     * the caller applies damage (through {@link PlayerState#takeBlow}, so the
+     * victim's own guard gets a say) and reports it via {@link #damaged}.
+     *
+     * <p>The bare-hands reach; {@link #resolveMeleeHit(PlayerState, List,
+     * double, double, double)} takes the weapon's own.
      */
     public PlayerState resolveMeleeHit(PlayerState attacker, List<PlayerState> players,
                                        double aimX, double aimY) {
+        return resolveMeleeHit(attacker, players, aimX, aimY, World.ATTACK_REACH);
+    }
+
+    /** {@link #resolveMeleeHit} at the held weapon's own {@code reach}. */
+    public PlayerState resolveMeleeHit(PlayerState attacker, List<PlayerState> players,
+                                       double aimX, double aimY, double reach) {
         if (phase != Phase.PLAYING || !config.pvp) return null;
         double size = level.tileSize;
         double px = attacker.x, py = attacker.y;
         double dx = aimX - px, dy = aimY - py;
         double len = Math.hypot(dx, dy);
-        double hitX = len > World.ATTACK_REACH ? px + dx / len * World.ATTACK_REACH : aimX;
-        double hitY = len > World.ATTACK_REACH ? py + dy / len * World.ATTACK_REACH : aimY;
+        double hitX = len > reach ? px + dx / len * reach : aimX;
+        double hitY = len > reach ? py + dy / len * reach : aimY;
         PlayerState best = null;
         double bestD = Double.MAX_VALUE;
         for (PlayerState p : players) {

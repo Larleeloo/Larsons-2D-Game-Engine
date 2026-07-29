@@ -50,11 +50,20 @@ public final class MobRegistry {
         MobRegistry r = new MobRegistry();
         // Humanoids (side-scroller: humanoid/)
         r.register(MobDef.hostile("zombie", "Zombie", new Color(90, 140, 80), new Color(200, 60, 60), 30, 60, 40, 8));
-        r.register(MobDef.hostile("skeleton", "Skeleton", new Color(225, 225, 210), new Color(40, 40, 40), 30, 80, 30, 7));
-        r.register(MobDef.hostile("goblin", "Goblin", new Color(110, 160, 70), new Color(240, 200, 60), 24, 110, 24, 5));
-        r.register(MobDef.hostile("orc", "Orc", new Color(80, 110, 60), new Color(200, 190, 170), 34, 70, 55, 10));
-        r.register(MobDef.hostile("bandit", "Bandit", new Color(120, 90, 90), new Color(60, 50, 50), 30, 100, 35, 7));
-        r.register(MobDef.hostile("knight", "Knight", new Color(170, 175, 190), new Color(220, 60, 60), 32, 75, 70, 12));
+        // The armed humanoids carry a real weapon: they inherit its melee
+        // timings, its swing sounds, and any wield/<item> art drawn for it —
+        // a knight fights with an Iron Sword exactly as a player does with
+        // the same blade (see com.larsons.engine.combat.MeleeProfiles).
+        r.register(MobDef.hostile("skeleton", "Skeleton", new Color(225, 225, 210), new Color(40, 40, 40), 30, 80, 30, 7)
+                .armedWith("wooden_sword"));
+        r.register(MobDef.hostile("goblin", "Goblin", new Color(110, 160, 70), new Color(240, 200, 60), 24, 110, 24, 5)
+                .armedWith("iron_dagger"));
+        r.register(MobDef.hostile("orc", "Orc", new Color(80, 110, 60), new Color(200, 190, 170), 34, 70, 55, 10)
+                .armedWith("battle_axe"));
+        r.register(MobDef.hostile("bandit", "Bandit", new Color(120, 90, 90), new Color(60, 50, 50), 30, 100, 35, 7)
+                .armedWith("iron_dagger"));
+        r.register(MobDef.hostile("knight", "Knight", new Color(170, 175, 190), new Color(220, 60, 60), 32, 75, 70, 12)
+                .armedWith("iron_sword"));
         r.register(MobDef.hostile("mage", "Mage", new Color(100, 80, 180), new Color(240, 230, 140), 30, 65, 30, 11));
         // Quadrupeds (side-scroller: quadruped/)
         r.register(MobDef.neutral("wolf", "Wolf", new Color(130, 130, 140), new Color(220, 220, 230), 28, 130, 30, 6));
@@ -157,10 +166,12 @@ public final class MobRegistry {
                 new Color(130, 130, 135), new Color(90, 200, 220), 48, 45, 150, 15,
                 MobDef.Temperament.HOSTILE, 220, 190, false,
                 "boulder", MobDef.Ability.SHIELD, null));
+        // A Tower Shield behind the SHIELD stance: it parries, it blocks, and
+        // it bashes, all on the shield's own timings.
         r.register(new MobDef("royal_guard", "Royal Guard",
                 new Color(200, 180, 90), new Color(150, 40, 40), 32, 80, 90, 13,
                 MobDef.Temperament.HOSTILE, 230, 34, false,
-                null, MobDef.Ability.SHIELD, null));
+                null, MobDef.Ability.SHIELD, null, "tower_shield"));
         r.register(new MobDef("phoenix", "Phoenix",
                 new Color(255, 140, 40), new Color(255, 220, 110), 36, 130, 70, 12,
                 MobDef.Temperament.NEUTRAL, 240, 170, true,

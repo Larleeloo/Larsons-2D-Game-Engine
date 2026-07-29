@@ -39,7 +39,15 @@ over in a generic, data-driven form and wired to the same toggles:
   physics and pickup, and a fully interactive hotbar + grid inventory:
   click stacks to move/merge/swap them, drop items back into the world,
   eat food — all server-authoritative online.
-- **Combat** — melee swings, knockback, mob loot, health + respawn.
+- **Combat** — a full melee move set carried by whatever you are *holding*:
+  swing, **parry**, **lunge**, **dash**, and a held **shield-ready** guard,
+  each with its own wind-up → strike → recovery on that weapon's timings, its
+  own animation state, and its own sound states. Mobs fight with the same
+  machine and can carry real weapons; a held object can bring its own
+  sprite sheets for the fighter using it (idle is always the fallback), so
+  every item can animate its own combat. Plus the knockback, mob loot,
+  health and respawn it always had. See
+  [Melee combat](#melee-combat-swing-parry-lunge-dash-shield).
 - **Projectiles & ranged weapons** — a data-driven
   [`ProjectileRegistry`](src/main/java/com/larsons/engine/entity/ProjectileRegistry.java)
   (arrows, rocks, throwing knives, magic bolts, exploding fireballs): bows
@@ -281,6 +289,10 @@ On launch you'll choose or create a **game type** before playing — see
   character's **ultimate ability** once its meter is full; **I** opens the
   inventory — click a stack to pick it up, click another slot to place/merge/
   swap it, click outside the panel to drop it into the world.
+- **Melee moves** (whatever you are holding decides how they feel — see
+  [Melee combat](#melee-combat-swing-parry-lunge-dash-shield)): **left-click**
+  swings, **V** parries (catches a blow outright and turns shots around),
+  **X** lunges, **Z** dashes, and **holding C** raises the guard.
 - **Starting a level:** if its creator put more than one character on the
   level's roster, a **character picker** opens first — arrow keys or the
   mouse to choose, Enter to drop in (see
@@ -687,6 +699,121 @@ simulation-seam shape as everything else:
   through [`LightingPass`](src/main/java/com/larsons/engine/graphics/shader/LightingPass.java)
   (and blooms, if bloom is on) — projectiles render inside the scene, so the
   whole post-FX chain applies to them like everything else.
+
+### Melee combat (swing, parry, lunge, dash, shield)
+
+The close-quarters half of the same seam. Whatever a fighter is holding
+brings a set of **five moves** with it
+([`MeleeAction`](src/main/java/com/larsons/engine/combat/MeleeAction.java)),
+and the timings of those moves belong to the *object*, not to the engine — so
+a dagger and a war hammer play completely differently out of the same
+controls, and a mob issued a Battle Axe fights the way a player holding one
+does.
+
+| Move | What it is | Keys |
+| --- | --- | --- |
+| **Swing** | The plain attack: wind-up, strike, recovery | left-click |
+| **Parry** | A short catching window — a blow that lands in it deals **nothing** and leaves the attacker staggered; shots in the air are **turned around and sent home** | `V` |
+| **Lunge** | A committed thrust: you travel with it, and it lands harder | `X` |
+| **Dash** | Evasive footwork, **untouchable** while it lasts | `Z` |
+| **Shield ready** | A *held* guard stance that soaks a fraction of everything and slows you to a walk | hold `C` |
+
+Every move runs the same three-phase shape on
+[`MeleeState`](src/main/java/com/larsons/engine/combat/MeleeState.java) —
+**wind-up → active → recovery** — which is what gives each weapon its weight:
+
+```
+WINDUP    committed, nothing has happened yet (the tell)
+ACTIVE    the move does its work: the hit lands, the parry catches,
+          the dash carries, the guard is up
+RECOVER   the tail you are stuck in before you can act again
+```
+
+A telegraphed hammer blow can be stepped out of. A swing lands **exactly
+once**, at the tick its hit window opens, however the frame rate wobbles.
+
+**Weapons are data rows**, like everything else here. A
+[`MeleeProfile`](src/main/java/com/larsons/engine/combat/MeleeProfile.java)
+carries reach, arc width, knockback, what a raised guard soaks, and one
+`Move` (wind-up / active / recovery / cooldown / stamina / damage scale /
+burst speed) per action.
+[`MeleeProfiles`](src/main/java/com/larsons/engine/combat/MeleeProfiles.java)
+**derives** one for every item already in the game from what it plainly is —
+`battle_axe` chops, `throwing_knife` flicks, `iron_spear` out-reaches
+everything, `diamond_pickaxe` swings like the tool it is, a staff jabs with
+its pommel, an apple is a fist with an apple in it — so the whole system
+works on existing content and on custom items without anybody registering
+anything. A game type that wants more can say "this fights like a spear"
+(`MeleeProfiles.setStyle`) or hand-write a whole profile
+(`MeleeProfiles.register`).
+
+An action a profile *lacks* simply can't be performed: nobody fences with a
+pickaxe. Nine
+[`MeleeStyle`](src/main/java/com/larsons/engine/combat/MeleeStyle.java)
+presets — fists, dagger, sword, axe, spear, hammer, shield, tool, staff —
+cover the ladder, and rarity buys a slightly better guard, so a Tower Shield
+stops more than a plank.
+
+**Mobs fight with the same machine.** A species can carry a weapon
+(`MobDef.weapon` — the Knight has an Iron Sword, the Orc a Battle Axe, the
+Royal Guard a Tower Shield) and inherits its timings, its sounds, and its
+art; a bare animal fights with claws sized to it. A mob's attack is now a
+real wind-up rather than an instant subtraction, hostiles **lunge** to close
+the last stretch, the dodge reflex reads as a **dash**, the guard species
+raise a real shield, and an armed mob can **parry your swing** and leave you
+reeling.
+
+**Everything is one simulation.** Players and mobs run the same
+`MeleeState`; strikes resolve through
+[`World.meleeStrike`](src/main/java/com/larsons/engine/world/World.java);
+incoming blows funnel through `PlayerState.takeBlow`, which is the single
+place dash frames, parries and guards get their say. Online, the server runs
+its own copy of every player's machine — cooldowns, stamina, wind-ups and
+guards are all decided there, so a client can no more lunge on cooldown than
+it can fabricate a shot — while the client predicts with the identical code
+and the stance rides the snapshot, so other players see the swing and hear
+the clang.
+
+#### Custom art and sound per item
+
+The point of the whole thing: **an object dresses the fighter holding it.**
+Two independent sheets resolve, and both are optional
+([`MeleeSprites`](src/main/java/com/larsons/engine/combat/MeleeSprites.java)):
+
+```
+wield/iron_sword/swing/e   the player swinging an Iron Sword, facing east
+wield/iron_sword/swing     …whichever way they face
+wield/iron_sword           …just holding it — the idle fallback
+item/iron_sword/swing      the blade's own sheet, swept through the arc
+item/iron_sword            the blade's icon — the idle fallback
+```
+
+`wield/` is a full-body sheet of *whoever* is holding the object — player,
+character profile, or mob — so a Frostmourne can have a two-handed overhead
+swing while a dagger flicks, on the same character. **Every chain ends at
+idle**, which is what makes adding melee combat change how nothing looks
+until somebody draws something: with no art at all, a swing draws the
+character's existing idle sheet and the built-in procedural arc.
+
+A move's sheet plays **once across the move**, not on a loop — so a slow
+hammer and a quick dagger each get the whole strip in the time they take.
+
+Sounds work the same way, most specific first
+([`MeleeSounds`](src/main/java/com/larsons/engine/combat/MeleeSounds.java)):
+
+```
+item/iron_sword/swing        the blade's own sound, if the pack has one
+character/rogue/swing        …else this character swinging anything
+player/swing                 …else any player swinging anything
+player/attack                …else the generic attack the engine always had
+```
+
+Ten sound states per fighter and per object (`swing`, `swing_hit`, `parry`,
+`parry_success`, `lunge`, `lunge_hit`, `dash`, `shield_up`, `shield_block`,
+`shield_down`), all defaulting to silence like everything else in the pack.
+In creative mode, an item's texture dialog grows an **Action state** row
+covering its icon, each move's own sheet, and each move's *wielder* sheet —
+with the **Facing** row on top for the wielder ones.
 
 ### Rendering backend & shaders
 
@@ -1945,7 +2072,8 @@ share/textures/
 ├── liquids/    water.png · lava.png · …
 ├── lights/     torch.png · lantern.png · …
 ├── mobs/       slime.png (all states) · slime_walk.png (one state) · slime_walk_e.png (one facing)
-├── items/      iron_sword.png · …
+├── items/      iron_sword.png · iron_sword_swing.png (the blade sweeping a melee move)
+├── wield/      iron_sword.png (holding it) · iron_sword_swing_e.png (swinging it, facing east)
 ├── player/     idle.png · walk_ne.png (one facing) · rogue_walk.png (a character profile)
 ├── particles/  embers.png · sparks.png · shards.png · …
 ├── projectiles/ arrow.png · fireball.png · …
@@ -2023,7 +2151,11 @@ block/dirt/step                   walking on Dirt
 block/water/splash                falling into Water
 mob/slime/attack                  the Slime lunging
 mob/slime/death                   the Slime dying
-item/iron_sword/use               swinging the Iron Sword
+mob/royal_guard/shield_up         the Royal Guard bracing behind its shield
+item/iron_sword/use               drawing the Iron Sword
+item/iron_sword/swing             …and cutting the air with it
+item/iron_sword/swing_hit         …and landing it
+item/tower_shield/parry_success   the clang of a blow caught on a guard
 projectile/meteor/fire            a meteor being called down
 projectile/meteor/flight          the meteor falling (repeats until it lands)
 projectile/meteor/impact          the meteor crashing
@@ -2037,7 +2169,9 @@ registry gets the full set of action states for its kind — and that includes
 the blocks, mobs, items, decorations and characters you create with the
 palette's **"+ New …"** buttons, which register into the same registries the
 catalogue reads. Make a new mob and it arrives with `spawn`, `idle`, `step`,
-`attack`, `hurt` and `death` waiting for audio.
+`attack`, `hurt` and `death` — plus the ten
+[melee-move states](#melee-combat-swing-parry-lunge-dash-shield) every
+fighter and every held object has — waiting for audio.
 
 Keys fall back one segment at a time, exactly like texture keys, so
 `mobs/slime.wav` alone gives a Slime one voice for everything it does, and
@@ -2059,11 +2193,11 @@ share/sounds/
 ├── soundpack.json    volume · pitch · pitch drift  (+ per-sound overrides)
 ├── SOUND_KEYS.txt    every sound in the game and the file to name it (generated)
 ├── README.txt
-├── player/       jump.wav · swim.wav · run.wav · ult_activate.wav · …
+├── player/       jump.wav · swim.wav · run.wav · ult_activate.wav · parry.wav · …
 ├── blocks/       dirt_break.wav · stone_place.wav · …
 ├── liquids/      water_splash.wav · lava_ambient.wav · …
 ├── mobs/         slime.wav (everything it does) · slime_death.wav (just dying)
-├── items/        iron_sword_use.wav · …
+├── items/        iron_sword_use.wav · iron_sword_swing.wav (a melee move) · …
 ├── projectiles/  meteor_fire.wav · meteor_flight.wav · meteor_impact.wav
 ├── ultimates/    meteor_volley_activate.wav · nova_burst_impact.wav · …
 ├── music/        level.mp3 · boss.mp3 · menu.mp3 · …
@@ -2691,14 +2825,26 @@ anything, so it is an untested port target rather than ready source
 [`SoundPackTest`](src/test/java/com/larsons/engine/SoundPackTest.java),
 [`SoundMixerTest`](src/test/java/com/larsons/engine/SoundMixerTest.java),
 [`SoundEditorTest`](src/test/java/com/larsons/engine/SoundEditorTest.java),
-[`SpriteEditorTest`](src/test/java/com/larsons/engine/SpriteEditorTest.java))
+[`SpriteEditorTest`](src/test/java/com/larsons/engine/SpriteEditorTest.java),
+[`MeleeCombatTest`](src/test/java/com/larsons/engine/MeleeCombatTest.java))
 covering JSON read/write, level loading (both tile modes + round-trips),
 sprite-sheet slicing, input edge detection, game-type save/load, the
 `ConfigForm` widget's keyboard/mouse interaction (including scrolling),
 rendering the scenes off-screen (play + creative), pixel-exact shader
 behavior + the GLSL contract and export (including the lighting pass),
 deterministic player physics, the mob AI state machine, world simulation
-(mining → drops → pickup, melee combat, the day/night curve), projectiles
+(mining → drops → pickup, melee combat, the day/night curve),
+melee combat (every move's wind-up → active → recovery phases and the rule
+that a swing lands exactly once; per-move cooldowns and stamina; the styles
+every existing item derives and the two ways a game type overrides them;
+weapon reach and arc deciding what a strike catches; a guard soaking its
+share, a parry catching a blow outright and turning shots around, dash frames
+avoiding one; a committed burst carrying a fighter and letting go; armed mobs
+inheriting their weapon's timings, winding up before they land, and catching a
+player's swing; the stance and the mob's move riding the wire; and the sheet
+and sound chains — a held object's wielder art, the object's own art, both
+falling back to idle, and the move sheet playing exactly once across the
+move), projectiles
 (registry + item links, ammo consumption, gravity arcs vs straight magic,
 mob hits, explosions with area damage, recoverable drops, toggle gating),
 inventory primitives (move/merge/swap/removeAt), per-game-type level saving,

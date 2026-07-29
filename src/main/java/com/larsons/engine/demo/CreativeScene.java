@@ -14,6 +14,13 @@ import com.larsons.engine.character.CharacterStore;
 import com.larsons.engine.character.Characters;
 import com.larsons.engine.character.Ultimate;
 import com.larsons.engine.character.Ultimates;
+import com.larsons.engine.combat.Melee;
+import com.larsons.engine.combat.MeleeAction;
+import com.larsons.engine.combat.MeleeProfile;
+import com.larsons.engine.combat.MeleeProfiles;
+import com.larsons.engine.combat.MeleeSounds;
+import com.larsons.engine.combat.MeleeSprites;
+import com.larsons.engine.combat.MeleeState;
 import com.larsons.engine.config.CustomContentStore;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
@@ -97,6 +104,7 @@ import java.awt.Graphics2D;
 import java.awt.RadialGradientPaint;
 import java.awt.Rectangle;
 import java.awt.event.KeyEvent;
+import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -450,6 +458,19 @@ public class CreativeScene extends AbstractScene {
     private boolean showInventory;
     private int cursorSlot = -1;
     private double swingTime;
+    /**
+     * The play-test's melee moves, on the same {@link MeleeState} machine the
+     * play scene and the authoritative server run — so a weapon's swing, its
+     * parry window and its lunge feel in a play-test exactly like they will
+     * when the level is played.
+     */
+    private final MeleeState testMelee = new MeleeState();
+    /** The item key the play-test's melee machine is running on. */
+    private String testMeleeItem = "";
+    /** Where the running move was aimed when it started, in world px. */
+    private double testMeleeAimX, testMeleeAimY;
+    /** Guard hits already reported, so a caught blow rings exactly once. */
+    private int testGuardHits;
     private double prevHealth = PlayerState.MAX_HEALTH;
     private final Particles particles = new Particles();
     /**
@@ -1731,6 +1752,11 @@ public class CreativeScene extends AbstractScene {
         texStates = switch (e.kind) {
             case "mob" -> TextureKeys.MOB_STATES;
             case "character" -> PlayerSprites.ACTION_STATES;
+            // An item is its icon, then one sheet per melee move (the object
+            // itself sweeping through the swing), then the "wielder" sheets:
+            // the whole fighter drawn holding it doing that move. Every one of
+            // them falls back to the icon / to idle, so all of it is optional.
+            case "item" -> ITEM_TEXTURE_STATES;
             // A block is looked at from more than one side. The flat sheet is
             // what a side-scroller draws and what both plan-view faces fall
             // back to; the top and side are the faces a top-down or isometric
@@ -1746,6 +1772,22 @@ public class CreativeScene extends AbstractScene {
 
     /** The block faces the texture dialog assigns sheets to, flat sheet first. */
     private static final List<String> BLOCK_FACES = List.of("flat", "top", "side");
+
+    /**
+     * What an item's texture dialog offers: its icon, the object's own sheet
+     * for each melee move, and then a "wielder" sheet per move — the fighter
+     * holding it, drawn doing that. See
+     * {@link com.larsons.engine.combat.MeleeSprites}.
+     */
+    private static final List<String> ITEM_TEXTURE_STATES = itemTextureStates();
+
+    private static List<String> itemTextureStates() {
+        List<String> out = new ArrayList<>();
+        out.add("default");
+        out.addAll(PlayerSprites.COMBAT_STATES);
+        for (String state : MeleeSprites.wieldStates()) out.add("wielder_" + state);
+        return List.copyOf(out);
+    }
 
     /** What the face/state cycler is called for the object being reskinned. */
     private String texStateLabel() {
@@ -1784,7 +1826,10 @@ public class CreativeScene extends AbstractScene {
     /** Whether an object's sheets may be split by facing (see {@link Facing}). */
     private static boolean directional(String kind) {
         return switch (kind) {
-            case "mob", "playerskin", "character" -> true;
+            // An item's wielder sheets are a whole character, so they split by
+            // facing like one; the icon and the object's own move sheets
+            // ignore the direction row (see itemTextureKey).
+            case "mob", "playerskin", "character", "item" -> true;
             default -> false;
         };
     }
@@ -2092,6 +2137,9 @@ public class CreativeScene extends AbstractScene {
         in.jump = input.isKeyJustPressed(KeyEvent.VK_SPACE);
         testInv.applyPassivesTo(testMe, p.itemsEnabled);
         double preX = testMe.x, preY = testMe.y;
+        // The melee machine before the body moves: a lunge's burst and a
+        // raised guard's slowed footwork are both movement.
+        stepTestMelee(input, p, dt);
         // Play-test simulates in the level's own perspective, so a top-down
         // maze tests as a top-down maze even inside a side-scroll game type.
         PlayerPhysics.step(testMe, in, level, p, level.perspective, dt);
@@ -2110,8 +2158,12 @@ public class CreativeScene extends AbstractScene {
         // exactly like the play scene, so the same skin animations play.
         String state = PlayerSprites.actionState(testMe, level, p,
                 level.perspective, in.sprint);
-        if (!state.equals(testAnimState)) {
-            testAnimState = state;
+        // A melee move takes the drawn animation over while it runs; the
+        // movement state below still drives the footsteps.
+        String drawn = testMelee.animationState().isEmpty()
+                ? state : testMelee.animationState();
+        if (!drawn.equals(testAnimState)) {
+            testAnimState = drawn;
             testAnimClock = 0;
         } else {
             testAnimClock += dt;
@@ -2164,6 +2216,7 @@ public class CreativeScene extends AbstractScene {
 
         if (!showInventory && craftingPanel == null && containerPanel == null) {
             updateTestMouseActions(input, p, dt);
+            updateTestMeleeControls(input, p);
             // [R] fires the character's ultimate at the cursor, once charged —
             // the same key and the same World resolution as in play.
             if (input.isKeyJustPressed(KeyEvent.VK_R)) tryTestUltimate(p);
@@ -2418,20 +2471,93 @@ public class CreativeScene extends AbstractScene {
             }
         }
         if (p.combatEnabled) {
-            swingTime = 0.2;
-            double damage = World.FIST_DAMAGE + (held != null ? held.damage() : 0);
-            Sounds.actor(testCharacter.key, "", "attack");
-            Mob hit = testWorld.playerAttack(testMe, aim[0], aim[1], damage);
-            if (hit != null) {
-                Sounds.actor(testCharacter.key,
-                        SoundKeys.mob(hit.def.key(), hit.dead() ? "death" : "hurt"),
-                        "attack_hit");
+            // The click starts the swing; it lands when the weapon's own hit
+            // window opens (stepTestMelee), exactly as it does in play.
+            testMeleeAimX = aim[0];
+            testMeleeAimY = aim[1];
+            Melee.start(testMe, testMelee, testMeleeProfile(p), MeleeAction.SWING);
+        }
+    }
+
+    /**
+     * The play-test's melee keys, matching the play scene's: [C] holds the
+     * guard, [V] parries, [X] lunges, [Z] dashes.
+     */
+    private void updateTestMeleeControls(InputManager input, GameProfile p) {
+        if (!p.combatEnabled) return;
+        MeleeAction requested = input.isKeyJustPressed(KeyEvent.VK_V) ? MeleeAction.PARRY
+                : input.isKeyJustPressed(KeyEvent.VK_X) ? MeleeAction.LUNGE
+                : input.isKeyJustPressed(KeyEvent.VK_Z) ? MeleeAction.DASH
+                : MeleeAction.NONE;
+        if (requested == MeleeAction.NONE) return;
+        double[] aim = camera.screenToWorld(mouseX, mouseY);
+        testMeleeAimX = aim[0];
+        testMeleeAimY = aim[1];
+        Melee.start(testMe, testMelee, testMeleeProfile(p), requested);
+    }
+
+    /**
+     * Advance the play-test's melee machine and land what it says landed —
+     * the play scene's {@code stepMelee}, against the local test world.
+     */
+    private void stepTestMelee(InputManager input, GameProfile p, double dt) {
+        MeleeProfile weapon = testMeleeProfile(p);
+        ItemDef held = p.itemsEnabled ? testInv.selectedDef() : null;
+        testMeleeItem = held == null ? "" : held.key();
+        boolean guard = p.combatEnabled && input.isKeyDown(KeyEvent.VK_C)
+                && !showInventory && craftingPanel == null && containerPanel == null;
+        boolean planar = level.perspective != Perspective.SIDE_SCROLL || !p.gravityEnabled;
+        Melee.step(testMe, testMelee, weapon, testMeleeItem, guard, planar, dt);
+
+        MeleeAction begun = testMelee.pollBegun();
+        if (begun != MeleeAction.NONE) {
+            Sounds.playFirst(1.0,
+                    MeleeSounds.playerStart(testCharacter.key, testMeleeItem, begun));
+        }
+        if (testMelee.pollEnded() == MeleeAction.SHIELD) {
+            Sounds.playFirst(0.8, MeleeSounds.playerEnd(testCharacter.key,
+                    testMeleeItem, MeleeAction.SHIELD));
+        }
+        // Drained unconditionally: a strike is never banked for a later tick.
+        boolean struck = testMelee.pollStrike();
+        if (struck && p.combatEnabled) {
+            double base = World.FIST_DAMAGE + (held != null ? held.damage() : 0);
+            World.MeleeHit hit = testWorld.meleeStrike(testMe, weapon,
+                    testMelee.action(), testMeleeAimX, testMeleeAimY,
+                    Melee.damage(base, weapon, testMelee.action()));
+            if (hit.parried()) {
+                testMelee.stagger(MeleeState.PARRY_STAGGER);
+                Sounds.playFirst(1.0, MeleeSounds.mobHit(hit.mob().def.key(),
+                        hit.mob().weaponKey(), MeleeAction.PARRY));
+            } else if (hit.hit()) {
+                testMelee.markConnected();
+                Sounds.actor(testCharacter.key, SoundKeys.mob(hit.mob().def.key(),
+                        hit.mob().dead() ? "death" : "hurt"), "attack_hit");
                 if (p.particlesEnabled) {
-                    particles.burst(hit.x + hit.def.size() / 2,
-                            hit.y + hit.def.size() / 2, hit.def.body(), 8);
+                    particles.burst(hit.mob().x + hit.mob().def.size() / 2,
+                            hit.mob().y + hit.mob().def.size() / 2,
+                            hit.mob().def.body(), 8);
                 }
             }
         }
+        if (testMelee.parrying() && testWorld.parryProjectiles(testMe, weapon) > 0) {
+            testMelee.markConnected();
+        }
+        if (testMelee.pollConnected()) {
+            Sounds.playFirst(1.0, MeleeSounds.playerHit(testCharacter.key,
+                    testMeleeItem, testMelee.action()));
+        }
+        if (testMe.guardHits > testGuardHits) {
+            testMelee.flashGuard();
+            Sounds.playFirst(1.0, MeleeSounds.playerHit(testCharacter.key, testMeleeItem,
+                    testMe.parrying ? MeleeAction.PARRY : MeleeAction.SHIELD));
+        }
+        testGuardHits = testMe.guardHits;
+    }
+
+    /** The melee timings of what the play-test player is holding. */
+    private MeleeProfile testMeleeProfile(GameProfile p) {
+        return MeleeProfiles.of(p.itemsEnabled ? testInv.selectedDef() : null);
     }
 
     /** Right click in test: place the selected hotbar block (consumes one). */
@@ -3009,7 +3135,7 @@ public class CreativeScene extends AbstractScene {
         String suffix = dir == null ? "" : "/" + dir.key();
         return switch (kind) {
             case "mob" -> "mob/" + key + "/" + state + suffix;
-            case "item" -> "item/" + key;
+            case "item" -> itemTextureKey(key, state, dir);
             case "decor" -> "decor/" + key;
             case "surface" -> "surface/" + key;
             case "playerskin" -> PlayerSprites.stateKey(state) + suffix;
@@ -3020,6 +3146,20 @@ public class CreativeScene extends AbstractScene {
             // faces, which live in their own pools and fall back to it.
             default -> "flat".equals(state) ? "block/" + key : "block/" + key + "/" + state;
         };
+    }
+
+    /**
+     * Where one of an item's sheets is filed: its plain icon, the object's own
+     * art for a melee move ({@code item/<key>/<move>}), or a full-body sheet of
+     * the fighter holding it ({@code wield/<key>/<move>}, which the dialog
+     * calls "wielder …" and which may be split by facing like a character).
+     */
+    private static String itemTextureKey(String key, String state, Facing dir) {
+        if (state == null || "default".equals(state)) return "item/" + key;
+        if (state.startsWith("wielder_")) {
+            return MeleeSprites.wieldKey(key, state.substring("wielder_".length()), dir);
+        }
+        return MeleeSprites.heldKey(key, state);
     }
 
     /**
@@ -5179,7 +5319,8 @@ public class CreativeScene extends AbstractScene {
             }
             for (Mob m : testWorld.mobs()) {
                 into.at(footDepth(m.x, m.y, m.def.size()), () ->
-                        drawMobAt(g, m.def, m.x, m.y, m.facing, mobStateKey(m)));
+                        drawMobAt(g, m.def, m.x, m.y, m.facing, mobStateKey(m),
+                                m.weaponKey(), m.melee.action(), m.meleeProgress()));
             }
             for (Projectile pr : testWorld.projectiles()) {
                 into.at(footDepth(pr.x, pr.y, 0), () -> drawProjectileAt(g, pr));
@@ -5224,6 +5365,8 @@ public class CreativeScene extends AbstractScene {
 
     /** The skin animation state a live mob is in (feeds {@code mob/<key>/<state>}). */
     private static String mobStateKey(Mob m) {
+        // A melee move takes the drawn state over while it runs.
+        if (!m.meleeAction().isEmpty()) return m.meleeAction();
         if (m.hurting()) return "hurt";
         return switch (m.state) {
             case CHASE, WANDER, FLEE -> "walk";
@@ -5393,22 +5536,23 @@ public class CreativeScene extends AbstractScene {
      */
     private void drawMobAt(Graphics2D g, MobDef def, double x, double y,
                            Facing facing, String state) {
+        drawMobAt(g, def, x, y, facing, state,
+                def.weapon() == null ? "" : def.weapon(), MeleeAction.NONE, 0);
+    }
+
+    /**
+     * {@link #drawMobAt} for a mob mid-melee-move: the weapon it carries gets
+     * first say over how its body is drawn, and the weapon itself is drawn in
+     * its hands — the same two sheets the play scene resolves.
+     */
+    private void drawMobAt(Graphics2D g, MobDef def, double x, double y,
+                           Facing facing, String state, String weapon,
+                           MeleeAction move, double moveProgress) {
         Facing dir = facing == null ? Facing.EAST : facing;
-        String base = "mob/" + def.key() + "/";
-        boolean mirror = false;
-        BufferedImage img = Skins.frame(base + state + "/" + dir.key(), animClock);
-        if (img == null && dir.mirrored()) {
-            img = Skins.frame(base + state + "/" + dir.mirrorOf().key(), animClock);
-            mirror = img != null;
-        }
-        if (img == null) {
-            img = Skins.frame(base + state, animClock);
-            mirror = img != null && dir.facingLeft();
-        }
-        if (img == null && !"idle".equals(state)) {
-            img = Skins.frame(base + "idle", animClock);
-            mirror = img != null && dir.facingLeft();
-        }
+        PlayerSprites.Frame resolved = MeleeSprites.mobFrame(def.key(), weapon, state,
+                dir, animClock, moveProgress);
+        BufferedImage img = resolved == null ? null : resolved.image();
+        boolean mirror = resolved != null && resolved.mirrored();
         if (img == null) {
             img = EntitySprites.mob(def, 32, dir);
             mirror = false;
@@ -5420,6 +5564,27 @@ public class CreativeScene extends AbstractScene {
             g.drawImage(img, dx + w, dy, -w, w, null);
         } else {
             g.drawImage(img, dx, dy, w, w, null);
+        }
+        if (!weapon.isEmpty()) {
+            MeleeSprites.Hold hold = MeleeSprites.hold(move,
+                    MeleeProfiles.ofKey(weapon), moveProgress);
+            BufferedImage held = MeleeSprites.heldFrame(weapon, move.key(),
+                    animClock, moveProgress);
+            if (held == null) {
+                ItemDef item = ItemRegistry.standard().get(weapon);
+                held = item == null ? null : EntitySprites.item(item, 16);
+            }
+            if (held != null) {
+                int iw = Math.max(5, (int) Math.round(def.size() * hold.scale()
+                        * camera.zoom * 0.7));
+                int flip = dir.facingLeft() ? -1 : 1;
+                AffineTransform old = g.getTransform();
+                g.translate(pcorner[0] + flip * hold.offsetX() * def.size() * camera.zoom,
+                        pcorner[1] - w / 2.0 + hold.offsetY() * def.size() * camera.zoom);
+                g.rotate(flip * hold.angle());
+                g.drawImage(held, flip * -iw / 2, -iw / 2, flip * iw, iw, null);
+                g.setTransform(old);
+            }
         }
     }
 
@@ -5568,9 +5733,11 @@ public class CreativeScene extends AbstractScene {
      */
     private void drawTestPlayer(Graphics2D g) {
         double size = profile().playerSize;
-        PlayerSprites.Frame sprite = PlayerSprites.directionalFrame(
-                testMe.characterKey, testAnimState, testMe.facing, testAnimClock,
-                (int) size, testCharacter.body);
+        // Whatever is in their hands gets first say over how they are drawn
+        // doing this — the same resolution the play scene uses.
+        PlayerSprites.Frame sprite = MeleeSprites.playerFrame(
+                testMe.characterKey, testMeleeItem, testAnimState, testMe.facing,
+                testAnimClock, testMelee.progress(), (int) size, testCharacter.body);
         camera.worldToScreen(testMe.x + size / 2.0, testMe.y + size, pcorner);
         int w = (int) Math.round(size * camera.zoom);
         int h = w;
@@ -5590,13 +5757,54 @@ public class CreativeScene extends AbstractScene {
                 g.drawImage(sprite.image(), dx, dy, w, h, null);
             }
         }
-        if (swingTime > 0) {
-            g.setColor(new Color(255, 255, 255, (int) (150 * Math.max(0, swingTime / 0.2))));
+        drawTestHeldObject(g, size, w, lift);
+        if (testMelee.action() != MeleeAction.NONE || swingTime > 0) {
+            // While a move runs the arc is the weapon's own reach and width;
+            // otherwise it is the short mining/firing stroke it always was.
+            MeleeProfile weapon = MeleeProfiles.ofKey(testMeleeItem);
+            boolean move = testMelee.action() != MeleeAction.NONE;
+            int r = (int) ((move ? weapon.reach() : size * 0.9) * camera.zoom);
+            double arc = move ? weapon.arc() : 120;
+            int start = move
+                    ? (int) Math.round((testMe.facingLeft ? 180 : 0) + arc / 2
+                    - arc * testMelee.progress() - arc / 4)
+                    : (testMe.facingLeft ? 120 : -60);
+            g.setColor(new Color(255, 255, 255, (int) (150 * Math.max(0,
+                    move ? (testMelee.striking() ? 1 : 0.4) : swingTime / 0.2))));
             g.setStroke(new BasicStroke(3f));
-            int r = (int) (size * camera.zoom * 0.9);
-            int start = testMe.facingLeft ? 120 : -60;
-            g.drawArc(pcorner[0] - r, pcorner[1] - w / 2 - r, r * 2, r * 2, start, 120);
+            g.drawArc(pcorner[0] - r, pcorner[1] - w / 2 - r, r * 2, r * 2,
+                    start, (int) Math.round(move ? arc / 2 : arc));
         }
+    }
+
+    /**
+     * The object in the play-test player's hands, swept through the move. Its
+     * sheet and its placement come from the same {@link MeleeSprites} the play
+     * scene draws from, so a weapon's art is tested where it is authored.
+     */
+    private void drawTestHeldObject(Graphics2D g, double size, int w, int lift) {
+        if (testMeleeItem.isEmpty()) return;
+        MeleeAction action = testMelee.action();
+        double progress = testMelee.progress();
+        BufferedImage img = MeleeSprites.heldFrame(testMeleeItem, action.key(),
+                animClock, progress);
+        if (img == null) {
+            ItemDef def = testWorld != null ? testWorld.itemTypes.get(testMeleeItem)
+                    : ItemRegistry.standard().get(testMeleeItem);
+            if (def == null) return;
+            img = EntitySprites.item(def, 16);
+        }
+        MeleeSprites.Hold hold = MeleeSprites.hold(action,
+                MeleeProfiles.ofKey(testMeleeItem), progress);
+        int iw = Math.max(6, (int) Math.round(size * hold.scale() * camera.zoom * 0.7));
+        int flip = testMe.facing != null && testMe.facing.facingLeft() ? -1 : 1;
+        double cx = pcorner[0] + flip * hold.offsetX() * size * camera.zoom;
+        double cy = pcorner[1] - w / 2.0 - lift + hold.offsetY() * size * camera.zoom;
+        AffineTransform old = g.getTransform();
+        g.translate(cx, cy);
+        g.rotate(flip * hold.angle());
+        g.drawImage(img, flip * -iw / 2, -iw / 2, flip * iw, iw, null);
+        g.setTransform(old);
     }
 
     /** Ghost of what a click would paint, under the cursor. */

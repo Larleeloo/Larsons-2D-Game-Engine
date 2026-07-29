@@ -115,6 +115,47 @@ public final class PlayerState {
      *  replicated vehicle carries the rider id for everyone else to render). */
     public int riding = -1;
 
+    // --- melee stance -----------------------------------------------------------
+    // Mirrored onto the state each tick from the fighter's MeleeState (see
+    // com.larsons.engine.combat.Melee#step) so that everything which needs to
+    // know "is this player mid-swing / guarding / untouchable" — the damage
+    // funnel below, the physics step, the renderer, the snapshot — reads one
+    // place instead of reaching into the combat machine.
+
+    /** The melee move being performed ({@code ""} = none); the animation state. */
+    public String meleeAction = "";
+    /** How far through that move, 0..1 — picks the frame of its sheet. */
+    public double meleeProgress;
+    /**
+     * The item key in hand, which picks the wielded sheets and the weapon's
+     * own sounds ({@code ""} = empty-handed). Replicated, so other players see
+     * you swinging the sword you are actually holding.
+     */
+    public String heldKey = "";
+    /** True while a raised guard is up: {@link #guardFraction} is soaked. */
+    public boolean guarding;
+    /** Fraction of an incoming blow a raised guard soaks, 0..1. */
+    public double guardFraction;
+    /** True while a parry window is open: a blow that lands in it is caught. */
+    public boolean parrying;
+    /** True while a dash's invulnerability frames run. */
+    public boolean invulnerable;
+    /**
+     * Running total of blows this player's guard or parry has stopped.
+     * Replicated, so the clang is heard online (where the server is the one
+     * that resolved it) by comparing against the previous snapshot.
+     */
+    public int guardHits;
+
+    /**
+     * A committed melee burst — a lunge or a dash — as a velocity and the
+     * seconds left on it. While it lasts {@link PlayerPhysics} moves the
+     * player along it instead of by their steering, colliding as usual, which
+     * is what makes the move a commitment rather than a speed boost.
+     */
+    public double dashVx, dashVy;
+    public double dashTime;
+
     public PlayerState() {}
 
     public PlayerState(int id, String name, double x, double y) {
@@ -133,10 +174,45 @@ public final class PlayerState {
      * Take {@code amount} damage, after whatever a running ultimate absorbs.
      * Every place a player is hurt goes through here so defensive ultimates
      * (and anything added later) apply once, in one place.
+     *
+     * <p>This is the <em>unconditional</em> funnel — standing in lava, drowning,
+     * anything a raised shield is no help against. A blow that a fighter can
+     * actually do something about goes through {@link #takeBlow} instead.
      */
     public void hurt(double amount) {
         if (amount <= 0) return;
         health -= amount * (1.0 - Math.max(0, Math.min(1, ultDamageResist)));
+    }
+
+    /**
+     * Take a <em>blow</em> — a mob's strike, a projectile, a blast, another
+     * player's swing — which the melee stance gets a say in:
+     *
+     * <ol>
+     *   <li>a dash's invulnerability frames avoid it outright;</li>
+     *   <li>an open parry window catches it: no damage, and whoever threw it
+     *       is left staggered (the attacker checks {@link #parrying});</li>
+     *   <li>a raised guard soaks {@link #guardFraction} of it;</li>
+     *   <li>whatever is left goes through {@link #hurt}.</li>
+     * </ol>
+     *
+     * @return the damage that actually landed (0 when it was avoided)
+     */
+    public double takeBlow(double amount) {
+        if (amount <= 0) return 0;
+        if (invulnerable) return 0;
+        if (parrying) {
+            guardHits++;
+            return 0;
+        }
+        double after = amount;
+        if (guarding) {
+            after *= 1.0 - Math.max(0, Math.min(1, guardFraction));
+            guardHits++;
+        }
+        double before = health;
+        hurt(after);
+        return before - health;
     }
 
     /** Refill every pool to this character's caps (respawn, level start). */
@@ -167,6 +243,12 @@ public final class PlayerState {
         s.ultCharge = ultCharge;
         s.ultActive = ultActive;
         s.ultActiveKey = ultActiveKey;
+        s.meleeAction = meleeAction;
+        s.meleeProgress = meleeProgress;
+        s.heldKey = heldKey;
+        s.guarding = guarding;
+        s.guardFraction = guardFraction;
+        s.guardHits = guardHits;
         return s;
     }
 
@@ -196,6 +278,15 @@ public final class PlayerState {
             m.put("ua", ultActive);
             m.put("uk", ultActiveKey);
         }
+        // The melee stance, so other players see the swing and hear the clang.
+        // Absent while nothing is happening, like every other extra here.
+        if (!meleeAction.isEmpty()) {
+            m.put("ma", meleeAction);
+            m.put("mg", meleeProgress);
+        }
+        if (!heldKey.isEmpty()) m.put("hk", heldKey);
+        if (guarding) m.put("gu", true);
+        if (guardHits > 0) m.put("gh", guardHits);
         return m;
     }
 
@@ -223,6 +314,11 @@ public final class PlayerState {
         s.ultCharge = dbl(m.get("uc"));
         s.ultActive = dbl(m.get("ua"));
         s.ultActiveKey = m.get("uk") instanceof String u ? u : "";
+        s.meleeAction = m.get("ma") instanceof String a ? a : "";
+        s.meleeProgress = dbl(m.get("mg"));
+        s.heldKey = m.get("hk") instanceof String h ? h : "";
+        s.guarding = Boolean.TRUE.equals(m.get("gu"));
+        s.guardHits = num(m.get("gh"), 0);
         return s;
     }
 

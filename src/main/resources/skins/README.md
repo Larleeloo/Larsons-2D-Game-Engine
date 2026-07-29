@@ -37,7 +37,9 @@ shared jar (bundled skins load from inside the jar too).
 | Key | Reskins |
 |-----|---------|
 | `unit/<unitKey>/<state>` | one unit in one animation state; states are `idle`, `walk`, `attack`, `cast`, `hit`, `death`. A unit with only an `idle` skin uses it for every state. |
-| `item/<itemKey>` | an item gem (bench, tooltips, drag ghost) |
+| `item/<itemKey>` | an item gem (bench, tooltips, drag ghost), and the object drawn in a fighter's hand |
+| `item/<itemKey>/<move>` | the object itself sweeping through one melee move — `swing`, `parry`, `lunge`, `dash`, `shield`. Falls back to the plain `item/<itemKey>` icon. |
+| `wield/<itemKey>/<move>` | the whole **fighter holding** that object, doing that move (add `/e`, `/ne`, … for one facing). Falls back to `wield/<itemKey>/idle`, then to the fighter's own art — so all of it is optional. |
 | `projectile/<kind>` | an in-flight projectile; kinds are `arrow`, `orb`, `bolt` |
 | `board/tile_a`, `board/tile_b` | the two checkerboard tiles of the game board |
 
@@ -50,6 +52,11 @@ so `skins/units/my_squire.png` works) and then the working directory.
 
 The same keys address the texture pack folder: `unit/squire/idle` is
 `units/squire_idle.png` there (or `units/squire.png` for every state),
-`item/sword` is `items/sword.png`, `projectile/arrow` is
+`item/sword` is `items/sword.png`, `item/iron_sword/swing` is
+`items/iron_sword_swing.png`, `wield/iron_sword/swing/e` is
+`wield/iron_sword_swing_e.png`, `projectile/arrow` is
 `projectiles/arrow.png`, `board/tile_a` is `board/tile_a.png`. An assignment
 made here takes precedence over the pack for that one key.
+
+A melee move's sheet is played **once across the move** rather than on a
+loop, so the same strip reads correctly on a quick dagger and a slow hammer.

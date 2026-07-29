@@ -32,8 +32,14 @@ public final class Projectile {
 
     public final int id;
     public final ProjectileDef def;
-    /** Player id that fired it (its owner is never hit by it). */
-    public final int ownerId;
+    /**
+     * Player id that fired it (its owner is never hit by it), or a negative id
+     * for a mob-fired shot. Not final because a shot can <em>change hands</em>:
+     * a parry turns it around and hands it to whoever caught it, which is what
+     * makes timing a parry against an archer worth doing (see
+     * {@code World.parryProjectiles}).
+     */
+    public int ownerId;
     public double x, y;        // centre, world px
     /**
      * Height over the floor in a plan-view level (world px). Always 0 in a

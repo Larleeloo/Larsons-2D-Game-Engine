@@ -80,6 +80,13 @@ public final class TextureKeys {
     public static final String BLOCKS_SIDE = "blocks_side";
     public static final String MOBS = "mobs";
     public static final String ITEMS = "items";
+    /**
+     * Full-body sheets of a fighter <em>holding</em> one object
+     * ({@code wield/iron_sword/swing}). Separate from {@link #ITEMS}, which is
+     * the object itself: one folder is the sword, the other is the person
+     * swinging it. See {@code com.larsons.engine.combat.MeleeSprites}.
+     */
+    public static final String WIELD = "wield";
     public static final String DECOR = "decor";
     public static final String BLOCK_DECOR = "block_decor";
     public static final String PLAYER = "player";
@@ -90,8 +97,28 @@ public final class TextureKeys {
     /** Where keys from an unrecognised namespace land. */
     public static final String OTHER = "other";
 
-    /** The mob animation states the creative texture dialog assigns. */
-    public static final List<String> MOB_STATES = List.of("idle", "walk", "attack", "hurt");
+    /**
+     * The mob animation states the creative texture dialog assigns: the four
+     * it always had, plus the melee moves every mob can now perform
+     * ({@link PlayerSprites#COMBAT_STATES}).
+     */
+    public static final List<String> MOB_STATES = concat(
+            List.of("idle", "walk", "attack", "hurt"), PlayerSprites.COMBAT_STATES);
+
+    /**
+     * The states a held object's own sheet may be split by: its icon (the
+     * fallback for everything) and one per melee move, so a creator can
+     * animate the blade itself sweeping through the swing.
+     */
+    public static final List<String> ITEM_STATES = PlayerSprites.COMBAT_STATES;
+
+    /**
+     * The states a wielder sheet may be split by — idle (just holding the
+     * thing) and one per melee move. Every one of them falls back to idle, so
+     * a single {@code wield/<item>.png} is a complete answer.
+     */
+    public static final List<String> WIELD_STATES =
+            concat(List.of("idle"), PlayerSprites.COMBAT_STATES);
 
     /** The auto-battler projectile kinds ({@code projectile/<kind>}). */
     public static final List<String> PROJECTILE_KINDS = List.of("arrow", "orb", "bolt");
@@ -137,8 +164,16 @@ public final class TextureKeys {
     /** Every pack folder, in the order the key list documents them. */
     public static List<String> folders() {
         return List.of(BLOCKS, BLOCKS_TOP, BLOCKS_SIDE, LIQUIDS, LIGHTS, MOBS,
-                ITEMS, DECOR, BLOCK_DECOR, PLAYER, UNITS, PROJECTILES, PARTICLES,
-                BOARD);
+                ITEMS, WIELD, DECOR, BLOCK_DECOR, PLAYER, UNITS, PROJECTILES,
+                PARTICLES, BOARD);
+    }
+
+    /** Two lists, end to end, as one immutable list. */
+    private static List<String> concat(List<String> a, List<String> b) {
+        List<String> out = new ArrayList<>(a.size() + b.size());
+        out.addAll(a);
+        out.addAll(b);
+        return List.copyOf(out);
     }
 
     /**
@@ -161,7 +196,12 @@ public final class TextureKeys {
             // Nested namespaces drop one segment at a time, so a single sheet
             // covers every state and direction until finer ones are supplied.
             case "mob" -> progressive(MOBS, parts);
-            case "item" -> List.of(ITEMS + "/" + rest);
+            // An item's action states drop back to its plain icon
+            // ({@code item/iron_sword/swing} → items/iron_sword_swing, then
+            // items/iron_sword), so an un-animated item still draws in hand.
+            case "item" -> progressive(ITEMS, parts);
+            // The fighter holding an object, per move and per direction.
+            case "wield" -> progressive(WIELD, parts);
             case "decor" -> List.of(DECOR + "/" + rest);
             case "surface" -> List.of(BLOCK_DECOR + "/" + rest);
             case "player" -> progressive(PLAYER, parts);
@@ -256,7 +296,15 @@ public final class TextureKeys {
         for (ItemDef d : ItemRegistry.standard().all()) {
             if (itemKeys.add(d.key())) {
                 out.add(new Entry("Items", ITEMS, "item/" + d.key(), d.key(),
-                        d.name(), List.of()));
+                        d.name(), ITEM_STATES));
+                // …and, for the things a fighter actually fights with, the
+                // full-body sheets of them doing it. Any item key resolves a
+                // wield sheet — this is only which ones are worth listing.
+                if (wieldable(d)) {
+                    out.add(new Entry("Wielded objects", WIELD,
+                            "wield/" + d.key() + "/idle", d.key(),
+                            d.name() + " — wielder", WIELD_STATES, directions()));
+                }
             }
         }
         for (Decor d : DecorRegistry.standard().all()) {
@@ -319,6 +367,19 @@ public final class TextureKeys {
                     part, List.of()));
         }
         return out;
+    }
+
+    /**
+     * Whether an item is worth listing a wielder sheet for: the things a
+     * fighter fights with. Every item key <em>resolves</em> one — you can
+     * animate a character swinging a loaf of bread if you want to — but the
+     * catalogue would be noise if it said so for all two hundred of them.
+     */
+    private static boolean wieldable(ItemDef d) {
+        return switch (d.category()) {
+            case WEAPON, RANGED_WEAPON, TOOL, ARMOR, THROWABLE -> true;
+            default -> false;
+        };
     }
 
     /** Join key segments {@code [from, to)} with underscores: the file name. */
