@@ -122,6 +122,27 @@ public final class Skins {
     }
 
     /**
+     * The frame of {@code key}'s sheet at {@code progress} (0..1) through a
+     * <em>one-shot</em> animation, rather than at a point in time: the sheet
+     * is stretched over the whole action, so a melee swing's art plays exactly
+     * once across the swing however long that particular weapon takes to
+     * throw it. Returns {@code null} when the key has no (working) skin, like
+     * {@link #frame}.
+     */
+    public static synchronized BufferedImage progressFrame(String key, double progress) {
+        SkinDef def = effective(key);
+        if (def == null) return null;
+        List<BufferedImage> frames = FRAMES.get(key);
+        if (frames == null) {
+            frames = slice(def);
+            FRAMES.put(key, frames);
+        }
+        if (frames.isEmpty()) return null;
+        double t = progress < 0 ? 0 : Math.min(0.999999, progress);
+        return frames.get(Math.min(frames.size() - 1, (int) (t * frames.size())));
+    }
+
+    /**
      * The icon a menu should show for a texture key: the first frame of
      * whatever texture actually renders it, scaled into a {@code size} square,
      * or {@code fallback} (the caller's built-in art) when nothing does. This

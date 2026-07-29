@@ -27,11 +27,18 @@ public final class EntityView {
     public final int rider;     // vehicle rider player id, or -1 when riderless
     /** The compass direction a mob faces, which picks its directional sprite. */
     public final Facing facing;
+    /** The melee move a mob is mid-way through ({@code ""} = none). */
+    public final String meleeAction;
+    /** How far through that move, 0..1 — picks the frame of its sheet. */
+    public final double meleeProgress;
+    /** The item key a mob fights with ({@code ""} = bare), for its wield sheet. */
+    public final String weapon;
 
     private EntityView(int id, String key, double x, double y, double z,
                        boolean facingLeft,
                        double health, int aiState, int count, double vx, double vy,
-                       int status, int rider, Facing facing) {
+                       int status, int rider, Facing facing,
+                       String meleeAction, double meleeProgress, String weapon) {
         this.id = id;
         this.key = key;
         this.x = x;
@@ -46,6 +53,9 @@ public final class EntityView {
         this.vy = vy;
         this.status = status;
         this.rider = rider;
+        this.meleeAction = meleeAction;
+        this.meleeProgress = meleeProgress;
+        this.weapon = weapon;
     }
 
     public static EntityView fromMap(Map<String, Object> m) {
@@ -63,7 +73,10 @@ public final class EntityView {
                 num(m.get("e"), 0),
                 num(m.get("p"), -1),
                 // Pre-directional snapshots carry only the left/right flag.
-                dir != null ? dir : Facing.side(facingLeft));
+                dir != null ? dir : Facing.side(facingLeft),
+                m.get("ma") instanceof String a ? a : "",
+                dbl(m.get("mg")),
+                m.get("w") instanceof String w ? w : "");
     }
 
     private static int num(Object o, int def) {

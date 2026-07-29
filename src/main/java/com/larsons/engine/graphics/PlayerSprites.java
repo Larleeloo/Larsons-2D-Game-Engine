@@ -50,10 +50,25 @@ public final class PlayerSprites {
     /**
      * The player's skinnable action states, in the order the Player Skin…
      * dialog cycles them: standing still, walking, sprinting, rising in a
-     * jump, falling, and swimming in a liquid.
+     * jump, falling, swimming in a liquid, and then the five melee moves
+     * ({@link #COMBAT_STATES}).
      */
     public static final List<String> ACTION_STATES =
-            List.of("idle", "walk", "run", "jump", "fall", "swim");
+            List.of("idle", "walk", "run", "jump", "fall", "swim",
+                    "swing", "parry", "lunge", "dash", "shield");
+
+    /**
+     * The melee moves' states — the tail of {@link #ACTION_STATES}. These are
+     * <em>one-shot</em> animations: their sheet is played once across the
+     * move ({@link #oneShot}) rather than looping in time, so a slow hammer
+     * and a quick dagger each get the whole sheet in the time they take.
+     *
+     * <p>Mirrors {@code MeleeAction.states()}; the combat package owns the
+     * moves themselves, this list is what the art side needs to know about
+     * them.
+     */
+    public static final List<String> COMBAT_STATES =
+            List.of("swing", "parry", "lunge", "dash", "shield");
 
     /** The default (unskinned) body colour of the local player. */
     public static final Color DEFAULT_BODY = new Color(70, 130, 220);
@@ -165,21 +180,39 @@ public final class PlayerSprites {
      */
     public static Frame directionalFrame(String characterKey, String state, Facing facing,
                                          double stateSeconds, int size, Color body) {
+        return directionalFrame(characterKey, state, facing, stateSeconds, 0, size, body);
+    }
+
+    /**
+     * {@link #directionalFrame(String, String, Facing, double, int, Color)}
+     * with a one-shot clock as well as a looping one.
+     *
+     * <p>A melee move's sheet plays exactly once across the move, so
+     * {@code progress} (0..1 through the action) picks its frame; every other
+     * state animates in time from {@code stateSeconds} as before. The chain
+     * checks the candidate rather than the requested state, so a swing that
+     * falls all the way back to the idle sheet still <em>idles</em> — it
+     * doesn't freeze on the first frame.
+     */
+    public static Frame directionalFrame(String characterKey, String state, Facing facing,
+                                         double stateSeconds, double progress,
+                                         int size, Color body) {
         Facing dir = facing == null ? Facing.EAST : facing;
         boolean idle = "idle".equals(state);
         for (String candidate : fallbackChain(state)) {
-            double t = idle && !"idle".equals(candidate) ? 0 : stateSeconds;
+            boolean once = oneShot(candidate);
+            double t = once ? progress : (idle && !"idle".equals(candidate) ? 0 : stateSeconds);
             for (String base : characterChain(characterKey)) {
                 // This exact direction, then the direction whose art it
                 // mirrors, then the state's one-size-fits-all sheet.
-                BufferedImage exact = Skins.frame(directionKey(base, candidate, dir), t);
+                BufferedImage exact = read(directionKey(base, candidate, dir), t, once);
                 if (exact != null) return new Frame(exact, false);
                 if (dir.mirrored()) {
-                    BufferedImage twin = Skins.frame(
-                            directionKey(base, candidate, dir.mirrorOf()), t);
+                    BufferedImage twin = read(
+                            directionKey(base, candidate, dir.mirrorOf()), t, once);
                     if (twin != null) return new Frame(twin, true);
                 }
-                BufferedImage plain = Skins.frame(stateKeyIn(base, candidate), t);
+                BufferedImage plain = read(stateKeyIn(base, candidate), t, once);
                 if (plain != null) return new Frame(plain, dir.facingLeft());
             }
         }
@@ -190,6 +223,18 @@ public final class PlayerSprites {
         // direction, so the caller must not flip it.
         int frame = idle ? 0 : (int) Math.floor(stateSeconds * WALK_FPS);
         return new Frame(DirectionalSprites.frame(size, body, dir, frame), false);
+    }
+
+    /**
+     * Whether a state's sheet plays once across the action (a melee move)
+     * rather than looping in time (walking, swimming).
+     */
+    public static boolean oneShot(String state) {
+        return COMBAT_STATES.contains(state);
+    }
+
+    private static BufferedImage read(String key, double t, boolean once) {
+        return once ? Skins.progressFrame(key, t) : Skins.frame(key, t);
     }
 
     /**
@@ -222,6 +267,14 @@ public final class PlayerSprites {
             case "fall" -> new String[]{"fall", "jump", "idle", "walk"};
             case "swim" -> new String[]{"swim", "walk", "idle"};
             case "walk" -> new String[]{"walk", "idle"};
+            // The melee moves. Each one ends at idle, which is what makes
+            // combat art optional: a character with one standing sheet fights
+            // in it until somebody draws the swing.
+            case "swing" -> new String[]{"swing", "idle"};
+            case "lunge" -> new String[]{"lunge", "swing", "idle"};
+            case "parry" -> new String[]{"parry", "shield", "idle"};
+            case "shield" -> new String[]{"shield", "parry", "idle"};
+            case "dash" -> new String[]{"dash", "run", "walk", "idle"};
             // Idle borrows the walk sheet when it's all there is — frozen on
             // frame 0 by frame()'s idle rule, so nobody walks in place.
             default -> new String[]{"idle", "walk"};

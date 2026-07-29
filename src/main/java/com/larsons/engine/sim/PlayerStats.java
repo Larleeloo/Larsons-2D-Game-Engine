@@ -22,6 +22,8 @@ public final class PlayerStats {
     public static final String[] TRACKED = {
             "blocks_mined", "blocks_placed", "items_picked_up", "distance_traveled",
             "jumps", "mobs_killed", "crafts", "deaths", "damage_taken", "shots_fired",
+            // Melee: blows caught outright, and blows a raised guard soaked.
+            "parries", "blocks",
     };
 
     /** Human-readable label for a stat key ("blocks_mined" → "Blocks Mined"). */

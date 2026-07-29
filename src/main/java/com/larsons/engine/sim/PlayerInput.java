@@ -42,6 +42,22 @@ public final class PlayerInput {
     public double aimX, aimY;
 
     /**
+     * A melee move requested this tick beyond the plain attack — the parry,
+     * lunge and dash keys — as the move's key ({@code ""} = none). Like
+     * {@link #attack} it is edge-triggered by the sender and validated by the
+     * server against what the player is actually holding, so a client can't
+     * lunge with a loaf of bread or ignore a cooldown. Absent on the wire when
+     * empty, keeping old messages compatible.
+     */
+    public String melee = "";
+
+    /**
+     * The guard key ("shield ready") <em>held</em>, level-triggered like
+     * {@link #sprint}: the stance stays up for as long as this does.
+     */
+    public boolean shield;
+
+    /**
      * The hotbar slot the player has selected. Riding the input command keeps
      * the server's view of "what am I holding" current, which is what melee
      * weapon damage, ranged shots, and block-place consumption resolve against.
@@ -96,6 +112,8 @@ public final class PlayerInput {
             m.put("mc", mineCol);
             m.put("mr", mineRow);
         }
+        if (!melee.isEmpty()) m.put("ml", melee);
+        if (shield) m.put("sd", true);
         return m;
     }
 
@@ -115,6 +133,8 @@ public final class PlayerInput {
         in.mine = Boolean.TRUE.equals(m.get("mi"));
         in.mineCol = m.get("mc") instanceof Number n ? n.intValue() : 0;
         in.mineRow = m.get("mr") instanceof Number n ? n.intValue() : 0;
+        in.melee = m.get("ml") instanceof String s ? s : "";
+        in.shield = Boolean.TRUE.equals(m.get("sd"));
         return in;
     }
 }

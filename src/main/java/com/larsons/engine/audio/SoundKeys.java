@@ -93,7 +93,7 @@ public final class SoundKeys {
      * sustained ultimate ({@code ult_loop}) repeat while the state holds; the
      * rest fire once as the action happens.
      */
-    public static final List<String> PLAYER_STATES = List.of(
+    public static final List<String> PLAYER_STATES = concat(List.of(
             "spawn", "walk", "run", "jump", "double_jump", "land", "fall",
             "swim", "swim_enter", "swim_exit", "hurt", "die", "respawn",
             "attack", "attack_hit", "shoot", "mine", "mine_break", "chop",
@@ -101,7 +101,39 @@ public final class SoundKeys {
             "open_inventory", "close_inventory", "sprint_start",
             "stamina_empty", "mana_empty", "ult_charged", "ult_activate",
             "ult_loop", "ult_end", "mount", "dismount", "door_enter",
-            "teleport", "perspective_switch");
+            "teleport", "perspective_switch"), meleeStates());
+
+    /**
+     * The melee moves' sound states — each move starting, each move
+     * connecting, and a held stance being lowered. Mirrors
+     * {@code MeleeAction.soundStates()}; every fighter (player, character
+     * profile, mob) and every held object can be given its own take on all of
+     * them, and the generic {@code attack} / {@code attack_hit} states remain
+     * the fallback for anything left silent.
+     *
+     * <pre>
+     *   item/iron_sword/swing        the blade cutting the air
+     *   item/iron_sword/swing_hit    …and landing
+     *   item/tower_shield/parry_success  the clang of a caught blow
+     *   character/rogue/dash         the rogue's own footwork
+     *   mob/royal_guard/shield_up    the guard bracing
+     * </pre>
+     */
+    public static final List<String> MELEE_STATES = meleeStates();
+
+    private static List<String> meleeStates() {
+        return List.of("swing", "swing_hit", "parry", "parry_success",
+                "lunge", "lunge_hit", "dash",
+                "shield_up", "shield_block", "shield_down");
+    }
+
+    /** Two lists, end to end, as one immutable list. */
+    private static List<String> concat(List<String> a, List<String> b) {
+        List<String> out = new ArrayList<>(a.size() + b.size());
+        out.addAll(a);
+        out.addAll(b);
+        return List.copyOf(out);
+    }
 
     /** What a solid block can be heard doing. */
     public static final List<String> BLOCK_STATES =
@@ -115,13 +147,18 @@ public final class SoundKeys {
     public static final List<String> LIGHT_STATES =
             List.of("place", "break", "mine", "step", "hit", "ambient");
 
-    /** A mob's life cycle, from spawning to dying. */
-    public static final List<String> MOB_STATES =
-            List.of("spawn", "idle", "step", "attack", "hurt", "death");
+    /** A mob's life cycle, from spawning to dying, and how it fights. */
+    public static final List<String> MOB_STATES = concat(
+            List.of("spawn", "idle", "step", "attack", "hurt", "death"),
+            meleeStates());
 
-    /** What holding, swinging or consuming an item sounds like. */
-    public static final List<String> ITEM_STATES =
-            List.of("use", "equip", "pickup", "drop", "craft");
+    /**
+     * What holding, swinging or consuming an item sounds like — the handling
+     * states, then one per melee move, so a weapon can be given its own voice
+     * ({@code items/iron_sword_swing.wav}).
+     */
+    public static final List<String> ITEM_STATES = concat(
+            List.of("use", "equip", "pickup", "drop", "craft"), meleeStates());
 
     /** A shot's life: leaving the weapon, in flight, landing, detonating. */
     public static final List<String> PROJECTILE_STATES =
@@ -518,6 +555,9 @@ public final class SoundKeys {
         return switch (fxKey) {
             // Relic and ability effects the simulation names in its own terms.
             case "nova", "tremor" -> List.of(world("explosion"));
+            // A blow turned aside — by a mob's guard, or by a player's parry
+            // sending a shot back where it came from.
+            case "parry" -> List.of(player("parry_success"), player("attack_hit"));
             case "blink" -> List.of(player("teleport"));
             case "warp" -> List.of(player("teleport"));
             case "summon" -> List.of(world("spawn_wave"), player("craft"));

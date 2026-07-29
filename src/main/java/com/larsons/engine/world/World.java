@@ -2,6 +2,10 @@ package com.larsons.engine.world;
 
 import com.larsons.engine.character.Ultimate;
 import com.larsons.engine.character.Ultimates;
+import com.larsons.engine.combat.Melee;
+import com.larsons.engine.combat.MeleeAction;
+import com.larsons.engine.combat.MeleeProfile;
+import com.larsons.engine.combat.MeleeProfiles;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.entity.DroppedItem;
 import com.larsons.engine.entity.Inventory;
@@ -547,7 +551,7 @@ public final class World {
                 double d = Math.hypot(pl.x + half - bx, pl.y + half - by);
                 if (d > radius + half) continue;
                 double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
-                pl.hurt(dmg * falloff);
+                pl.takeBlow(dmg * falloff);
             }
         }
     }
@@ -563,38 +567,156 @@ public final class World {
      * Resolve a melee swing from {@code attacker} toward (aimX, aimY): the
      * nearest living mob within {@link #ATTACK_REACH} of the reach point takes
      * {@code damage}. Returns the mob hit, or {@code null} on a whiff.
+     *
+     * <p>The bare-hands shape, kept for callers with no weapon profile to
+     * hand; {@link #meleeStrike} is what the melee moves resolve through.
      */
     public Mob playerAttack(PlayerState attacker, double aimX, double aimY, double damage) {
+        return meleeStrike(attacker, MeleeProfiles.fists(), MeleeAction.SWING,
+                aimX, aimY, damage).mob();
+    }
+
+    /**
+     * What a melee strike did: the mob it reached (or {@code null} on a
+     * whiff), whether that mob <em>caught</em> the blow, and the damage that
+     * actually landed. The caller uses this to pick the sound, the particles,
+     * and — on a parry — to stagger the attacker.
+     */
+    public record MeleeHit(Mob mob, boolean parried, double damage) {
+        /** Whether the strike reached anything at all. */
+        public boolean hit() {
+            return mob != null;
+        }
+
+        /** Whether the mob it reached died of it. */
+        public boolean killed() {
+            return mob != null && mob.dead();
+        }
+
+        static final MeleeHit MISS = new MeleeHit(null, false, 0);
+    }
+
+    /**
+     * Resolve one melee strike with a weapon's own reach and arc: the nearest
+     * living mob inside the strike's cone, from the attacker's centre toward
+     * the aim, takes {@code damage} scaled by the move.
+     *
+     * <p>Two things a bare swing didn't do happen here. An armed mob gets the
+     * chance to <em>catch</em> the blow ({@link Mob#tryParry()}) — the strike
+     * deals nothing and the attacker is left staggered — and a strike that
+     * lands adds the profile's knockback on top of the usual shove.
+     *
+     * <p>Like everything else in this class it is the one implementation: the
+     * play scene, the creative play-test and the authoritative server all
+     * resolve strikes through it, so a swing cannot mean different things in
+     * different modes.
+     */
+    public MeleeHit meleeStrike(PlayerState attacker, MeleeProfile profile,
+                                MeleeAction action, double aimX, double aimY,
+                                double damage) {
         // A running ultimate (Overdrive) multiplies what the swing lands for.
         damage *= attacker.ultDamageFactor;
-        double px = attacker.x, py = attacker.y;
-        // Point of impact: from the player toward the aim, capped at reach.
-        double dx = aimX - px, dy = aimY - py;
-        double len = Math.hypot(dx, dy);
-        double hitX = len > ATTACK_REACH ? px + dx / len * ATTACK_REACH : aimX;
-        double hitY = len > ATTACK_REACH ? py + dy / len * ATTACK_REACH : aimY;
+        double reach = profile == null ? ATTACK_REACH : profile.reach();
+        double half = level.tileSize / 2.0;
+        double cx = attacker.x + half, cy = attacker.y + half;
+        double[] hit = Melee.strikePoint(cx, cy, aimX, aimY, reach);
+
+        // The cone the strike sweeps: everything within the weapon's arc of
+        // the aim direction, which is why a hammer catches a crowd and a spear
+        // catches whatever is directly in front of it.
+        double aimAngle = Math.atan2(hit[1] - cy, hit[0] - cx);
+        double halfArc = Math.toRadians((profile == null ? 120 : profile.arc()) / 2.0);
 
         Mob best = null;
         double bestD = Double.MAX_VALUE;
         for (Mob m : mobs) {
             if (m.dead()) continue;
-            double d = Math.hypot(m.x + m.def.size() / 2 - hitX, m.y + m.def.size() / 2 - hitY);
-            if (d < m.def.size() / 2 + 24 && d < bestD) {
-                bestD = d;
-                best = m;
+            double mx = m.x + m.def.size() / 2, my = m.y + m.def.size() / 2;
+            double d = Math.hypot(mx - hit[0], my - hit[1]);
+            if (d >= m.def.size() / 2 + 24 || d >= bestD) continue;
+            // Anything already touching the fighter is in the arc by
+            // definition; only reaching out has a direction to miss in.
+            double toMob = Math.hypot(mx - cx, my - cy);
+            if (toMob > m.def.size() / 2 + 4
+                    && angleBetween(aimAngle, Math.atan2(my - cy, mx - cx)) > halfArc) {
+                continue;
             }
+            bestD = d;
+            best = m;
         }
-        if (best != null) {
-            // Damage dealt is what fills an ultimate meter fastest, exactly
-            // like the shooter it is borrowed from.
-            Ultimates.chargeFromDamage(attacker, damage);
-            if (best.damage(damage, px, py, space())) {
-                mobs.remove(best);
-                handleMobDeath(best, true, null);
-                killsByPlayers++;
-            }
+        if (best == null) return MeleeHit.MISS;
+
+        if (best.tryParry()) {
+            // Caught. The blade rings off the guard and the swing is wasted.
+            impacts.add(new Impact("parry", best.x + best.def.size() / 2,
+                    best.y + best.def.size() / 2, false));
+            return new MeleeHit(best, true, 0);
         }
-        return best;
+        // Damage dealt is what fills an ultimate meter fastest, exactly
+        // like the shooter it is borrowed from.
+        Ultimates.chargeFromDamage(attacker, damage);
+        double before = best.health;
+        boolean killed = best.damage(damage, cx, cy, space());
+        double dealt = Math.max(0, before - best.health);
+        if (dealt > 0 && profile != null && profile.knockback() > 0) {
+            shove(best, cx, cy, profile.knockback());
+        }
+        if (killed) {
+            mobs.remove(best);
+            handleMobDeath(best, true, null);
+            killsByPlayers++;
+        }
+        return new MeleeHit(best, false, dealt);
+    }
+
+    /**
+     * Resolve an open parry window against the shots in the air: anything
+     * inside the guard's reach in front of {@code defender} is batted back the
+     * way it came and turned against whoever fired it. Returns how many were
+     * turned, so the caller can ring the parry.
+     *
+     * <p>This is the reward for timing a parry against a ranged attacker,
+     * which a shield can only soak.
+     */
+    public int parryProjectiles(PlayerState defender, MeleeProfile profile) {
+        double reach = (profile == null ? ATTACK_REACH : profile.reach()) * 1.2;
+        double half = level.tileSize / 2.0;
+        double cx = defender.x + half, cy = defender.y + half;
+        int turned = 0;
+        for (Projectile p : projectiles) {
+            if (p.dead() || p.ownerId >= 0) continue; // our own volleys fly on
+            if (Math.hypot(p.x - cx, p.y - cy) > reach) continue;
+            // Straight back at the shooter, and now owned by the parrier — so
+            // it hurts mobs on the way home.
+            p.vx = -p.vx;
+            p.vy = -p.vy;
+            p.ownerId = defender.id;
+            turned++;
+            impacts.add(new Impact("parry", p.x, p.y, false));
+        }
+        return turned;
+    }
+
+    /** An extra shove away from (fromX, fromY), along whatever axes exist here. */
+    private void shove(Mob m, double fromX, double fromY, double amount) {
+        double half = m.def.size() / 2;
+        double dx = m.x + half - fromX, dy = m.y + half - fromY;
+        double len = Math.hypot(dx, dy);
+        if (len < 0.001) {
+            dx = 1;
+            dy = 0;
+            len = 1;
+        }
+        m.x += dx / len * amount;
+        if (space().hasElevation()) m.y += dy / len * amount;
+        m.x = Math.max(0, Math.min(m.x, level.width * (double) level.tileSize - m.def.size()));
+        m.y = Math.max(0, Math.min(m.y, level.height * (double) level.tileSize - m.def.size()));
+    }
+
+    /** The smallest angle between two headings, in radians. */
+    private static double angleBetween(double a, double b) {
+        double d = Math.abs(a - b) % (Math.PI * 2);
+        return d > Math.PI ? Math.PI * 2 - d : d;
     }
 
     /**
@@ -813,7 +935,7 @@ public final class World {
                     if (p.def.explosionRadius() > 0) {
                         explode(p, players, profile);
                     } else {
-                        hit.hurt(p.damage);
+                        hit.takeBlow(p.damage);
                         if (p.def.element() == ProjectileDef.Element.ICE) {
                             hit.stamina = 0; // webs and frost sap the sprint
                         }
@@ -999,7 +1121,7 @@ public final class World {
                 double d = Math.hypot(pl.x + half - p.x, pl.y + half - p.y);
                 if (d > radius + half) continue;
                 double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
-                pl.hurt(p.damage * falloff);
+                pl.takeBlow(p.damage * falloff);
                 if (!mobShot) pvpRule.damaged(p.ownerId, pl);
             }
         }

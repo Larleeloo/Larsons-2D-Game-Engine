@@ -90,6 +90,13 @@ public final class PlayerPhysics {
     /** How far a hop's peak lifts the sprite, as a fraction of its height. */
     public static final double HOP_DRAW_SCALE = 1.0;
 
+    /**
+     * How much a raised guard slows a fighter down. "Shield ready" is a
+     * commitment: you take the blow instead of avoiding it, and you cannot
+     * chase anybody while you are behind it.
+     */
+    public static final double GUARD_SPEED_FACTOR = 0.45;
+
     // Relic passives (see PlayerState.speedFactor / slowFall / canFly).
     public static final double FLY_ACCEL = 2600;         // Aether Wings climb accel
     public static final double FLY_MAX_RISE = 380;       // px/sec climbing
@@ -139,6 +146,7 @@ public final class PlayerPhysics {
         double speed = SPEED * s.speedFactor * s.characterSpeed * s.ultSpeedFactor;
         if (inLiquid) speed *= SWIM_SPEED_FACTOR;
         if (sprinting) speed *= SPRINT_FACTOR;
+        if (s.guarding) speed *= GUARD_SPEED_FACTOR;
         // Diagonals on a plane would otherwise travel √2 times as fast as the
         // axes; normalizing the step keeps top-down/isometric speed uniform in
         // every direction.
@@ -146,9 +154,27 @@ public final class PlayerPhysics {
             speed *= Math.sqrt(0.5);
         }
 
+        // A committed melee burst — a lunge or a dash — overrides steering for
+        // as long as it lasts. It still collides with the world like any other
+        // movement; what it doesn't do is let go of the direction it was
+        // thrown in, which is exactly what makes it a commitment.
+        boolean bursting = s.dashTime > 0;
+        if (bursting) {
+            s.dashTime = Math.max(0, s.dashTime - dt);
+            if (s.dashTime <= 0) {
+                s.dashVx = 0;
+                s.dashVy = 0;
+            }
+        }
+
         double dx = 0;
-        if (in.left) { dx -= speed * dt; s.facingLeft = true; }
-        if (in.right) { dx += speed * dt; s.facingLeft = false; }
+        if (bursting) {
+            dx = s.dashVx * dt;
+            if (s.dashVx != 0) s.facingLeft = s.dashVx < 0;
+        } else {
+            if (in.left) { dx -= speed * dt; s.facingLeft = true; }
+            if (in.right) { dx += speed * dt; s.facingLeft = false; }
+        }
         boolean moving = dx != 0;
         double steerY = 0; // plan-view vertical steering, for the facing below
 
@@ -211,8 +237,12 @@ public final class PlayerPhysics {
             s.vz = 0;
         } else {
             double dy = 0;
-            if (in.up) dy -= speed * dt;
-            if (in.down) dy += speed * dt;
+            if (bursting) {
+                dy = s.dashVy * dt;
+            } else {
+                if (in.up) dy -= speed * dt;
+                if (in.down) dy += speed * dt;
+            }
             s.y = slideY(level, s.x, s.y, size, size, dy);
             moving = moving || dy != 0;
             steerY = dy;

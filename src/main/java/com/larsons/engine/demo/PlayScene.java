@@ -13,6 +13,13 @@ import com.larsons.engine.audio.AudioManager.Sfx;
 import com.larsons.engine.audio.SceneSounds;
 import com.larsons.engine.audio.SoundKeys;
 import com.larsons.engine.audio.Sounds;
+import com.larsons.engine.combat.Melee;
+import com.larsons.engine.combat.MeleeAction;
+import com.larsons.engine.combat.MeleeProfile;
+import com.larsons.engine.combat.MeleeProfiles;
+import com.larsons.engine.combat.MeleeSounds;
+import com.larsons.engine.combat.MeleeSprites;
+import com.larsons.engine.combat.MeleeState;
 import com.larsons.engine.crafting.Recipe;
 import com.larsons.engine.crafting.RecipeRegistry;
 import com.larsons.engine.entity.DroppedItem;
@@ -126,11 +133,20 @@ import java.util.Map;
  * to show. Walking through a door into a level of another format is how a game
  * changes perspective.
  *
+ * <p><b>Melee combat.</b> Whatever is in the player's hands brings a set of
+ * moves with it ({@link com.larsons.engine.combat.MeleeAction}) — a swing, a
+ * parry, a lunge, a dash, and a held guard — on timings that belong to that
+ * object, so a dagger and a war hammer play completely differently out of the
+ * same controls. The same machine runs for mobs and on the authoritative
+ * server, and the object may bring its own art and its own voice for every one
+ * of those moves (see {@link com.larsons.engine.combat.MeleeSprites} and
+ * {@link com.larsons.engine.combat.MeleeSounds}).
+ *
  * <p>Controls: WASD/arrows move — up is a direction (it swims, it climbs, it
  * walks north), never a jump — Space jumps in every perspective (a hop along
  * the elevation axis in top-down and isometric levels), +/- zoom (if enabled),
  * left-click mine/attack, right-click place, 1-5 + wheel hotbar, I inventory,
- * F eat, R ultimate, Esc pause.
+ * F eat, R ultimate, C hold to guard, V parry, X lunge, Z dash, Esc pause.
  */
 public class PlayScene extends AbstractScene {
 
@@ -249,6 +265,19 @@ public class PlayScene extends AbstractScene {
      */
     private Vehicle predictedVehicle;
     private double swingTime;      // seconds left on the melee swing visual
+    /**
+     * The local player's melee moves — swing, parry, lunge, dash, and the held
+     * guard — run on the same {@link MeleeState} machine mobs and the
+     * authoritative server run. Offline it <em>is</em> the simulation; online
+     * it is the prediction, and the server keeps its own copy for authority.
+     */
+    private final MeleeState melee = new MeleeState();
+    /** The item key the melee machine is currently running on. */
+    private String meleeItem = "";
+    /** Where the running move was aimed when it started, in world px. */
+    private double meleeAimX, meleeAimY;
+    /** Guard hits the server had resolved last time we looked (for the clang). */
+    private int prevGuardHits;
     private double prevVy;
     private double prevVz;         // plan-view hop velocity, for jump feedback
     private double prevHealth = PlayerState.MAX_HEALTH;
@@ -288,6 +317,9 @@ public class PlayScene extends AbstractScene {
         showInventory = false;
         cursorSlot = -1;
         swingTime = 0;
+        Melee.clear(me, melee);
+        meleeItem = "";
+        prevGuardHits = 0;
         doors = new DoorDirectory(profile().name);
         // Objects created with the creative editor's "+" entries must be
         // registered before a level referencing them loads.
@@ -597,6 +629,7 @@ public class PlayScene extends AbstractScene {
 
         if (!showInventory && craftingPanel == null && containerPanel == null) {
             handleMouseActions(input, p, in, dt);
+            updateMeleeControls(input, p, in);
             // [R] fires the character's ultimate at the cursor, once charged.
             // (Q is already "drop one of the held stack".)
             if (input.isKeyJustPressed(KeyEvent.VK_R)) tryUltimate(p);
@@ -609,6 +642,10 @@ public class PlayScene extends AbstractScene {
         // simulates the level's own format, so prediction does too.
         // A mounted player drives their vehicle instead of walking.
         Perspective simPerspective = net != null ? level.perspective : camera.getPerspective();
+        // The melee machine steps before the body does: a lunge's burst and a
+        // raised guard's slowed footwork are both movement, and the physics
+        // step below is what carries them out.
+        stepMelee(p, in, simPerspective != Perspective.SIDE_SCROLL || !p.gravityEnabled, dt);
         prevVy = me.vy;
         double preX = me.x, preY = me.y;
         boolean riding = stepRiding(in, p, dt);
@@ -704,6 +741,10 @@ public class PlayScene extends AbstractScene {
             // is watching the same health bar and knows the character.
         }
         prevHealth = me.health;
+        // Blows the guard or the parry stopped this tick — resolved wherever
+        // the simulation lives (the world offline, the server online), heard
+        // and seen here.
+        pollGuardFeedback(p);
 
         if (swingTime > 0) swingTime -= dt;
         if (p.particlesEnabled) particles.update(dt);
@@ -714,8 +755,13 @@ public class PlayScene extends AbstractScene {
         // the matching skin animation plays, restarting on state changes.
         String state = riding ? "idle"
                 : PlayerSprites.actionState(me, level, p, simPerspective, in.sprint);
-        if (!state.equals(animState)) {
-            animState = state;
+        // A melee move takes the drawn animation over while it runs — its own
+        // sheet, played once across the move rather than looping with the walk
+        // cycle. The movement state itself is untouched: footsteps still land
+        // while you are swinging.
+        String drawn = melee.animationState().isEmpty() ? state : melee.animationState();
+        if (!drawn.equals(animState)) {
+            animState = drawn;
             animStateClock = 0;
         } else {
             animStateClock += dt;
@@ -1211,35 +1257,164 @@ public class PlayScene extends AbstractScene {
         }
     }
 
+    /**
+     * Left click: throw a swing. The click only <em>starts</em> the move — the
+     * blade lands when the wind-up finishes and the hit window opens
+     * ({@link #stepMelee}), which is what gives every weapon its own weight
+     * and what lets a mob step out of a telegraphed hammer blow.
+     */
     private void swingAt(double aimX, double aimY, PlayerInput in, GameProfile p) {
-        swingTime = 0.2;
+        meleeAimX = aimX;
+        meleeAimY = aimY;
+        if (!Melee.start(me, melee, meleeProfile(p), MeleeAction.SWING)) return;
+        if (net != null) in.attackAt(aimX, aimY); // the server resolves the hit
+    }
+
+    /**
+     * The melee keys: [C] holds the guard up, [V] parries, [X] lunges, [Z]
+     * dashes. Each is validated against what is actually held and against the
+     * move's own cooldown by the same machine the server runs, so the request
+     * only rides the input command when it really started here.
+     */
+    private void updateMeleeControls(InputManager input, GameProfile p, PlayerInput in) {
+        if (!p.combatEnabled) return;
+        in.shield = input.isKeyDown(KeyEvent.VK_C);
+        MeleeAction requested = input.isKeyJustPressed(KeyEvent.VK_V) ? MeleeAction.PARRY
+                : input.isKeyJustPressed(KeyEvent.VK_X) ? MeleeAction.LUNGE
+                : input.isKeyJustPressed(KeyEvent.VK_Z) ? MeleeAction.DASH
+                : MeleeAction.NONE;
+        if (requested == MeleeAction.NONE) return;
+        double[] aim = camera.screenToWorld(mouseX, mouseY);
+        meleeAimX = aim[0];
+        meleeAimY = aim[1];
+        if (Melee.start(me, melee, meleeProfile(p), requested)) {
+            in.melee = requested.key();
+            if (requested == MeleeAction.LUNGE && net != null) {
+                // A lunge lands damage, so the server needs the aim too.
+                in.attackAt(aim[0], aim[1]);
+            }
+        }
+    }
+
+    /**
+     * Advance the melee machine and act on what it reports: the move's start
+     * sound, the strike landing, a parry batting shots out of the air, and a
+     * held guard being lowered.
+     *
+     * <p>Offline this is the whole simulation; online it is the prediction and
+     * the server resolves the damage on its own copy — the moves themselves
+     * play identically either way because both run this same machine.
+     */
+    private void stepMelee(GameProfile p, PlayerInput in, boolean planar, double dt) {
+        MeleeProfile profile = meleeProfile(p);
+        meleeItem = heldMeleeKey(p);
+        Melee.step(me, melee, profile, meleeItem, in.shield && p.combatEnabled, planar, dt);
+
+        MeleeAction begun = melee.pollBegun();
+        if (begun != MeleeAction.NONE) {
+            Sounds.playFirst(1.0, MeleeSounds.playerStart(character.key, meleeItem, begun));
+        }
+        if (melee.pollEnded() == MeleeAction.SHIELD) {
+            Sounds.playFirst(0.8,
+                    MeleeSounds.playerEnd(character.key, meleeItem, MeleeAction.SHIELD));
+        }
+        // The hit window opened. Drained unconditionally — a strike is never
+        // banked for a later tick — and resolved here only offline; online the
+        // server's copy of this machine is the one that lands it.
+        boolean struck = melee.pollStrike();
+        if (struck && p.combatEnabled && net == null && world != null) {
+            resolveMeleeStrike(p, profile);
+        }
+        // An open parry catches shots as well as blades: anything in the air in
+        // front of the guard is turned around and sent home.
+        if (melee.parrying() && net == null && world != null
+                && world.parryProjectiles(me, profile) > 0) {
+            melee.markConnected();
+            stats.add("parries", 1);
+        }
+        if (melee.pollConnected()) {
+            Sounds.playFirst(1.0,
+                    MeleeSounds.playerHit(character.key, meleeItem, melee.action()));
+        }
+    }
+
+    /**
+     * Land the swing (or lunge) whose hit window just opened, offline. A mob
+     * that catches it leaves us staggered; a whiff near an empty vehicle packs
+     * the vehicle back into its item, exactly as a plain swing always did.
+     */
+    private void resolveMeleeStrike(GameProfile p, MeleeProfile profile) {
         ItemDef held = p.itemsEnabled ? inventory.selectedDef() : null;
-        double damage = World.FIST_DAMAGE + me.meleeBonus
-                + (held != null ? held.damage() : 0);
-        if (net != null) {
-            in.attackAt(aimX, aimY); // the server resolves the hit
+        double base = World.FIST_DAMAGE + me.meleeBonus + (held != null ? held.damage() : 0);
+        World.MeleeHit hit = world.meleeStrike(me, profile, melee.action(),
+                meleeAimX, meleeAimY, Melee.damage(base, profile, melee.action()));
+        if (hit.parried()) {
+            // Caught on their guard: the swing is spent and we are off balance.
+            melee.stagger(MeleeState.PARRY_STAGGER);
+            Sounds.playFirst(1.0, MeleeSounds.mobHit(hit.mob().def.key(),
+                    hit.mob().weaponKey(), MeleeAction.PARRY));
+            if (p.particlesEnabled) {
+                particles.burst(hit.mob().x + hit.mob().def.size() / 2,
+                        hit.mob().y + hit.mob().def.size() / 2,
+                        new Color(255, 240, 190), 10);
+            }
             return;
         }
-        playerSound("attack");
-        Mob hit = world.playerAttack(me, aimX, aimY, damage);
-        if (hit != null) {
+        if (hit.hit()) {
+            Mob m = hit.mob();
+            melee.markConnected();
             Sounds.actor(character.key,
-                    SoundKeys.mob(hit.def.key(), hit.dead() ? "death" : "hurt"),
-                    "attack_hit");
+                    SoundKeys.mob(m.def.key(), m.dead() ? "death" : "hurt"), "attack_hit");
             if (p.particlesEnabled) {
-                particles.burst(hit.x + hit.def.size() / 2, hit.y + hit.def.size() / 2,
-                        hit.def.body(), 8);
+                particles.burst(m.x + m.def.size() / 2, m.y + m.def.size() / 2,
+                        m.def.body(), 8);
             }
-        } else {
-            // A whiffed swing near an empty vehicle packs it back into its item.
-            Vehicle packed = world.packUpVehicle(aimX, aimY, p.itemsEnabled);
-            if (packed != null) {
-                Sounds.actor(character.key,
-                        SoundKeys.vehicle(packed.def.key(), "dismount"), "pickup");
-                ruleStatus = packed.def.name() + " packed up";
-                ruleStatusTime = 2.5;
+            return;
+        }
+        // A whiffed swing near an empty vehicle packs it back into its item.
+        Vehicle packed = world.packUpVehicle(meleeAimX, meleeAimY, p.itemsEnabled);
+        if (packed != null) {
+            Sounds.actor(character.key,
+                    SoundKeys.vehicle(packed.def.key(), "dismount"), "pickup");
+            ruleStatus = packed.def.name() + " packed up";
+            ruleStatusTime = 2.5;
+        }
+    }
+
+    /**
+     * Ring the guard when something is stopped by it. The stance itself was
+     * resolved by whichever simulation is authoritative — offline the local
+     * world, online the server, which replicates the running total — so this
+     * only has to notice the count going up.
+     */
+    private void pollGuardFeedback(GameProfile p) {
+        if (me.guardHits == prevGuardHits) {
+            prevGuardHits = me.guardHits;
+            return;
+        }
+        if (me.guardHits > prevGuardHits) {
+            MeleeAction stance = me.parrying ? MeleeAction.PARRY : MeleeAction.SHIELD;
+            melee.flashGuard();
+            Sounds.playFirst(1.0, MeleeSounds.playerHit(character.key, meleeItem, stance));
+            if (stance == MeleeAction.PARRY) stats.add("parries", 1);
+            else stats.add("blocks", 1);
+            if (p.particlesEnabled) {
+                particles.burst(me.x + ps() / 2, me.y + ps() / 2,
+                        new Color(230, 240, 255), 8);
             }
         }
+        prevGuardHits = me.guardHits;
+    }
+
+    /** The melee timings of what is in hand right now (nothing = fists). */
+    private MeleeProfile meleeProfile(GameProfile p) {
+        return MeleeProfiles.of(p.itemsEnabled ? inventory.selectedDef() : null);
+    }
+
+    /** The item key in hand, which picks the wielded sheets and weapon sounds. */
+    private String heldMeleeKey(GameProfile p) {
+        ItemDef held = p.itemsEnabled ? inventory.selectedDef() : null;
+        return held == null ? "" : held.key();
     }
 
     /**
@@ -1678,6 +1853,10 @@ public class PlayScene extends AbstractScene {
         double rk = Math.min(1.0, 10 * dt);
         me.stamina += (corrected.stamina - me.stamina) * rk;
         me.mana += (corrected.mana - me.mana) * rk;
+        // Blows our guard stopped were resolved on the server; taking its
+        // running total is what lets the clang be heard here (see
+        // pollGuardFeedback). The stance itself stays locally predicted.
+        me.guardHits = server.guardHits;
     }
 
     private void updatePaused(double dt, InputManager input) {
@@ -1736,12 +1915,22 @@ public class PlayScene extends AbstractScene {
             MiniGameHud.drawTeamRing(g, camera, me.x + ps() / 2, me.y + ps(),
                     ps(), mgView.teamOf(me.id), camera.zoom);
         }
-        standing.at(footDepth(me.x, me.y), () ->
-                drawPlayer(g, me.x, me.y, me.z, PlayerSprites.directionalFrame(
-                        me.characterKey, animState, me.facing, animStateClock,
-                        (int) ps(), character.body), null));
+        // The local player, wearing whatever the object in their hands says
+        // they should look like while doing this (see MeleeSprites), with the
+        // object itself drawn in hand on top.
+        standing.at(footDepth(me.x, me.y), () -> {
+            drawPlayer(g, me.x, me.y, me.z, MeleeSprites.playerFrame(
+                    me.characterKey, meleeItem, animState, me.facing, animStateClock,
+                    melee.progress(), (int) ps(), character.body), null);
+            drawHeldObject(g, me.x, me.y, me.z, ps(), me.facing, meleeItem,
+                    melee.action(), melee.progress(), meleeProfile(p));
+        });
         standing.flush();
-        if (swingTime > 0) drawSwing(g);
+        if (melee.action() != MeleeAction.NONE) {
+            drawMeleeArc(g, meleeProfile(p));
+        } else if (swingTime > 0) {
+            drawSwing(g);
+        }
         if (cutscenes != null && cutscenes.active() != null) {
             CutscenePainter.drawActors(g, camera, cutscenes.active());
         }
@@ -2299,9 +2488,13 @@ public class PlayScene extends AbstractScene {
                         drawItemSprite(g, item.key, item.x, item.y, item.count));
             }
             for (Mob m : world.mobs()) {
+                // A mob mid-move draws that move, on its weapon's own sheets.
+                String state = m.meleeAction().isEmpty()
+                        ? stateKeyFor(m.state.ordinal(), m.hurting()) : m.meleeAction();
                 into.at(footDepth(m.x, m.y, m.def.size()), () ->
                         drawMobSprite(g, m.def, m.x, m.y, m.facing, m.health, m.hurting(),
-                                stateKeyFor(m.state.ordinal(), m.hurting()), m.statusBits()));
+                                state, m.statusBits(), m.weaponKey(),
+                                m.melee.action(), m.meleeProgress()));
             }
             for (Projectile pr : world.projectiles()) {
                 into.at(footDepth(pr.x, pr.y, 0), () ->
@@ -2350,9 +2543,14 @@ public class PlayScene extends AbstractScene {
                 if (def != null) {
                     double mx = lerpX(old.get(mv.id), mv, t);
                     double my = lerpY(old.get(mv.id), mv, t);
+                    // The move the server says it is mid-way through, drawn on
+                    // the weapon the server says it carries.
+                    String state = mv.meleeAction.isEmpty()
+                            ? stateKeyFor(mv.aiState, false) : mv.meleeAction;
+                    MeleeAction move = MeleeAction.byKey(mv.meleeAction);
                     into.at(footDepth(mx, my, def.size()), () ->
                             drawMobSprite(g, def, mx, my, mv.facing, mv.health, false,
-                                    stateKeyFor(mv.aiState, false), mv.status));
+                                    state, mv.status, mv.weapon, move, mv.meleeProgress));
                 }
             }
             old = viewsById(from.shots());
@@ -2450,22 +2648,25 @@ public class PlayScene extends AbstractScene {
     private void drawMobSprite(Graphics2D g, MobDef def, double x, double y,
                                Facing facing, double health, boolean hurt,
                                String state, int statusBits) {
+        drawMobSprite(g, def, x, y, facing, health, hurt, state, statusBits,
+                def.weapon() == null ? "" : def.weapon(), MeleeAction.NONE, 0);
+    }
+
+    /**
+     * {@link #drawMobSprite} for a mob mid-melee-move: the weapon it carries
+     * gets first say over how its body is drawn ({@code wield/<item>/<move>}),
+     * and the weapon itself is drawn in its hands — the same two sheets a
+     * player holding the same thing resolves.
+     */
+    private void drawMobSprite(Graphics2D g, MobDef def, double x, double y,
+                               Facing facing, double health, boolean hurt,
+                               String state, int statusBits, String weapon,
+                               MeleeAction move, double moveProgress) {
         Facing dir = facing == null ? Facing.EAST : facing;
-        String base = "mob/" + def.key() + "/";
-        boolean mirror = false;
-        BufferedImage img = Skins.frame(base + state + "/" + dir.key(), animClock);
-        if (img == null && dir.mirrored()) {
-            img = Skins.frame(base + state + "/" + dir.mirrorOf().key(), animClock);
-            mirror = img != null;
-        }
-        if (img == null) {
-            img = Skins.frame(base + state, animClock);
-            mirror = img != null && dir.facingLeft();
-        }
-        if (img == null && !"idle".equals(state)) {
-            img = Skins.frame(base + "idle", animClock);
-            mirror = img != null && dir.facingLeft();
-        }
+        PlayerSprites.Frame resolved = MeleeSprites.mobFrame(def.key(), weapon, state,
+                dir, animClock, moveProgress);
+        BufferedImage img = resolved == null ? null : resolved.image();
+        boolean mirror = resolved != null && resolved.mirrored();
         if (img == null) {
             img = EntitySprites.mob(def, 32, dir);
             mirror = false;
@@ -2479,6 +2680,9 @@ public class PlayScene extends AbstractScene {
         } else {
             g.drawImage(img, dx, dy, w, w, null);
         }
+        // Whatever it fights with, drawn in its hands and swept by the move.
+        drawHeldObject(g, x, y, 0, def.size(), dir, weapon, move, moveProgress,
+                MeleeProfiles.ofKey(weapon));
         if (hurt) {
             g.setColor(new Color(255, 60, 60, 90));
             g.fillRect(dx, dy, w, w);
@@ -2562,7 +2766,7 @@ public class PlayScene extends AbstractScene {
         g.setPaint(old);
     }
 
-    /** A short arc in front of the player while a melee swing plays. */
+    /** A short arc in front of the player while a mining or firing stroke plays. */
     private void drawSwing(Graphics2D g) {
         double size = ps();
         camera.worldToScreen(me.x + size / 2, me.y + size / 2, corner);
@@ -2571,6 +2775,97 @@ public class PlayScene extends AbstractScene {
         g.setStroke(new BasicStroke(3f));
         int start = me.facingLeft ? 120 : -60;
         g.drawArc(corner[0] - r, corner[1] - r, r * 2, r * 2, start, 120);
+    }
+
+    /**
+     * The melee move itself, drawn at the weapon's own reach and arc: a bright
+     * sweep tracking the strike window, a narrow thrust for a lunge, a bracing
+     * shield in front of a raised guard, and a ring when a parry catches
+     * something.
+     */
+    private void drawMeleeArc(Graphics2D g, MeleeProfile profile) {
+        double size = ps();
+        camera.worldToScreen(me.x + size / 2, me.y + size / 2, corner);
+        int r = (int) Math.round(profile.reach() * camera.zoom);
+        MeleeAction action = melee.action();
+        double t = melee.progress();
+        // The sweep is brightest through the hit window and fades out with the
+        // recovery, so what you see is what is actually dangerous.
+        int alpha = (int) (200 * (melee.striking() ? 1 : 0.35));
+        double facingDeg = -Math.toDegrees(Math.atan2(me.facing.dy(), me.facing.dx()));
+        switch (action) {
+            case SWING, LUNGE -> {
+                double arc = action == MeleeAction.LUNGE
+                        ? Math.min(40, profile.arc() * 0.4) : profile.arc();
+                // The arc travels through its own width across the move.
+                double lead = facingDeg + arc / 2 - arc * t;
+                g.setColor(new Color(255, 255, 255, Math.max(0, alpha)));
+                g.setStroke(new BasicStroke(3f));
+                g.drawArc(corner[0] - r, corner[1] - r, r * 2, r * 2,
+                        (int) Math.round(lead - arc / 4), (int) Math.round(arc / 2));
+            }
+            case PARRY -> {
+                boolean caught = melee.parryFlash() > 0;
+                g.setColor(caught ? new Color(255, 245, 200, 220)
+                        : new Color(200, 225, 255, alpha));
+                g.setStroke(new BasicStroke(caught ? 4f : 2.5f));
+                int pr = (int) (r * 0.8);
+                g.drawArc(corner[0] - pr, corner[1] - pr, pr * 2, pr * 2,
+                        (int) Math.round(facingDeg - 45), 90);
+            }
+            case SHIELD -> {
+                g.setColor(new Color(190, 215, 255,
+                        melee.parryFlash() > 0 ? 220 : 120));
+                g.setStroke(new BasicStroke(4f));
+                int sr = (int) (r * 0.75);
+                g.drawArc(corner[0] - sr, corner[1] - sr, sr * 2, sr * 2,
+                        (int) Math.round(facingDeg - 55), 110);
+            }
+            case DASH -> {
+                // A motion streak behind the roll rather than a weapon arc.
+                g.setColor(new Color(235, 240, 255, (int) (120 * (1 - t))));
+                g.setStroke(new BasicStroke(2f));
+                int dr = (int) (r * 0.6);
+                g.drawOval(corner[0] - dr, corner[1] - dr / 2, dr * 2, dr);
+            }
+            default -> { /* nothing running */ }
+        }
+    }
+
+    /**
+     * The object in a fighter's hands, swept through the move. Its sheet comes
+     * from {@code item/<key>/<move>} and falls back to the plain icon, so an
+     * un-animated item still shows up in hand; where it sits and how it is
+     * angled comes from {@link MeleeSprites#hold}, shared with every other
+     * scene that draws a fighter.
+     */
+    private void drawHeldObject(Graphics2D g, double x, double y, double z, double size,
+                                Facing facing, String itemKey, MeleeAction action,
+                                double progress, MeleeProfile profile) {
+        if (itemKey == null || itemKey.isEmpty()) return;
+        BufferedImage img = MeleeSprites.heldFrame(itemKey, action.key(), animClock, progress);
+        if (img == null) {
+            ItemDef def = (world != null ? world.itemTypes : ItemRegistry.standard())
+                    .get(itemKey);
+            if (def == null) return;
+            img = EntitySprites.item(def, 16);
+        }
+        MeleeSprites.Hold hold = MeleeSprites.hold(action, profile, progress);
+        int w = Math.max(6, (int) Math.round(size * hold.scale() * camera.zoom * 0.7));
+        Facing dir = facing == null ? Facing.EAST : facing;
+        int flip = dir.facingLeft() ? -1 : 1;
+        int footX = camera.worldToScreenX(x + size / 2.0, y + size);
+        int footY = camera.worldToScreenY(x + size / 2.0, y + size);
+        int lift = (int) Math.round(z * camera.zoom * PlayerPhysics.HOP_DRAW_SCALE);
+        double cx = footX + flip * hold.offsetX() * size * camera.zoom;
+        double cy = footY - size * camera.zoom * 0.5 - lift
+                + hold.offsetY() * size * camera.zoom;
+
+        AffineTransform old = g.getTransform();
+        g.translate(cx, cy);
+        g.rotate(flip * hold.angle());
+        g.drawImage(img, flip * -w / 2, -w / 2, flip * w, w, null);
+        g.setTransform(old);
     }
 
     /**
@@ -2594,14 +2889,22 @@ public class PlayScene extends AbstractScene {
                 MiniGameHud.drawTeamRing(g, camera, x + size / 2, y + size,
                         size, mgView.teamOf(ps.id), camera.zoom);
             }
-            // Remote players wear their own character's skin and face their
-            // own direction — both ride along in the snapshot.
+            // Remote players wear their own character's skin, hold their own
+            // weapon, and face their own direction — all of it rides along in
+            // the snapshot, so a swing looks like a swing from across the map.
             CharacterProfile theirs = Characters.getOrDefault(ps.characterKey);
             Color body = remoteBody(ps.id, theirs);
-            PlayerSprites.Frame sprite = PlayerSprites.directionalFrame(
-                    ps.characterKey, ps.moving ? "walk" : "idle", ps.facing,
-                    animClock, (int) size, body);
-            into.at(footDepth(x, y), () -> drawPlayer(g, x, y, ps.z, sprite, ps.name));
+            String state = ps.meleeAction.isEmpty()
+                    ? (ps.moving ? "walk" : "idle") : ps.meleeAction;
+            PlayerSprites.Frame sprite = MeleeSprites.playerFrame(
+                    ps.characterKey, ps.heldKey, state, ps.facing,
+                    animClock, ps.meleeProgress, (int) size, body);
+            MeleeAction move = MeleeAction.byKey(ps.meleeAction);
+            into.at(footDepth(x, y), () -> {
+                drawPlayer(g, x, y, ps.z, sprite, ps.name);
+                drawHeldObject(g, x, y, ps.z, size, ps.facing, ps.heldKey, move,
+                        ps.meleeProgress, MeleeProfiles.ofKey(ps.heldKey));
+            });
         }
     }
 

@@ -1,5 +1,9 @@
 package com.larsons.engine.entity;
 
+import com.larsons.engine.combat.MeleeAction;
+import com.larsons.engine.combat.MeleeProfile;
+import com.larsons.engine.combat.MeleeProfiles;
+import com.larsons.engine.combat.MeleeState;
 import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.level.Level;
@@ -44,6 +48,18 @@ import java.util.Random;
  *   <li><b>Projectiles</b> — an incoming shot aimed their way triggers an
  *       evasive hop/dash (with a cooldown, so volleys still land).</li>
  * </ul>
+ *
+ * <p><b>Melee moves.</b> A mob fights with the same five-move set a player
+ * has ({@link MeleeAction}), on the same {@link MeleeState} machine and the
+ * same {@link MeleeProfile} timings — with its species' {@link MobDef#weapon()}
+ * when it carries one, and with claws sized to the animal when it doesn't. So
+ * an attack is a real wind-up → strike → recovery rather than an instant
+ * subtraction; a hostile chasing from too far away <em>lunges</em>; an
+ * incoming shot is answered with a <em>dash</em> rather than a hop; the
+ * SHIELD-stance species raise a real guard; and a mob with a weapon can
+ * <em>parry</em> a player's swing outright and leave them staggered. All of it
+ * is deterministic and seeded per mob, so the server and every client agree
+ * about it.
  *
  * <p><b>Species abilities</b> ({@link MobDef.Ability}) extend the machine
  * without changing it: ranged species fire their {@link MobDef#projectile()}
@@ -101,6 +117,16 @@ public final class Mob {
     private static final double POISON_DPS = 3.0;
     private static final double CHILL_SPEED = 0.45;      // speed multiplier
 
+    // Melee tuning (see com.larsons.engine.combat).
+    /** Chance an armed mob answers a player's swing with a parry. */
+    private static final double PARRY_CHANCE_ARMED = 0.22;
+    /** …and an unarmed one, which has only its forearms to catch with. */
+    private static final double PARRY_CHANCE_BARE = 0.06;
+    /** Seconds between a mob's attempts to catch a blow. */
+    private static final double PARRY_COOLDOWN = 1.8;
+    /** How much further than its attack range a mob will lunge to close. */
+    private static final double LUNGE_REACH_FACTOR = 2.4;
+
     // Status bits replicated in snapshots (statusBits()).
     public static final int STATUS_BURNING = 1;
     public static final int STATUS_CHILLED = 2;
@@ -125,6 +151,20 @@ public final class Mob {
     public double burnTime;
     public double chillTime;
     public double poisonTime;
+
+    /**
+     * This mob's melee moves — the same machine a player runs, on the timings
+     * of whatever its species fights with. Public because the world resolves
+     * its strikes and the scenes read the animation state off it; it is still
+     * advanced only by {@link #step}.
+     */
+    public final MeleeState melee = new MeleeState();
+    /** The timings of what this species fights with, resolved once. */
+    private final MeleeProfile meleeProfile;
+    /** Cooldown until this mob may try to catch a blow again. */
+    private double parryTimer;
+    /** The player a strike is aimed at, remembered from wind-up to landing. */
+    private PlayerState strikeTarget;
 
     // AI working state (server/simulation side only; not replicated).
     private final Random rng;
@@ -159,6 +199,27 @@ public final class Mob {
         this.rng = new Random(0x9E3779B9L * (id + 1) + def.key().hashCode());
         this.idleFor = 0.5 + rng.nextDouble() * 2.0;
         this.abilityTimer = 0.5 + rng.nextDouble() * 1.5; // stagger first casts
+        this.meleeProfile = MeleeProfiles.forMob(def);
+    }
+
+    /** The timings this mob fights on — its weapon's, or its species' claws. */
+    public MeleeProfile meleeProfile() {
+        return meleeProfile;
+    }
+
+    /** The item key this mob fights with ({@code ""} = bare). */
+    public String weaponKey() {
+        return def.weapon() == null ? "" : def.weapon();
+    }
+
+    /** The melee animation state this mob is in ({@code ""} = not mid-move). */
+    public String meleeAction() {
+        return melee.animationState();
+    }
+
+    /** How far through that move it is, 0..1 — picks the frame of its sheet. */
+    public double meleeProgress() {
+        return melee.progress();
     }
 
     public boolean dead() {
@@ -172,8 +233,34 @@ public final class Mob {
 
     /** True while the SHIELD stance is up: damage is shrugged off. */
     public boolean shielded() {
-        return def.ability() == MobDef.Ability.SHIELD
-                && shieldClock % (SHIELD_DOWN + SHIELD_UP) >= SHIELD_DOWN;
+        return def.ability() == MobDef.Ability.SHIELD && shieldUpPhase();
+    }
+
+    /** Where the SHIELD species' guard cycle currently is. */
+    private boolean shieldUpPhase() {
+        return shieldClock % (SHIELD_DOWN + SHIELD_UP) >= SHIELD_DOWN;
+    }
+
+    /**
+     * Offer this mob the chance to catch an incoming melee blow. Armed
+     * species catch far more often than bare ones, and a guard species more
+     * often again; a mob already committed to a move of its own can't. A
+     * caught blow deals nothing and leaves whoever threw it staggered — the
+     * caller applies that, since only it knows who swung.
+     *
+     * <p>The roll comes from the mob's own seeded RNG, so the authoritative
+     * server decides it and every client renders the same answer.
+     */
+    public boolean tryParry() {
+        if (dead() || parryTimer > 0) return false;
+        if (!meleeProfile.has(MeleeAction.PARRY)) return false;
+        double chance = def.armed() ? PARRY_CHANCE_ARMED : PARRY_CHANCE_BARE;
+        if (def.ability() == MobDef.Ability.SHIELD) chance *= 2;
+        if (rng.nextDouble() >= chance) return false;
+        if (!melee.begin(MeleeAction.PARRY, meleeProfile, Double.MAX_VALUE)) return false;
+        parryTimer = PARRY_COOLDOWN;
+        melee.markConnected();
+        return true;
     }
 
     /** Replicated status flags (burn/chill/poison tint, shield glow). */
@@ -204,12 +291,21 @@ public final class Mob {
      * it is a direction to be knocked in.
      *
      * <p>Returns true if this killed it.
+     *
+     * <p>Note that a mob's {@link MeleeAction#DASH} does <em>not</em> grant the
+     * invulnerability frames a player's does. A mob's dodge reflex fires at
+     * every shot that comes near it (see the projectile awareness in
+     * {@link #step}), so frames on it would make every ranged weapon in the
+     * game bounce off every mob. A mob dodges by actually getting out of the
+     * way; the frames are the player's reward for spending a cooldown
+     * deliberately.
      */
     public boolean damage(double amount, double fromX, double fromY,
                           PerspectiveSpace space) {
         if (dead()) return false;
         if (shielded()) {
             hurtTimer = HURT_FLASH * 0.5; // a clank, not a wound
+            melee.markConnected();        // the guard rang
             return false;
         }
         health -= amount;
@@ -232,6 +328,7 @@ public final class Mob {
         if (health <= 0) {
             health = 0;
             state = AIState.DEAD;
+            melee.cancel();
             return true;
         }
         // Passives run; neutrals and hostiles turn on the attacker.
@@ -304,7 +401,24 @@ public final class Mob {
         if (abilityTimer > 0) abilityTimer -= dt;
         if (burstTime > 0) burstTime -= dt;
         if (windupTime > 0) windupTime -= dt;
+        if (parryTimer > 0) parryTimer -= dt;
         if (def.ability() == MobDef.Ability.SHIELD) shieldClock += dt;
+
+        // The melee machine, on the same timings and the same rules a player's
+        // runs. A SHIELD-stance species holds its guard through the "up" half
+        // of its cycle; everything else keeps its hands free. A lunge that
+        // reaches its active window throws the mob forward using the same
+        // movement burst LEAP and CHARGE use.
+        melee.holdShield(def.ability() == MobDef.Ability.SHIELD && shieldUpPhase(),
+                meleeProfile, Double.MAX_VALUE);
+        melee.step(meleeProfile, dt);
+        if (melee.pollTravelStart() && melee.action() == MeleeAction.LUNGE) {
+            MeleeProfile.Move lunge = meleeProfile.move(MeleeAction.LUNGE);
+            burstTime = lunge.active();
+            burstDx = (facingLeft ? -1 : 1) * lunge.burstSpeed();
+            burstDy = gravityOn ? 0 : facing.dy() * lunge.burstSpeed();
+        }
+        if (melee.pollStrike()) resolveStrike(level, combatOn);
 
         tickStatuses(dt);
         if (dead()) return; // burn/poison finished it this tick
@@ -380,6 +494,15 @@ public final class Mob {
                     dx = steer(pcx - cx) * def.speed();
                     if (planar) dyPlanar = steer(pcy - cy) * def.speed();
                     chaseAbilities(level, nearest, dist, gravityOn, planar, ts);
+                    // Closing the last stretch with a committed thrust rather
+                    // than a walk. The move's own cooldown paces it.
+                    if (combatOn && !def.ranged() && dist > def.attackRange()
+                            && dist < def.attackRange() * LUNGE_REACH_FACTOR) {
+                        facingLeft = pcx < cx;
+                        if (melee.begin(MeleeAction.LUNGE, meleeProfile, Double.MAX_VALUE)) {
+                            strikeTarget = nearest;
+                        }
+                    }
                 }
             }
             case ATTACK -> {
@@ -392,11 +515,14 @@ public final class Mob {
                             pendingShot = new double[]{pcx, pcy};
                             facingLeft = pcx < cx;
                         }
-                    } else {
-                        attackTimer = ATTACK_COOLDOWN;
-                        nearest.hurt(def.damage());
-                        if (def.ability() == MobDef.Ability.LIFESTEAL) {
-                            health = Math.min(def.maxHealth(), health + def.damage() * 0.5);
+                    } else if (combatOn) {
+                        // A real swing: wind-up, strike, recovery. The damage
+                        // lands when the hit window opens (resolveStrike), not
+                        // the instant the AI decided to attack.
+                        facingLeft = pcx < cx;
+                        if (melee.begin(MeleeAction.SWING, meleeProfile, Double.MAX_VALUE)) {
+                            attackTimer = ATTACK_COOLDOWN;
+                            strikeTarget = nearest;
                         }
                     }
                 }
@@ -425,6 +551,12 @@ public final class Mob {
             dx = burstDx;
             if (planar) dyPlanar = burstDy;
         }
+        // A mob whose blow was caught is reeling: it neither advances nor acts
+        // until it has found its feet again.
+        if (melee.staggered()) {
+            dx = 0;
+            dyPlanar = 0;
+        }
         dx *= speedFactor;
         dyPlanar *= speedFactor;
 
@@ -439,6 +571,14 @@ public final class Mob {
                 dodgeDx = threat.vy == 0 && threat.vx == 0 ? 1
                         : Math.signum(threat.vx == 0 ? x - threat.x : -threat.vy * Math.signum(threat.vx));
                 if (dodgeDx == 0) dodgeDx = rng.nextBoolean() ? 1 : -1;
+                // The sidestep it always had, now played as the DASH move —
+                // its animation and its sound state — and lasting as long as
+                // the move does. Evasion here is displacement, not frames
+                // (see damage): the mob really does get out of the way.
+                if (melee.begin(MeleeAction.DASH, meleeProfile, Double.MAX_VALUE)) {
+                    MeleeProfile.Move d = meleeProfile.move(MeleeAction.DASH);
+                    dodgeTime = d.windup() + d.active();
+                }
                 if (!def.flying() && gravityOn
                         && PlayerPhysics.onGround(level, x, y, size, size)) {
                     vy = -JUMP_VELOCITY * 0.8;
@@ -542,6 +682,37 @@ public final class Mob {
         y = Math.max(0, Math.min(y, level.height * (double) level.tileSize - size));
     }
 
+    /**
+     * Land the swing (or lunge) whose hit window has just opened. The target
+     * remembered at wind-up takes the blow if it is still inside the weapon's
+     * reach — step out of a telegraphed swing and it misses, which is the
+     * whole reason attacks have a wind-up at all.
+     *
+     * <p>The blow goes through {@link PlayerState#takeBlow}, so a raised guard
+     * soaks it and a dash avoids it; a blow caught by an open parry window
+     * leaves this mob staggered instead.
+     */
+    private void resolveStrike(Level level, boolean combatOn) {
+        PlayerState target = strikeTarget;
+        strikeTarget = null;
+        if (!combatOn || target == null || dead()) return;
+        double half = level.tileSize / 2.0;
+        double d = Math.hypot((target.x + half) - (x + def.size() / 2),
+                (target.y + half) - (y + def.size() / 2));
+        if (d > meleeProfile.reach() + half) return; // they got out of the way
+        double dmg = def.damage() * meleeProfile.move(melee.action()).damageScale();
+        boolean parried = target.parrying;
+        double dealt = target.takeBlow(dmg);
+        if (parried) {
+            melee.stagger(MeleeState.PARRY_STAGGER);
+        } else if (dealt > 0) {
+            melee.markConnected();
+            if (def.ability() == MobDef.Ability.LIFESTEAL) {
+                health = Math.min(def.maxHealth(), health + dealt * 0.5);
+            }
+        }
+    }
+
     /** Burn and poison tick damage; chill only slows (handled where speed is read). */
     private void tickStatuses(double dt) {
         if (burnTime > 0) {
@@ -556,6 +727,7 @@ public final class Mob {
         if (health <= 0) {
             health = 0;
             state = AIState.DEAD;
+            melee.cancel();
         }
     }
 
@@ -742,6 +914,14 @@ public final class Mob {
         if (bits != 0) m.put("e", bits); // absent when clean, like input flags
         // Absent for plain east/west facings, which the "f" flag already says.
         if (facing != Facing.EAST && facing != Facing.WEST) m.put("d", facing.key());
+        // The melee move it is mid-way through, so clients draw the wind-up
+        // and the strike rather than an instant hit. Absent while idle.
+        String move = melee.animationState();
+        if (!move.isEmpty()) {
+            m.put("ma", move);
+            m.put("mg", melee.progress());
+        }
+        if (def.armed()) m.put("w", def.weapon());
         return m;
     }
 }

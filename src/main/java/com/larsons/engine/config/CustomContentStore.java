@@ -350,6 +350,7 @@ public final class CustomContentStore {
         if (d.projectile() != null) m.put("projectile", d.projectile());
         if (d.ability() != MobDef.Ability.NONE) m.put("ability", d.ability().name());
         if (d.abilityArg() != null) m.put("abilityArg", d.abilityArg());
+        if (d.armed()) m.put("weapon", d.weapon());
         return m;
     }
 
@@ -372,7 +373,8 @@ public final class CustomContentStore {
                     Boolean.TRUE.equals(m.get("flying")),
                     m.get("projectile") instanceof String p ? p : null,
                     ability,
-                    m.get("abilityArg") instanceof String arg ? arg : null);
+                    m.get("abilityArg") instanceof String arg ? arg : null,
+                    m.get("weapon") instanceof String w ? w : null);
         } catch (RuntimeException e) {
             System.err.println("CustomContentStore: bad mob entry: " + e.getMessage());
             return null;

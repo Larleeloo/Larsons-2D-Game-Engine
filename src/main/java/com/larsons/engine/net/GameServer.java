@@ -1,5 +1,10 @@
 package com.larsons.engine.net;
 
+import com.larsons.engine.combat.Melee;
+import com.larsons.engine.combat.MeleeAction;
+import com.larsons.engine.combat.MeleeProfile;
+import com.larsons.engine.combat.MeleeProfiles;
+import com.larsons.engine.combat.MeleeState;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.core.GameLoop;
 import com.larsons.engine.entity.DroppedItem;
@@ -10,6 +15,7 @@ import com.larsons.engine.entity.Mob;
 import com.larsons.engine.entity.Projectile;
 import com.larsons.engine.entity.Vehicle;
 import com.larsons.engine.entity.VehicleDef;
+import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
 import com.larsons.engine.minigame.MiniGame;
@@ -349,6 +355,7 @@ public final class GameServer {
             // burn every air jump at once.
             boolean jumpPressed = false;
             List<PlayerInput> attacks = null;
+            List<PlayerInput> moves = null;
             PlayerInput latest = null;
             PlayerInput queued;
             while ((queued = c.inputQueue.poll()) != null) {
@@ -356,6 +363,12 @@ public final class GameServer {
                 if (queued.attack && queued.seq != c.lastAttackSeq) {
                     if (attacks == null) attacks = new ArrayList<>(2);
                     attacks.add(queued);
+                }
+                // Melee moves are edge-triggered exactly like attack clicks,
+                // and lost just as easily if only the latest input is sampled.
+                if (!queued.melee.isEmpty() && queued.seq != c.lastMeleeSeq) {
+                    if (moves == null) moves = new ArrayList<>(2);
+                    moves.add(queued);
                 }
                 latest = queued;
             }
@@ -367,6 +380,15 @@ public final class GameServer {
             // magnetism, melee power) come from the server-side inventory, so
             // they can't be conjured client-side.
             c.inventory.applyPassivesTo(c.state, profile.itemsEnabled);
+
+            // The melee machine before the body moves, exactly as offline: a
+            // lunge's burst and a raised guard's slowed footwork are movement,
+            // and the physics step below is what carries them out. Every move
+            // is validated here — the client's copy is only a prediction.
+            if (moves != null) {
+                for (PlayerInput move : moves) startMelee(c, move);
+            }
+            stepMelee(c, in, dt);
 
             // A mounted player drives the vehicle instead of walking: the same
             // deterministic vehicle step the client predicts with. The rider
@@ -427,23 +449,95 @@ public final class GameServer {
         if (shot != null) {
             sendInventory(c);
         } else if (profile.combatEnabled) {
-            ItemDef held = profile.itemsEnabled ? c.inventory.selectedDef() : null;
-            boolean melee = held == null || held.projectile() == null;
-            double damage = World.FIST_DAMAGE + c.state.meleeBonus
-                    + (melee && held != null ? held.damage() : 0);
-            // Mini-game PvP: an enemy player in reach takes the swing;
-            // otherwise it resolves against mobs as always — and a
-            // whiffed swing near an empty vehicle packs it up.
-            PlayerState victim = minigame == null ? null
-                    : minigame.resolveMeleeHit(c.state, joinedPlayers(),
-                    atk.aimX, atk.aimY);
-            if (victim != null) {
-                victim.hurt(damage);
-                minigame.damaged(c.state.id, victim);
-            } else if (world.playerAttack(c.state, atk.aimX, atk.aimY, damage) == null) {
-                world.packUpVehicle(atk.aimX, atk.aimY, profile.itemsEnabled);
-            }
+            // A click starts a swing; the blade lands when its hit window
+            // opens (stepMelee → resolveMeleeStrike), on the timings of what
+            // this player is actually holding. A swing that can't start —
+            // still recovering from the last one, or staggered by a parry —
+            // simply doesn't, which is the server's say over spam.
+            c.meleeAimX = atk.aimX;
+            c.meleeAimY = atk.aimY;
+            Melee.start(c.state, c.melee, meleeProfileOf(c), MeleeAction.SWING);
         }
+    }
+
+    /**
+     * Apply one edge-triggered melee request (parry / lunge / dash). The
+     * client has already predicted it, but this is the copy that counts: the
+     * move has to exist on the held object, be off cooldown, and be affordable
+     * here or it never happened.
+     */
+    private void startMelee(Connection c, PlayerInput move) {
+        c.lastMeleeSeq = move.seq;
+        if (!profile.combatEnabled) return;
+        MeleeAction action = MeleeAction.byKey(move.melee);
+        if (action == MeleeAction.NONE || action == MeleeAction.SHIELD) return;
+        c.inventory.select(move.selected);
+        c.meleeAimX = move.aimX;
+        c.meleeAimY = move.aimY;
+        Melee.start(c.state, c.melee, meleeProfileOf(c), action);
+    }
+
+    /**
+     * Advance one player's melee machine and land whatever it says landed.
+     * This is the authoritative half of the melee seam: the client runs the
+     * identical machine for prediction, but damage, parries and blocks are
+     * decided here and reported back in the snapshot.
+     */
+    private void stepMelee(Connection c, PlayerInput in, double dt) {
+        MeleeProfile profile2 = meleeProfileOf(c);
+        ItemDef held = profile.itemsEnabled ? c.inventory.selectedDef() : null;
+        boolean planar = level.perspective != Perspective.SIDE_SCROLL
+                || !profile.gravityEnabled;
+        Melee.step(c.state, c.melee, profile2, held == null ? "" : held.key(),
+                in.shield && profile.combatEnabled, planar, dt);
+        // Drained unconditionally, so a tick with combat switched off can
+        // never bank a strike for a tick where it is back on.
+        boolean struck = c.melee.pollStrike();
+        if (!profile.combatEnabled) return;
+        if (struck) resolveMeleeStrike(c, profile2, held);
+        // An open parry window turns the shots in the air around.
+        if (c.melee.parrying() && world.parryProjectiles(c.state, profile2) > 0) {
+            c.melee.markConnected();
+            c.state.guardHits++;
+        }
+    }
+
+    /** Land the strike whose hit window just opened, authoritatively. */
+    private void resolveMeleeStrike(Connection c, MeleeProfile weapon, ItemDef held) {
+        boolean swings = held == null || held.projectile() == null;
+        double base = World.FIST_DAMAGE + c.state.meleeBonus
+                + (swings && held != null ? held.damage() : 0);
+        double damage = Melee.damage(base, weapon, c.melee.action());
+        // Mini-game PvP: an enemy player in reach takes the blow — and their
+        // own guard gets a say in it, exactly like a mob's does; otherwise it
+        // resolves against mobs as always, and a whiffed swing near an empty
+        // vehicle packs it up.
+        PlayerState victim = minigame == null ? null
+                : minigame.resolveMeleeHit(c.state, joinedPlayers(),
+                c.meleeAimX, c.meleeAimY, weapon.reach());
+        if (victim != null) {
+            boolean parried = victim.parrying;
+            if (victim.takeBlow(damage) > 0) {
+                c.melee.markConnected();
+                minigame.damaged(c.state.id, victim);
+            }
+            if (parried) c.melee.stagger(MeleeState.PARRY_STAGGER);
+            return;
+        }
+        World.MeleeHit hit = world.meleeStrike(c.state, weapon, c.melee.action(),
+                c.meleeAimX, c.meleeAimY, damage);
+        if (hit.parried()) {
+            c.melee.stagger(MeleeState.PARRY_STAGGER);
+        } else if (hit.hit()) {
+            c.melee.markConnected();
+        } else {
+            world.packUpVehicle(c.meleeAimX, c.meleeAimY, profile.itemsEnabled);
+        }
+    }
+
+    /** The melee timings of what this player is holding right now. */
+    private MeleeProfile meleeProfileOf(Connection c) {
+        return MeleeProfiles.of(profile.itemsEnabled ? c.inventory.selectedDef() : null);
     }
 
     /**
@@ -767,6 +861,18 @@ public final class GameServer {
         PlayerInput heldInput = new PlayerInput();
         /** Input sequence whose attack was already applied (tick thread only). */
         int lastAttackSeq;
+        /**
+         * This player's melee moves, authoritatively (tick thread only). The
+         * same {@link MeleeState} machine the client predicts with, so the
+         * cooldowns, the stamina, the wind-ups and the guard are all decided
+         * here — a client can no more lunge on cooldown than it can fabricate
+         * a shot.
+         */
+        final MeleeState melee = new MeleeState();
+        /** Where the move being wound up was aimed (tick thread only). */
+        double meleeAimX, meleeAimY;
+        /** Input sequence whose melee request was already applied. */
+        int lastMeleeSeq = -1;
         /** Hold-to-mine progress on the current cell (tick thread only). */
         int mineCol = Integer.MIN_VALUE, mineRow = Integer.MIN_VALUE;
         double mineProgress;

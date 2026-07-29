@@ -191,6 +191,16 @@ public final class EntitySprites {
                     g.fillRect(s * 5 / 12, s / 5, s / 6, s / 3);
                 }
                 case BLOCK -> g.fillRect(s / 5, s / 5, s * 3 / 5, s * 3 / 5);
+                case ARMOR -> { // a shield: heater silhouette with a boss and a rim
+                    int[] sx = {s / 5, s * 4 / 5, s * 4 / 5, s / 2, s / 5};
+                    int[] sy = {s / 6, s / 6, s / 2, s * 5 / 6, s / 2};
+                    g.fillPolygon(sx, sy, 5);
+                    g.setColor(def.color().darker());
+                    g.setStroke(new BasicStroke(Math.max(1.5f, s / 14f)));
+                    g.drawPolygon(sx, sy, 5);
+                    g.setColor(def.color().brighter());
+                    g.fillOval(s * 5 / 12, s * 2 / 5, s / 6, s / 6);
+                }
                 case THROWABLE -> { // diagonal dart (arrow / knife / rock icon)
                     g.setStroke(new BasicStroke(Math.max(2, s / 8f), BasicStroke.CAP_ROUND,
                             BasicStroke.JOIN_ROUND));

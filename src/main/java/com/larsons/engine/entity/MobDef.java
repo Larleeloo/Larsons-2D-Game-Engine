@@ -31,12 +31,19 @@ import java.awt.Color;
  * @param abilityArg  ability parameter: the mob key SUMMON spawns / SPLIT
  *                    breaks into, or the projectile key whose colours a
  *                    DEATH_BURST explosion borrows; {@code null} otherwise
+ * @param weapon      the {@link ItemDef} key this species fights with
+ *                    ({@code null} = claws and teeth). An armed species
+ *                    inherits that weapon's melee timings, its swing sounds,
+ *                    and any {@code wield/<item>} art drawn for it, exactly
+ *                    like a player holding the same thing — see
+ *                    {@code com.larsons.engine.combat.MeleeProfiles}
  */
 public record MobDef(String key, String displayName, Color body, Color accent,
                      double size, double speed, double maxHealth, double damage,
                      Temperament temperament, double detectRange,
                      double attackRange, boolean flying,
-                     String projectile, Ability ability, String abilityArg) {
+                     String projectile, Ability ability, String abilityArg,
+                     String weapon) {
 
     /** Ported from the side-scroller's mob registry categories. */
     public enum Temperament { HOSTILE, NEUTRAL, PASSIVE }
@@ -70,6 +77,17 @@ public record MobDef(String key, String displayName, Color body, Color accent,
         SHIELD
     }
 
+    /** Pre-weapon constructor shape, kept so existing registrations read the same. */
+    public MobDef(String key, String displayName, Color body, Color accent,
+                  double size, double speed, double maxHealth, double damage,
+                  Temperament temperament, double detectRange,
+                  double attackRange, boolean flying,
+                  String projectile, Ability ability, String abilityArg) {
+        this(key, displayName, body, accent, size, speed, maxHealth, damage,
+                temperament, detectRange, attackRange, flying,
+                projectile, ability, abilityArg, null);
+    }
+
     /** Pre-ability constructor shape, kept so existing registrations read the same. */
     public MobDef(String key, String displayName, Color body, Color accent,
                   double size, double speed, double maxHealth, double damage,
@@ -77,12 +95,24 @@ public record MobDef(String key, String displayName, Color body, Color accent,
                   double attackRange, boolean flying) {
         this(key, displayName, body, accent, size, speed, maxHealth, damage,
                 temperament, detectRange, attackRange, flying,
-                null, Ability.NONE, null);
+                null, Ability.NONE, null, null);
     }
 
     /** This species fights at range (fires {@link #projectile} while attacking). */
     public boolean ranged() {
         return projectile != null;
+    }
+
+    /** Whether this species carries a weapon rather than fighting bare. */
+    public boolean armed() {
+        return weapon != null && !weapon.isBlank();
+    }
+
+    /** This species again, issued {@code itemKey} to fight with. */
+    public MobDef armedWith(String itemKey) {
+        return new MobDef(key, displayName, body, accent, size, speed, maxHealth,
+                damage, temperament, detectRange, attackRange, flying,
+                projectile, ability, abilityArg, itemKey);
     }
 
     public static MobDef hostile(String key, String name, Color body, Color accent,

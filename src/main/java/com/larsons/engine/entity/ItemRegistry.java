@@ -114,6 +114,20 @@ public final class ItemRegistry {
         r.register(ItemDef.weapon("battle_axe", "Battle Axe", ItemDef.Rarity.RARE, new Color(140, 120, 110), 14));
         r.register(ItemDef.weapon("legendary_sword", "Legendary Sword", ItemDef.Rarity.LEGENDARY, new Color(255, 180, 60), 22));
         r.register(ItemDef.weapon("frostmourne", "Frostmourne", ItemDef.Rarity.MYTHIC, new Color(140, 220, 255), 28));
+        // The other melee schools. Each one's name is what picks its fighting
+        // style — a dagger flicks, a spear thrusts, a hammer commits — see
+        // com.larsons.engine.combat.MeleeProfiles.
+        r.register(ItemDef.weapon("iron_dagger", "Iron Dagger", ItemDef.Rarity.COMMON, new Color(190, 195, 205), 5));
+        r.register(ItemDef.weapon("shadow_dagger", "Shadow Dagger", ItemDef.Rarity.EPIC, new Color(120, 90, 170), 13));
+        r.register(ItemDef.weapon("iron_spear", "Iron Spear", ItemDef.Rarity.UNCOMMON, new Color(180, 185, 195), 9));
+        r.register(ItemDef.weapon("dragon_lance", "Dragon Lance", ItemDef.Rarity.LEGENDARY, new Color(210, 120, 70), 20));
+        r.register(ItemDef.weapon("war_hammer", "War Hammer", ItemDef.Rarity.RARE, new Color(120, 118, 125), 17));
+        r.register(ItemDef.weapon("earthbreaker", "Earthbreaker", ItemDef.Rarity.MYTHIC, new Color(180, 130, 70), 30));
+        // Shields: carried to be raised. Their damage is a bash, not a strike.
+        r.register(ItemDef.shield("wooden_shield", "Wooden Shield", ItemDef.Rarity.COMMON, new Color(160, 120, 70), 3));
+        r.register(ItemDef.shield("iron_shield", "Iron Shield", ItemDef.Rarity.UNCOMMON, new Color(180, 185, 195), 5));
+        r.register(ItemDef.shield("tower_shield", "Tower Shield", ItemDef.Rarity.RARE, new Color(150, 150, 165), 7));
+        r.register(ItemDef.shield("aegis", "Aegis", ItemDef.Rarity.LEGENDARY, new Color(240, 210, 110), 10));
         // Ranged weapons fire ProjectileRegistry entries; bows consume arrows,
         // staves fire freely (mana is their cost).
         r.register(ItemDef.ranged("wooden_bow", "Wooden Bow",

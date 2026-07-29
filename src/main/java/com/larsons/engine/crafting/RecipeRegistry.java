@@ -93,6 +93,18 @@ public final class RecipeRegistry {
         r.register(craft("steel_sword", 1, of("iron_ingot", 2), of("coal", 2), of("stick", 1)));
         r.register(craft("crystal_sword", 1, of("crystal", 2), of("diamond", 1), of("stick", 1)));
         r.register(craft("battle_axe", 1, of("iron_ingot", 3), of("stick", 2)));
+        // The other melee schools, each reachable from the same ore ladder.
+        r.register(craft("iron_dagger", 1, of("iron_ingot", 1), of("stick", 1)));
+        r.register(craft("shadow_dagger", 1, of("iron_dagger", 1), of("shadow_essence", 2)));
+        r.register(craft("iron_spear", 1, of("iron_ingot", 2), of("stick", 3)));
+        r.register(craft("dragon_lance", 1, of("iron_spear", 1), of("fire_essence", 3), of("gold_ingot", 2)));
+        r.register(craft("war_hammer", 1, of("iron_ingot", 4), of("stone", 4), of("stick", 2)));
+        r.register(craft("earthbreaker", 1, of("war_hammer", 1), of("diamond", 3), of("ruby", 2)));
+        // Shields: carried to be raised (hold [C] for the guard stance).
+        r.register(craft("wooden_shield", 1, of("planks", 5), of("stick", 2)));
+        r.register(craft("iron_shield", 1, of("wooden_shield", 1), of("iron_ingot", 3)));
+        r.register(craft("tower_shield", 1, of("iron_shield", 1), of("iron_ingot", 4), of("stone", 4)));
+        r.register(craft("aegis", 1, of("tower_shield", 1), of("gold_ingot", 3), of("emerald", 2)));
         r.register(craft("legendary_sword", 1, of("gold_ingot", 2), of("diamond", 2), of("ruby", 1)));
         r.register(craft("wooden_bow", 1, of("stick", 3), of("rope", 1)));
         r.register(craft("longbow", 1, of("wooden_bow", 1), of("rope", 1), of("iron_ingot", 1)));

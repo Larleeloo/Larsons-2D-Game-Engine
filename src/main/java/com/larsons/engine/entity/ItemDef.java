@@ -94,6 +94,19 @@ public record ItemDef(String key, String name, Category category, Rarity rarity,
         return new ItemDef(key, name, Category.BLOCK, Rarity.COMMON, color, 64, 0, 0, blockKey, null, null);
     }
 
+    /**
+     * A shield: a poor weapon and an excellent guard. Held like anything else,
+     * but its melee profile is the guard stance's — the best block and the
+     * widest parry window in the game (see
+     * {@code com.larsons.engine.combat.MeleeStyle#SHIELD}), with a bash for
+     * {@code damage} when you swing it anyway.
+     */
+    public static ItemDef shield(String key, String name, Rarity rarity, Color color,
+                                 double damage) {
+        return new ItemDef(key, name, Category.ARMOR, rarity, color, 1, damage, 0,
+                null, null, null);
+    }
+
     /** A ranged weapon firing {@code projectile}, consuming {@code ammo} per shot. */
     public static ItemDef ranged(String key, String name, Rarity rarity, Color color,
                                  double damage, String projectile, String ammo) {
