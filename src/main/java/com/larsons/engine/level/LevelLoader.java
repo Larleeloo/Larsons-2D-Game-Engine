@@ -71,6 +71,7 @@ public final class LevelLoader {
             lvl.setFormat(LevelFormat.of(p, lvl.format()));
         }
         if (root.get("music") instanceof String track) lvl.music = track;
+        if (root.get("lightAngle") instanceof Number a) lvl.lightAngle = a.doubleValue();
         if (root.containsKey("tileSize")) lvl.tileSize = intOf(root.get("tileSize"), 32);
         if (root.get("background") instanceof String bg) lvl.background = parseColor(bg, lvl.background);
 

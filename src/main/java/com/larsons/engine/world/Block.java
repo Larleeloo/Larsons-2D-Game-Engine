@@ -173,21 +173,26 @@ public record Block(int id, String key, String displayName, Color color,
     }
 
     /**
-     * The plan-view <em>top</em> face's texture key, or {@link #textureKey()}
-     * when this block declares no top of its own. Top-down and isometric
-     * levels see this face on the floor and on the lid of a stacked block.
+     * The plan-view <em>top</em> face's texture key — what top-down and
+     * isometric levels see on the floor and on the lid of a stacked block.
+     *
+     * <p>The key exists whatever {@link #topTexture} says, because the flag is
+     * a <em>declaration</em> (it drives the pack's key list and what the
+     * creation form asks for), not a gate: a creator who assigns a top sheet in
+     * the texture dialog gets one, and a face with no sheet of its own falls
+     * back to {@link #textureKey()} at lookup time.
      */
     public String topTextureKey() {
-        return topTexture ? "block/" + key + "/top" : textureKey();
+        return "block/" + key + "/top";
     }
 
     /**
-     * The plan-view <em>side</em> face's texture key, or {@link #textureKey()}
-     * when this block declares no side of its own. Only the raised half of a
-     * stacked block shows a side, which is what gives a barrier its height.
+     * The plan-view <em>side</em> face's texture key: the face a stacked block
+     * turns toward the camera, which is what gives a barrier its height. Falls
+     * back to {@link #textureKey()} exactly like {@link #topTextureKey()}.
      */
     public String sideTextureKey() {
-        return sideTexture ? "block/" + key + "/side" : textureKey();
+        return "block/" + key + "/side";
     }
 
     /** Flow twins are simulation artifacts, hidden from palettes/item catalogs. */
