@@ -4732,8 +4732,7 @@ public class CreativeScene extends AbstractScene {
         // side view's layers are fixed and correct, so its pass draws straight
         // through in call order.
         DepthPass standing = DepthPass.of(camera.getPerspective());
-        drawTiles(g, standing);
-        if (testing) drawMiningCracks(g);
+        drawTiles(g, standing);   // queues the crack overlay with its block
         // The grid is drawn through the camera, so it lands as a diamond
         // lattice in isometric view — which is exactly where lining blocks
         // up by eye is hardest, so it is worth having there too.
@@ -4788,12 +4787,12 @@ public class CreativeScene extends AbstractScene {
     }
 
     /** Crack overlay on the block being held-mined, scaled by progress. */
-    private void drawMiningCracks(Graphics2D g) {
-        if (testWorld == null) return;
+    /** The play-test's hold-to-mine stroke, for the crack overlay, or null. */
+    private TerrainPainter.Mining miningStroke() {
+        if (!testing || testWorld == null) return null;
         int[] cell = testWorld.miningCell();
-        double progress = testWorld.miningProgress();
-        if (cell == null || progress <= 0.01) return;
-        TerrainPainter.drawMiningCracks(g, camera, level, cell[0], cell[1], progress);
+        return cell == null ? null
+                : new TerrainPainter.Mining(cell[0], cell[1], testWorld.miningProgress());
     }
 
     /** The editor is always daylit; play-test uses the game type's lighting. */
@@ -4876,7 +4875,7 @@ public class CreativeScene extends AbstractScene {
      */
     private void drawTiles(Graphics2D g, DepthPass standing) {
         TerrainPainter.draw(g, level, camera, visibleTileBounds(), animClock,
-                standing, this::drawOpenLid);
+                standing, this::drawOpenLid, miningStroke());
     }
 
     /** The animated lid on the chest or barrel whose panel is open. */

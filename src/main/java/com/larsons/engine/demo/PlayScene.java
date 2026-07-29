@@ -1725,8 +1725,7 @@ public class PlayScene extends AbstractScene {
         // side view's layers are fixed and correct, so its pass draws straight
         // through in call order.
         DepthPass standing = DepthPass.of(camera.getPerspective());
-        drawTiles(g, standing);
-        drawMiningCracks(g);
+        drawTiles(g, standing);   // queues the crack overlay with its block
         if (p.gridVisible) drawGrid(g); // projects to a diamond lattice in isometric
         if (!sceneryBehind) drawDecorLayer(g, false, standing);
         drawDoors(g);
@@ -1775,23 +1774,6 @@ public class PlayScene extends AbstractScene {
         // world they are about to drop into behind the cards.
         if (picker != null) picker.render(g, viewportWidth, viewportHeight);
         if (net != null && !net.client().isConnected()) drawDisconnectOverlay(g);
-    }
-
-    /** Crack overlay on the block being held-mined, scaled by progress.
-     *  Offline it reads the world's stroke; online, the local prediction. */
-    private void drawMiningCracks(Graphics2D g) {
-        int[] cell;
-        double progress;
-        if (net != null) {
-            cell = netMineCol == Integer.MIN_VALUE ? null : new int[]{netMineCol, netMineRow};
-            progress = netMineProgress;
-        } else {
-            if (world == null) return;
-            cell = world.miningCell();
-            progress = world.miningProgress();
-        }
-        if (cell == null) return;
-        TerrainPainter.drawMiningCracks(g, camera, level, cell[0], cell[1], progress);
     }
 
     /** Stamina (green) and mana (blue) bars stacked above the health bar. */
@@ -2147,7 +2129,23 @@ public class PlayScene extends AbstractScene {
      */
     private void drawTiles(Graphics2D g, DepthPass standing) {
         TerrainPainter.draw(g, level, camera, visibleTileBounds(), animClock,
-                standing, this::drawOpenLid);
+                standing, this::drawOpenLid, miningStroke());
+    }
+
+    /**
+     * The hold-to-mine stroke in progress, for the crack overlay, or
+     * {@code null}. Offline it reads the world's stroke; online, the local
+     * prediction.
+     */
+    private TerrainPainter.Mining miningStroke() {
+        if (net != null) {
+            return netMineCol == Integer.MIN_VALUE ? null
+                    : new TerrainPainter.Mining(netMineCol, netMineRow, netMineProgress);
+        }
+        if (world == null) return null;
+        int[] cell = world.miningCell();
+        return cell == null ? null
+                : new TerrainPainter.Mining(cell[0], cell[1], world.miningProgress());
     }
 
     /** The animated lid on the chest or barrel whose panel is open. */

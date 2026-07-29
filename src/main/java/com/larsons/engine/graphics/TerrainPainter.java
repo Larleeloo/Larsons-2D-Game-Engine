@@ -134,6 +134,9 @@ public final class TerrainPainter {
                       Block block, Color color);
     }
 
+    /** A hold-to-mine stroke in progress: the cell, and how far along it is. */
+    public record Mining(int col, int row, double progress) {}
+
     /**
      * Paint the terrain inside {@code bounds} ({@code {col0, row0, col1, row1}}).
      *
@@ -143,7 +146,24 @@ public final class TerrainPainter {
      */
     public static void draw(Graphics2D g, Level level, Camera camera, int[] bounds,
                             double animClock, DepthPass raised, CellDecorator decor) {
-        new Pass(g, level, camera, animClock, decor).run(bounds, raised);
+        draw(g, level, camera, bounds, animClock, raised, decor, null);
+    }
+
+    /**
+     * Paint the terrain, with the crack overlay of a hold-to-mine stroke.
+     *
+     * <p>The cracks go into the same queue as the blocks, at the depth of the
+     * cell being mined, because they belong to a block rather than to the
+     * screen. Drawn outside the queue they were painted before it was flushed,
+     * and every stacked block then landed on top of them: in a top-down level
+     * the mined block covered its own cracks, and in an isometric one the walls
+     * to the south stood up over the cell to their north-west and covered even
+     * a floor tile's.
+     */
+    public static void draw(Graphics2D g, Level level, Camera camera, int[] bounds,
+                            double animClock, DepthPass raised, CellDecorator decor,
+                            Mining mining) {
+        new Pass(g, level, camera, animClock, decor).run(bounds, raised, mining);
     }
 
     /** One frame's terrain, with the scratch state a sweep over the cells needs. */
@@ -198,7 +218,7 @@ public final class TerrainPainter {
             this.shadowY = offset[1] * camera.zoom;
         }
 
-        void run(int[] bounds, DepthPass raisedPass) {
+        void run(int[] bounds, DepthPass raisedPass, Mining mining) {
             Path2D.Double shadows = layered ? new Path2D.Double() : null;
             for (int r = bounds[1]; r <= bounds[3]; r++) {
                 for (int c = bounds[0]; c <= bounds[2]; c++) {
@@ -216,6 +236,23 @@ public final class TerrainPainter {
                 g.fill(shadows);
                 queueRaised(bounds, raisedPass);
             }
+            // The cracks go in last, so among everything queued at the mined
+            // cell's depth — its own stacked block above all — they are the
+            // part drawn on top. Blocks nearer the viewer still cover them,
+            // which is right: they are in front of the block being mined.
+            if (mining != null && mining.progress() > 0.01) {
+                raisedPass.at(baseDepth(mining.col(), mining.row()), () ->
+                        drawMiningCracks(g, camera, level, mining.col(), mining.row(),
+                                mining.progress()));
+            }
+        }
+
+        /**
+         * The screen row a cell's base sits on — what everything standing on
+         * the floor there is sorted by, sprites included.
+         */
+        private int baseDepth(int col, int row) {
+            return camera.worldToScreenY((col + 0.5) * tileSize, (row + 1.0) * tileSize);
         }
 
         /** The flat floor tile — the top face of the block lying in the ground layer. */
@@ -265,9 +302,7 @@ public final class TerrainPainter {
                     Block block = level.blocks.get(id);
                     if (block == null) continue;
                     int col = c, row = r;
-                    int depth = camera.worldToScreenY((col + 0.5) * tileSize,
-                            (row + 1.0) * tileSize);
-                    raisedPass.at(depth, () -> drawRaised(col, row, block));
+                    raisedPass.at(baseDepth(col, row), () -> drawRaised(col, row, block));
                 }
             }
         }
