@@ -316,6 +316,7 @@ com.larsons.engine
 │   │                       cast shadows, stacked blocks queued into the depth pass
 │   ├── DepthPass.java     Painter's queue for everything standing on the floor
 │   ├── SpriteSheet.java   Slice a sheet into frames
+│   ├── SpriteCanvas.java  The pixels behind "Create texture": frames, paint tools, undo, export
 │   ├── Animation.java     Delta-timed frame animation
 │   ├── AssetLoader.java   Cached image loading + placeholders
 │   ├── CutscenePainter.java Cutscene actors (sheet frames + fallbacks) + letterbox/captions
@@ -411,7 +412,9 @@ com.larsons.engine
 │   ├── Menu.java          Keyboard/mouse menu (scroll bar when it overflows)
 │   ├── MenuItem.java      Label (dynamic) + action
 │   ├── MenuTheme.java     Colours, fonts, spacing
-│   └── ConfigForm.java    Clickable toggles / steppers / cyclers / text / buttons; draggable scroll bar
+│   ├── ConfigForm.java    Clickable toggles / steppers / cyclers / text / buttons; draggable scroll bar
+│   └── SpriteEditorPanel.java "Create texture": the paint window — tools, palette,
+│                          frame strip, onion skin, live preview at the chosen fps
 ├── util
 │   └── Json.java          Dependency-free JSON parser + writer (pretty + compact)
 └── demo
@@ -802,7 +805,10 @@ Every creatable category **leads with a "+" entry** — click it to define a
 brand-new block/liquid/light/mob/item/decoration with fully customizable
 properties (colours, solidity, light, damage, hardness/tool, AI stats,
 rarity…). Creations are registered live, persist to the game type's
-`custom.json`, and reload with it.
+`custom.json`, and reload with it. The form finishes with **Create & draw
+its texture…**, which makes the object and opens the
+[sprite-sheet editor](#create-texture-draw-the-sprite-sheet-in-game) on it —
+so a new object can be given its own art on the spot.
 
 A new **block** is always asked one extra question: whether it comes with a
 **top texture, a side texture, or both** — the faces a top-down or isometric
@@ -818,7 +824,7 @@ broken block.
 |-------|----------|
 | Left click / drag | paint the selected entry (grid-snapped for blocks; drag keeps painting) |
 | Right click (canvas) | erase — entities first, then **one layer** off the top of the block stack per click |
-| Right click (palette icon) | assign a sprite-sheet texture to that block/item/mob/decoration |
+| Right click (palette icon) | that object's texture dialog: assign a sprite sheet, or **✎ Create texture** to draw one here |
 | Middle click | pick the hovered block into the palette (the top of the stack) |
 | WASD / arrows | pan the camera |
 | Mouse wheel | zoom (over the canvas) / scroll the palette (over the sidebar) |
@@ -920,6 +926,57 @@ persists via the engine's `Skins`/`skins.json` system, and **the palette
 swatch redraws with the new texture** — the sidebar always previews what
 will land on the canvas. *Reset to defaults* puts an object back on the
 pack with the procedural art as its fallback.
+
+### Create texture (draw the sprite sheet in game)
+
+There is a third way to supply art, and it needs no art program and no file
+manager at all: **✎ Create texture** in that same dialog opens a **paint
+window** over the editor
+([`SpriteEditorPanel`](src/main/java/com/larsons/engine/ui/SpriteEditorPanel.java)).
+It is offered for **every** object the palette can reskin — the blocks, mobs
+and items that ship with the engine as much as the ones you made yourself —
+and the "+ New …" form has its own **Create & draw its texture…** button, so
+a custom object can go from "doesn't exist" to "has its own animated
+sprite" without leaving the editor.
+
+Open it on an object that already has a sheet and that sheet opens for
+**editing**; open it on one that hasn't and you get a blank canvas at the
+pack's frame size.
+
+| Tool | Key | What it does |
+|------|-----|--------------|
+| Pencil | `B` | paint with the selected colour; drag to draw a stroke |
+| Eraser | `E` | paint transparency (right-dragging erases with any tool selected) |
+| Fill   | `G` | flood fill up to the colour boundary |
+| Line   | `L` | drag a straight line, previewed until you let go |
+| Rect   | `R` | drag a rectangle — outlined, or solid with the Outline/Solid toggle |
+| Pick   | `I` | eyedropper: take a colour off the canvas |
+
+A 40-swatch palette and R/G/B sliders pick the colour, `[` and `]` size the
+brush, the wheel zooms, `Ctrl+Z`/`Ctrl+Y` undo and redo **whole strokes**
+(not single pixels), and *− size / + size* changes the frame size itself,
+keeping what is already drawn.
+
+**Frame by frame, forward.** The strip along the bottom is the animation.
+**+ Frame** adds a frame that starts as a *copy of the one you are on*, so
+you draw only what moves — and the previous frame shows through underneath
+as an **onion skin** while you do (`O` toggles it). **+ Blank** starts a
+fresh frame instead, **Delete** removes one, and `,` / `.` step between
+them. The **fps stepper** sets the playback rate (0 = a still image), and
+the box on the right plays the animation at that rate as you draw it, so
+the framerate is chosen by watching it rather than by guessing.
+
+**Saving puts it in the texture pack.** *Save to texture pack* (or `Ctrl+S`)
+writes the frames as one sheet, left to right, to **this object's own file
+name** inside the [texture pack](#texture-packs-drop-in-art) —
+`blocks/moon_rock.png` for a custom block, `mobs/slime_walk.png` for a mob's
+walk cycle — creating the pack folder if this is the first texture anyone
+made. The frame size, length and rate it was drawn at are recorded as that
+texture's entry in `texturepack.json`, the object redraws with it
+immediately (palette swatch included), and because the result is an ordinary
+PNG in the pack folder it ships with the game, can be opened in a real paint
+program later, and can be handed to someone else as part of a pack. `Esc`
+backs out and writes nothing.
 
 **Generate** (Tools palette) builds a level from Perlin noise
 ([`LevelGenerator`](src/main/java/com/larsons/engine/level/LevelGenerator.java)):
@@ -1925,6 +1982,13 @@ left-to-right). Any single texture can depart from that via the `overrides`
 block, or from the creative texture dialog, which writes the override back
 into the pack.
 
+**Art drawn in game lands here.** The creative editor's
+[Create texture](#create-texture-draw-the-sprite-sheet-in-game) window saves
+the sheet it painted into this folder under the object's own file name, with
+its frame size/length/rate written into `texturepack.json` — so a texture
+drawn in game is the same kind of thing as one dropped in by hand, and
+travels with the pack.
+
 **Always safe to leave on.** The pack is consulted for every texture key by
 default, and a key with no file in it keeps its built-in procedural icon —
 so a pack can be one file or a thousand. Per object, the texture dialog can
@@ -2470,6 +2534,17 @@ g.drawImage(walk.current(), x, y, null);
 Missing images resolve to a magenta/black placeholder instead of crashing, so
 you can build out art incrementally.
 
+Sheets can also be *made* from code — or from the game, which is what
+[Create texture](#create-texture-draw-the-sprite-sheet-in-game) does:
+
+```java
+SpriteCanvas canvas = new SpriteCanvas(32, 32, 6); // 32x32 frames at 6 fps
+canvas.plot(4, 4, 0xffb13e53, 1);                  // ARGB pixel, 1px brush
+canvas.addFrame();                                 // frame 2 = a copy of frame 1
+canvas.fill(0, 0, 0xff1a1c2c);                     // flood fill the background
+TexturePack.writeSheet("block/moon_rock", canvas.toSheet()); // → blocks/moon_rock.png
+```
+
 ### Levels
 
 Levels are JSON loaded from the classpath (bundled, including inside the jar) or
@@ -2615,7 +2690,8 @@ anything, so it is an untested port target rather than ready source
 [`Mp3TablesTest`](src/test/java/com/larsons/engine/audio/Mp3TablesTest.java),
 [`SoundPackTest`](src/test/java/com/larsons/engine/SoundPackTest.java),
 [`SoundMixerTest`](src/test/java/com/larsons/engine/SoundMixerTest.java),
-[`SoundEditorTest`](src/test/java/com/larsons/engine/SoundEditorTest.java))
+[`SoundEditorTest`](src/test/java/com/larsons/engine/SoundEditorTest.java),
+[`SpriteEditorTest`](src/test/java/com/larsons/engine/SpriteEditorTest.java))
 covering JSON read/write, level loading (both tile modes + round-trips),
 sprite-sheet slicing, input edge detection, game-type save/load, the
 `ConfigForm` widget's keyboard/mouse interaction (including scrolling),
@@ -2644,6 +2720,15 @@ the fresh-pitch drift staying inside its bound while never repeating, and
 never touching music; the whole system being a no-op with no audio device;
 objects made with the "+" button arriving with a full set of action states in
 the generated key list; and the creative sound menu driven by clicking it),
+the in-game sprite-sheet editor (pencil, flood fill, line and rectangle
+coverage; a drag interpolated into a stroke rather than dots; a new frame
+starting as a copy of the one before it while leaving that one alone; the
+last frame cleared rather than deleted away; whole-stroke undo, including
+across a canvas resize; the exported sheet slicing back into exactly the
+frames it was drawn as; painting, right-click erasing and `Ctrl+S` driven
+through the real window with synthesized mouse and key events; and the saved
+sheet landing in the texture pack under the object's own file name, at the
+frame rate it was drawn at, drawing immediately),
 cutscenes ([`CutsceneTest`](src/test/java/com/larsons/engine/CutsceneTest.java):
 sheet-anim frame timing with loop/one-shot clamping, the step player's
 sequencing — captions, moves with walk-state restore and facing, camera

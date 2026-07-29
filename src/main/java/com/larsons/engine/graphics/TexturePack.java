@@ -2,6 +2,8 @@ package com.larsons.engine.graphics;
 
 import com.larsons.engine.util.Json;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.net.URISyntaxException;
@@ -349,6 +351,39 @@ public final class TexturePack {
         return Json.stringify(root);
     }
 
+    // --- authoring ------------------------------------------------------------------
+
+    /**
+     * File a sprite sheet into the pack under the name {@code key} is looked
+     * up by ({@code blocks/dirt.png}, {@code mobs/slime_walk.png} …) — what
+     * the creative editor's "Create texture" window saves, so art drawn in
+     * game lands in the same folder as art dropped in by hand and travels with
+     * it. The pack is scaffolded first when this is the first texture anyone
+     * made, and the caches are dropped so the new sheet is what draws from the
+     * next frame on.
+     *
+     * @return the file written
+     */
+    public static Path writeSheet(String key, BufferedImage sheet) throws IOException {
+        String name = fileNameFor(key);
+        if (sheet == null || name.isEmpty()) {
+            throw new IOException("no pack file name for texture key \"" + key + "\"");
+        }
+        Path root = root();
+        if (!Files.isDirectory(root)) scaffold(root);
+        Path file = root.resolve(name);
+        Files.createDirectories(file.getParent());
+        if (!ImageIO.write(sheet, "png", file.toFile())) {
+            throw new IOException("no PNG encoder available");
+        }
+        // A path cached as missing (or holding the previous version of this
+        // sheet) has to go, or the pack would keep serving what was there
+        // before the file was written.
+        AssetLoader.clearCache();
+        reload();
+        return file;
+    }
+
     // --- scaffolding ----------------------------------------------------------------
 
     /**
@@ -452,6 +487,20 @@ public final class TexturePack {
                   from the creative editor: right-click the palette icon, edit the
                   frame fields, Apply — the override is written back here.
 
+                DRAWING ONE IN THE GAME
+                  You do not need a paint program to fill this folder. In
+                  creative mode, right-click any object and choose
+                  "Create texture": a paint window opens with pencil, eraser,
+                  fill, line, rectangle and eyedropper tools, a palette, undo,
+                  and a frame strip for animating — each new frame starts as a
+                  copy of the last one, with the previous frame showing through
+                  as an onion skin, and a preview plays at the frame rate you
+                  pick. Saving writes the sheet here, under that object's file
+                  name from the list above, and records its frame size, length
+                  and rate in %s. It is an ordinary PNG afterwards:
+                  open it in a real paint program later, or hand the whole
+                  folder to a friend.
+
                 IN-GAME CONTROLS
                   Right-click any palette icon in creative mode:
                     * "Use texture pack folder" is ON by default — this folder
@@ -461,9 +510,11 @@ public final class TexturePack {
                     * The "Pack file:" row names the file that object wants and
                       says whether it is here yet; click it to rescan after
                       adding sheets while the game is running.
+                    * "Create texture" draws that sheet without leaving the game.
                 """.formatted(KEYS_FILE, CONFIG_FILE,
                 DEFAULT_FRAME_SIZE, DEFAULT_FRAME_SIZE, DEFAULT_FRAME_COUNT, DEFAULT_FPS,
-                DEFAULT_FRAME_SIZE * DEFAULT_FRAME_COUNT, DEFAULT_FRAME_SIZE);
+                DEFAULT_FRAME_SIZE * DEFAULT_FRAME_COUNT, DEFAULT_FRAME_SIZE,
+                CONFIG_FILE);
     }
 
     /** The generated key list: every object, its file name, and its texture key. */
