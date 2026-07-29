@@ -340,6 +340,7 @@ public final class LevelGenerator {
         final int cols, rows;          // maze cells (each = 1 room tile + wall)
         final int[][] dist;            // BFS distance from the entrance cell
         final List<int[]> deadEnds = new ArrayList<>(); // {cx, cy}
+        final boolean layered;         // walls stand in the second layer
 
         MazeGeneration(Level lvl, long seed) {
             this.lvl = lvl;
@@ -350,6 +351,7 @@ public final class LevelGenerator {
             this.cols = (w - 1) / 2;
             this.rows = (h - 1) / 2;
             this.dist = new int[cols][rows];
+            this.layered = lvl.layered();
         }
 
         int id(String key) {
@@ -361,9 +363,19 @@ public final class LevelGenerator {
         int tileY(int cy) { return cy * 2 + 1; }
 
         void run() {
-            int wall = id("stone_wall");
+            // A plan-view maze is built in the two layers that format reads as
+            // geometry: floor everywhere, and a wall standing on all of it
+            // until the carve knocks the stacked half back down again. Asked
+            // for a maze in a side-scroller, the same carve runs on the one
+            // layer that format has, exactly as it always did.
+            Block wallBlock = LevelFormat.wallBlock(lvl.blocks);
+            int wall = wallBlock != null ? wallBlock.id() : id("stone");
+            if (layered) {
+                Block floor = LevelFormat.floorBlock(lvl.blocks);
+                lvl.fillFloor(floor != null ? floor.id() : id("stone"));
+            }
             for (int r = 0; r < h; r++) {
-                for (int c = 0; c < w; c++) lvl.tiles[r][c] = wall;
+                for (int c = 0; c < w; c++) raise(c, r, wall);
             }
             carve();
             measureDistances();
@@ -374,12 +386,31 @@ public final class LevelGenerator {
             lvl.spawnY = (tileY(0) + 0.5) * ts - ts / 2.0;
         }
 
+        /** Whether a cell is open to walk through (nothing standing on it). */
+        boolean open(int tx, int ty) {
+            return (layered ? lvl.upperAt(tx, ty) : lvl.tileAt(tx, ty)) == 0;
+        }
+
+        /** Stand a block up in a cell — the layer that obstructs in this format. */
+        void raise(int tx, int ty, int id) {
+            if (layered) {
+                lvl.setUpper(tx, ty, id);
+            } else {
+                lvl.setTile(tx, ty, id);
+            }
+        }
+
+        /** Clear whatever stands in a cell, leaving it open to walk through. */
+        void openCell(int tx, int ty) {
+            raise(tx, ty, 0);
+        }
+
         /** Recursive backtracker: carve rooms + the wall between visited pairs. */
         void carve() {
             boolean[][] visited = new boolean[cols][rows];
             java.util.ArrayDeque<int[]> stack = new java.util.ArrayDeque<>();
             visited[0][0] = true;
-            lvl.tiles[tileY(0)][tileX(0)] = 0;
+            openCell(tileX(0), tileY(0));
             stack.push(new int[]{0, 0});
             int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
             while (!stack.isEmpty()) {
@@ -398,15 +429,15 @@ public final class LevelGenerator {
                 int[] d = open.get(rng.nextInt(open.size()));
                 int nx = cur[0] + d[0], ny = cur[1] + d[1];
                 visited[nx][ny] = true;
-                lvl.tiles[tileY(ny)][tileX(nx)] = 0;
-                lvl.tiles[tileY(cur[1]) + d[1]][tileX(cur[0]) + d[0]] = 0;
+                openCell(tileX(nx), tileY(ny));
+                openCell(tileX(cur[0]) + d[0], tileY(cur[1]) + d[1]);
                 stack.push(new int[]{nx, ny});
                 // Occasional extra opening turns the perfect maze into loops.
                 if (rng.nextDouble() < 0.04) {
                     int[] d2 = dirs[rng.nextInt(4)];
                     int lx = cur[0] + d2[0], ly = cur[1] + d2[1];
                     if (lx >= 0 && lx < cols && ly >= 0 && ly < rows && visited[lx][ly]) {
-                        lvl.tiles[tileY(cur[1]) + d2[1]][tileX(cur[0]) + d2[0]] = 0;
+                        openCell(tileX(cur[0]) + d2[0], tileY(cur[1]) + d2[1]);
                     }
                 }
             }
@@ -426,7 +457,7 @@ public final class LevelGenerator {
                     int nx = cur[0] + d[0], ny = cur[1] + d[1];
                     if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
                     // Connected when the wall tile between the cells is open.
-                    if (lvl.tiles[tileY(cur[1]) + d[1]][tileX(cur[0]) + d[0]] != 0) continue;
+                    if (!open(tileX(cur[0]) + d[0], tileY(cur[1]) + d[1])) continue;
                     exits++;
                     if (dist[nx][ny] < 0) {
                         dist[nx][ny] = dist[cur[0]][cur[1]] + 1;
@@ -438,20 +469,23 @@ public final class LevelGenerator {
         }
 
         void dress() {
-            int path = id("stone_path"), torch = id("torch"), chest = id("chest");
-            // Path floors along the corridors (walkable markings, not walls).
+            int gravel = id("gravel_path"), torch = id("torch"), chest = id("chest");
+            // Worn patches in the corridor floor, so the paths read as paths
+            // rather than one flat colour. Floor only — the walking surface is
+            // the ground layer, and nothing here stacks.
             for (int r = 1; r < h - 1; r++) {
                 for (int c = 1; c < w - 1; c++) {
-                    if (lvl.tiles[r][c] == 0 && rng.nextDouble() < 0.5) {
-                        lvl.tiles[r][c] = path;
+                    if (gravel != 0 && open(c, r) && rng.nextDouble() < 0.35) {
+                        lvl.setTile(c, r, gravel);
                     }
                 }
             }
-            // Torches at junction cells so the maze is navigable when lit.
+            // Torches standing at junction cells so the maze is navigable when
+            // lit. They stack on the floor and, being passable, leave it open.
             for (int cx = 0; cx < cols; cx++) {
                 for (int cy = 0; cy < rows; cy++) {
                     if (dist[cx][cy] >= 0 && rng.nextDouble() < 0.10) {
-                        lvl.tiles[tileY(cy)][tileX(cx)] = torch;
+                        raise(tileX(cx), tileY(cy), torch);
                     }
                 }
             }
@@ -490,10 +524,10 @@ public final class LevelGenerator {
             if (chest == 0) return; // chest block missing: loot cells stay open
         }
 
-        /** A chest block in the cell, its container pre-filled with the loot. */
+        /** A chest standing in the cell, its container pre-filled with the loot. */
         void placeChest(int[] cell, String[] items) {
             int tx = tileX(cell[0]), ty = tileY(cell[1]);
-            lvl.tiles[ty][tx] = id("chest");
+            raise(tx, ty, id("chest"));
             List<com.larsons.engine.entity.ItemStack> box = lvl.openContainer(tx, ty);
             for (String item : items) {
                 box.add(new com.larsons.engine.entity.ItemStack(item, 1));

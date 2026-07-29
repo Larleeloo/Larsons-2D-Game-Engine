@@ -1,7 +1,6 @@
 {
   "name": "Top Down Adventure",
   "perspective": "TOP_DOWN",
-  "perspectiveSwitchingEnabled": true,
   "zoomEnabled": true,
   "minZoom": 0.75,
   "maxZoom": 3.0,

@@ -107,7 +107,18 @@ over in a generic, data-driven form and wired to the same toggles:
   objects (`blocks/dirt.png`, `mobs/slime.png`), reskins the game on sight.
   A generated key list names every object for you, one universal frame
   size/count/fps covers the whole pack, and anything you don't supply keeps
-  its built-in icon. See [Texture packs](#texture-packs-drop-in-art).
+  its built-in icon. Blocks get a **second pool for the plan-view
+  perspectives** — `blocks_top/` and `blocks_side/` — because a side-scroller
+  and a top-down level look at different faces of the same block. See
+  [Texture packs](#texture-packs-drop-in-art).
+- **Stacked blocks (top-down & isometric)** — the plan views build in **two
+  layers**, and the stack is their geometry: bare ground is a hole, one layer
+  is a pathway, two is a barrier. A stacked block is drawn standing off its own
+  floor tile and **casts a shadow**, so height is something you can see rather
+  than a colour you have to learn — and it sorts against the players, mobs and
+  scenery around it, so you pass behind the wall to your north and in front of
+  the one to your south. See
+  [Stacked blocks](#stacked-blocks-the-plan-views-geometry).
 - **Share with friends** — launching from IntelliJ auto-builds a `share/`
   folder with a runnable jar, double-click launch scripts, online-play
   instructions (including your LAN address), and empty texture and sound
@@ -167,7 +178,9 @@ over in a generic, data-driven form and wired to the same toggles:
   (Hytale-style) for new blocks, liquids, lights, mobs, items, and
   decorations; creations persist per game type
   ([`CustomContentStore`](src/main/java/com/larsons/engine/config/CustomContentStore.java))
-  and re-register on load so saved levels keep working.
+  and re-register on load so saved levels keep working. A new block is always
+  asked whether it has a **top texture, a side texture, or both**, and told
+  the exact files to draw for them.
 - **Brush shapes** — square/circle/diamond/line/spray brushes up to 12 tiles
   across paint or erase many blocks per stroke
   ([`Brush`](src/main/java/com/larsons/engine/level/Brush.java)).
@@ -201,7 +214,7 @@ This engine was built against six explicit requirements:
 | # | Requirement | How it's addressed |
 |---|-------------|--------------------|
 | 1 | **120 FPS** | A fixed-timestep [`GameLoop`](src/main/java/com/larsons/engine/core/GameLoop.java) renders with a configurable cap (default **120**). The limiter schedules frames on an absolute timeline and uses a hybrid coarse-sleep / fine-park wait, so the cap is hit precisely without pegging a CPU. |
-| 2 | **Multiple 2D perspectives** | Three **distinct level formats** ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)) — side-scroller, top-down, isometric — each with its own creative mode, palette and movement model, all loading and playing through the same code. [`Camera`](src/main/java/com/larsons/engine/graphics/Camera.java) + [`Perspective`](src/main/java/com/larsons/engine/graphics/Perspective.java) supply the projections (`SIDE_SCROLL`, `TOP_DOWN`, `ISOMETRIC`), switchable at runtime. |
+| 2 | **Multiple 2D perspectives** | Three **distinct level formats** ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)) — side-scroller, top-down, isometric — each with its own creative mode, movement model and **number of block layers**, all loading and playing through the same code. [`Camera`](src/main/java/com/larsons/engine/graphics/Camera.java) + [`Perspective`](src/main/java/com/larsons/engine/graphics/Perspective.java) supply the projections (`SIDE_SCROLL`, `TOP_DOWN`, `ISOMETRIC`). A level's format is fixed for its lifetime — the three are different worlds, not three views of one — and a door into a level of another format is how a game changes perspective. |
 | 3 | **Online play** | ✅ Implemented — see [Online play](#online-play). An authoritative [`GameServer`](src/main/java/com/larsons/engine/net/GameServer.java) ticks the same deterministic [`PlayerPhysics`](src/main/java/com/larsons/engine/sim/PlayerPhysics.java) clients predict with; host in-game or run a headless dedicated server; friends join by IP + port like Minecraft Java edition. |
 | 4 | **Out of the box on any Java machine** | The engine uses **only the JDK** (Java2D / AWT / Swing / sockets). No third-party runtime dependencies — JSON parsing, networking, and shader execution are all in-engine. |
 | 5 | **Shader support** | ✅ Implemented — see [Shaders](#shaders). Every [`ShaderPass`](src/main/java/com/larsons/engine/graphics/shader/ShaderPass.java) is defined **GLSL-first** (real GPU fragment-shader source, exportable as `.frag` files) with a semantically identical multithreaded CPU fallback, so effects run everywhere today and on a GPU backend without porting. |
@@ -249,9 +262,8 @@ On launch you'll choose or create a **game type** before playing — see
 - **Menus / forms:** arrow keys to move, **Left/Right** to adjust a value,
   **Enter** to activate, or use the mouse (hover + click the toggles/steppers).
   In the game-type editor, just type to set the name.
-- **Level:** `WASD` / arrows to move, **Space** to jump, **P** to cycle
-  perspective (if enabled), **+ / -** to zoom (if enabled), **Esc** to open
-  the pause menu. **Space is the only jump key** — `W`/`Up` are *directions*:
+- **Level:** `WASD` / arrows to move, **Space** to jump, **+ / -** to zoom
+  (if enabled), **Esc** to open the pause menu. **Space is the only jump key** — `W`/`Up` are *directions*:
   they stroke upward while swimming, climb while flying, and walk north in a
   top-down or isometric level, so holding one no longer bounces you off the
   ground. Jumping itself works in **all three formats**: gravity in
@@ -298,6 +310,9 @@ com.larsons.engine
 │   ├── Java2DRenderer.java Default backend (double-buffered Canvas + post-FX)
 │   ├── Camera.java        World→screen, per-perspective projection (+inverse)
 │   ├── Perspective.java   SIDE_SCROLL | TOP_DOWN | ISOMETRIC
+│   ├── TerrainPainter.java Terrain in as many layers as the format has: floor,
+│   │                       cast shadows, stacked blocks queued into the depth pass
+│   ├── DepthPass.java     Painter's queue for everything standing on the floor
 │   ├── SpriteSheet.java   Slice a sheet into frames
 │   ├── Animation.java     Delta-timed frame animation
 │   ├── AssetLoader.java   Cached image loading + placeholders
@@ -350,7 +365,8 @@ com.larsons.engine
 │   ├── AbstractScene.java No-op base with viewport + manager refs
 │   └── SceneManager.java  Named scenes + fade transitions
 ├── level
-│   ├── Level.java         Tile grid (palette or block-registry mode) + spawns
+│   ├── Level.java         Tile grid (palette or block-registry mode) + spawns;
+│   │                      two layers in the plan views — the stack is the geometry
 │   ├── LevelFormat.java   The 3 level formats: side-scroller | top-down | isometric
 │   ├── LevelLoader.java   Load a Level from JSON (or raw text, for the server)
 │   ├── LevelStore.java    Per-game-type level saving + listing levels by format
@@ -545,6 +561,59 @@ visible tile range by inverse-projecting the viewport corners
 (`Camera.screenToWorld`) and only draws those tiles, so arbitrarily large
 levels render at the same speed.
 
+A level's perspective is **fixed for its lifetime**. There is no in-game
+switch, because the three formats are not three views of one world: they differ
+in which axis is up, in what a block *means*, and in how many layers of them a
+level is written in, so there is nothing coherent for a mid-level switch to
+show. Walking through a door into a level of another format is how a game
+changes perspective, and that works mid-play with no reload.
+
+### Stacked blocks (the plan views' geometry)
+
+Top-down and isometric levels build in **two layers of blocks**, and the stack
+is what their geometry means — see
+[`TerrainPainter`](src/main/java/com/larsons/engine/graphics/TerrainPainter.java)
+and [`Level.walkable`](src/main/java/com/larsons/engine/level/Level.java):
+
+| Stack | What it is | Why |
+|-------|-----------|-----|
+| **Bare ground** | a hole — unwalkable | a plan view has no "down" to fall along, so a gap in the floor is simply somewhere you cannot go |
+| **One layer** | a pathway to walk along | the block grid *is* the floor |
+| **Two layers** | a barrier | the stacked block stands up out of the floor and reads as a wall |
+
+This replaced the old arrangement, where a handful of `*_path` and `*_wall`
+block families carried the plan views' geometry on their own. That is a thing
+the camera cannot show: seen from above, a wall and the floor beside it are
+both squares, and the only difference between them was a colour the player had
+to learn. **Height** is the difference now, and a stacked block is drawn as
+one — lifted off its own floor tile, showing the side face that lift exposes,
+and casting a shadow onto the floor behind it. Every block builds either way,
+so the creative palette hides nothing in any format.
+
+Because a wall has height, it is not a layer painted over the actors but a
+thing standing among them: raised blocks join the same
+[`DepthPass`](src/main/java/com/larsons/engine/graphics/DepthPass.java) as the
+trees, mobs, dropped items and players, queued at the screen row of their base.
+Walking north behind a wall puts the wall in front of you; walking south past
+it puts you in front of the wall — the same rule that already decided whether
+you pass in front of a tree.
+
+Mining takes a stack apart from the top (wall → path → hole) and placing builds
+it back up from the bottom (a hole is floored before anything is stood on it).
+Liquids pool in the stacked layer, so a puddle lies *on* the floor rather than
+eating it. In the editor, **H** (or the sidebar's `Build:` row) switches the
+block brush between building a wall and laying a path, and the cursor preview
+stands up when it is about to build one.
+
+**A side-scroller has one layer and is untouched.** Its blocks are drawn
+edge-on, so they already show their own height; solidity comes from the block
+definition exactly as it always did. Plan-view levels written before blocks
+stacked are converted on load
+([`Level.liftSolidsToUpperLayer`](src/main/java/com/larsons/engine/level/Level.java)):
+solid blocks become stacks of themselves, passable ones stay one layer, and
+the air that used to be walkable corridor becomes floor — so an old level still
+plays exactly as its author drew it.
+
 ### The world simulation
 
 The systems merged from the Side-Scroller engine all hang off one class:
@@ -723,18 +792,27 @@ properties (colours, solidity, light, damage, hardness/tool, AI stats,
 rarity…). Creations are registered live, persist to the game type's
 `custom.json`, and reload with it.
 
+A new **block** is always asked one extra question: whether it comes with a
+**top texture, a side texture, or both** — the faces a top-down or isometric
+level sees that a side-scroller never does (see
+[texture packs](#texture-packs-drop-in-art)). Whatever you answer, the form
+names the exact files to draw, and a face you leave off falls back to the
+block's flat sheet and then to its colour, so no answer leaves you with a
+broken block.
+
 **Editor controls:**
 
 | Input | Function |
 |-------|----------|
 | Left click / drag | paint the selected entry (grid-snapped for blocks; drag keeps painting) |
-| Right click (canvas) | erase (entities first, then the block cell) |
+| Right click (canvas) | erase (entities first, then the top of the block stack) |
 | Right click (palette icon) | assign a sprite-sheet texture to that block/item/mob/decoration |
-| Middle click | pick the hovered block into the palette |
+| Middle click | pick the hovered block into the palette — and how it was built with it |
 | WASD / arrows | pan the camera |
 | Mouse wheel | zoom (over the canvas) / scroll the palette (over the sidebar) |
 | Tab | next palette category |
 | B | toggle the decoration layer (background / foreground) |
+| H | *(top-down / isometric)* switch the block brush between building a **wall** (stacked) and laying a **path** (floor) — see [stacked blocks](#stacked-blocks-the-plan-views-geometry) |
 | [ / ] | shrink / grow the paint brush (shapes cycle in the sidebar's Brush row) |
 | G | toggle the grid |
 | P | play-test the level in place (terrain restored on exit) |
@@ -1788,7 +1866,9 @@ share/textures/
 ├── texturepack.json     universal frame size / count / fps  (+ per-texture overrides)
 ├── TEXTURE_KEYS.txt     every object's file name and texture key (generated)
 ├── README.txt
-├── blocks/     dirt.png · stone.png · …
+├── blocks/       dirt.png · stone.png · …        (what a side-scroller draws)
+├── blocks_top/   dirt.png · …   the face a plan view looks *down* at
+├── blocks_side/  dirt.png · …   the face a stacked block turns to the camera
 ├── liquids/    water.png · lava.png · …
 ├── lights/     torch.png · lantern.png · …
 ├── mobs/       slime.png (all states) · slime_walk.png (one state) · slime_walk_e.png (one facing)
@@ -1809,6 +1889,18 @@ The generated `TEXTURE_KEYS.txt` lists **every object in the game** with the
 exact file name and texture key to use, including custom content you created
 yourself — so nobody has to guess or memorize a key. PNG is preferred; GIF
 and JPG load too.
+
+**Blocks have a second pool, for the plan-view perspectives.** A side-scroller
+and a top-down or isometric level look at *different faces* of the same block,
+and one sheet cannot be both a wall seen edge-on and a floor seen from above.
+So `blocks_top/` supplies the face a plan view looks down at (floors, and the
+lid of a [stacked block](#stacked-blocks-the-plan-views-geometry)) and
+`blocks_side/` the face a stacked block turns toward the camera, which is what
+gives a wall its height. Both are optional and independent: a block with no top
+or side sheet falls back to its `blocks/` sheet, and with none of the three to
+its procedural colour, so a pack can dress one format, both, or neither.
+**"+ New Block" always asks** which faces your block has and names the exact
+files to draw for them.
 
 **One spec for the whole pack.** Every sheet plays at the universal settings
 in `texturepack.json` — **32×32 frames, 3 frames, 3 fps** — so a pack is
@@ -2204,8 +2296,7 @@ toggles into the level on every save, and are stored under
 
 | Feature | Type | Notes |
 |---------|------|-------|
-| Default level format | cycler | Side-Scroller / Top-Down / Isometric — the format **new** levels start in (each level then carries its own) |
-| Switch perspective in-game | toggle | allow the **P** key to cycle |
+| Default level format | cycler | Side-Scroller / Top-Down / Isometric — the format **new** levels start in (each level then carries its own, for life) |
 | Zoom enabled | toggle | gates the zoom controls + range |
 | Min / Max / Default zoom | steppers | enabled only when zoom is on |
 | Min / Max framerate | steppers | **Max** is applied live as the render cap |
@@ -2379,6 +2470,7 @@ the filesystem. Only `tiles` is required:
   "palette": ["#785a3c", "#5aa050", "#6e6e78"],
   "spawn": { "x": 64, "y": 96 },
   "tiles": [[0,0,1,...], ...],
+  "upperRle": [id, runLength, ...],
   "entities": [ { "type": "player", "x": 64, "y": 96 } ]
 }
 ```
@@ -2391,6 +2483,14 @@ Level level = LevelLoader.load("levels/sample_level.json");
 (`side_scroller` / `top_down` / `isometric`) — which creative mode builds it
 and how it plays. `"perspective"` is the same choice in the older spelling;
 either key alone is enough, and a level with neither loads as a side-scroller.
+A level keeps the format it was saved with for its whole life.
+
+`"upperRle"` (or `"upperChunks"` on a giant level) carries the **second layer
+of blocks** the plan-view formats stack — see
+[Stacked blocks](#stacked-blocks-the-plan-views-geometry). A side-scroller has
+no such key, and neither does a top-down or isometric level written before
+blocks stacked: a plan-view level with no upper layer in the file is converted
+on load so it still plays as drawn.
 
 Levels come in two modes. **Palette mode** (above, the original format):
 tile ids index the colour palette and every tile is solid. **Registry mode**

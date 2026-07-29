@@ -389,7 +389,9 @@ public final class TexturePack {
                   Each subfolder is a creative-palette category, and each file is
                   named after the object it reskins:
 
-                      blocks/dirt.png            the Dirt block
+                      blocks/dirt.png            the Dirt block (side-scroller)
+                      blocks_top/dirt.png        Dirt seen from above
+                      blocks_side/dirt.png       Dirt's raised side face
                       liquids/water.png          the Water liquid
                       lights/torch.png           the Torch light
                       mobs/slime.png             the Slime, every animation state
@@ -403,6 +405,22 @@ public final class TexturePack {
                       particles/embers.png       the ember particle
                       projectiles/arrow.png      the arrow projectile
                       units/squire.png           the auto-battler Squire
+
+                BLOCK FACES
+                  A side-scroller and a plan view look at different faces of the
+                  same block, so blocks have two pools:
+
+                      blocks/       what a side-scrolling level draws
+                      blocks_top/   the face a top-down or isometric level
+                                    looks down at — floors, and the lid of a
+                                    stacked block
+                      blocks_side/  the face a stacked block turns toward the
+                                    camera, which is what gives a wall height
+
+                  Both plan-view pools are optional: a block with no top or side
+                  sheet falls back to its blocks/ sheet, and with none of the
+                  three to its built-in colour. The "+ New Block" form asks which
+                  faces your block has and names the exact files to drop in.
 
                 DIRECTIONS
                   Characters and mobs are drawn facing one of eight compass

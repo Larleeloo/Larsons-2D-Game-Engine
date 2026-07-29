@@ -179,7 +179,9 @@ public final class GameClient implements Closeable {
 
     /**
      * Drain block changes received since the last call, each as
-     * {@code [col, row, newId]} (for local feedback: particles, sounds).
+     * {@code [col, row, newId, layer]} (for local feedback: particles,
+     * sounds). {@code layer} is which of a plan-view level's two layers
+     * changed — see {@link Level#LAYER_UPPER}.
      */
     public List<int[]> pollBlockEvents() {
         List<int[]> out = new ArrayList<>();
@@ -259,7 +261,12 @@ public final class GameClient implements Closeable {
 
     /** Ask the server to set a block; {@code mode} is "paint" or "play". */
     public void sendBlockEdit(int col, int row, int blockId, String mode) {
-        if (connected) outbox.offer(Protocol.blockEdit(col, row, blockId, mode));
+        sendBlockEdit(col, row, blockId, mode, Level.LAYER_GROUND);
+    }
+
+    /** A block edit aimed at one of a plan-view level's two layers. */
+    public void sendBlockEdit(int col, int row, int blockId, String mode, int layer) {
+        if (connected) outbox.offer(Protocol.blockEdit(col, row, blockId, mode, layer));
     }
 
     /** Ask the server to spawn a painted entity (kind "mob" or "item"). */
@@ -322,11 +329,11 @@ public final class GameClient implements Closeable {
                         int col = msg.get("c") instanceof Number n ? n.intValue() : -1;
                         int row = msg.get("r") instanceof Number n ? n.intValue() : -1;
                         int id = msg.get("b") instanceof Number n ? n.intValue() : 0;
-                        applyBlock(col, row, id);
+                        applyBlock(col, row, id, Protocol.layerOf(msg));
                     }
                     case "blocks" -> {
                         // A batched burst (liquid flow, explosions): flat
-                        // col,row,id triples in one message.
+                        // col,row,id,layer quadruples in one message.
                         if (msg.get("l") instanceof List<?> flat) applyBlockBatch(flat);
                     }
                     case "inv" -> {
@@ -366,22 +373,23 @@ public final class GameClient implements Closeable {
     }
 
     /** Apply one authoritative tile write and remember it for local feedback. */
-    private void applyBlock(int col, int row, int id) {
+    private void applyBlock(int col, int row, int id, int layer) {
         // Tile writes are single ints; a frame that races one simply draws it
         // a frame late, which is harmless.
-        if (level != null && level.setTile(col, row, id)) {
-            blockEvents.addLast(new int[]{col, row, id});
+        if (level != null && level.setTile(col, row, layer, id)) {
+            blockEvents.addLast(new int[]{col, row, id, layer});
             while (blockEvents.size() > MAX_BLOCK_EVENTS) blockEvents.pollFirst();
         }
     }
 
-    /** Apply a batched {@code blocks} message: flat col,row,id triples. */
+    /** Apply a batched {@code blocks} message: flat col,row,id,layer quadruples. */
     private void applyBlockBatch(List<?> flat) {
-        for (int k = 0; k + 2 < flat.size(); k += 3) {
+        for (int k = 0; k + 3 < flat.size(); k += 4) {
             int col = flat.get(k) instanceof Number n ? n.intValue() : -1;
             int row = flat.get(k + 1) instanceof Number n ? n.intValue() : -1;
             int id = flat.get(k + 2) instanceof Number n ? n.intValue() : 0;
-            applyBlock(col, row, id);
+            int layer = flat.get(k + 3) instanceof Number n ? n.intValue() : 0;
+            applyBlock(col, row, id, layer);
         }
     }
 

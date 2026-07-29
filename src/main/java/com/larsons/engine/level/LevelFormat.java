@@ -1,9 +1,8 @@
 package com.larsons.engine.level;
 
 import com.larsons.engine.graphics.Perspective;
-
-import java.util.LinkedHashSet;
-import java.util.Set;
+import com.larsons.engine.world.Block;
+import com.larsons.engine.world.BlockRegistry;
 
 /**
  * The three level formats the engine builds and plays: side-scroller,
@@ -34,12 +33,15 @@ import java.util.Set;
  *       which is what jumps hop along, what meteors fall down, and what an
  *       ember rises through. Effects ask the space which axis carries their
  *       vertical component instead of replaying a side-scroller's screen.</li>
- *   <li><b>Palette</b> — the path and wall block families only exist in the
- *       plan-view formats ({@link #allowsBlock}); a side-scroller's creative
- *       palette never offers them.</li>
+ *   <li><b>Layers</b> — {@link #layered()} formats stack blocks two deep, and
+ *       the stack is what geometry <em>means</em> there: one layer is floor to
+ *       walk on, two layers is a wall, and bare ground is a hole you cannot
+ *       cross. A side-scroller has one layer and reads solidity off the block
+ *       itself, exactly as it always did.</li>
  *   <li><b>Starter canvas &amp; generator</b> — {@link #starterLevel} floors a
- *       side-scroller and walls a plan-view map, and
- *       {@link #defaultsToMaze()} picks the generator the format expects.</li>
+ *       side-scroller and gives a plan-view map a walkable floor inside a
+ *       stacked wall border, and {@link #defaultsToMaze()} picks the generator
+ *       the format expects.</li>
  * </ul>
  */
 public enum LevelFormat {
@@ -47,20 +49,18 @@ public enum LevelFormat {
     SIDE_SCROLLER(Perspective.SIDE_SCROLL, "side_scroller", "Side-Scroller",
             "Gravity world seen from the side — run, jump and climb platforms."),
     TOP_DOWN(Perspective.TOP_DOWN, "top_down", "Top-Down",
-            "Plan view with no gravity — walk the whole plane through paths and walls."),
+            "Plan view with no gravity — one layer of blocks is floor, two is a wall."),
     ISOMETRIC(Perspective.ISOMETRIC, "isometric", "Isometric",
-            "The plan-view world projected into a diamond grid.");
+            "The plan-view world projected into a diamond grid, stacked two deep.");
 
     /**
-     * Block families that only exist in the plan-view formats: floor markings
-     * to walk along and walls to be stopped by. They read as level geometry
-     * seen from above, so the side-scroller's creative palette leaves them
-     * out (a level that already contains them still renders and collides with
-     * them — hiding them is a palette rule, not a tile rule).
+     * The floor a fresh plan-view canvas is laid with, and what legacy plan-view
+     * levels get under their lifted walls, in order of preference.
      */
-    private static final Set<String> PLAN_VIEW_BLOCKS = Set.of(
-            "stone_path", "gravel_path", "wood_path",
-            "stone_wall", "brick_wall", "hedge_wall");
+    private static final String[] FLOOR_BLOCKS = {"stone_path", "grass", "dirt", "stone"};
+
+    /** The wall a fresh plan-view canvas is bordered with, in order of preference. */
+    private static final String[] WALL_BLOCKS = {"stone_wall", "stone", "cobblestone"};
 
     private final Perspective perspective;
     private final String id;
@@ -118,30 +118,46 @@ public enum LevelFormat {
     /** True for the plan-view formats (top-down, isometric): movement on a plane. */
     public boolean planar() { return !gravity(); }
 
-    /** Whether this format's palette offers the path and wall block families. */
-    public boolean usesPathsAndWalls() { return planar(); }
+    /**
+     * Whether blocks stack two deep here — true for the plan views, where the
+     * screen is the floor and a block's <em>height</em> is the only thing that
+     * can read as a wall. A side view already draws its walls edge-on, so it
+     * has one layer and no use for a second.
+     */
+    public boolean layered() { return planar(); }
 
     /** Whether the Generate dialog defaults to the maze generator. */
     public boolean defaultsToMaze() { return planar(); }
 
-    /** Whether a block key belongs in this format's creative palette. */
-    public boolean allowsBlock(String key) {
-        if (key == null) return false;
-        return usesPathsAndWalls() || !PLAN_VIEW_BLOCKS.contains(key);
+    /** The floor block a fresh (or migrated) plan-view canvas is laid with. */
+    public static Block floorBlock(BlockRegistry blocks) {
+        return firstOf(blocks, FLOOR_BLOCKS);
     }
 
-    /** The block keys that only the plan-view formats paint with. */
-    public static Set<String> planViewBlocks() {
-        return new LinkedHashSet<>(PLAN_VIEW_BLOCKS);
+    /** The wall block a fresh plan-view canvas is bordered with. */
+    public static Block wallBlock(BlockRegistry blocks) {
+        return firstOf(blocks, WALL_BLOCKS);
+    }
+
+    /** The first of {@code keys} this registry still holds, or {@code null}. */
+    private static Block firstOf(BlockRegistry blocks, String[] keys) {
+        if (blocks == null) return null;
+        for (String key : keys) {
+            Block b = blocks.get(key);
+            if (b != null) return b;
+        }
+        return null;
     }
 
     /**
      * A fresh canvas in this format. The side-scroller gets a ground floor to
      * stand on (gravity needs somewhere to land); the plan-view formats get a
-     * wall border, which is what reads as the edge of the world when there is
-     * no "down" to fall off. Giant canvases only dress the first 2048 rows /
-     * columns eagerly — materializing every chunk of a 65536-wide map up front
-     * would defeat chunked storage.
+     * floor everywhere — bare ground is a hole there, not open air — inside a
+     * border of stacked wall, which is what reads as the edge of the world
+     * when there is no "down" to fall off. Giant canvases only dress the first
+     * 2048 rows / columns eagerly and lay the rest of their floor with a
+     * generator, because materializing every chunk of a 65536-wide map up
+     * front would defeat chunked storage.
      */
     public Level starterLevel(String name, int widthTiles, int heightTiles, int tileSize) {
         Level lvl = Level.empty(name, widthTiles, heightTiles, tileSize);
@@ -157,15 +173,19 @@ public enum LevelFormat {
             lvl.spawnX = lvl.tileSize * 3;
             lvl.spawnY = (lvl.height - 4) * (double) lvl.tileSize;
         } else {
-            int wall = lvl.blocks.get("stone_wall").id();
+            Block floor = floorBlock(lvl.blocks);
+            Block wall = wallBlock(lvl.blocks);
+            int floorId = floor != null ? floor.id() : 0;
+            int wallId = wall != null ? wall.id() : floorId;
+            lvl.fillFloor(floorId);
             int bw = Math.min(lvl.width, 2048), bh = Math.min(lvl.height, 2048);
             for (int c = 0; c < bw; c++) {
-                lvl.setTile(c, 0, wall);
-                lvl.setTile(c, bh - 1, wall);
+                lvl.stackTile(c, 0, wallId);
+                lvl.stackTile(c, bh - 1, wallId);
             }
             for (int r = 0; r < bh; r++) {
-                lvl.setTile(0, r, wall);
-                lvl.setTile(bw - 1, r, wall);
+                lvl.stackTile(0, r, wallId);
+                lvl.stackTile(bw - 1, r, wallId);
             }
             lvl.spawnX = lvl.tileSize * 2;
             lvl.spawnY = lvl.tileSize * 2;

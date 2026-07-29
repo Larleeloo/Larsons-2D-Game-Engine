@@ -328,12 +328,13 @@ class MechanicsFixesTest {
                 }
             }
         }
-        // The exit chest (gold key) exists somewhere.
+        // The exit chest (gold key) exists somewhere. A plan-view maze stands
+        // its chest on the floor, so it is in the stacked layer.
         boolean chest = false;
         int chestId = maze.blocks.get("chest").id();
         for (int c = 0; c < maze.width && !chest; c++) {
             for (int r = 0; r < maze.height && !chest; r++) {
-                chest = maze.tileAt(c, r) == chestId;
+                chest = maze.tileAt(c, r) == chestId || maze.upperAt(c, r) == chestId;
             }
         }
         assertTrue(chest, "mazes should place at least the exit chest");

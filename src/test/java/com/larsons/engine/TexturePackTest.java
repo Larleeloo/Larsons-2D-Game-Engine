@@ -6,6 +6,8 @@ import com.larsons.engine.graphics.SkinDef;
 import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.TextureKeys;
 import com.larsons.engine.graphics.TexturePack;
+import com.larsons.engine.world.Block;
+import com.larsons.engine.world.BlockRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -255,5 +257,65 @@ class TexturePackTest {
         assertTrue(all.stream().anyMatch(e -> e.key().startsWith("mob/")));
         assertTrue(all.stream().anyMatch(e -> e.key().startsWith("item/")));
         assertTrue(all.stream().anyMatch(e -> e.key().startsWith("player/")));
+        // The plan views look at faces a side-scroller never shows, so those
+        // faces are listed as files of their own.
+        assertTrue(all.stream().anyMatch(e -> e.folder().equals(TextureKeys.BLOCKS_TOP)));
+        assertTrue(all.stream().anyMatch(e -> e.folder().equals(TextureKeys.BLOCKS_SIDE)));
+    }
+
+    /**
+     * Blocks have a separate texture pool for the plan-view perspectives: the
+     * top face a top-down or isometric level looks down at, and the side face a
+     * stacked block turns toward the camera. Neither is required — both fall
+     * back to the block's one side-scroll sheet — so a pack can supply as much
+     * or as little of the pool as it likes.
+     */
+    @Test
+    void blocksHaveTheirOwnTopAndSideFacesInThePlanViews(@TempDir Path tmp) throws IOException {
+        Block stone = BlockRegistry.standard().get("stone");
+        assertTrue(stone.topTexture() && stone.sideTexture(),
+                "a built-in block accepts both faces");
+
+        // Each face leads with its own pool and then falls through to blocks/.
+        assertEquals(TextureKeys.BLOCKS_TOP + "/stone",
+                TextureKeys.paths(stone.topTextureKey()).get(0));
+        assertEquals(TextureKeys.BLOCKS_SIDE + "/stone",
+                TextureKeys.paths(stone.sideTextureKey()).get(0));
+        assertTrue(TextureKeys.paths(stone.topTextureKey()).contains("blocks/stone"));
+        assertTrue(TextureKeys.paths(stone.sideTextureKey()).contains("blocks/stone"));
+
+        // With only the flat sheet in the pack, every face resolves to it.
+        TexturePack.scaffold(tmp);
+        TexturePack.useDir(tmp.toString());
+        sheet(tmp.resolve("blocks/stone.png"));
+        TexturePack.reload();
+        assertNotNull(Skins.frame(stone.textureKey(), 0));
+        String flatSheet = Skins.effective(stone.textureKey()).sheet;
+        assertEquals(flatSheet, Skins.effective(stone.topTextureKey()).sheet,
+                "with no top of its own, the top falls back to the flat sheet");
+        assertEquals(flatSheet, Skins.effective(stone.sideTextureKey()).sheet,
+                "and so does the side");
+
+        // Drop a top face in and only the top changes.
+        sheet(tmp.resolve(TextureKeys.BLOCKS_TOP + "/stone.png"));
+        TexturePack.reload();
+        assertTrue(Skins.effective(stone.topTextureKey()).sheet
+                        .replace('\\', '/').contains(TextureKeys.BLOCKS_TOP + "/stone"),
+                "the top face now comes from the plan-view pool");
+        assertEquals(flatSheet, Skins.effective(stone.sideTextureKey()).sheet,
+                "and the side still falls back to the flat sheet");
+    }
+
+    /** A block may declare it has neither plan-view face, and still draw. */
+    @Test
+    void aBlockCanDeclareItHasNeitherPlanViewFace() {
+        Block plain = new Block(9001, "plain", "Plain", Color.GRAY, true, 0, null,
+                null, false, 0, 1, null, false, false, false);
+        assertEquals(plain.textureKey(), plain.topTextureKey());
+        assertEquals(plain.textureKey(), plain.sideTextureKey());
+
+        Block topOnly = plain.withFaceTextures(true, false);
+        assertEquals("block/plain/top", topOnly.topTextureKey());
+        assertEquals("block/plain", topOnly.sideTextureKey());
     }
 }

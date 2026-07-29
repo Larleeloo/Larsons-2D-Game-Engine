@@ -28,9 +28,15 @@ public class GameProfile {
 
     public String name = "New Game Type";
 
-    // Perspective the creator builds levels in (requirement #2).
+    /**
+     * The format new levels start in (requirement #2). A level owns its
+     * perspective from the moment it is created and keeps it — the three
+     * formats differ in which axis is up, in what a block means, and in how
+     * many layers of them a level is written in, so there is no coherent
+     * "switch view" for one to offer. Changing perspective is what walking
+     * through a door into a level of another format does.
+     */
     public Perspective perspective = Perspective.SIDE_SCROLL;
-    public boolean perspectiveSwitchingEnabled = false;
 
     // Zoom feature + bounds.
     public boolean zoomEnabled = true;
@@ -146,7 +152,6 @@ public class GameProfile {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("name", name);
         m.put("perspective", perspective.name());
-        m.put("perspectiveSwitchingEnabled", perspectiveSwitchingEnabled);
         m.put("zoomEnabled", zoomEnabled);
         m.put("minZoom", minZoom);
         m.put("maxZoom", maxZoom);
@@ -226,7 +231,6 @@ public class GameProfile {
         String keepLast = lastLevelPath;
         GameProfile s = src.copy();
         perspective = s.perspective;
-        perspectiveSwitchingEnabled = s.perspectiveSwitchingEnabled;
         zoomEnabled = s.zoomEnabled;
         minZoom = s.minZoom;
         maxZoom = s.maxZoom;
@@ -283,7 +287,6 @@ public class GameProfile {
         GameProfile p = new GameProfile();
         p.name = str(m, "name", p.name);
         p.perspective = perspectiveOf(str(m, "perspective", p.perspective.name()), p.perspective);
-        p.perspectiveSwitchingEnabled = bool(m, "perspectiveSwitchingEnabled", p.perspectiveSwitchingEnabled);
         p.zoomEnabled = bool(m, "zoomEnabled", p.zoomEnabled);
         p.minZoom = dbl(m, "minZoom", p.minZoom);
         p.maxZoom = dbl(m, "maxZoom", p.maxZoom);

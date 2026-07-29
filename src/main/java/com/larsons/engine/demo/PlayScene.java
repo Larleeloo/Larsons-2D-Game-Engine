@@ -42,6 +42,7 @@ import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.PlayerSprites;
 import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.SurfaceDecorPainter;
+import com.larsons.engine.graphics.TerrainPainter;
 import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.level.CutsceneDirector;
@@ -118,11 +119,18 @@ import java.util.Map;
  * toward the viewer, and a shot with height on it draws above its own shadow,
  * rather than every effect replaying a side-scroller's screen-space "up".
  *
+ * <p>The perspective is the level's and stays the level's for as long as it is
+ * played. The three formats are not three views of one world — they differ in
+ * which axis is up, in what a block means, and in how many layers of them the
+ * geometry is written in — so there is nothing coherent for a mid-level switch
+ * to show. Walking through a door into a level of another format is how a game
+ * changes perspective.
+ *
  * <p>Controls: WASD/arrows move — up is a direction (it swims, it climbs, it
  * walks north), never a jump — Space jumps in every perspective (a hop along
- * the elevation axis in top-down and isometric levels), P cycles perspective
- * (if enabled), +/- zoom (if enabled), left-click mine/attack, right-click
- * place, 1-5 + wheel hotbar, I inventory, F eat, R ultimate, Esc pause.
+ * the elevation axis in top-down and isometric levels), +/- zoom (if enabled),
+ * left-click mine/attack, right-click place, 1-5 + wheel hotbar, I inventory,
+ * F eat, R ultimate, Esc pause.
  */
 public class PlayScene extends AbstractScene {
 
@@ -255,15 +263,11 @@ public class PlayScene extends AbstractScene {
     private double ruleStatusTime;
     private double animClock;      // drives skinned (sprite-sheet) textures
     private DoorDirectory doors;   // this game type's external door list
-    // Per-frame cache: block id -> skin frame (null = procedural colour).
-    private final Map<Integer, BufferedImage> tileSkins = new HashMap<>();
 
     private boolean paused;
     private ConfigForm pauseForm;
 
-    // Scratch buffers for zero-allocation tile projection.
-    private final int[] xs = new int[4];
-    private final int[] ys = new int[4];
+    // Scratch buffer for zero-allocation world-to-screen projection.
     private final int[] corner = new int[2];
 
     public PlayScene(GameContext ctx, String levelPath) {
@@ -541,12 +545,10 @@ public class PlayScene extends AbstractScene {
             }
         }
 
-        if (p.perspectiveSwitchingEnabled && input.isKeyJustPressed(KeyEvent.VK_P)) {
-            camera.setPerspective(camera.getPerspective().next());
-        }
         // Effects are authored in the space they are drawn in — which axis is
-        // up, and whether height is an axis at all. Re-read every tick so the
-        // [P] toggle above lands on the very next burst.
+        // up, and whether height is an axis at all. Re-read every tick so
+        // walking through a door into a level of another format lands on the
+        // very next burst.
         particles.setSpace(PerspectiveSpace.of(camera.getPerspective()));
         if (p.zoomEnabled) {
             if (input.isKeyDown(KeyEvent.VK_EQUALS)) camera.zoom = clampZoom(camera.zoom + dt * 2, p);
@@ -1066,7 +1068,9 @@ public class PlayScene extends AbstractScene {
             predictMining(col, row, held, dt);
         } else if (miningNow) {
             swingTime = Math.max(swingTime, 0.1);
-            if (level.blockAt(col, row) == null) {
+            // The tool bites the top of the stack: the block standing on the
+            // floor where there is one, the floor itself where there isn't.
+            if (level.topBlockAt(col, row) == null) {
                 // Legacy palette tile with no block definition: instant break.
                 if (leftClick && level.setTile(col, row, 0)) {
                     stats.add("blocks_mined", 1);
@@ -1077,7 +1081,7 @@ public class PlayScene extends AbstractScene {
                 }
             } else {
                 // The scrape of the tool against the block, while it lasts.
-                Block digging = level.blockAt(col, row);
+                Block digging = level.topBlockAt(col, row);
                 mineSoundTimer -= dt;
                 if (digging != null && mineSoundTimer <= 0) {
                     mineSoundTimer = MINE_SOUND_INTERVAL;
@@ -1177,17 +1181,22 @@ public class PlayScene extends AbstractScene {
         }
         String blockKey = def != null ? def.blockKey() : "dirt";
         Block b = level.blocks.get(blockKey);
-        // Empty cells and liquid cells accept placement — covering water with
-        // a block is how pools are removed, since liquids can't be mined.
-        if (b == null || (level.tileAt(col, row) != 0 && level.liquidAt(col, row) == null)) {
-            return;
-        }
-        // Don't wall yourself in.
+        // A stack is built from the bottom up: a hole is floored first, and a
+        // cell that already has a floor gets the block stood on it. Liquid
+        // cells accept placement either way — covering water with a block is
+        // how pools are removed, since liquids can't be mined.
+        int layer = level.placeLayer(col, row);
+        if (b == null || layer < 0) return;
+        // Don't wall yourself in. Flooring a hole under your feet is not
+        // walling yourself in — it is the opposite — so only a placement that
+        // would actually close the cell counts.
         double ts = ts();
         double size = ps();
         boolean overlapsMe = me.x + size > col * ts && me.x < (col + 1) * ts
                 && me.y + size > row * ts && me.y < (row + 1) * ts;
-        if (b.solid() && overlapsMe) return;
+        boolean wouldClose = b.solid()
+                && (!level.layered() || layer == Level.LAYER_UPPER);
+        if (wouldClose && overlapsMe) return;
 
         if (net != null) {
             net.client().sendBlockEdit(col, row, b.id(), "play");
@@ -1708,15 +1717,15 @@ public class PlayScene extends AbstractScene {
         boolean sceneryBehind = PerspectiveSpace.of(camera.getPerspective())
                 .scenerySitsBehindTerrain();
         if (sceneryBehind) drawDecorLayer(g, false);
-        drawTiles(g);
-        drawMiningCracks(g);
-        if (p.gridVisible) drawGrid(g); // projects to a diamond lattice in isometric
         // Everything standing on the floor shares one queue on a plane, so
-        // whether the player is in front of a tree or behind it is settled by
-        // where they are standing rather than by a fixed layer order. The side
-        // view's layers are fixed and correct, so its pass draws straight
+        // whether the player is in front of a tree — or of a wall — is settled
+        // by where they are standing rather than by a fixed layer order. The
+        // side view's layers are fixed and correct, so its pass draws straight
         // through in call order.
         DepthPass standing = DepthPass.of(camera.getPerspective());
+        drawTiles(g, standing);
+        drawMiningCracks(g);
+        if (p.gridVisible) drawGrid(g); // projects to a diamond lattice in isometric
         if (!sceneryBehind) drawDecorLayer(g, false, standing);
         drawDoors(g);
         drawWorldEntities(g, p, standing);
@@ -1785,7 +1794,11 @@ public class PlayScene extends AbstractScene {
         int x = corner[0], y = corner[1];
         camera.worldToScreen((cell[0] + 1) * ts, (cell[1] + 1) * ts, corner);
         int w = Math.abs(corner[0] - x), h = Math.abs(corner[1] - y);
-        int cx = x + w / 2, cy = y + h / 2;
+        // The cracks belong on the block being chipped, and a stacked one
+        // stands above its own floor tile.
+        int lift = level.upperAt(cell[0], cell[1]) > 0
+                ? TerrainPainter.liftPixels(camera, (int) ts) : 0;
+        int cx = x + w / 2, cy = y + h / 2 - lift;
         g.setColor(new Color(20, 16, 12, 200));
         g.setStroke(new BasicStroke(Math.max(1f, w / 22f)));
         int cracks = 2 + (int) (progress * 6);
@@ -2092,25 +2105,25 @@ public class PlayScene extends AbstractScene {
     // --- profile-driven constraints ---
 
     /**
-     * The perspective this session simulates and renders in by default: the
-     * loaded level's own, in every case. The level carries its format, so
-     * playing a side-scroller, a top-down map, or an isometric one is the same
-     * act — and online the server simulates that same level's format, so
-     * client prediction and the authoritative step agree.
+     * The perspective this session simulates and renders in: the loaded
+     * level's own, always. The level carries its format, so playing a
+     * side-scroller, a top-down map, or an isometric one is the same act — and
+     * online the server simulates that same level's format, so client
+     * prediction and the authoritative step agree.
      */
     private Perspective basePerspective() {
         return level.perspective;
     }
 
     private void enforceProfileConstraints(GameProfile p) {
-        if (!p.perspectiveSwitchingEnabled) camera.setPerspective(basePerspective());
+        camera.setPerspective(basePerspective());
         camera.zoom = p.zoomEnabled ? clampZoom(camera.zoom, p) : clampZoom(p.defaultZoom, p);
     }
 
     private void syncCameraFromProfile() {
         GameProfile p = profile();
         camera.tileSize = level.tileSize;
-        if (!p.perspectiveSwitchingEnabled) camera.setPerspective(basePerspective());
+        camera.setPerspective(basePerspective());
         camera.zoom = clampZoom(p.zoomEnabled ? camera.zoom : p.defaultZoom, p);
     }
 
@@ -2145,71 +2158,23 @@ public class PlayScene extends AbstractScene {
         return new int[]{col0, row0, col1, row1};
     }
 
-    private void drawTiles(Graphics2D g) {
-        int ts = (int) ts();
-        int[] b = visibleTileBounds();
-        boolean flat = camera.getPerspective() != Perspective.ISOMETRIC;
-        tileSkins.clear();
-        for (int r = b[1]; r <= b[3]; r++) {
-            for (int c = b[0]; c <= b[2]; c++) {
-                int id = level.tileAt(c, r);
-                if (id <= 0) continue;
-                Block block = level.blockAt(c, r);
-                double wx = c * ts, wy = r * ts;
-                camera.worldToScreen(wx, wy, corner);
-                xs[0] = corner[0]; ys[0] = corner[1];
-                camera.worldToScreen(wx + ts, wy, corner);
-                xs[1] = corner[0]; ys[1] = corner[1];
-                camera.worldToScreen(wx + ts, wy + ts, corner);
-                xs[2] = corner[0]; ys[2] = corner[1];
-                camera.worldToScreen(wx, wy + ts, corner);
-                xs[3] = corner[0]; ys[3] = corner[1];
-
-                // The open chest/barrel gets an animated lid drawn over it.
-                boolean openLid = containerPanel != null && block != null
-                        && block.container()
-                        && c == containerPanel.col() && r == containerPanel.row();
-
-                // Sprite-sheet texture override, when one is assigned —
-                // isometric view warps the same texture into the tile diamond.
-                if (block != null) {
-                    BufferedImage skin = tileSkinFor(id, block);
-                    if (skin != null) {
-                        com.larsons.engine.graphics.TilePainter.drawTexture(
-                                g, skin, xs, ys, flat);
-                        if (openLid) {
-                            ContainerPanel.drawLid(g, xs, ys,
-                                    containerPanel.openness(), level.colorFor(id));
-                        }
-                        continue;
-                    }
-                }
-
-                Color col = level.colorFor(id);
-                g.setColor(col);
-                g.fillPolygon(xs, ys, 4);
-                if (block != null && block.liquid()) {
-                    // Liquids render translucent with a bright surface line.
-                    if (level.liquidAt(c, r - 1) == null) {
-                        g.setColor(new Color(255, 255, 255, 90));
-                        g.drawLine(xs[0], ys[0], xs[1], ys[1]);
-                    }
-                } else {
-                    g.setColor(col.darker());
-                    g.drawPolygon(xs, ys, 4);
-                }
-                if (openLid) {
-                    ContainerPanel.drawLid(g, xs, ys, containerPanel.openness(), col);
-                }
-            }
-        }
+    /**
+     * The level's terrain. In a side-scroller that is one flat pass; in the
+     * plan views the floor is drawn now and the blocks stacked on it join
+     * {@code standing}, so a wall sorts against the players and scenery around
+     * it instead of being painted over them (see {@link TerrainPainter}).
+     */
+    private void drawTiles(Graphics2D g, DepthPass standing) {
+        TerrainPainter.draw(g, level, camera, visibleTileBounds(), animClock,
+                standing, this::drawOpenLid);
     }
 
-    private BufferedImage tileSkinFor(int id, Block block) {
-        if (tileSkins.containsKey(id)) return tileSkins.get(id);
-        BufferedImage img = Skins.frame("block/" + block.key(), animClock);
-        tileSkins.put(id, img);
-        return img;
+    /** The animated lid on the chest or barrel whose panel is open. */
+    private void drawOpenLid(Graphics2D g, int col, int row, int[] quadX, int[] quadY,
+                             Block block, Color color) {
+        if (containerPanel == null || block == null || !block.container()) return;
+        if (col != containerPanel.col() || row != containerPanel.row()) return;
+        ContainerPanel.drawLid(g, quadX, quadY, containerPanel.openness(), color);
     }
 
     /**
@@ -2747,7 +2712,6 @@ public class PlayScene extends AbstractScene {
         }
         if (profile().zoomEnabled) hud.append("    |    zoom ").append(String.format("%.2f", camera.zoom));
         hud.append("    |    [Esc] pause");
-        if (profile().perspectiveSwitchingEnabled) hud.append("  [P] perspective");
         if (profile().zoomEnabled) hud.append("  [+/-] zoom");
         if (profile().itemsEnabled) hud.append("  [I] inventory");
         if (Ultimates.of(me) != null) hud.append("  [R] ultimate");
