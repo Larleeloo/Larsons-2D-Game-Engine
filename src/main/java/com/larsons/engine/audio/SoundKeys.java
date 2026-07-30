@@ -193,7 +193,7 @@ public final class SoundKeys {
     /** Menu and HUD feedback. */
     public static final List<String> UI_SOUNDS = List.of(
             "click", "select", "back", "open", "close", "error", "hover",
-            "tab", "type", "paint", "erase");
+            "tab", "type", "paint", "erase", "undo", "redo");
 
     /** Things the world itself does, rather than any one object in it. */
     public static final List<String> WORLD_SOUNDS = List.of(

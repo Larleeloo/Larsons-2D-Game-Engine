@@ -745,6 +745,183 @@ public class Level {
         }
     }
 
+    // --- editor undo snapshots -------------------------------------------------
+
+    /**
+     * Everything one cell holds: both block layers, plus the data that hangs
+     * off them. This is the unit the creative editor's undo saves terrain in
+     * ({@link EditHistory}) — one of these per cell a stroke is about to touch,
+     * because a level has millions of cells and a stroke touches a handful.
+     *
+     * <p>It is the whole cell rather than a tile id because clearing a cell's
+     * floor takes the block stacked on it, its surface details and its
+     * container with it ({@link #setTile}): put back only the id and a mined
+     * wall comes back as a path with its moss gone.
+     */
+    public record CellState(int col, int row, int ground, int stacked,
+                            List<SurfaceDecor.Placement> decor, List<ItemStack> container) {}
+
+    /** Save everything at (col,row) — see {@link CellState}. */
+    public CellState captureCell(int col, int row) {
+        List<SurfaceDecor.Placement> decor = List.of();
+        if (!surfaceDecor.isEmpty()) {
+            List<SurfaceDecor.Placement> found = new ArrayList<>(2);
+            for (SurfaceDecor.Placement sd : surfaceDecor) {
+                if (sd.col() == col && sd.row() == row) found.add(sd);
+            }
+            if (!found.isEmpty()) decor = List.copyOf(found);
+        }
+        List<ItemStack> held = containerAt(col, row);
+        return new CellState(col, row, tileAt(col, row), upperAt(col, row),
+                decor, held == null ? null : List.copyOf(held));
+    }
+
+    /** Put a cell back exactly as {@link #captureCell} found it. */
+    public void restoreCell(CellState state) {
+        if (state == null) return;
+        int col = state.col(), row = state.row();
+        // The floor goes back first: writing it can clear the whole cell
+        // (see clearCellAttachments), so everything else has to be laid on top
+        // of that cascade rather than under it.
+        setTile(col, row, LAYER_GROUND, state.ground());
+        setTile(col, row, LAYER_UPPER, state.stacked());
+        if (!surfaceDecor.isEmpty()) {
+            surfaceDecor.removeIf(sd -> sd.col() == col && sd.row() == row);
+        }
+        surfaceDecor.addAll(state.decor());
+        long cell = cellKey(col, row);
+        if (state.container() == null) containers.remove(cell);
+        else containers.put(cell, new ArrayList<>(state.container()));
+    }
+
+    /**
+     * The level as its editor's dialogs see it: the fields and lists they
+     * change, in a form that can be compared and put back. Terrain is not in
+     * here — {@link CellState} carries that.
+     *
+     * <p>Cutscenes and the mini-game setup are held in their serialized form
+     * rather than as objects, which does two jobs: it makes the snapshot a deep
+     * copy (the editor edits cutscenes in place, so a list of references would
+     * change underneath the history), and it makes two snapshots comparable, so
+     * a window that was opened and cancelled leaves no undo step behind.
+     */
+    public record Doc(String name, String music, double lightAngle,
+                      double spawnX, double spawnY,
+                      List<EntitySpawn> entities,
+                      List<SurfaceDecor.Placement> surfaceDecor,
+                      List<StatRule> statRules, List<String> characters,
+                      List<Map<String, Object>> cutscenes,
+                      Map<String, Object> minigame) {}
+
+    /** Save the level's document state — see {@link Doc}. */
+    public Doc snapshotDoc() {
+        List<Map<String, Object>> scenes = new ArrayList<>(cutscenes.size());
+        for (Cutscene cs : cutscenes) scenes.add(cs.toMap());
+        return new Doc(name, music, lightAngle, spawnX, spawnY,
+                List.copyOf(entities), List.copyOf(surfaceDecor),
+                List.copyOf(statRules), List.copyOf(characters),
+                List.copyOf(scenes), minigame == null ? null : minigame.toMap());
+    }
+
+    /** Put back a {@link #snapshotDoc()} (the snapshot stays reusable). */
+    public void restoreDoc(Doc doc) {
+        if (doc == null) return;
+        name = doc.name();
+        music = doc.music();
+        lightAngle = doc.lightAngle();
+        spawnX = doc.spawnX();
+        spawnY = doc.spawnY();
+        refill(entities, doc.entities());
+        refill(surfaceDecor, doc.surfaceDecor());
+        refill(statRules, doc.statRules());
+        refill(characters, doc.characters());
+        cutscenes.clear();
+        for (Map<String, Object> m : doc.cutscenes()) cutscenes.add(Cutscene.fromMap(m));
+        minigame = doc.minigame() == null ? null
+                : com.larsons.engine.minigame.MiniGameConfig.fromMap(
+                        new LinkedHashMap<>(doc.minigame()));
+    }
+
+    private static <T> void refill(List<T> list, List<T> saved) {
+        list.clear();
+        list.addAll(saved);
+    }
+
+    /**
+     * A whole-level snapshot, for the one edit that cannot be described cell by
+     * cell: a {@link #resize}, which re-cuts both tile layers and drops
+     * whatever fell outside the new bounds.
+     *
+     * <p>Which storage the level used is part of it, because growing past
+     * {@link #DENSE_TILE_LIMIT} turns a dense grid into chunks and resizing
+     * back down does not turn it back — undo has to reinstate the grid itself,
+     * not just its bounds.
+     */
+    public record Bounds(int width, int height, Object ground, Object stacked,
+                         boolean chunkedStorage, ChunkGenerator generator,
+                         List<EntitySpawn> entities,
+                         List<SurfaceDecor.Placement> surfaceDecor,
+                         Map<Long, List<ItemStack>> containers,
+                         double spawnX, double spawnY) {}
+
+    /** Save the level's size and everything a resize would re-cut or drop. */
+    public Bounds snapshotBounds() {
+        return new Bounds(width, height,
+                snapshotLayer(chunked, tiles), snapshotLayer(upperChunked, upper),
+                chunked != null, chunked != null ? chunked.generator() : null,
+                List.copyOf(entities), List.copyOf(surfaceDecor),
+                copyContainers(containers), spawnX, spawnY);
+    }
+
+    /** Put back a {@link #snapshotBounds()} (the snapshot stays reusable). */
+    public void restoreBounds(Bounds saved) {
+        if (saved == null) return;
+        width = saved.width();
+        height = saved.height();
+        if (saved.chunkedStorage()) {
+            tiles = null;
+            upper = null;
+            chunked = new ChunkedTiles(width, height);
+            chunked.setGenerator(saved.generator());
+            if (saved.ground() instanceof ChunkedTiles.Snapshot s) chunked.restore(s);
+            upperChunked = null;
+            if (saved.stacked() instanceof ChunkedTiles.Snapshot s) {
+                upperChunked = new ChunkedTiles(width, height);
+                upperChunked.restore(s);
+            }
+        } else {
+            chunked = null;
+            upperChunked = null;
+            tiles = saved.ground() instanceof int[][] g ? denseCopy(g) : new int[height][width];
+            upper = saved.stacked() instanceof int[][] u ? denseCopy(u) : null;
+        }
+        refill(entities, saved.entities());
+        refill(surfaceDecor, saved.surfaceDecor());
+        containers.clear();
+        containers.putAll(copyContainers(saved.containers()));
+        spawnX = saved.spawnX();
+        spawnY = saved.spawnY();
+    }
+
+    private static int[][] denseCopy(int[][] layer) {
+        int[][] copy = new int[layer.length][];
+        for (int r = 0; r < layer.length; r++) copy[r] = layer[r].clone();
+        return copy;
+    }
+
+    /**
+     * Container map copy: the lists are copied so adding a chest cannot reach
+     * into a snapshot, the stacks in them are not, because a level being edited
+     * replaces stacks rather than changing them.
+     */
+    private static Map<Long, List<ItemStack>> copyContainers(Map<Long, List<ItemStack>> from) {
+        Map<Long, List<ItemStack>> copy = new LinkedHashMap<>();
+        for (Map.Entry<Long, List<ItemStack>> e : from.entrySet()) {
+            copy.put(e.getKey(), new ArrayList<>(e.getValue()));
+        }
+        return copy;
+    }
+
     private static Color[] defaultPalette() {
         return new Color[]{
                 new Color(120, 90, 60),    // 1: dirt

@@ -63,6 +63,7 @@ import com.larsons.engine.level.CutsceneDirector;
 import com.larsons.engine.level.CutscenePlayer;
 import com.larsons.engine.level.DoorDirectory;
 import com.larsons.engine.level.DoorLink;
+import com.larsons.engine.level.EditHistory;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelGenerator;
@@ -112,8 +113,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Creative Mode: the Side-Scroller engine's level editor, rebuilt on this
@@ -234,10 +237,29 @@ import java.util.Map;
  * broadcast to every player, and other players appear live while you paint.
  * Save/load/test/resize and the non-replicated markers stay disabled online.
  *
+ * <p><b>Undo:</b> {@code Ctrl+Z} takes back the last thing done, {@code Ctrl+Y}
+ * (or {@code Ctrl+Shift+Z}) puts it back, and the history goes as far back as
+ * the session does. A step is an <em>action</em>, not a change: a whole brush
+ * drag comes back at once, and so does a window's worth of editing, so nothing
+ * has to be walked back a cell or a field at a time ({@link EditHistory}).
+ *
+ * <p>It covers every edit — the blocks and details a stroke lays down or takes
+ * off, painted mobs/items/decorations/doors/markers, the spawn and cutscene
+ * markers, live resizes, <em>New</em>/<em>Load</em>/<em>Generate</em> (which
+ * hand the previous level back), stat rules, cutscenes with their actors and
+ * scripts, mini game setup, the character roster, the sun, the level's music,
+ * the door directory, the objects "+ New …" creates and the palette deletes,
+ * and the textures and sounds assigned to them. Three things it deliberately
+ * leaves alone: <em>looking</em> (camera, grid, palette selection, brush
+ * settings, decor layer) is not an edit; <em>saving</em> is not either, so
+ * Ctrl+Z never un-writes a level file or a sheet drawn in the paint window
+ * (which has an undo of its own); and painting a <em>server's</em> world is
+ * the server's to answer for, so undo is offline only.
+ *
  * <p>Controls: WASD/arrows pan · wheel zoom (over canvas) / scroll palette
  * (over sidebar) · Tab category · left paint · right erase (canvas) /
  * texture (palette) · middle pick · B decor layer · G grid · P test ·
- * Ctrl+S save · L load · N new · Esc menu/back.
+ * Ctrl+Z undo · Ctrl+Y redo · Ctrl+S save · L load · N new · Esc menu/back.
  */
 public class CreativeScene extends AbstractScene {
 
@@ -297,6 +319,27 @@ public class CreativeScene extends AbstractScene {
     private String status = "";
     private double statusTime;
     private double animClock; // drives skinned sprite animation
+
+    // Undo/redo (Ctrl+Z / Ctrl+Y). One history step per action: a whole drag,
+    // or a whole window session, comes back in a single keystroke.
+    private final EditHistory history = new EditHistory();
+    /** True while a canvas stroke's step is open — it closes on mouse-up. */
+    private boolean strokeOpen;
+    /** True while an open window's step is open — it closes with the window. */
+    private boolean dialogEditOpen;
+    /**
+     * The cells the open step has already saved. A drag that comes back over a
+     * cell, or an eraser that takes a stack apart a layer at a time, must undo
+     * to the state before the stroke rather than to the one halfway through it,
+     * so each cell is saved the first time the stroke reaches it and not again.
+     */
+    private final Set<Long> stepCells = new HashSet<>();
+    /**
+     * Which non-cell snapshots the open step already holds ({@code "doc"},
+     * {@code "bounds"}…), for the same reason — and so that a stroke that
+     * places one mob doesn't pay for the level's document twice.
+     */
+    private final Set<String> stepAspects = new HashSet<>();
 
     // Brush (block painting/erasing): shape + diameter in tiles, plus the
     // multi-block mix — extra block keys the stroke scatters alongside the
@@ -505,6 +548,12 @@ public class CreativeScene extends AbstractScene {
 
     private GameProfile profile() { return ctx.profile(); }
 
+    /** The level being edited, exposed so tests can assert what an edit did. */
+    public Level editing() { return level; }
+
+    /** This session's undo history, exposed so tests can walk it. */
+    public EditHistory history() { return history; }
+
     /**
      * The level format this creative session is building in — the editor
      * <em>is</em> that format's creative mode: its palette, its starter
@@ -520,6 +569,13 @@ public class CreativeScene extends AbstractScene {
         testing = false;
         dialog = Dialog.NONE;
         spriteEditor = null;
+        // A new editing session starts with nothing to take back: the levels the
+        // history could hand back belong to the session that had them open.
+        history.clear();
+        strokeOpen = false;
+        dialogEditOpen = false;
+        stepCells.clear();
+        stepAspects.clear();
         doors = new DoorDirectory(profile().name);
         // Custom objects created with the "+" palette entries must be
         // registered before any level referencing them loads.
@@ -843,6 +899,10 @@ public class CreativeScene extends AbstractScene {
             return;
         }
         if (dialog != Dialog.NONE) {
+            // A window that opened out of a stroke swallows the button coming
+            // up, so the stroke is closed here rather than waiting for a
+            // mouse-up the editor will never see.
+            endStroke();
             updateDialog(dt, input);
             return;
         }
@@ -853,6 +913,20 @@ public class CreativeScene extends AbstractScene {
             } else {
                 openDialog(Dialog.CONFIRM_EXIT);
             }
+            return;
+        }
+
+        // --- undo / redo ---
+        // Before anything else: whatever the last action was, this takes it
+        // back, and it must not be read as a fresh edit on the way through.
+        boolean ctrl = input.isKeyDown(KeyEvent.VK_CONTROL);
+        if (ctrl && input.isKeyJustPressed(KeyEvent.VK_Z)) {
+            if (input.isKeyDown(KeyEvent.VK_SHIFT)) redoEdit();
+            else undoEdit();
+            return;
+        }
+        if (ctrl && input.isKeyJustPressed(KeyEvent.VK_Y)) {
+            redoEdit();
             return;
         }
 
@@ -925,6 +999,7 @@ public class CreativeScene extends AbstractScene {
 
         // --- mouse editing ---
         if (overSidebar) {
+            endStroke(); // the pointer left the canvas: the stroke is over
             if (input.isMouseJustPressed()) {
                 handlePaletteClick(input.getMouseX(), input.getMouseY());
             }
@@ -944,12 +1019,19 @@ public class CreativeScene extends AbstractScene {
         if (input.isMiddleMouseJustPressed()) {
             pickBlock(col, row);
         }
+        // One stroke, one undo step: the step opens on the press and closes when
+        // the button comes up, so a drag across half the level comes back in a
+        // single Ctrl+Z instead of a cell at a time.
         if (input.isMouseDown()) {
             Entry entry = selectedEntry();
             boolean paintable = entry != null
                     && (entry.kind.equals("block") || entry.kind.equals("eraser"));
             boolean newCell = col != lastPaintCol || row != lastPaintRow;
             if (input.isMouseJustPressed() || (paintable && newCell)) {
+                // Opened here rather than on the press, because a drag that
+                // began over the sidebar arrives on the canvas with the press
+                // already spent — and it still paints, so it is still a stroke.
+                beginStroke(entry);
                 paintAt(entry, aim[0], aim[1], col, row, input.isMouseJustPressed());
                 lastPaintCol = col;
                 lastPaintRow = row;
@@ -963,12 +1045,16 @@ public class CreativeScene extends AbstractScene {
         if (input.isRightMouseDown()) {
             if (input.isRightMouseJustPressed()
                     || col != lastEraseCol || row != lastEraseRow) {
+                beginStroke("erase");
                 eraseAt(aim[0], aim[1], col, row);
                 lastEraseCol = col;
                 lastEraseRow = row;
             }
         } else {
             lastEraseCol = lastEraseRow = Integer.MIN_VALUE;
+        }
+        if (!input.isMouseDown() && !input.isRightMouseDown()) {
+            endStroke(); // both buttons up: the stroke is one finished action
         }
 
         particles.update(dt);
@@ -1012,9 +1098,15 @@ public class CreativeScene extends AbstractScene {
                     int w = draggingSizeSlider == 0 ? pendingLevelW : level.width;
                     int h = draggingSizeSlider == 1 ? pendingLevelH : level.height;
                     if (w != level.width || h != level.height) {
+                        // A resize re-cuts both tile layers and drops whatever
+                        // fell outside, so its undo saves the level whole.
+                        beginEdit("resize to " + w + "x" + h);
+                        recordBounds();
                         level.resize(w, h);
+                        commitEdit();
                         setStatus("Level resized to " + level.width + "x" + level.height
-                                + (level.isChunked() ? " (chunked storage)" : ""));
+                                + (level.isChunked() ? " (chunked storage)" : "")
+                                + " · [Ctrl+Z] undo");
                     }
                     pendingLevelW = level.width;
                     pendingLevelH = level.height;
@@ -1073,6 +1165,243 @@ public class CreativeScene extends AbstractScene {
         }
     }
 
+    // --- undo / redo -------------------------------------------------------------
+
+    /**
+     * Open a history step for an action that is about to change something, so
+     * {@code Ctrl+Z} takes the whole action back under {@code label}.
+     *
+     * <p>Editing a server's world records nothing: those edits are requests,
+     * and what comes back is the server's answer for every player in it — so
+     * there is nothing here that is this editor's to take back.
+     */
+    private void beginEdit(String label) {
+        if (net != null) return;
+        history.begin(label);
+    }
+
+    /** Close a step opened by {@link #beginEdit} (see {@link EditHistory#commit}). */
+    private void commitEdit() {
+        history.commit();
+        if (!history.recording()) {
+            stepCells.clear();
+            stepAspects.clear();
+        }
+    }
+
+    /**
+     * Open the step a canvas stroke records into. The step stays open for the
+     * whole drag — every cell the brush reaches, every marker the drag places —
+     * and closes when the button comes up, so one stroke costs one Ctrl+Z.
+     */
+    private void beginStroke(String label) {
+        if (net != null || strokeOpen) return;
+        strokeOpen = true;
+        history.begin(label);
+    }
+
+    /** {@link #beginStroke} for a paint stroke, named after what it paints. */
+    private void beginStroke(Entry entry) {
+        if (net != null || strokeOpen) return;
+        beginStroke(strokeLabel(entry));
+    }
+
+    /** Close the stroke's step: the button came up, or something took over. */
+    private void endStroke() {
+        if (!strokeOpen) return;
+        strokeOpen = false;
+        history.flush();
+        stepCells.clear();
+        stepAspects.clear();
+    }
+
+    /** What Ctrl+Z will call the stroke a palette entry is about to start. */
+    private String strokeLabel(Entry entry) {
+        if (entry == null) return "edit";
+        return switch (entry.kind) {
+            case "block" -> "paint " + entry.name;
+            case "eraser" -> "erase";
+            case "surface" -> "surface detail";
+            case "spawn" -> "move the spawn";
+            case "cutscene" -> "cutscene marker";
+            default -> "place " + entry.name;
+        };
+    }
+
+    /**
+     * Save the cell at (col,row) into the open step, once per step — call it
+     * <em>before</em> writing the cell. Both block layers and everything
+     * attached to them come along ({@link Level#captureCell}), because clearing
+     * a floor takes the stack, the surface details and the container with it.
+     */
+    private void recordCell(int col, int row) {
+        if (!history.recording()) return;
+        if (col < 0 || row < 0 || col >= level.width || row >= level.height) return;
+        if (!stepCells.add(Level.cellKey(col, row))) return;
+        Level target = level;
+        history.add(EditHistory.field(() -> target.captureCell(col, row),
+                target::restoreCell));
+    }
+
+    /**
+     * Save the level's document state — markers, spawn, rules, cutscenes, the
+     * mini game, the roster, the sun, the music — into the open step, once per
+     * step. Windows take one of these as they open, which is what makes every
+     * button in them undoable without each one describing its own inverse.
+     */
+    private void recordDoc() {
+        if (!history.recording() || !stepAspects.add("doc")) return;
+        Level target = level;
+        history.add(EditHistory.field(target::snapshotDoc, doc -> {
+            target.restoreDoc(doc);
+            buildPalette(); // the CUTSCENES category lists the level's cutscenes
+            clampScroll();
+        }));
+    }
+
+    /** Save the level's size and contents before a resize re-cuts them. */
+    private void recordBounds() {
+        if (!history.recording() || !stepAspects.add("bounds")) return;
+        Level target = level;
+        history.add(EditHistory.field(target::snapshotBounds, bounds -> {
+            target.restoreBounds(bounds);
+            pendingLevelW = target.width;
+            pendingLevelH = target.height;
+        }));
+    }
+
+    /**
+     * Save which level is being edited, before one replaces it. Undoing a
+     * <em>New</em>, <em>Load</em> or <em>Generate</em> hands back the level that
+     * was open — the object itself, untouched, so nothing about it had to be
+     * copied to make it undoable.
+     */
+    private void recordLevelSwap() {
+        if (!history.recording() || !stepAspects.add("level")) return;
+        history.add(EditHistory.field(
+                () -> new OpenLevel(level, profile().lastLevelPath),
+                open -> {
+                    level = open.level();
+                    profile().lastLevelPath = open.path();
+                    afterLevelSwap();
+                }));
+    }
+
+    /** The level the editor has open, and the file the game type reopens. */
+    private record OpenLevel(Level level, String path) {}
+
+    /**
+     * Save what a texture key is drawn with — the assignment in
+     * {@code skins.json} and the frame layout the texture pack keeps for it —
+     * before the Texture window reassigns either.
+     */
+    private void recordSkin(String key) {
+        if (!history.recording() || !stepAspects.add("skin:" + key)) return;
+        history.add(EditHistory.field(
+                () -> new SkinState(Skins.get(key), TexturePack.hasOverride(key),
+                        TexturePack.framesFor(key)),
+                state -> {
+                    if (state.skin() == null) Skins.remove(key);
+                    else Skins.put(state.skin());
+                    persistSkins();
+                    if (state.packOverride()) {
+                        TexturePack.Frames f = state.frames();
+                        TexturePack.setOverride(key, f.width(), f.height(), f.count(), f.fps());
+                    } else {
+                        TexturePack.clearOverride(key);
+                    }
+                    Skins.clearCache();
+                    buildPalette(); // the swatches show what actually draws
+                }));
+    }
+
+    /** Everything that decides how one texture key draws. */
+    private record SkinState(SkinDef skin, boolean packOverride, TexturePack.Frames frames) {}
+
+    /**
+     * Save what a sound key plays — its own definition and the pack's playback
+     * exception for it — before the Sound window reassigns either.
+     */
+    private void recordSound(String key) {
+        if (!history.recording() || !stepAspects.add("sound:" + key)) return;
+        history.add(EditHistory.field(
+                () -> new SoundState(Sounds.get(key), SoundPack.hasOverride(key),
+                        SoundPack.playbackFor(key)),
+                state -> {
+                    if (state.sound() == null) Sounds.remove(key);
+                    else Sounds.put(state.sound());
+                    Sounds.save();
+                    if (state.packOverride()) {
+                        SoundPack.Playback p = state.playback();
+                        SoundPack.setOverride(key, p.volume(), p.pitch(), p.loop(),
+                                p.varyPitch());
+                    } else {
+                        SoundPack.clearOverride(key);
+                    }
+                    refreshSoundRows();
+                }));
+    }
+
+    /** Everything that decides how one sound key plays. */
+    private record SoundState(SoundDef sound, boolean packOverride,
+                              SoundPack.Playback playback) {}
+
+    /**
+     * Save the game type's door list before the Doors window changes it. The
+     * list is shared by every level of the game type and lives in its own
+     * {@code doors.json}, so undo rewrites that file the same way the window
+     * does.
+     */
+    private void recordDoors() {
+        if (!history.recording() || !stepAspects.add("doors")) return;
+        history.add(EditHistory.field(() -> List.copyOf(doors.all()), saved -> {
+            for (DoorLink link : List.copyOf(doors.all())) doors.remove(link.key());
+            for (DoorLink link : saved) doors.put(link);
+            buildPalette(); // the Doors palette is built from the directory
+        }));
+    }
+
+    /**
+     * Take back the newest action. Terrain, markers, level settings, the
+     * objects the palette is built from and the art and audio assigned to them
+     * all come back the same way — whatever the action reached, its step holds.
+     */
+    private void undoEdit() {
+        endStroke();
+        if (net != null) {
+            setStatus("Undo isn't available while editing a server's world"
+                    + " — the server owns those edits");
+            return;
+        }
+        if (!history.canUndo()) {
+            setStatus("Nothing left to undo");
+            return;
+        }
+        String label = history.undoLabel();
+        history.undo();
+        ctx.sound(SoundKeys.ui("undo"));
+        setStatus("Undid " + label + " · [Ctrl+Y] redo"
+                + (history.canUndo() ? " · " + history.undoDepth() + " more to undo" : ""));
+    }
+
+    /** Put back the action {@link #undoEdit} took away. */
+    private void redoEdit() {
+        endStroke();
+        if (net != null) {
+            setStatus("Redo isn't available while editing a server's world");
+            return;
+        }
+        if (!history.canRedo()) {
+            setStatus("Nothing left to redo");
+            return;
+        }
+        String label = history.redoLabel();
+        history.redo();
+        ctx.sound(SoundKeys.ui("redo"));
+        setStatus("Redid " + label
+                + (history.canRedo() ? " · " + history.redoDepth() + " more to redo" : ""));
+    }
+
     // --- painting ----------------------------------------------------------------
 
     private Entry selectedEntry() {
@@ -1083,6 +1412,16 @@ public class CreativeScene extends AbstractScene {
 
     private void paintAt(Entry entry, double wx, double wy, int col, int row, boolean firstClick) {
         if (entry == null) return;
+        // Blocks and surface details are saved per cell (see writeLayer and
+        // paintSurfaceDecor); everything else the palette paints is part of the
+        // level's document — a marker, the spawn, a cutscene's trigger — so the
+        // step saves that once, up front, whatever this arm turns out to do. An
+        // arm that only opens a window changes nothing, and a snapshot that
+        // comes back equal is dropped when the step closes.
+        switch (entry.kind) {
+            case "block", "eraser", "surface" -> { /* saved per cell */ }
+            default -> recordDoc();
+        }
         switch (entry.kind) {
             case "block" -> {
                 Block b = level.blocks.get(entry.key);
@@ -1367,13 +1706,18 @@ public class CreativeScene extends AbstractScene {
         return writeLayer(col, row, paintLayer(col, row), id);
     }
 
-    /** One layer of one cell, locally or through the server. */
+    /**
+     * One layer of one cell, locally or through the server. Every block a
+     * stroke writes passes through here, so this is where the cell's old state
+     * joins the open undo step.
+     */
     private boolean writeLayer(int col, int row, int layer, int id) {
         if (level.tileAt(col, row, layer) == id) return false;
         if (net != null) {
             net.client().sendBlockEdit(col, row, id, "paint", layer);
             return true;
         }
+        recordCell(col, row);
         return level.setTile(col, row, layer, id);
     }
 
@@ -1398,6 +1742,7 @@ public class CreativeScene extends AbstractScene {
         }
         // One decoration per (cell, face): repaint replaces.
         SurfaceDecor.Face f = face;
+        recordCell(col, row); // the cell's details are part of the cell
         level.surfaceDecor.removeIf(sd -> sd.col() == col && sd.row() == row && sd.face() == f);
         level.surfaceDecor.add(new SurfaceDecor.Placement(col, row, face, def.key(),
                 surfaceForeground, surfaceVisibility));
@@ -1435,6 +1780,7 @@ public class CreativeScene extends AbstractScene {
         if (net == null) {
             Level.EntitySpawn near = nearestSpawn(wx, wy);
             if (near != null) {
+                recordDoc(); // the marker list, and any waypoint renumbering
                 level.entities.remove(near);
                 if (MiniGame.KIND_PATH.equals(near.kind)) renumberWaypoints();
                 ctx.sfx(Sfx.CLICK);
@@ -1444,6 +1790,7 @@ public class CreativeScene extends AbstractScene {
             if (level.tileAt(col, row) > 0) {
                 SurfaceDecor.Placement sd = surfaceDecorAt(col, row);
                 if (sd != null) {
+                    recordCell(col, row);
                     level.surfaceDecor.remove(sd);
                     ctx.sfx(Sfx.CLICK);
                     setStatus("Erased surface detail");
@@ -1480,7 +1827,9 @@ public class CreativeScene extends AbstractScene {
     /** Erase the topmost block of one cell. */
     private boolean eraseCell(int col, int row) {
         int layer = eraseLayer(col, row);
-        return level.tileAt(col, row, layer) != 0 && level.setTile(col, row, layer, 0);
+        if (level.tileAt(col, row, layer) == 0) return false;
+        recordCell(col, row);
+        return level.setTile(col, row, layer, 0);
     }
 
     private void pickBlock(int col, int row) {
@@ -1905,10 +2254,14 @@ public class CreativeScene extends AbstractScene {
     /** Leaving creative mode stops its music and every sound it started. */
     @Override
     public void onExit() {
+        endStroke(); // leaving mid-drag still leaves one undoable stroke behind
         testSounds.reset();
     }
 
     private void enterTest() {
+        // Whatever was being painted is a finished edit now: a play-test is not
+        // part of the stroke, and mining during one is not an edit at all.
+        endStroke();
         // Snapshot terrain so test-mode mining/liquid flow doesn't eat the
         // level (works for dense and giant chunked storage alike). Container
         // contents snapshot alongside so test-mode looting isn't destructive.
@@ -2636,6 +2989,13 @@ public class CreativeScene extends AbstractScene {
     // --- dialogs -------------------------------------------------------------------
 
     private void openDialog(Dialog d) {
+        // A window is one action: its rows and buttons record into a single
+        // step that opens here and closes when the window does, so Ctrl+Z takes
+        // back the session — a rule added, a mini game set up, a cutscene
+        // scripted — rather than whichever field was touched last. Rows that
+        // write straight into the level as they are dragged are covered by that
+        // too, without every one of them having to know about the history.
+        beginDialogEdit(d);
         dialog = d;
         dialogForm = new ConfigForm(switch (d) {
             case NEW_LEVEL -> "New Level";
@@ -2695,13 +3055,15 @@ public class CreativeScene extends AbstractScene {
                             v -> pendingHeight = v, 8, STANDARD_MAX_SIZE);
                 }
                 dialogForm.addAction("Create", () -> {
+                    recordLevelSwap(); // Ctrl+Z hands the level back untouched
                     level = starterLevel(pendingName, pendingWidth, pendingHeight,
                             pendingFormat);
                     afterLevelSwap();
                     setStatus("Created \"" + level.name + "\" (" + level.width + "x"
                             + level.height + ") — " + format().displayName()
                             + " creative mode"
-                            + (level.isChunked() ? ", chunked" : ""));
+                            + (level.isChunked() ? ", chunked" : "")
+                            + " · [Ctrl+Z] goes back to the last one");
                 });
                 dialogForm.addAction("Cancel", this::closeDialog);
             }
@@ -2730,11 +3092,13 @@ public class CreativeScene extends AbstractScene {
                 }
                 for (String name : names) {
                     dialogForm.addAction(name, () -> {
+                        recordLevelSwap(); // Ctrl+Z hands the level back untouched
                         level = store.load(name);
                         profile().lastLevelPath = store.fileFor(name).toString();
                         ctx.save();
                         afterLevelSwap();
-                        setStatus("Loaded \"" + level.name + "\"");
+                        setStatus("Loaded \"" + level.name + "\""
+                                + " · [Ctrl+Z] goes back to the last one");
                     });
                 }
                 dialogForm.addAction("Cancel", this::closeDialog);
@@ -2996,6 +3360,7 @@ public class CreativeScene extends AbstractScene {
         dialogForm.addAction("Randomize Seed", () -> genSeed = 1 + (int) (Math.random() * 99998));
         dialogForm.addAction("Generate", () -> {
             String name = pendingName.isBlank() ? "Generated" : pendingName.trim();
+            recordLevelSwap(); // Ctrl+Z hands the level back untouched
             if (genMaze) {
                 level = LevelGenerator.generateMaze(name, genWidth, genHeight,
                         profile().tileSize, genSeed, pendingFormat);
@@ -3074,6 +3439,7 @@ public class CreativeScene extends AbstractScene {
         dialogForm.addAction(editing == null ? "Add Door" : "Save Door", () -> {
             String key = editing != null ? editing.key() : doors.freshKey();
             String target = doorTargetIndex > 0 ? targets.get(doorTargetIndex) : "";
+            recordDoors();
             doors.put(new DoorLink(key, doorLabel.isBlank() ? key : doorLabel.trim(),
                     target, DOOR_COLORS[doorColorIndex]));
             buildPalette();
@@ -3082,11 +3448,13 @@ public class CreativeScene extends AbstractScene {
         });
         if (editing != null) {
             dialogForm.addAction("Delete Door", () -> {
+                recordDoors();
                 doors.remove(editing.key());
                 buildPalette();
                 doorEditIndex = 0;
                 closeDialog();
-                setStatus("Door \"" + editing.label() + "\" removed from the directory");
+                setStatus("Door \"" + editing.label() + "\" removed from the directory"
+                        + " · [Ctrl+Z] puts it back");
             });
         }
         dialogForm.addAction("Close", this::closeDialog);
@@ -3326,6 +3694,7 @@ public class CreativeScene extends AbstractScene {
             return;
         }
         ctx.save(); // the texture pack folder persists with the game type
+        recordSkin(key); // what this object was drawn with, before the change
         if (texUsePack) {
             try {
                 TexturePack.setOverride(key, w, h, count, fps);
@@ -3699,6 +4068,7 @@ public class CreativeScene extends AbstractScene {
             return;
         }
         ctx.save(); // the sound pack folder persists with the game type
+        recordSound(key); // what this key played, before the change
         try {
             SoundPack.setOverride(key, volume, pitch, sndLoop, sndVary);
         } catch (RuntimeException e) {
@@ -3905,28 +4275,106 @@ public class CreativeScene extends AbstractScene {
 
     /** Delete the right-clicked user-created object (custom.json + registries). */
     private void deleteCustomEntry() {
-        if ("character".equals(texEntry.kind)) {
-            if (characterStore.remove(texEntry.key)) {
-                level.characters.remove(texEntry.key);
-                buildPalette();
-                selected.put(category, 0);
+        String kind = texEntry.kind, key = texEntry.key;
+        // What it was, so Ctrl+Z can register it again exactly as it stood.
+        Runnable restore = customRestorer(kind, key);
+        if ("character".equals(kind)) {
+            if (characterStore.remove(key)) {
+                level.characters.remove(key);
+                recordCustomObject(kind, key, restore);
+                afterCustomChange();
                 closeDialog();
                 setStatus("Deleted the " + texEntry.name + " character —"
-                        + " levels offering it fall back to the rest of the roster");
+                        + " levels offering it fall back to the rest of the roster"
+                        + " · [Ctrl+Z] brings it back");
             } else {
                 setStatus("The built-in character can't be deleted");
             }
             return;
         }
-        if (customContent.remove(texEntry.kind, texEntry.key)) {
-            buildPalette();
-            selected.put(category, 0);
+        if (customContent.remove(kind, key)) {
+            recordCustomObject(kind, key, restore);
+            afterCustomChange();
             closeDialog();
             setStatus("Deleted custom " + texEntry.name
-                    + " — levels using it show placeholders");
+                    + " — levels using it show placeholders · [Ctrl+Z] brings it back");
         } else {
             setStatus("Couldn't delete " + texEntry.name);
         }
+    }
+
+    /**
+     * A one-shot "register this object again" for the object at
+     * {@code kind}/{@code key} <em>as it stands now</em> — read before it is
+     * deleted, so undoing the deletion is a re-registration of the very same
+     * definition rather than a rebuild from the form that made it.
+     */
+    private Runnable customRestorer(String kind, String key) {
+        switch (kind) {
+            case "character" -> {
+                CharacterProfile c = characterStore.isCustom(key) ? Characters.get(key) : null;
+                return c == null ? null : () -> characterStore.add(c);
+            }
+            case "mob" -> {
+                MobDef d = MobRegistry.standard().get(key);
+                return d == null ? null : () -> customContent.addMob(d);
+            }
+            case "item" -> {
+                ItemDef d = ItemRegistry.standard().get(key);
+                return d == null ? null : () -> customContent.addItem(d);
+            }
+            case "decor" -> {
+                Decor d = DecorRegistry.standard().get(key);
+                return d == null ? null : () -> customContent.addDecor(d);
+            }
+            case "surface" -> {
+                SurfaceDecor d = SurfaceDecorRegistry.standard().get(key);
+                return d == null ? null : () -> customContent.addSurfaceDecor(d);
+            }
+            default -> {
+                Block b = level.blocks.get(key);
+                return b == null ? null : () -> customContent.addBlock(b);
+            }
+        }
+    }
+
+    /**
+     * Record a user-created object appearing or disappearing, in whichever
+     * direction the action went: {@code register} puts it back into its registry
+     * and {@code custom.json}, and the other direction takes it out again. The
+     * palette is rebuilt either way, because the object is one of the things it
+     * is built from.
+     *
+     * @param register how to (re-)register the object; {@code null} records
+     *                 nothing, which is what a built-in object being "deleted"
+     *                 amounts to
+     */
+    private void recordCustomObject(String kind, String key, Runnable register) {
+        if (!history.recording() || register == null) return;
+        boolean registered = "character".equals(kind)
+                ? characterStore.isCustom(key) : customContent.isCustom(kind, key);
+        Runnable remove = () -> {
+            if ("character".equals(kind)) characterStore.remove(key);
+            else customContent.remove(kind, key);
+            afterCustomChange();
+        };
+        Runnable add = () -> {
+            register.run();
+            afterCustomChange();
+        };
+        // Creating an object undoes by removing it; deleting one undoes by
+        // putting it back. Same edit, read in the direction the action went.
+        history.add(registered ? EditHistory.of(remove, add) : EditHistory.of(add, remove));
+    }
+
+    /** Palette bookkeeping after the set of paintable objects changes. */
+    private void afterCustomChange() {
+        buildPalette();
+        for (Category c : Category.values()) {
+            List<Entry> entries = palette.get(c);
+            if (entries != null && selected.get(c) >= entries.size()) selected.put(c, 0);
+        }
+        clampScroll();
     }
 
     /**
@@ -4342,41 +4790,48 @@ public class CreativeScene extends AbstractScene {
                     if (!level.characters.isEmpty()) level.characters.add(c.key);
                     createdKind = "character";
                     createdKey = c.key;
+                    recordCustomObject("character", c.key, () -> characterStore.add(c));
                 }
                 case MOBS -> {
                     String key = CustomContentStore.keyFor(name,
                             k -> MobRegistry.standard().get(k) != null);
-                    customContent.addMob(new MobDef(key, name,
+                    MobDef def = new MobDef(key, name,
                             new Color(cR, cG, cB), new Color(cR2, cG2, cB2),
                             cSize, cSpeed, cHp, cMobDamage,
                             MobDef.Temperament.values()[cTemperIndex],
-                            cDetect, cAttack, cFlying));
+                            cDetect, cAttack, cFlying);
+                    customContent.addMob(def);
                     createdKind = "mob";
                     createdKey = key;
+                    recordCustomObject("mob", key, () -> customContent.addMob(def));
                 }
                 case ITEMS -> {
                     String key = CustomContentStore.keyFor(name,
                             k -> ItemRegistry.standard().get(k) != null);
                     boolean isTool = cToolIndex > 0
                             || "TOOL".equals(ITEM_CATEGORIES[cCategoryIndex]);
-                    customContent.addItem(new ItemDef(key, name,
+                    ItemDef def = new ItemDef(key, name,
                             ItemDef.Category.valueOf(ITEM_CATEGORIES[cCategoryIndex]),
                             ItemDef.Rarity.values()[cRarityIndex],
                             new Color(cR, cG, cB), cMaxStack, cMobDamage, cHeal,
                             null, null, null,
                             isTool && cToolIndex > 0 ? TOOL_CLASSES[cToolIndex] : null,
-                            isTool && cToolIndex > 0 ? cToolPower : 0));
+                            isTool && cToolIndex > 0 ? cToolPower : 0);
+                    customContent.addItem(def);
                     createdKind = "item";
                     createdKey = key;
+                    recordCustomObject("item", key, () -> customContent.addItem(def));
                 }
                 case DECOR -> {
                     String key = CustomContentStore.keyFor(name,
                             k -> DecorRegistry.standard().get(k) != null);
-                    customContent.addDecor(new Decor(key, name,
+                    Decor def = new Decor(key, name,
                             Decor.Shape.values()[cShapeIndex],
-                            new Color(cR, cG, cB), new Color(cR2, cG2, cB2), cSizeTiles));
+                            new Color(cR, cG, cB), new Color(cR2, cG2, cB2), cSizeTiles);
+                    customContent.addDecor(def);
                     createdKind = "decor";
                     createdKey = key;
+                    recordCustomObject("decor", key, () -> customContent.addDecor(def));
                 }
                 case SURFACE -> {
                     String key = CustomContentStore.keyFor(name,
@@ -4387,26 +4842,34 @@ public class CreativeScene extends AbstractScene {
                     if (cFaceDown) faces.add(SurfaceDecor.Face.DOWN);
                     if (cFaceLeft) faces.add(SurfaceDecor.Face.LEFT);
                     if (cFaceRight) faces.add(SurfaceDecor.Face.RIGHT);
-                    customContent.addSurfaceDecor(new SurfaceDecor(key, name,
+                    SurfaceDecor def = new SurfaceDecor(key, name,
                             SurfaceDecor.Style.values()[cSurfStyleIndex],
                             new Color(cR, cG, cB), new Color(cR2, cG2, cB2),
-                            faces, cSurfForeground));
+                            faces, cSurfForeground);
+                    customContent.addSurfaceDecor(def);
                     createdKind = "surface";
                     createdKey = key;
+                    recordCustomObject("surface", key,
+                            () -> customContent.addSurfaceDecor(def));
                 }
                 default -> {
                     boolean liquid = customCategory == Category.LIQUIDS;
                     String key = CustomContentStore.keyFor(name,
                             k -> level.blocks.get(k) != null);
                     boolean solid = !liquid && cSolid;
-                    customContent.addBlock(new Block(customContent.nextBlockId(), key,
+                    // The id is part of the block, so undoing and redoing its
+                    // creation puts the same id back — a level already painted
+                    // with it still resolves to it.
+                    Block def = new Block(customContent.nextBlockId(), key,
                             name, new Color(cR, cG, cB), solid,
                             cLightRadius, new Color(cLightR, cLightG, cLightB),
                             solid ? key : null, liquid, cDamage, cHardness,
                             cToolIndex > 0 ? TOOL_CLASSES[cToolIndex] : null,
-                            !liquid && cFalling, cTopTexture, cSideTexture));
+                            !liquid && cFalling, cTopTexture, cSideTexture);
+                    customContent.addBlock(def);
                     createdKind = "block";
                     createdKey = key;
+                    recordCustomObject("block", key, () -> customContent.addBlock(def));
                 }
             }
         } catch (RuntimeException e) {
@@ -5016,6 +5479,61 @@ public class CreativeScene extends AbstractScene {
     private void closeDialog() {
         dialog = Dialog.NONE;
         dialogForm = null;
+        endDialogEdit();
+    }
+
+    /**
+     * Open the history step a window records into.
+     *
+     * <p>These forms reopen themselves after anything that changes what they
+     * offer — a rule added, an actor saved, a mode switched, a different row
+     * selected — so closing the previous step here and starting a fresh one
+     * turns each of those into its own {@code Ctrl+Z}. A reopen that changed
+     * nothing (picking a different rule to look at) leaves a step with nothing
+     * in it, and those are dropped rather than remembered, so browsing a window
+     * never costs a keystroke to walk back through.
+     *
+     * <p>Windows that only look at things (Save, Load's list, the exit
+     * confirmation, Brush Settings, Sound Options) get no step at all: nothing
+     * they do is an edit to this level, and a step for them would put a
+     * keystroke between the creator and the edit they actually want back.
+     */
+    private void beginDialogEdit(Dialog d) {
+        endStroke();
+        endDialogEdit();
+        if (net != null) return;
+        String label = switch (d) {
+            case NEW_LEVEL -> "new level";
+            case LOAD -> "load level";
+            case GENERATE -> "generate level";
+            case RULES -> "stat rules";
+            case CUTSCENES, CUTSCENE_ACTORS, CUTSCENE_STEPS -> "cutscene edit";
+            case MINIGAME -> "mini game setup";
+            case ROSTER -> "character roster";
+            case SUNLIGHT -> "sun bearing";
+            case LEVEL_MUSIC -> "level music";
+            case CUSTOM -> "new custom object";
+            case TEXTURE -> "texture change";
+            case DOORS -> "door list edit";
+            case SOUND -> "sound change";
+            default -> "";
+        };
+        if (label.isEmpty()) return;
+        dialogEditOpen = true;
+        history.begin(label);
+        // Every one of these windows can reach the level itself; the ones that
+        // reach further (a level swap, a created object, a reassigned sheet)
+        // record that where they do it.
+        recordDoc();
+    }
+
+    /** Close a window's step (see {@link #beginDialogEdit}). */
+    private void endDialogEdit() {
+        if (!dialogEditOpen) return;
+        dialogEditOpen = false;
+        history.flush();
+        stepCells.clear();
+        stepAspects.clear();
     }
 
     private void updateDialog(double dt, InputManager input) {
@@ -6323,10 +6841,18 @@ public class CreativeScene extends AbstractScene {
             bar = mode + " CREATIVE (ONLINE) — painting the server's world   ·   [Tab] category"
                     + " · right-click erase · [G] grid · [Esc] back to game";
         } else {
+            // The undo count is on the bar because it is the answer to "can I
+            // try this?" — it says how far back the editor can still walk.
+            String undo = history.canUndo()
+                    ? " · [Ctrl+Z] undo " + history.undoLabel()
+                    + (history.undoDepth() > 1 ? " (" + history.undoDepth() + ")" : "")
+                    : "";
+            String redo = history.canRedo() ? " · [Ctrl+Y] redo" : "";
             bar = mode + " CREATIVE — " + level.name + " (" + level.width + "x" + level.height + ")"
                     + chunkInfo
                     + "   ·   [Tab] category · right-click erase · middle pick · [B] layer"
-                    + " · [ ] brush · [G] grid · [P] test · [Ctrl+S] save · [L] load · [N] new · [Esc] menu";
+                    + " · [ ] brush · [G] grid · [P] test · [Ctrl+S] save · [L] load · [N] new"
+                    + undo + redo + " · [Esc] menu";
         }
         g.drawString(bar, x0 + 12, 19);
     }
