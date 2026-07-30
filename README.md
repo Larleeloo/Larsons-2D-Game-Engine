@@ -22,9 +22,10 @@ over in a generic, data-driven form and wired to the same toggles:
 
 - **Creative Mode** — a level editor for *painting objects into the world*
   (blocks, lights, mobs, items) with palette categories, drag-painting,
-  erasing, pick-block, pan/zoom, play-testing, and per-game-type level
-  saving — in **three modes, one per level format** (side-scroller, top-down,
-  isometric), each with its own palette, starter canvas and movement model.
+  erasing, pick-block, pan/zoom, play-testing, `Ctrl+Z` undo over **every**
+  action it can take, and per-game-type level saving — in **three modes, one
+  per level format** (side-scroller, top-down, isometric), each with its own
+  palette, starter canvas and movement model.
   Works offline **and inside a multiplayer session**, where strokes replicate
   to every player. See [Creative mode](#creative-mode-paint-objects) and
   [The three level formats](#the-three-level-formats).
@@ -960,8 +961,47 @@ broken block.
 | [ / ] | shrink / grow the paint brush (shapes cycle in the sidebar's Brush row) |
 | G | toggle the grid |
 | P | play-test the level in place (terrain restored on exit) |
+| Ctrl+Z | undo the last thing you did (a whole drag, or a whole window's worth of editing) |
+| Ctrl+Y / Ctrl+Shift+Z | redo it |
 | Ctrl+S / L / N | save / load / new level |
 | Esc | back (with a save prompt offline) |
+
+**Undo everything (`Ctrl+Z`).** Every action in creative mode can be taken
+back, and put back again with `Ctrl+Y`. A history step is an *action*, not a
+change: one brush drag comes back at once however many cells it covered, and
+so does a window session, so nothing has to be walked back a cell or a field
+at a time. The top bar names what `Ctrl+Z` will undo next and how many steps
+are left behind it.
+
+It covers the lot:
+
+* **Painting and erasing** — blocks in either layer, brush shapes and
+  multi-block mixes, surface details, and the things that follow a block when
+  its cell is cleared (its stack, its details, a container's contents all come
+  back with it).
+* **Markers** — mobs, items, decorations, doors, multiplayer spawns, mini-game
+  flags/stockpiles/spawns/waypoints (renumbered escort paths included), the
+  player spawn, and cutscene triggers.
+* **Level-shape edits** — live resizes (including the content a shrink
+  dropped, and the dense grid a giant resize converted to chunks), and
+  *New* / *Load* / *Generate*, which hand the level you were editing back
+  exactly as it was.
+* **Window sessions** — stat rules, cutscenes with their actors, animation
+  states and step scripts, mini game setup, the character roster, the sun's
+  bearing, the level's music track, and the game type's door directory.
+* **The objects and their art** — everything "+ New …" creates and the palette
+  deletes (unregistered/re-registered in `custom.json` and the live
+  registries, keeping the same block id so painted levels still resolve), plus
+  texture and sound assignments (`skins.json`, the pack's own exception
+  files).
+
+Three things it deliberately leaves alone. *Looking* is not an edit, so the
+camera, grid, palette selection, brush settings and decoration layer are not
+in the history. *Saving* is not an edit either: `Ctrl+Z` never un-writes a
+level file, and never deletes a sheet drawn in the paint window — which has an
+undo of its own for the drawing itself. And painting a **server's** world is
+the server's to answer for, so undo is offline only; online it says so instead
+of pretending.
 
 **One creative mode per level format.** The main menu's *Creative Mode*
 entry asks which format you are building — Side-Scroller, Top-Down or
@@ -2826,7 +2866,8 @@ anything, so it is an untested port target rather than ready source
 [`SoundMixerTest`](src/test/java/com/larsons/engine/SoundMixerTest.java),
 [`SoundEditorTest`](src/test/java/com/larsons/engine/SoundEditorTest.java),
 [`SpriteEditorTest`](src/test/java/com/larsons/engine/SpriteEditorTest.java),
-[`MeleeCombatTest`](src/test/java/com/larsons/engine/MeleeCombatTest.java))
+[`MeleeCombatTest`](src/test/java/com/larsons/engine/MeleeCombatTest.java),
+[`CreativeUndoTest`](src/test/java/com/larsons/engine/CreativeUndoTest.java))
 covering JSON read/write, level loading (both tile modes + round-trips),
 sprite-sheet slicing, input edge detection, game-type save/load, the
 `ConfigForm` widget's keyboard/mouse interaction (including scrolling),
@@ -2854,6 +2895,20 @@ collisions, sprint stamina, block durability with tool speed-ups, crafting
 and smelting recipes, mana-costed magic, stat rules firing rewards and
 consumptions, brush footprints, mob wall-hopping, surface-decor and
 stat-rule serialization, and the creative scene rendering off-screen),
+creative mode's undo (a step grouping a whole action and undoing its parts in
+reverse; an action that changed nothing leaving no step to press through;
+overlapping saves of one cell resolving to the state before the stroke;
+nested steps counting as one action; a new edit dropping what redo would have
+put back; the bound forgetting the oldest first; an undo that cannot record a
+step of its own; cell snapshots bringing back a stack with its details and its
+container; document snapshots restoring markers, rules, cutscenes edited in
+place, the mini game and the roster, and comparing equal when nothing changed;
+resize snapshots restoring dropped content and the dense grid a giant resize
+converted away; a level swap handing back the very level that was open; and
+Ctrl+Z / Ctrl+Y driven through the real editor with synthesized clicks and
+keystrokes — a whole drag taken back at once, an erased block and the detail
+that hung off it coming back in order, a painted marker unplaced and placed
+again, and Ctrl+Z with nothing to undo leaving the level alone),
 sound (the MP3 decoder against streams it builds itself — frames, ID3v1/v2
 tags, resynchronisation past damage, and every truncation and random-byte
 case a half-written file can produce; the packed Huffman code books walked
