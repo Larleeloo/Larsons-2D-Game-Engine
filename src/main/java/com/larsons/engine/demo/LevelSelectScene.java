@@ -5,7 +5,9 @@ import com.larsons.engine.character.CharacterStore;
 import com.larsons.engine.character.Characters;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelStore;
@@ -17,7 +19,6 @@ import com.larsons.engine.ui.MenuTheme;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics2D;
-import java.awt.event.KeyEvent;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -202,7 +203,7 @@ public class LevelSelectScene extends AbstractScene {
     @Override
     public void update(double dt, InputManager input) {
         // Esc steps back one view (edit → actions → list → main menu).
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
             switch (view) {
                 case EDIT -> openActions(selectedLevel);
                 case ACTIONS -> { view = View.LIST; buildListMenu(); }

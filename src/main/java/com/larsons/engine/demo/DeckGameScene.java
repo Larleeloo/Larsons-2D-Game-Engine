@@ -16,7 +16,9 @@ import com.larsons.engine.fx.Particles;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.shader.Shaders;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 
 import java.awt.BasicStroke;
@@ -198,7 +200,8 @@ public class DeckGameScene extends AbstractScene {
         boolean disconnected = !client.isConnected();
         boolean over = client.gameOver() != null;
 
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK)
+                || KeyBinds.pressed(input, GameAction.PAUSE)) {
             if (showHelp) {
                 showHelp = false;
             } else if (disconnected || over) {

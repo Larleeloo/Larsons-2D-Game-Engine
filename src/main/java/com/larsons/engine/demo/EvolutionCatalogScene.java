@@ -10,7 +10,9 @@ import com.larsons.engine.evolution.History;
 import com.larsons.engine.evolution.Phenotype;
 import com.larsons.engine.evolution.SpeciesRecord;
 import com.larsons.engine.evolution.Trait;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 
 import java.awt.BasicStroke;
@@ -165,7 +167,7 @@ public class EvolutionCatalogScene extends AbstractScene {
         mouseX = input.getMouseX();
         mouseY = input.getMouseY();
 
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE) || input.isKeyJustPressed(KeyEvent.VK_K)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK) || input.isKeyJustPressed(KeyEvent.VK_K)) {
             leave();
             return;
         }
@@ -177,8 +179,8 @@ public class EvolutionCatalogScene extends AbstractScene {
 
         int wheel = input.getWheelRotation();
         if (wheel != 0) scroll = Math.max(0, scroll + wheel * 3);
-        if (input.isKeyJustPressed(KeyEvent.VK_DOWN)) moveSelection(1);
-        if (input.isKeyJustPressed(KeyEvent.VK_UP)) moveSelection(-1);
+        if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) moveSelection(1);
+        if (KeyBinds.pressed(input, GameAction.MENU_UP)) moveSelection(-1);
 
         if (input.isMouseJustPressed()) {
             if (backButton.contains(mouseX, mouseY)) {

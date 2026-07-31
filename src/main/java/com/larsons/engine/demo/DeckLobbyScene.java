@@ -8,7 +8,9 @@ import com.larsons.engine.deckbuilder.DeckProto;
 import com.larsons.engine.deckbuilder.DeckServer;
 import com.larsons.engine.deckbuilder.DeckSession;
 import com.larsons.engine.deckbuilder.Leader;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.net.Protocol;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
@@ -78,6 +80,8 @@ public class DeckLobbyScene extends AbstractScene {
         form.addText("Host on port", () -> hostPort, v -> hostPort = v, 5);
         form.addAction("Host Game", this::startHost);
         form.addAction("How to Play", () -> showHelp = true);
+        form.addAction("Controls (Key Binds)",
+                () -> KeyBindsScene.open(scenes, "decklobby"));
         form.addAction("Back", () -> scenes.transitionTo("startup"));
     }
 
@@ -102,7 +106,7 @@ public class DeckLobbyScene extends AbstractScene {
         }
 
         if (showHelp) {
-            if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)
+            if (KeyBinds.pressed(input, GameAction.MENU_BACK)
                     || input.isKeyJustPressed(KeyEvent.VK_H)
                     || input.isMouseJustPressed()) {
                 showHelp = false;
@@ -111,7 +115,7 @@ public class DeckLobbyScene extends AbstractScene {
         }
 
         if (session == null) {
-            if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+            if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
                 scenes.transitionTo("startup");
                 return;
             }
@@ -140,7 +144,7 @@ public class DeckLobbyScene extends AbstractScene {
             showHelp = true;
             return;
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
             session.close();
             session = null;
             status = "";

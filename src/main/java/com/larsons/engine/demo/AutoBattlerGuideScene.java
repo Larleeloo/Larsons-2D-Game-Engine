@@ -13,7 +13,9 @@ import com.larsons.engine.autobattler.SynergyCategory;
 import com.larsons.engine.autobattler.Trait;
 import com.larsons.engine.autobattler.UnitDef;
 import com.larsons.engine.config.GameContext;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 
 import java.awt.BasicStroke;
@@ -24,7 +26,6 @@ import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
 import java.awt.Shape;
-import java.awt.event.KeyEvent;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.List;
@@ -134,7 +135,7 @@ public class AutoBattlerGuideScene extends AbstractScene {
         mouseY = input.getMouseY();
         layoutChrome();
 
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
             if (detail != null) {
                 detail = null;
             } else {
@@ -146,10 +147,10 @@ public class AutoBattlerGuideScene extends AbstractScene {
         // Wheel and arrow keys scroll the current tab's content.
         int wheel = input.getWheelRotation();
         if (wheel != 0) scroll += wheel * 48;
-        if (input.isKeyJustPressed(KeyEvent.VK_DOWN)) scroll += 40;
-        if (input.isKeyJustPressed(KeyEvent.VK_UP)) scroll -= 40;
-        if (input.isKeyJustPressed(KeyEvent.VK_LEFT)) cycleTab(-1);
-        if (input.isKeyJustPressed(KeyEvent.VK_RIGHT)) cycleTab(1);
+        if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) scroll += 40;
+        if (KeyBinds.pressed(input, GameAction.MENU_UP)) scroll -= 40;
+        if (KeyBinds.pressed(input, GameAction.MENU_LEFT)) cycleTab(-1);
+        if (KeyBinds.pressed(input, GameAction.MENU_RIGHT)) cycleTab(1);
         clampScroll();
 
         if (!input.isMouseJustPressed()) return;

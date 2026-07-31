@@ -106,6 +106,13 @@ over in a generic, data-driven form and wired to the same toggles:
   a reference book that ships empty on purpose. Discoveries are kept in two tiers, so the game can be **fully reset**
   whenever you like while your history of every organism ever found is kept
   forever. See [Evolution](#evolution-artificial-life-simulator).
+- **Custom key binds** — every action in the engine, from *jump* to the
+  creative editor's *undo*, is rebindable to **any key or any mouse button**
+  (side buttons included, with `Ctrl`/`Shift`/`Alt` combinations) from a
+  **Controls (Key Binds)** menu that is on the launch menu, every main menu,
+  the pause menus and the editor. Two slots per action, conflicts flagged, one
+  readable `config/keybinds.json` for the whole engine. See
+  [Custom key binds](#custom-key-binds-rebind-anything).
 - **Skins (texture overrides)** — drop PNG sprite sheets in
   `resources/skins/` and assign them in the lobby's **Customize Skins** menu:
   frame pixel width/height + frame count + a 0-120 fps playback rate, per
@@ -270,6 +277,11 @@ On launch you'll choose or create a **game type** before playing — see
 
 ### Demo controls
 
+Everything below is the **default** binding. Every one of them can be moved
+onto any key or any mouse button from *Controls (Key Binds)*, which is on the
+launch menu, every game's main menu, and the in-game pause menu — see
+[Custom key binds](#custom-key-binds-rebind-anything).
+
 - **Menus / forms:** arrow keys to move, **Left/Right** to adjust a value,
   **Enter** to activate, or use the mouse (hover + click the toggles/steppers).
   In the game-type editor, just type to set the name.
@@ -375,7 +387,12 @@ com.larsons.engine
 │   ├── NetSession.java    Active client + optional integrated server
 │   └── ServerMain.java    Dedicated server entry point (--port/--level/--gametype)
 ├── input
-│   └── InputManager.java  Polled keyboard/mouse (3 buttons + wheel) + typed text
+│   ├── InputManager.java  Polled keyboard/mouse (any key, any button, wheel) + typed text
+│   ├── GameAction.java    Every rebindable action + the keys it ships with
+│   ├── InputBinding.java  One key or mouse button (+ Ctrl/Shift/Alt), savable
+│   ├── KeyBinds.java      Action → bindings, queried by gameplay; the active set
+│   ├── KeyBindStore.java  Reads/writes config/keybinds.json
+│   └── KeyNames.java      Stable, locale-independent names for AWT key codes
 ├── scene
 │   ├── Scene.java         update(dt,input) / render(g,alpha) lifecycle
 │   ├── AbstractScene.java No-op base with viewport + manager refs
@@ -2065,6 +2082,92 @@ genetics, **Esc** pauses (and offers the full game reset).
 
 ---
 
+## Custom key binds (rebind anything)
+
+Nothing in the engine names a key any more. Gameplay asks whether an **action**
+is down — `JUMP`, `INTERACT`, `EDITOR_UNDO` — and the player decides what
+"down" means, from a controls menu reachable everywhere:
+
+- the **launch menu** (before a game type is even chosen),
+- every game type's **main menu** and the **game-type editor**,
+- the **pause menu** while playing, and the creative editor's
+  **Controls (Key Binds)…** tool, both of which open the same sheet *over* the
+  level so rebinding mid-session costs you neither the level nor the server
+  connection,
+- the **Auto Battler**, **Council of Six** and **Evolution** lobbies, and
+  Evolution's pause menu.
+
+**Any key, any mouse button.** A slot takes whatever you press: a letter, a
+function key, the numpad, `Ctrl+S`-style combinations (hold the modifiers while
+you press), the left/middle/right mouse buttons, or the **side buttons** on a
+gaming mouse. Input state is tracked in sets rather than a fixed 256-entry
+table, so keys like **F13-F24** and buttons past the familiar three are bindable
+like everything else.
+
+**Two slots per action.** Each action keeps a primary and an alternate, which is
+how the defaults are already shaped (`A` *and* Left Arrow both walk left). Leave
+one empty, or empty both to unbind an action entirely.
+
+**How to use the screen**
+
+| Action | What it does |
+| --- | --- |
+| **Enter** / click a slot | Listen for the new binding — press any key or mouse button |
+| **Esc** | Back out of listening, leaving the slot as it was |
+| **Del** / right-click a slot | Empty the slot |
+| **Left/Right** | Move between the primary and alternate slot |
+| *Reset All to Defaults* | Put every action back on the key it ships with |
+
+Two actions in the **same group** sharing a binding are drawn in red as a
+warning (they still work — it is your engine). The same button doing different
+jobs in *different* groups is normal and is not flagged: the left mouse button
+attacks while playing and paints while editing, and those two never happen at
+once.
+
+**Where it is saved.** One file for the whole engine —
+`src/main/resources/config/keybinds.json` — because controls belong to the
+person playing, not to a game type. Rebind jump once and it is rebound in every
+game type, level and mode, this session and the next. The file is plain,
+readable JSON with stable key names, so it can be copied between machines:
+
+```json
+{
+  "version": 1,
+  "binds": {
+    "move_left": ["key:A", "key:LEFT"],
+    "jump": ["key:SPACE"],
+    "attack": ["mouse:1"],
+    "editor_undo": ["ctrl+key:Z"],
+    "editor_redo": ["ctrl+key:Y", "ctrl+shift+key:Z"]
+  }
+}
+```
+
+Missing entries fall back to the shipped default (so binds saved by an older
+build still load when the engine grows a new action), an entry with an empty
+list stays deliberately unbound, and an unreadable file is simply "the
+defaults" — the game always starts with working controls.
+
+**Adding a bindable action** (engine code):
+
+```java
+// 1. Declare it, with the keys it ships with, in GameAction:
+INTERACT("interact", "Interact (doors, chests, mounts)", Category.ITEMS,
+        InputBinding.key(KeyEvent.VK_E)),
+
+// 2. Ask for it where you used to name a key:
+if (KeyBinds.pressed(input, GameAction.INTERACT)) openDoor();   // rising edge
+if (KeyBinds.down(input, GameAction.SPRINT))      run();        // held
+```
+
+That is the whole job: the controls menu is built from `GameAction.values()`,
+so the new action shows up there, saves with the rest, and is rebindable the day
+it is added. A form anywhere in the engine can host rebinding rows directly with
+`ConfigForm.addKeyBind(binds, action)`, or the whole sheet with
+`KeyBindForm.build(...)`.
+
+---
+
 ## Skins (texture overrides)
 
 Every game texture is overridable with your own art, without touching code:
@@ -2679,9 +2782,17 @@ form.addEnum("Format", LevelFormat.values(), () -> LevelFormat.of(p.perspective)
         v -> p.perspective = v.perspective());
 form.addText("Name", () -> p.name, v -> p.name = v, 40);
 form.addNote("Explains the rows around it — wraps, and the selection skips it.");
+form.addKeyBind(KeyBinds.active(), GameAction.JUMP);   // a rebinding row
 form.addAction("Save", () -> store.save(p));
 // in the scene: form.update(dt, input); form.render(g, w, h);
 ```
+
+A key-bind row shows one slot box per binding; activating a slot puts the whole
+form into **capture**, where the next press of any key or mouse button lands in
+it. A host scene asks `form.isCapturing()` before reading input of its own, so
+the key that would normally close the window goes into the binding instead —
+that is all it takes to host the controls sheet anywhere (see
+[Custom key binds](#custom-key-binds-rebind-anything)).
 
 Rows lay out **control first**: the control is right-aligned in the content
 column and the label gets what's left, shortened with an ellipsis if it has to
@@ -2786,6 +2897,10 @@ Menu menu = new Menu("My Game")
     .add("Quit",     () -> System.exit(0));
 ```
 
+Menus navigate on the player's own binds (`MENU_UP` / `MENU_DOWN` /
+`MENU_SELECT` — arrows plus `W`/`S`, Enter/Space out of the box), so a rebind in
+the controls screen moves every menu in the engine at once.
+
 `MenuTheme` exposes every colour, font, and spacing value; `MenuItem` labels can
 be dynamic (e.g. a "Perspective: ISOMETRIC" toggle that updates live). Menus
 with more entries than fit on screen **scroll**: the mouse wheel and a draggable
@@ -2867,9 +2982,15 @@ anything, so it is an untested port target rather than ready source
 [`SoundEditorTest`](src/test/java/com/larsons/engine/SoundEditorTest.java),
 [`SpriteEditorTest`](src/test/java/com/larsons/engine/SpriteEditorTest.java),
 [`MeleeCombatTest`](src/test/java/com/larsons/engine/MeleeCombatTest.java),
-[`CreativeUndoTest`](src/test/java/com/larsons/engine/CreativeUndoTest.java))
+[`CreativeUndoTest`](src/test/java/com/larsons/engine/CreativeUndoTest.java),
+[`KeyBindTest`](src/test/java/com/larsons/engine/KeyBindTest.java))
 covering JSON read/write, level loading (both tile modes + round-trips),
-sprite-sheet slicing, input edge detection, game-type save/load, the
+sprite-sheet slicing, input edge detection, custom key binds (what ships
+bound, binding tokens round-tripping through the saved file, keys and mouse
+buttons outside the usual range being tracked and bindable, modifier
+combinations only firing while held, conflicts reported inside a group but not
+across them, and the controls form capturing, cancelling and clearing a
+binding), game-type save/load, the
 `ConfigForm` widget's keyboard/mouse interaction (including scrolling),
 rendering the scenes off-screen (play + creative), pixel-exact shader
 behavior + the GLSL contract and export (including the lighting pass),

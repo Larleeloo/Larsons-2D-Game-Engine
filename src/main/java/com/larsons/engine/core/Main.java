@@ -15,6 +15,7 @@ import com.larsons.engine.demo.EvolutionCatalogScene;
 import com.larsons.engine.demo.EvolutionLobbyScene;
 import com.larsons.engine.demo.EvolutionScene;
 import com.larsons.engine.demo.GameTypeEditorScene;
+import com.larsons.engine.demo.KeyBindsScene;
 import com.larsons.engine.demo.LevelSelectScene;
 import com.larsons.engine.demo.MainMenuScene;
 import com.larsons.engine.demo.MultiplayerScene;
@@ -23,6 +24,8 @@ import com.larsons.engine.demo.SkinEditorScene;
 import com.larsons.engine.demo.StartupScene;
 import com.larsons.engine.graphics.SkinStore;
 import com.larsons.engine.graphics.Skins;
+import com.larsons.engine.input.KeyBindStore;
+import com.larsons.engine.input.KeyBinds;
 
 /**
  * Application entry point.
@@ -60,6 +63,10 @@ public class Main {
         Skins.install(new SkinStore().load());
         Sounds.load();
 
+        // Custom key binds, likewise: the controls a player set last time are
+        // in force from the launch menu on, before any scene reads a key.
+        KeyBinds.install(new KeyBindStore().load());
+
         EngineConfig config = new EngineConfig()
                 .title("Larson's 2D Game Engine")
                 .size(1280, 720)
@@ -84,6 +91,7 @@ public class Main {
         engine.scenes().register("evolutionlobby", new EvolutionLobbyScene(context));
         engine.scenes().register("evolution", new EvolutionScene(context));
         engine.scenes().register("evolutioncatalog", new EvolutionCatalogScene(context));
+        engine.scenes().register(KeyBindsScene.NAME, new KeyBindsScene());
         engine.scenes().register("skins", new SkinEditorScene(context));
         engine.scenes().register("boardtheme", new BoardCustomizeScene(context));
 
