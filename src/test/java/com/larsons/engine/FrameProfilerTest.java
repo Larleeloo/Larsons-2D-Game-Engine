@@ -473,4 +473,80 @@ class FrameProfilerTest {
             window.dispose();
         }
     }
+
+    /**
+     * Frames are composed offscreen whether or not any shader pass is active.
+     * Drawing straight at a hardware-backed surface made the same scene nine
+     * times more expensive on an M1 Air, because the engine's antialiased
+     * shapes are rasterized in software either way and each one then had to be
+     * uploaded on its own. Without a pass configured there is no shader time
+     * to attribute, but the offscreen path must still be the one taken.
+     */
+    @Test
+    void framesAreComposedOffscreenEvenWithNoShaderPasses() throws Exception {
+        assumeFalse(GraphicsEnvironment.isHeadless(), "needs a display");
+        assumeFalse(Boolean.getBoolean("larsons.render.direct"),
+                "the direct-to-surface escape hatch is set");
+
+        Frame window = new Frame("frame-profiler-offscreen-test");
+        try {
+            Canvas canvas = new Canvas();
+            canvas.setSize(320, 240);
+            window.add(canvas);
+            window.pack();
+            window.setVisible(true);
+            for (int i = 0; i < 100 && !canvas.isDisplayable(); i++) Thread.sleep(10);
+            assumeFalse(!canvas.isDisplayable(), "canvas never became displayable");
+
+            FrameProfiler profiler = enabled();
+            Java2DRenderer renderer = new Java2DRenderer(canvas, Color.BLACK);
+            renderer.setProfiler(profiler);
+            renderer.setShaderChain(new ShaderChain());   // attached, but empty
+
+            assertTrue(renderer.isOffscreen(), "the default path should be offscreen");
+
+            Graphics2D g = renderer.beginFrame();
+            g.setColor(Color.RED);
+            g.fillRect(0, 0, 200, 150);
+            renderer.present();
+            profiler.endFrame();
+
+            Snapshot snapshot = profiler.snapshot();
+            assertTrue(snapshot.stage(Stage.PRESENT).meanMs() > 0,
+                    "composing and blitting the frame should still be recorded");
+            assertEquals(0.0, snapshot.stage(Stage.SHADERS).meanMs(), 1e-9,
+                    "an empty chain should cost nothing");
+            assertTrue(snapshot.passes().isEmpty(), "no passes ran, so none should be listed");
+        } finally {
+            window.dispose();
+        }
+    }
+
+    @Test
+    void aRendererWithNoShaderChainAtAllStillPresents() throws Exception {
+        // Nothing requires a chain to be attached; the offscreen path must not
+        // depend on one existing.
+        assumeFalse(GraphicsEnvironment.isHeadless(), "needs a display");
+        assumeFalse(Boolean.getBoolean("larsons.render.direct"),
+                "the direct-to-surface escape hatch is set");
+
+        Frame window = new Frame("frame-profiler-nochain-test");
+        try {
+            Canvas canvas = new Canvas();
+            canvas.setSize(160, 120);
+            window.add(canvas);
+            window.pack();
+            window.setVisible(true);
+            for (int i = 0; i < 100 && !canvas.isDisplayable(); i++) Thread.sleep(10);
+            assumeFalse(!canvas.isDisplayable(), "canvas never became displayable");
+
+            Java2DRenderer renderer = new Java2DRenderer(canvas, Color.BLACK);
+            Graphics2D g = renderer.beginFrame();
+            g.setColor(Color.BLUE);
+            g.fillRect(0, 0, 80, 60);
+            renderer.present();   // must not throw with shaders == null
+        } finally {
+            window.dispose();
+        }
+    }
 }
