@@ -2,7 +2,7 @@ package com.larsons.engine.scene;
 
 import com.larsons.engine.input.InputManager;
 
-import java.awt.Graphics2D;
+import com.larsons.engine.graphics.draw.DrawTarget;
 
 /**
  * Convenience base class for scenes: provides no-op lifecycle hooks and tracks
@@ -33,7 +33,7 @@ public abstract class AbstractScene implements Scene {
 
     @Override public abstract void update(double dt, InputManager input);
 
-    @Override public abstract void render(Graphics2D g, float alpha);
+    @Override public abstract void render(DrawTarget target, float alpha);
 
     @Override public String name() { return getClass().getSimpleName(); }
 }

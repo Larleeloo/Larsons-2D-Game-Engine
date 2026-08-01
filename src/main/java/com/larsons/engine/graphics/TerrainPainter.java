@@ -60,6 +60,9 @@ public final class TerrainPainter {
     /** Darkening applied to a side face with no texture of its own. */
     private static final double SIDE_SHADE = 0.62;
 
+    /** The bright line along the top of an exposed liquid surface. */
+    private static final Color LIQUID_SURFACE = new Color(255, 255, 255, 90);
+
     private TerrainPainter() {}
 
     /**
@@ -90,6 +93,12 @@ public final class TerrainPainter {
      * the floor beside the wall being mined.
      */
     public static void drawMiningCracks(Graphics2D g, Camera camera, Level level,
+                                        int col, int row, double progress) {
+        drawMiningCracks(Java2DTarget.unsized(g), camera, level, col, row, progress);
+    }
+
+    /** {@link #drawMiningCracks(Graphics2D, Camera, Level, int, int, double)}. */
+    public static void drawMiningCracks(DrawTarget target, Camera camera, Level level,
                                         int col, int row, double progress) {
         if (progress <= 0.01) return;
         int tileSize = level.tileSize;
@@ -123,17 +132,18 @@ public final class TerrainPainter {
         double halfW = Math.max(2, (maxX - minX) / 2.0);
         double halfH = Math.max(2, (maxY - minY) / 2.0);
 
-        g.setColor(new Color(20, 16, 12, 200));
-        g.setStroke(new BasicStroke((float) Math.max(1, Math.min(halfW, halfH) / 11)));
+        int crackArgb = new Color(20, 16, 12, 200).getRGB();
+        float thickness = (float) Math.max(1, Math.min(halfW, halfH) / 11);
         int cracks = 2 + (int) (progress * 6);
         for (int i = 0; i < cracks; i++) {
             double a = i * (Math.PI * 2 / 8) + (col * 3 + row * 7) % 7 * 0.4;
             double reach = 0.2 + progress * 0.42;
             int mx = cx + (int) (Math.cos(a) * reach * halfW * 1.1);
             int my = cy + (int) (Math.sin(a) * reach * halfH * 1.1);
-            g.drawLine(cx, cy, mx, my);
-            g.drawLine(mx, my, mx + (int) (Math.cos(a + 0.6) * reach * halfW * 0.9),
-                    my + (int) (Math.sin(a + 0.6) * reach * halfH * 0.9));
+            target.drawLine(cx, cy, mx, my, crackArgb, thickness);
+            target.drawLine(mx, my, mx + (int) (Math.cos(a + 0.6) * reach * halfW * 0.9),
+                    my + (int) (Math.sin(a + 0.6) * reach * halfH * 0.9),
+                    crackArgb, thickness);
         }
     }
 
@@ -146,7 +156,7 @@ public final class TerrainPainter {
          * at. {@code xs}/{@code ys} hold the face's projected corners in
          * top-left, top-right, bottom-right, bottom-left order.
          */
-        void afterTop(Graphics2D g, int col, int row, int[] xs, int[] ys,
+        void afterTop(DrawTarget target, int col, int row, int[] xs, int[] ys,
                       Block block, Color color);
     }
 
@@ -160,9 +170,15 @@ public final class TerrainPainter {
      * {@code raised} so they sort against everything else standing on the
      * floor. The caller flushes that pass once it has added its own sprites.
      */
+    public static void draw(DrawTarget target, Level level, Camera camera, int[] bounds,
+                            double animClock, DepthPass raised, CellDecorator decor) {
+        draw(target, level, camera, bounds, animClock, raised, decor, null);
+    }
+
+    /** {@link #draw(DrawTarget, Level, Camera, int[], double, DepthPass, CellDecorator)}. */
     public static void draw(Graphics2D g, Level level, Camera camera, int[] bounds,
                             double animClock, DepthPass raised, CellDecorator decor) {
-        draw(g, level, camera, bounds, animClock, raised, decor, null);
+        draw(Java2DTarget.unsized(g), level, camera, bounds, animClock, raised, decor, null);
     }
 
     /**
@@ -176,22 +192,46 @@ public final class TerrainPainter {
      * to the south stood up over the cell to their north-west and covered even
      * a floor tile's.
      */
+    public static void draw(DrawTarget target, Level level, Camera camera, int[] bounds,
+                            double animClock, DepthPass raised, CellDecorator decor,
+                            Mining mining) {
+        draw(target, level, camera, bounds, animClock, raised, decor, mining, null);
+    }
+
+    /**
+     * Paint the terrain, reusing {@code cache}'s baked floor chunks where it
+     * can.
+     *
+     * <p>The cache is skipped outright when a {@link CellDecorator} is in play.
+     * A decorator draws something animated over a finished top face — the
+     * swinging lid of an open container — and baking that into a chunk image
+     * would freeze it mid-swing until the level was edited. A caller that has
+     * nothing to decorate should pass {@code null} rather than a decorator
+     * that does nothing, which is what lets the floor be cached at all.
+     */
+    public static void draw(DrawTarget target, Level level, Camera camera, int[] bounds,
+                            double animClock, DepthPass raised, CellDecorator decor,
+                            Mining mining, TerrainCache cache) {
+        new Pass(target, level, camera, animClock, decor)
+                .run(bounds, raised, mining, decor == null ? cache : null);
+    }
+
+    /** {@link #draw(DrawTarget, Level, Camera, int[], double, DepthPass, CellDecorator, Mining)}. */
     public static void draw(Graphics2D g, Level level, Camera camera, int[] bounds,
                             double animClock, DepthPass raised, CellDecorator decor,
                             Mining mining) {
-        new Pass(g, level, camera, animClock, decor).run(bounds, raised, mining);
+        draw(Java2DTarget.unsized(g), level, camera, bounds, animClock, raised, decor, mining);
     }
 
     /** One frame's terrain, with the scratch state a sweep over the cells needs. */
     private static final class Pass {
-        private final Graphics2D g;
         /**
-         * One draw target for the whole pass. Built here rather than per tile
-         * because this loop runs over every visible cell — around two thousand
-         * of them at 1080p — and a wrapper allocated inside it would cost more
-         * than the drawing it wraps.
+         * The pass draws through this and nothing else — there is no
+         * Graphics2D left in here. One target for the whole sweep, because the
+         * loop runs over every visible cell (around two thousand at 1080p) and
+         * anything allocated inside it would cost more than the drawing.
          */
-        private final DrawTarget target;
+        private DrawTarget target;
         private final Level level;
         private final Camera camera;
         private final double animClock;
@@ -212,10 +252,9 @@ public final class TerrainPainter {
         /** Per-frame cache: texture key -> frame (absent value = procedural). */
         private final Map<String, BufferedImage> skins = new HashMap<>();
 
-        Pass(Graphics2D g, Level level, Camera camera, double animClock,
+        Pass(DrawTarget target, Level level, Camera camera, double animClock,
              CellDecorator decor) {
-            this.g = g;
-            this.target = Java2DTarget.unsized(g);
+            this.target = target;
             this.level = level;
             this.camera = camera;
             this.animClock = animClock;
@@ -242,8 +281,39 @@ public final class TerrainPainter {
             this.shadowY = offset[1] * camera.zoom;
         }
 
-        void run(int[] bounds, DepthPass raisedPass, Mining mining) {
+        void run(int[] bounds, DepthPass raisedPass, Mining mining, TerrainCache cache) {
             Path2D.Double shadows = layered ? new Path2D.Double() : null;
+            if (cache != null && TerrainCache.enabled()
+                    && TerrainCache.faithfulIn(camera.getPerspective())) {
+                // The floor comes out of the cache as a handful of blits. The
+                // shadows still have to be gathered live, because they are cast
+                // by blocks that are not in the cache and must land under the
+                // actors rather than inside a chunk image.
+                cache.drawFloor(target, level, camera, bounds, animClock, this::renderChunk);
+                cache.endFrame();
+                if (shadows != null) gatherShadows(bounds, shadows);
+            } else {
+                sweepFloor(bounds, shadows);
+            }
+            if (shadows != null) {
+                // One fill for every shadow in the frame: overlapping casters
+                // would otherwise stack their alpha and band the floor.
+                target.fillShape(shadows, SHADOW);
+                queueRaised(bounds, raisedPass);
+            }
+            // The cracks go in last, so among everything queued at the mined
+            // cell's depth — its own stacked block above all — they are the
+            // part drawn on top. Blocks nearer the viewer still cover them,
+            // which is right: they are in front of the block being mined.
+            if (mining != null && mining.progress() > 0.01) {
+                raisedPass.at(baseDepth(mining.col(), mining.row()), () ->
+                        drawMiningCracks(target, camera, level, mining.col(), mining.row(),
+                                mining.progress()));
+            }
+        }
+
+        /** Draw every floor cell in the bounds, gathering shadows as it goes. */
+        private void sweepFloor(int[] bounds, Path2D.Double shadows) {
             for (int r = bounds[1]; r <= bounds[3]; r++) {
                 for (int c = bounds[0]; c <= bounds[2]; c++) {
                     int id = level.tileAt(c, r);
@@ -253,21 +323,32 @@ public final class TerrainPainter {
                     if (shadows != null && level.upperAt(c, r) > 0) addShadow(shadows);
                 }
             }
-            if (shadows != null) {
-                // One fill for every shadow in the frame: overlapping casters
-                // would otherwise stack their alpha and band the floor.
-                g.setColor(SHADOW);
-                g.fill(shadows);
-                queueRaised(bounds, raisedPass);
+        }
+
+        /** The shadow shapes alone, for when the floor came from the cache. */
+        private void gatherShadows(int[] bounds, Path2D.Double shadows) {
+            for (int r = bounds[1]; r <= bounds[3]; r++) {
+                for (int c = bounds[0]; c <= bounds[2]; c++) {
+                    if (level.tileAt(c, r) <= 0 || level.upperAt(c, r) <= 0) continue;
+                    project(c, r);
+                    addShadow(shadows);
+                }
             }
-            // The cracks go in last, so among everything queued at the mined
-            // cell's depth — its own stacked block above all — they are the
-            // part drawn on top. Blocks nearer the viewer still cover them,
-            // which is right: they are in front of the block being mined.
-            if (mining != null && mining.progress() > 0.01) {
-                raisedPass.at(baseDepth(mining.col(), mining.row()), () ->
-                        drawMiningCracks(g, camera, level, mining.col(), mining.row(),
-                                mining.progress()));
+        }
+
+        /**
+         * Paint one chunk's floor into a target of its own — the same per-cell
+         * work the live sweep does, aimed at a chunk image instead of the
+         * screen. Swapping the target for the duration is what lets one
+         * implementation serve both.
+         */
+        private void renderChunk(DrawTarget into, int col0, int row0, int col1, int row1) {
+            DrawTarget previous = target;
+            target = into;
+            try {
+                sweepFloor(new int[]{col0, row0, col1, row1}, null);
+            } finally {
+                target = previous;
             }
         }
 
@@ -289,20 +370,17 @@ public final class TerrainPainter {
             if (skin != null) {
                 TilePainter.drawTexture(target, skin, xs, ys, !iso);
             } else {
-                g.setColor(color);
-                g.fillPolygon(xs, ys, 4);
+                target.fillPolygon(xs, ys, 4, color);
                 if (block != null && block.liquid()) {
                     // Liquids render translucent with a bright surface line.
                     if (level.liquidAt(col, row - 1) == null) {
-                        g.setColor(new Color(255, 255, 255, 90));
-                        g.drawLine(xs[0], ys[0], xs[1], ys[1]);
+                        target.drawLine(xs[0], ys[0], xs[1], ys[1], LIQUID_SURFACE);
                     }
                 } else {
-                    g.setColor(color.darker());
-                    g.drawPolygon(xs, ys, 4);
+                    target.drawPolygon(xs, ys, 4, color.darker());
                 }
             }
-            if (decor != null) decor.afterTop(g, col, row, xs, ys, block, color);
+            if (decor != null) decor.afterTop(target, col, row, xs, ys, block, color);
         }
 
         /** Add this cell's cast shadow to the frame's single shadow shape. */
@@ -351,13 +429,10 @@ public final class TerrainPainter {
             if (top != null) {
                 TilePainter.drawTexture(target, top, xs, ys, !iso);
             } else {
-                g.setColor(color);
-                g.fillPolygon(xs, ys, 4);
-                g.setColor(color.darker());
-                g.setStroke(new BasicStroke(1f));
-                g.drawPolygon(xs, ys, 4);
+                target.fillPolygon(xs, ys, 4, color);
+                target.drawPolygon(xs, ys, 4, color.darker());
             }
-            if (decor != null) decor.afterTop(g, col, row, xs, ys, block, color);
+            if (decor != null) decor.afterTop(target, col, row, xs, ys, block, color);
         }
 
         /**
@@ -379,11 +454,8 @@ public final class TerrainPainter {
                 TilePainter.drawTexture(target, skin, faceX, faceY, false);
                 return;
             }
-            g.setColor(shade(color, SIDE_SHADE));
-            g.fillPolygon(faceX, faceY, 4);
-            g.setColor(shade(color, SIDE_SHADE * 0.75));
-            g.setStroke(new BasicStroke(1f));
-            g.drawPolygon(faceX, faceY, 4);
+            target.fillPolygon(faceX, faceY, 4, shade(color, SIDE_SHADE));
+            target.drawPolygon(faceX, faceY, 4, shade(color, SIDE_SHADE * 0.75));
         }
 
         /** Project cell (col,row) into {@link #xs}/{@link #ys}. */

@@ -42,6 +42,8 @@ import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.CutscenePainter;
 import com.larsons.engine.graphics.DecorPainter;
 import com.larsons.engine.graphics.DepthPass;
+import com.larsons.engine.graphics.draw.DrawTarget;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.graphics.EntitySprites;
 import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.ParallaxBackground;
@@ -49,6 +51,7 @@ import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.PlayerSprites;
 import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.SurfaceDecorPainter;
+import com.larsons.engine.graphics.TerrainCache;
 import com.larsons.engine.graphics.TerrainPainter;
 import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.input.GameAction;
@@ -1886,8 +1889,24 @@ public class PlayScene extends AbstractScene {
         ctx.applyLiveSettings();
     }
 
+    /** This frame's draw target, set at the top of {@link #render}. */
+    private DrawTarget frameTarget;
+
+    /**
+     * The baked floor. Terrain is the biggest thing on screen and the least
+     * likely to change, so it is drawn into chunk images and blitted rather
+     * than rebuilt cell by cell every frame.
+     */
+    private final TerrainCache terrainCache = new TerrainCache();
+
     @Override
-    public void render(Graphics2D g, float alpha) {
+    public void render(DrawTarget target, float alpha) {
+        // Most of this scene is not ported off Graphics2D yet; see
+        // Java2DTarget.graphicsOf. The frame's target is held so the painters
+        // that *are* ported (the terrain) draw through it, which is also what
+        // puts their operations into the frame's draw-call count.
+        this.frameTarget = target;
+        Graphics2D g = Java2DTarget.graphicsOf(target);
         if (leaving) {
             // Session gone; hold a blank frame while the menu fade finishes.
             ctx.lighting().setDarkness(0);
@@ -2354,8 +2373,13 @@ public class PlayScene extends AbstractScene {
      * it instead of being painted over them (see {@link TerrainPainter}).
      */
     private void drawTiles(Graphics2D g, DepthPass standing) {
-        TerrainPainter.draw(g, level, camera, visibleTileBounds(), animClock,
-                standing, this::drawOpenLid, miningStroke());
+        // The decorator is passed only when there is actually something to
+        // decorate. A decorator that does nothing still forces the floor to be
+        // repainted cell by cell, because the painter cannot know it is a
+        // no-op — so "no open container" has to mean "no decorator".
+        TerrainPainter.draw(frameTarget, level, camera, visibleTileBounds(), animClock,
+                standing, containerPanel == null ? null : this::drawOpenLid,
+                miningStroke(), terrainCache);
     }
 
     /**
@@ -2375,11 +2399,11 @@ public class PlayScene extends AbstractScene {
     }
 
     /** The animated lid on the chest or barrel whose panel is open. */
-    private void drawOpenLid(Graphics2D g, int col, int row, int[] quadX, int[] quadY,
+    private void drawOpenLid(DrawTarget target, int col, int row, int[] quadX, int[] quadY,
                              Block block, Color color) {
         if (containerPanel == null || block == null || !block.container()) return;
         if (col != containerPanel.col() || row != containerPanel.row()) return;
-        ContainerPanel.drawLid(g, quadX, quadY, containerPanel.openness(), color);
+        ContainerPanel.drawLid(target, quadX, quadY, containerPanel.openness(), color);
     }
 
     /**

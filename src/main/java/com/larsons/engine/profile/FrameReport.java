@@ -1,5 +1,6 @@
 package com.larsons.engine.profile;
 
+import com.larsons.engine.profile.FrameProfiler;
 import com.larsons.engine.profile.FrameProfiler.Snapshot;
 import com.larsons.engine.profile.FrameProfiler.Stage;
 import com.larsons.engine.profile.FrameProfiler.Stats;
@@ -72,6 +73,9 @@ public final class FrameReport {
             out.append('\n').append(table("Shader passes", snapshot.passes(), snapshot));
         }
 
+        if (!snapshot.draws().isEmpty()) {
+            out.append('\n').append(drawBlock(snapshot));
+        }
         out.append('\n').append(summaryBlock(snapshot, device));
         out.append('\n').append(verdict(snapshot, device));
         return out.toString();
@@ -104,6 +108,24 @@ public final class FrameReport {
             out.append("%-10s %8.3f %8.3f %8.3f %8.3f %7s%n".formatted(
                     s.name(), s.meanMs(), s.p50Ms(), s.p95Ms(), s.p99Ms(), share));
         }
+        return out.toString();
+    }
+
+    /**
+     * What the frame asked the renderer to draw, and what a batching backend
+     * would collapse it into — the half of the GPU question the timings cannot
+     * answer.
+     */
+    private static String drawBlock(Snapshot snapshot) {
+        FrameProfiler.Draws draws = snapshot.draws();
+        StringBuilder out = new StringBuilder();
+        out.append("Draw calls (per frame, mean)\n");
+        out.append("-".repeat(64)).append('\n');
+        out.append("operations issued : %.0f%n".formatted(draws.operations()));
+        out.append("batched draws     : %.0f%n".formatted(draws.batches()));
+        out.append("merge ratio       : %.1fx%n".formatted(draws.mergeRatio()));
+        out.append("  of which images : %.0f%n".formatted(draws.images()));
+        out.append("  of which text   : %.0f%n".formatted(draws.glyphs()));
         return out.toString();
     }
 
@@ -205,8 +227,45 @@ public final class FrameReport {
         }
 
         appendHitchNote(out, snapshot);
+        appendBatchingNote(out, snapshot);
         appendDeviceNotes(out, snapshot, device);
         return out.toString();
+    }
+
+    /**
+     * How much a batching backend could merge, which is what decides whether
+     * a GPU renderer is the next move or whether the art has to be atlased
+     * first. Only meaningful once the scene draws through a DrawTarget, so it
+     * stays silent while the migration is under way.
+     */
+    private static void appendBatchingNote(StringBuilder out, Snapshot snapshot) {
+        FrameProfiler.Draws draws = snapshot.draws();
+        if (draws.isEmpty()) return;
+
+        double ratio = draws.mergeRatio();
+        if (ratio >= 10) {
+            out.append("""
+                    %nBatching: %.0f operations collapse into %.0f draws (%.1fx). \
+                    This draw order is already GPU-shaped — a batching backend \
+                    would issue very few calls for it, which is where the win \
+                    would come from.%n"""
+                    .formatted(draws.operations(), draws.batches(), ratio));
+        } else if (ratio >= 3) {
+            out.append("""
+                    %nBatching: %.0f operations collapse into %.0f draws (%.1fx). \
+                    Worth having, but sorting the scene by texture — or atlasing \
+                    the art so more of it shares one — would raise it before any \
+                    backend work.%n"""
+                    .formatted(draws.operations(), draws.batches(), ratio));
+        } else {
+            out.append("""
+                    %nBatching: %.0f operations collapse into only %.0f draws \
+                    (%.1fx). Consecutive operations rarely share a texture, so a \
+                    GPU backend would issue nearly one call per sprite and buy \
+                    little. Atlas the art and sort by texture first; that is a \
+                    prerequisite, not an optimisation.%n"""
+                    .formatted(draws.operations(), draws.batches(), ratio));
+        }
     }
 
     private static void appendHitchNote(StringBuilder out, Snapshot snapshot) {

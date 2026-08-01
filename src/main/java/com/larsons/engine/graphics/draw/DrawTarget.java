@@ -2,6 +2,7 @@ package com.larsons.engine.graphics.draw;
 
 import java.awt.Color;
 import java.awt.Font;
+import java.awt.Shape;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 
@@ -89,6 +90,29 @@ public interface DrawTarget {
 
     default void fillPolygon(int[] xs, int[] ys, int count, Color color) {
         fillPolygon(xs, ys, count, color.getRGB());
+    }
+
+    /**
+     * Fill an arbitrary shape — the general case, and the only verb here that
+     * is not a primitive.
+     *
+     * <p>It exists for one real requirement: a frame's cast shadows are
+     * accumulated into a single path and filled once, because filling them
+     * separately would stack translucent black wherever two shadows overlap
+     * and band the floor. "These regions, with the alpha applied once" is a
+     * different operation from "these regions, drawn one after another", and
+     * no amount of {@link #fillPolygon} expresses it.
+     *
+     * <p>A GPU backend tessellates this through
+     * {@link java.awt.Shape#getPathIterator(java.awt.geom.AffineTransform, double)},
+     * whose flattening argument turns any curve into the triangles it needs.
+     * That is more work per call than a quad, so prefer the primitives when
+     * they say what you mean; reach for this when the union is the point.
+     */
+    void fillShape(Shape shape, int argb);
+
+    default void fillShape(Shape shape, Color color) {
+        fillShape(shape, color.getRGB());
     }
 
     // --- outlines --------------------------------------------------------------

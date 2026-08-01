@@ -1,5 +1,6 @@
 package com.larsons.engine;
 
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.config.GameTypeStore;
@@ -66,7 +67,7 @@ class EvolutionSceneTest {
         BufferedImage frame = new BufferedImage(W, H, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = frame.createGraphics();
         try {
-            scenes.render(g, 1f);
+            scenes.render(Java2DTarget.unsized(g), 1f);
         } finally {
             g.dispose();
         }

@@ -26,6 +26,8 @@ import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.shader.Shaders;
 import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.graphics.draw.DrawTarget;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 
@@ -1050,7 +1052,9 @@ public class AutoBattlerScene extends AbstractScene {
     // ------------------------------------------------------------------ render
 
     @Override
-    public void render(Graphics2D g, float alpha) {
+    public void render(DrawTarget target, float alpha) {
+        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
+        Graphics2D g = Java2DTarget.graphicsOf(target);
         int w = viewportWidth, h = viewportHeight;
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         BoardTheme theme = BoardTheme.active();

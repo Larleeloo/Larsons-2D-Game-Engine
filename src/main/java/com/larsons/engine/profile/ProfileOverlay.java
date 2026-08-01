@@ -65,7 +65,8 @@ public final class ProfileOverlay {
 
         int rows = snapshot.isEmpty() ? 1 : Stage.values().length + snapshot.passes().size();
         int extra = snapshot.passes().isEmpty() ? 0 : ROW; // "shader passes" heading
-        int height = PAD * 2 + ROW * 2 + BAR_HEIGHT + 8 + rows * ROW + extra + ROW;
+        int draws = snapshot.draws().isEmpty() ? 0 : ROW;
+        int height = PAD * 2 + ROW * 2 + BAR_HEIGHT + 8 + rows * ROW + extra + draws + ROW;
 
         g.setColor(PANEL);
         g.fillRoundRect(PAD, PAD, WIDTH, height, 8, 8);
@@ -142,6 +143,15 @@ public final class ProfileOverlay {
                         truncate(pass.name(), 14), pass.meanMs()), x + 14, y);
                 y += ROW;
             }
+        }
+
+        if (!snapshot.draws().isEmpty()) {
+            y += 4;
+            g.setColor(TEXT);
+            g.drawString("draws %.0f ops -> %.0f (%.1fx)".formatted(
+                    snapshot.draws().operations(), snapshot.draws().batches(),
+                    snapshot.draws().mergeRatio()), x, y);
+            y += ROW;
         }
 
         y += 4;

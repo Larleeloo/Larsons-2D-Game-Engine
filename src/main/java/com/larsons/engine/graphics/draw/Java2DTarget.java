@@ -81,6 +81,25 @@ public final class Java2DTarget implements DrawTarget {
      */
     public Graphics2D graphics() { return g; }
 
+    /**
+     * The Graphics2D behind a target that has one — the line a scene not yet
+     * ported puts at the top of its {@code render} so the body below it can
+     * stay exactly as it was.
+     *
+     * <p><b>Counting the calls to this is how the migration is tracked.</b>
+     * Each one is a scene a GPU backend cannot draw, and the port is finished
+     * when there are none. It throws rather than returning null on a target
+     * with no Graphics2D, because the alternative is a scene that silently
+     * renders nothing on the backend it was supposed to be checked against.
+     */
+    public static Graphics2D graphicsOf(DrawTarget target) {
+        if (target instanceof Java2DTarget java2d) return java2d.graphics();
+        throw new UnsupportedOperationException(
+                "this drawing code still needs a Graphics2D, and "
+                        + (target == null ? "null" : target.getClass().getSimpleName())
+                        + " has none — port it to DrawTarget first");
+    }
+
     @Override public int width() { return width; }
 
     @Override public int height() { return height; }
@@ -116,6 +135,14 @@ public final class Java2DTarget implements DrawTarget {
         stats.record(DrawStats.Kind.SHAPE, null);
         g.setColor(new Color(argb, true));
         g.fillPolygon(xs, ys, count);
+    }
+
+    @Override
+    public void fillShape(Shape shape, int argb) {
+        if (shape == null) return;
+        stats.record(DrawStats.Kind.SHAPE, null);
+        g.setColor(new Color(argb, true));
+        g.fill(shape);
     }
 
     // --- outlines --------------------------------------------------------------

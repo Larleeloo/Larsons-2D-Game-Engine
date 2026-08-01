@@ -3,6 +3,7 @@ package com.larsons.engine;
 import com.larsons.engine.graphics.Java2DRenderer;
 import com.larsons.engine.graphics.shader.ShaderChain;
 import com.larsons.engine.graphics.shader.Shaders;
+import com.larsons.engine.graphics.draw.RecordingTarget;
 import com.larsons.engine.profile.DeviceProfile;
 import com.larsons.engine.profile.FrameProfiler;
 import com.larsons.engine.profile.FrameProfiler.Snapshot;
@@ -414,6 +415,122 @@ class FrameProfilerTest {
         assertEquals(dir.resolve("frame-profile-2.txt"), second);
         assertTrue(Files.readString(first).contains("run one"), "the first run should survive");
         assertTrue(Files.readString(second).contains("run two"));
+    }
+
+    @Test
+    void drawCountsAreRecordedAgainstTheFrameThatIssuedThem() {
+        FrameProfiler profiler = enabled();
+        RecordingTarget target = new RecordingTarget(64, 64);
+        for (int i = 0; i < 100; i++) target.fillRect(i, 0, 1, 1, Color.RED);
+
+        profiler.recordDraws(target.stats());
+        profiler.endFrame();
+
+        FrameProfiler.Draws draws = profiler.snapshot().draws();
+        assertEquals(100.0, draws.operations(), 1e-9);
+        assertEquals(1.0, draws.batches(), 1e-9, "solid geometry merges");
+        assertEquals(100.0, draws.mergeRatio(), 1e-9);
+    }
+
+    @Test
+    void drawCountsAverageAcrossTheWindow() {
+        FrameProfiler profiler = enabled();
+        RecordingTarget busy = new RecordingTarget(64, 64);
+        for (int i = 0; i < 100; i++) busy.fillRect(i, 0, 1, 1, Color.RED);
+
+        profiler.recordDraws(busy.stats());
+        profiler.endFrame();
+        profiler.endFrame();   // a frame that drew nothing
+
+        assertEquals(50.0, profiler.snapshot().draws().operations(), 1e-9,
+                "a hundred operations over two frames averages fifty");
+    }
+
+    @Test
+    void aFrameThatDrawsNothingDoesNotInheritThePreviousLap() {
+        // The ring is reused, so the slot has to be cleared as it comes round.
+        FrameProfiler profiler = enabled();
+        RecordingTarget busy = new RecordingTarget(64, 64);
+        busy.fillRect(0, 0, 1, 1, Color.RED);
+
+        profiler.recordDraws(busy.stats());
+        profiler.endFrame();
+        for (int i = 0; i < FrameProfiler.WINDOW + 5; i++) profiler.endFrame();
+
+        assertEquals(0.0, profiler.snapshot().draws().operations(), 1e-9,
+                "the busy frame has rolled out of the window");
+    }
+
+    @Test
+    void alternatingTexturesShowUpAsAnUnbatchableFrame() {
+        // The measurement that decides whether a GPU backend is the next move.
+        FrameProfiler profiler = enabled();
+        RecordingTarget target = new RecordingTarget(64, 64);
+        java.awt.image.BufferedImage a = image(8, 8), b = image(8, 8);
+        for (int i = 0; i < 50; i++) {
+            target.drawImage(a, 0, 0);
+            target.drawImage(b, 8, 0);
+        }
+
+        profiler.recordDraws(target.stats());
+        profiler.endFrame();
+
+        assertEquals(1.0, profiler.snapshot().draws().mergeRatio(), 1e-9,
+                "one draw call per sprite — a backend would buy nothing here");
+    }
+
+    @Test
+    void theReportNamesAtlasingWhenBatchingWouldBuyNothing() {
+        FrameProfiler profiler = enabled();
+        RecordingTarget target = new RecordingTarget(64, 64);
+        java.awt.image.BufferedImage a = image(8, 8), b = image(8, 8);
+        for (int i = 0; i < 50; i++) {
+            target.drawImage(a, 0, 0);
+            target.drawImage(b, 8, 0);
+        }
+        for (int i = 0; i < 5; i++) {
+            profiler.record(Stage.SCENE, agoMs(14));
+            profiler.recordDraws(target.stats());
+            profiler.endFrame();
+        }
+
+        String text = FrameReport.render(profiler.snapshot(), DeviceProfile.detect(), null);
+        assertTrue(text.contains("Draw calls"), text);
+        assertTrue(text.contains("Atlas the art"),
+                "a 1x merge ratio should name atlasing as the prerequisite:\n" + text);
+    }
+
+    @Test
+    void theReportCallsAWellBatchedFrameGpuShaped() {
+        FrameProfiler profiler = enabled();
+        RecordingTarget target = new RecordingTarget(64, 64);
+        for (int i = 0; i < 500; i++) target.fillRect(i, 0, 1, 1, Color.RED);
+        for (int i = 0; i < 5; i++) {
+            profiler.record(Stage.SCENE, agoMs(14));
+            profiler.recordDraws(target.stats());
+            profiler.endFrame();
+        }
+
+        String verdict = FrameReport.verdict(profiler.snapshot(), DeviceProfile.detect());
+        assertTrue(verdict.contains("already GPU-shaped"), verdict);
+    }
+
+    @Test
+    void aReportWithNoDrawDataOmitsTheSection() {
+        // Until the scenes are ported, most frames record no draws at all; the
+        // report must not print a table of zeroes and a verdict about them.
+        FrameProfiler profiler = enabled();
+        profiler.record(Stage.SCENE, agoMs(4));
+        profiler.endFrame();
+
+        String text = FrameReport.render(profiler.snapshot(), DeviceProfile.detect(), null);
+        assertFalse(text.contains("Draw calls"), text);
+        assertFalse(text.contains("Batching:"), text);
+    }
+
+    private static java.awt.image.BufferedImage image(int w, int h) {
+        return new java.awt.image.BufferedImage(w, h,
+                java.awt.image.BufferedImage.TYPE_INT_ARGB);
     }
 
     @Test

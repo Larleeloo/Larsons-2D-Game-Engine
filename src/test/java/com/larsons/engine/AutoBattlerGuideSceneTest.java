@@ -1,5 +1,6 @@
 package com.larsons.engine;
 
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.config.GameTypeStore;
@@ -63,21 +64,21 @@ class AutoBattlerGuideSceneTest {
             for (int f = 0; f < 3; f++) {
                 input.newFrame();
                 scenes.update(1.0 / 60.0, input);
-                scenes.render(g, 0f);
+                scenes.render(Java2DTarget.unsized(g), 0f);
             }
             for (int gy = 130; gy < 620; gy += 36) {
                 for (int gx = 60; gx < 1000; gx += 110) {
                     click(input, gx, gy);              // open a card if one lives here
                     scenes.update(1.0 / 60.0, input);
-                    scenes.render(g, 0f);
+                    scenes.render(Java2DTarget.unsized(g), 0f);
                     click(input, gx, gy);              // dismiss whatever opened
                     scenes.update(1.0 / 60.0, input);
-                    scenes.render(g, 0f);
+                    scenes.render(Java2DTarget.unsized(g), 0f);
                 }
             }
             key(input, KeyEvent.VK_RIGHT);             // next tab
             scenes.update(1.0 / 60.0, input);
-            scenes.render(g, 0f);
+            scenes.render(Java2DTarget.unsized(g), 0f);
         }
 
         assertNotNull(scenes.current());
@@ -86,11 +87,11 @@ class AutoBattlerGuideSceneTest {
         // Esc with no card open leaves the guide for the lobby.
         key(input, KeyEvent.VK_ESCAPE);
         scenes.update(1.0 / 60.0, input);
-        scenes.render(g, 0f);
+        scenes.render(Java2DTarget.unsized(g), 0f);
         for (int i = 0; i < 80 && !"AutoBattlerLobbyScene".equals(scenes.current().name()); i++) {
             input.newFrame();
             scenes.update(1.0 / 30.0, input);
-            scenes.render(g, 0f);
+            scenes.render(Java2DTarget.unsized(g), 0f);
         }
         assertEquals("AutoBattlerLobbyScene", scenes.current().name());
 

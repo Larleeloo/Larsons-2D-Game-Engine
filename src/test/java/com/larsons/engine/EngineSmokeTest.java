@@ -1,5 +1,6 @@
 package com.larsons.engine;
 
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.graphics.SpriteSheet;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.level.Level;
@@ -94,14 +95,14 @@ class EngineSmokeTest {
         for (int i = 0; i < 5; i++) {
             input.newFrame();
             scenes.update(1.0 / 120.0, input);
-            scenes.render(g, 0f);
+            scenes.render(Java2DTarget.unsized(g), 0f);
         }
 
         scenes.setScene("play");
         for (int i = 0; i < 30; i++) {
             input.newFrame();
             scenes.update(1.0 / 120.0, input);
-            scenes.render(g, 0f);
+            scenes.render(Java2DTarget.unsized(g), 0f);
         }
         g.dispose();
 

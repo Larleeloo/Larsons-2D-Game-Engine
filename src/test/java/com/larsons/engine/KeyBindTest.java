@@ -1,5 +1,6 @@
 package com.larsons.engine;
 
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputBinding;
 import com.larsons.engine.input.InputManager;
@@ -378,7 +379,7 @@ class KeyBindTest {
         for (int i = 0; i < 40 && scenes.isTransitioning(); i++) {
             input.newFrame();
             scenes.update(1 / 30.0, input);
-            scenes.render(g, 1f);
+            scenes.render(Java2DTarget.unsized(g), 1f);
         }
         g.dispose();
     }

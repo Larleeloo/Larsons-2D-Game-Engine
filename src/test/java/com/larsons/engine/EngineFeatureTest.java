@@ -1,5 +1,6 @@
 package com.larsons.engine;
 
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.config.GameTypeStore;
@@ -362,7 +363,7 @@ class EngineFeatureTest {
         for (int i = 0; i < 20; i++) {
             input.newFrame();
             scenes.update(1.0 / 120.0, input);
-            scenes.render(g, 0f);
+            scenes.render(Java2DTarget.unsized(g), 0f);
         }
         g.dispose();
         assertNotNull(scenes.current());

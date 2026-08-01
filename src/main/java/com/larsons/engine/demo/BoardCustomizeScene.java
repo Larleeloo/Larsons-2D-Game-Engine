@@ -7,6 +7,8 @@ import com.larsons.engine.config.GameContext;
 import com.larsons.engine.graphics.AssetLoader;
 import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.graphics.draw.DrawTarget;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
@@ -294,7 +296,9 @@ public class BoardCustomizeScene extends AbstractScene {
     }
 
     @Override
-    public void render(Graphics2D g, float alpha) {
+    public void render(DrawTarget target, float alpha) {
+        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
+        Graphics2D g = Java2DTarget.graphicsOf(target);
         form.render(g, viewportWidth, viewportHeight);
         drawPreview(g);
         if (!status.isEmpty()) {

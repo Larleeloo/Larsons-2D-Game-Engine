@@ -2,7 +2,7 @@ package com.larsons.engine.scene;
 
 import com.larsons.engine.input.InputManager;
 
-import java.awt.Graphics2D;
+import com.larsons.engine.graphics.draw.DrawTarget;
 
 /**
  * A distinct game state — a menu, a level, a cutscene, etc.
@@ -28,10 +28,16 @@ public interface Scene {
     /**
      * Draw the scene.
      *
-     * @param g     the drawing surface for this frame
-     * @param alpha interpolation factor in [0,1] between sim steps
+     * <p>The target is backend-neutral: today it wraps Java2D, and a GPU
+     * backend implements the same verbs. Scenes not yet ported off
+     * {@code Graphics2D} start by unwrapping it with
+     * {@link com.larsons.engine.graphics.draw.Java2DTarget#graphicsOf}, and
+     * the number of scenes still doing that is the migration's progress bar.
+     *
+     * @param target the drawing surface for this frame
+     * @param alpha  interpolation factor in [0,1] between sim steps
      */
-    void render(Graphics2D g, float alpha);
+    void render(DrawTarget target, float alpha);
 
     /** Called when this scene is replaced. */
     void onExit();

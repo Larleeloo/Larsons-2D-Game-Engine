@@ -145,6 +145,26 @@ public class Level {
 
     /** True when tile ids are {@link BlockRegistry} block ids. */
     public boolean registryTiles;
+
+    /**
+     * Bumped whenever this level's terrain changes. Anything that caches a
+     * picture of the world watches it: a cached chunk built at revision N is
+     * still the truth at revision N and stale at anything higher, which is a
+     * cheaper question than comparing tiles.
+     *
+     * <p>Deliberately not saved — it describes this session's edits, not the
+     * level, and a loaded level starts over at zero.
+     */
+    private transient long terrainRevision;
+
+    /** The current terrain revision; see {@link #terrainRevision}. */
+    public long terrainRevision() { return terrainRevision; }
+
+    /**
+     * Mark the terrain as changed. Called by the setters, and by anything that
+     * rewrites the grid wholesale (loading, resizing, changing format).
+     */
+    public void bumpTerrainRevision() { terrainRevision++; }
     /** Resolves block ids in registry mode. */
     public BlockRegistry blocks = BlockRegistry.standard();
 
@@ -542,7 +562,10 @@ public class Level {
         if (id != 0 && registryTiles && blocks.get(id) == null) return false;
         if (chunked != null) {
             boolean changed = chunked.set(col, row, id);
-            if (changed && id == 0) clearCellAttachments(col, row);
+            if (changed) {
+                bumpTerrainRevision();
+                if (id == 0) clearCellAttachments(col, row);
+            }
             return changed;
         }
         if (tiles == null || row < 0 || row >= tiles.length
@@ -551,6 +574,7 @@ public class Level {
         }
         if (tiles[row][col] == id) return false;
         tiles[row][col] = id;
+        bumpTerrainRevision();
         if (id == 0) clearCellAttachments(col, row);
         return true;
     }
@@ -566,10 +590,15 @@ public class Level {
         if (id != 0 && blocks.get(id) == null) return false;
         if (col < 0 || row < 0 || col >= width || row >= height) return false;
         if (id != 0) ensureUpperStorage();
-        if (upperChunked != null) return upperChunked.set(col, row, id);
+        if (upperChunked != null) {
+            boolean changed = upperChunked.set(col, row, id);
+            if (changed) bumpTerrainRevision();
+            return changed;
+        }
         if (upper == null) return false;  // clearing a layer that never existed
         if (upper[row][col] == id) return false;
         upper[row][col] = id;
+        bumpTerrainRevision();
         return true;
     }
 
