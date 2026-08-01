@@ -1,6 +1,7 @@
 package com.larsons.engine.graphics;
 
 import com.larsons.engine.graphics.shader.ShaderChain;
+import com.larsons.engine.profile.FrameProfiler;
 
 import java.awt.Canvas;
 import java.awt.Color;
@@ -25,6 +26,15 @@ import java.awt.image.DataBufferInt;
  * fragment-shader parallelism), and the result is blitted to the canvas. With
  * no passes active the offscreen hop is skipped entirely, so shaders cost
  * nothing when disabled.
+ *
+ * <p><b>The shader path costs more than the passes themselves.</b> Reaching the
+ * pixels means {@code DataBufferInt.getData()}, and Java2D permanently stops
+ * caching an image in video memory once a caller holds a pointer into its
+ * raster. So enabling any pass gives up whatever hardware blitting the platform
+ * was doing for the frame, on top of the per-pass CPU work. That is why
+ * {@link com.larsons.engine.profile.FrameProfiler.Stage#SHADERS} and
+ * {@link com.larsons.engine.profile.FrameProfiler.Stage#PRESENT} are timed
+ * separately: turning passes on can move both numbers.
  */
 public class Java2DRenderer implements Renderer {
     private final Canvas canvas;
@@ -35,6 +45,7 @@ public class Java2DRenderer implements Renderer {
     private ShaderChain shaders;
     private BufferedImage offscreen;
     private boolean offscreenFrame;
+    private FrameProfiler profiler;
 
     public Java2DRenderer(Canvas canvas, Color clearColor) {
         this.canvas = canvas;
@@ -44,6 +55,11 @@ public class Java2DRenderer implements Renderer {
     @Override
     public void setShaderChain(ShaderChain chain) {
         this.shaders = chain;
+    }
+
+    @Override
+    public void setProfiler(FrameProfiler profiler) {
+        this.profiler = profiler;
     }
 
     private void ensureStrategy() {
@@ -56,6 +72,16 @@ public class Java2DRenderer implements Renderer {
 
     @Override
     public Graphics2D beginFrame() {
+        long started = profiler == null ? 0L : profiler.begin();
+        try {
+            return acquireFrame();
+        } finally {
+            if (profiler != null) profiler.record(FrameProfiler.Stage.PRESENT, started);
+        }
+    }
+
+    /** Acquire and clear this frame's surface. Timed as presentation overhead. */
+    private Graphics2D acquireFrame() {
         ensureStrategy();
         offscreenFrame = shaders != null && shaders.hasPasses();
         if (offscreenFrame) {
@@ -79,13 +105,31 @@ public class Java2DRenderer implements Renderer {
 
     @Override
     public void present() {
+        long presentStart = profiler == null ? 0L : profiler.begin();
         if (currentGraphics != null) {
             currentGraphics.dispose();
             currentGraphics = null;
         }
         if (offscreenFrame && offscreen != null) {
             int[] pixels = ((DataBufferInt) offscreen.getRaster().getDataBuffer()).getData();
-            shaders.apply(pixels, offscreen.getWidth(), offscreen.getHeight());
+
+            // The shader chain is timed on its own: it is the budget a GPU
+            // shader backend would compete for, and it is the one part of the
+            // frame whose cost scales with pixel count rather than with how
+            // much the scene drew.
+            if (profiler != null) {
+                profiler.record(FrameProfiler.Stage.PRESENT, presentStart);
+                long shaderStart = profiler.begin();
+                try {
+                    shaders.apply(pixels, offscreen.getWidth(), offscreen.getHeight());
+                } finally {
+                    profiler.record(FrameProfiler.Stage.SHADERS, shaderStart);
+                }
+                presentStart = profiler.begin();
+            } else {
+                shaders.apply(pixels, offscreen.getWidth(), offscreen.getHeight());
+            }
+
             Graphics2D g = (Graphics2D) strategy.getDrawGraphics();
             try {
                 g.drawImage(offscreen, 0, 0, null);
@@ -98,6 +142,7 @@ public class Java2DRenderer implements Renderer {
         }
         // Helps keep animation smooth on some platforms (notably Linux).
         Toolkit.getDefaultToolkit().sync();
+        if (profiler != null) profiler.record(FrameProfiler.Stage.PRESENT, presentStart);
     }
 
     @Override

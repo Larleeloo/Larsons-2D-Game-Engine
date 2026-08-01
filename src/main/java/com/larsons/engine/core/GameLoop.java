@@ -1,5 +1,7 @@
 package com.larsons.engine.core;
 
+import com.larsons.engine.profile.FrameProfiler;
+
 import java.util.concurrent.locks.LockSupport;
 
 /**
@@ -48,11 +50,24 @@ public final class GameLoop implements Runnable {
     private Thread thread;
     private volatile double fps;
 
+    /**
+     * Optional frame instrumentation. The loop owns the two stages nobody else
+     * can see: the fixed-step simulation, and the time the limiter spends
+     * waiting — the headroom that says whether a frame had anything to spare.
+     */
+    private FrameProfiler profiler;
+
     public GameLoop(int updateRate, int targetFps, Update update, Render render) {
         this.updateRate = Math.max(1, updateRate);
         this.targetFps = Math.max(1, targetFps);
         this.update = update;
         this.render = render;
+    }
+
+    /** Attach the profiler this loop reports update and idle time to. */
+    public void setProfiler(FrameProfiler profiler) {
+        this.profiler = profiler;
+        if (profiler != null) profiler.setTargetFps(targetFps);
     }
 
     public void start() {
@@ -69,7 +84,12 @@ public final class GameLoop implements Runnable {
     public int getTargetFps() { return targetFps; }
 
     /** Adjust the render frame cap at runtime (e.g. from a settings menu). */
-    public void setTargetFps(int fps) { this.targetFps = Math.max(1, fps); }
+    public void setTargetFps(int fps) {
+        this.targetFps = Math.max(1, fps);
+        FrameProfiler p = profiler;
+        // Headroom is measured against the cap, so the profiler has to follow it.
+        if (p != null) p.setTargetFps(this.targetFps);
+    }
 
     @Override
     public void run() {
@@ -91,9 +111,18 @@ public final class GameLoop implements Runnable {
             accumulator += (frameStart - lastTime);
             lastTime = frameStart;
 
+            FrameProfiler prof = profiler;
+
             int maxUpdates = 8; // cap catch-up to avoid a spiral of death
             while (accumulator >= nsPerUpdate && maxUpdates-- > 0) {
-                update.update(1.0 / updateRate);
+                // Every catch-up step is timed; they sum into one frame's
+                // update cost, which is what a frame actually paid.
+                long updateStart = prof == null ? 0L : prof.begin();
+                try {
+                    update.update(1.0 / updateRate);
+                } finally {
+                    if (prof != null) prof.record(FrameProfiler.Stage.UPDATE, updateStart);
+                }
                 accumulator -= nsPerUpdate;
             }
 
@@ -114,10 +143,18 @@ public final class GameLoop implements Runnable {
             long now = System.nanoTime();
             if (nextFrame <= now) {
                 // Fell behind (hitch or cap change): restart the schedule rather
-                // than racing to catch up.
+                // than racing to catch up. No idle time is recorded, which is
+                // exactly right — a frame that overran had none.
                 nextFrame = now;
-            } else if (!waitUntil(nextFrame)) {
-                break; // interrupted
+                if (prof != null) prof.endFrame();
+            } else {
+                long idleStart = prof == null ? 0L : prof.begin();
+                boolean uninterrupted = waitUntil(nextFrame);
+                if (prof != null) {
+                    prof.record(FrameProfiler.Stage.IDLE, idleStart);
+                    prof.endFrame();
+                }
+                if (!uninterrupted) break; // interrupted
             }
         }
     }

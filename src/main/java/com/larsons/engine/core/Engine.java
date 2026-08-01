@@ -4,9 +4,15 @@ import com.larsons.engine.graphics.Java2DRenderer;
 import com.larsons.engine.graphics.Renderer;
 import com.larsons.engine.graphics.shader.ShaderChain;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.profile.DeviceProfile;
+import com.larsons.engine.profile.FrameProfiler;
+import com.larsons.engine.profile.FrameReport;
+import com.larsons.engine.profile.ProfileOverlay;
 import com.larsons.engine.scene.SceneManager;
 
 import java.awt.Graphics2D;
+import java.awt.event.KeyEvent;
+import java.nio.file.Path;
 
 /**
  * Top-level engine: wires together the window, renderer, input, scene manager,
@@ -19,6 +25,19 @@ import java.awt.Graphics2D;
  *   engine.scenes().setScene("menu");
  *   engine.start();
  * </pre>
+ *
+ * <p><b>Profiling.</b> {@code F3} toggles a frame-cost readout in every scene,
+ * and {@code F4} writes the current measurement to a report file. Both are also
+ * driveable from the command line so a run can be reproduced on another
+ * machine without touching the keyboard:
+ * <pre>
+ *   -Dlarsons.profile=true              start with profiling on
+ *   -Dlarsons.profile.overlay=false     measure, but draw no HUD
+ *   -Dlarsons.profile.seconds=30        auto-write a report after 30 s and stop
+ *   -Dlarsons.profile.out=frames.txt    where that report goes
+ * </pre>
+ * See {@link FrameProfiler} for what the stages mean and {@link FrameReport}
+ * for how a result is read.
  */
 public class Engine {
     private final EngineConfig config;
@@ -28,6 +47,16 @@ public class Engine {
     private final ShaderChain shaders;
     private final SceneManager scenes;
     private final GameLoop loop;
+
+    private final FrameProfiler profiler = new FrameProfiler();
+    private final DeviceProfile device = DeviceProfile.detect();
+    private boolean overlayVisible;
+
+    /** Seconds of measurement after which a report is written, or 0 for never. */
+    private final double autoReportSeconds;
+    private final Path reportPath;
+    private double profiledSeconds;
+    private boolean autoReportDone;
 
     // Last-seen viewport size, to detect window resizes.
     private int lastWidth, lastHeight;
@@ -47,6 +76,32 @@ public class Engine {
         this.lastHeight = config.height;
 
         this.loop = new GameLoop(config.updateRate, config.targetFps, this::tick, this::draw);
+
+        this.renderer.setProfiler(profiler);
+        this.shaders.setProfiler(profiler);
+        this.loop.setProfiler(profiler);
+        this.profiler.setTargetFps(config.targetFps);
+
+        this.autoReportSeconds = numberProperty("larsons.profile.seconds", 0);
+        this.reportPath = Path.of(System.getProperty("larsons.profile.out", "frame-profile.txt"));
+        if (booleanProperty("larsons.profile", false)) {
+            setProfilingEnabled(true);
+            this.overlayVisible = booleanProperty("larsons.profile.overlay", true);
+        }
+    }
+
+    private static boolean booleanProperty(String key, boolean fallback) {
+        String value = System.getProperty(key);
+        return value == null ? fallback : !value.equalsIgnoreCase("false");
+    }
+
+    private static double numberProperty(String key, double fallback) {
+        try {
+            String value = System.getProperty(key);
+            return value == null ? fallback : Double.parseDouble(value.trim());
+        } catch (NumberFormatException e) {
+            return fallback;
+        }
     }
 
     public SceneManager scenes() { return scenes; }
@@ -64,6 +119,55 @@ public class Engine {
 
     /** Change the render frame cap at runtime (used by game-type settings). */
     public void setTargetFps(int fps) { loop.setTargetFps(fps); }
+
+    /** Per-stage frame timings. See {@link FrameProfiler} for what they mean. */
+    public FrameProfiler profiler() { return profiler; }
+
+    /** The machine these measurements were taken on. */
+    public DeviceProfile device() { return device; }
+
+    /**
+     * Turn measurement on or off; enabling always starts a fresh window.
+     *
+     * <p>Enabling also re-arms {@code larsons.profile.seconds}, so each F3
+     * press starts a new timed run. That is what makes the interesting
+     * workflow work: launch with a duration but <em>without</em>
+     * {@code larsons.profile}, walk into whatever scene you actually want
+     * measured, and press F3 there — the timer starts on the scene you care
+     * about rather than on the menu the game happened to boot into.
+     */
+    public void setProfilingEnabled(boolean on) {
+        profiler.setEnabled(on);
+        if (on) {
+            profiledSeconds = 0;
+            autoReportDone = false;
+        }
+    }
+
+    /** Whether the on-screen readout is drawn (measurement is independent). */
+    public void setOverlayVisible(boolean visible) { this.overlayVisible = visible; }
+
+    public boolean isOverlayVisible() { return overlayVisible; }
+
+    /**
+     * Write the current measurement to {@code larsons.profile.out} (default
+     * {@code frame-profile.txt}) and echo the verdict to the console. Returns
+     * the file written, or {@code null} if nothing was measured or the write
+     * failed.
+     */
+    public Path writeProfileReport(String context) {
+        FrameProfiler.Snapshot snapshot = profiler.snapshot();
+        if (snapshot.isEmpty()) {
+            System.out.println("[profile] nothing measured yet — press F3 first");
+            return null;
+        }
+        Path written = FrameReport.write(reportPath, snapshot, device, context);
+        System.out.print(FrameReport.verdict(snapshot, device));
+        if (written != null) {
+            System.out.println("[profile] full report: " + written.toAbsolutePath());
+        }
+        return written;
+    }
 
     public void start() {
         window.show();
@@ -83,13 +187,71 @@ public class Engine {
         }
 
         input.newFrame();
+        handleProfilerKeys();
         scenes.update(dt, input);
+        advanceAutoReport(dt);
+    }
+
+    /**
+     * F3 toggles measurement and the readout together; F4 writes a report
+     * without interrupting the run. Read before scene updates so a scene that
+     * binds the same keys still sees them.
+     */
+    private void handleProfilerKeys() {
+        if (input.isKeyJustPressed(KeyEvent.VK_F3)) {
+            boolean on = !profiler.isEnabled();
+            setProfilingEnabled(on);
+            overlayVisible = on;
+        }
+        if (input.isKeyJustPressed(KeyEvent.VK_F4) && profiler.isEnabled()) {
+            writeProfileReport(describeContext());
+        }
+    }
+
+    /**
+     * Drive {@code -Dlarsons.profile.seconds}: measure for a fixed span, write
+     * the report, and stop. This is what makes a run comparable across
+     * machines — the same scene, the same duration, no human timing a
+     * keystroke.
+     */
+    private void advanceAutoReport(double dt) {
+        if (autoReportDone || autoReportSeconds <= 0 || !profiler.isEnabled()) return;
+        profiledSeconds += dt;
+        if (profiledSeconds >= autoReportSeconds) {
+            autoReportDone = true;
+            writeProfileReport(describeContext());
+            setProfilingEnabled(false);
+            overlayVisible = false;
+        }
+    }
+
+    /** What was on screen while measuring — a report is useless without it. */
+    private String describeContext() {
+        String scene = scenes.current() == null
+                ? "no scene" : scenes.current().getClass().getSimpleName();
+        return "%s, %dx%d, %d shader pass(es)".formatted(
+                scene, renderer.getWidth(), renderer.getHeight(), shaders.passes().size());
     }
 
     private void draw(double alpha) {
         Graphics2D g = renderer.beginFrame();
         try {
-            scenes.render(g, (float) alpha);
+            // Only the scene's own drawing is timed here. The renderer reports
+            // its shader and present costs itself, so the three stay separable.
+            long sceneStart = profiler.begin();
+            try {
+                scenes.render(g, (float) alpha);
+            } finally {
+                profiler.record(FrameProfiler.Stage.SCENE, sceneStart);
+            }
+            if (overlayVisible) {
+                long overlayStart = profiler.begin();
+                try {
+                    ProfileOverlay.draw(g, profiler.latest(), device, loop.getFps());
+                } finally {
+                    profiler.record(FrameProfiler.Stage.OVERLAY, overlayStart);
+                }
+            }
         } finally {
             renderer.present();
         }

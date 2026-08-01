@@ -42,4 +42,15 @@ public interface Renderer {
      * (CPU stripes, GPU FBO ping-pong) as long as pass order is preserved.
      */
     default void setShaderChain(ShaderChain chain) {}
+
+    /**
+     * Attach the profiler this backend reports its own timings to. A backend
+     * is expected to separate the cost of running the shader chain
+     * ({@link com.larsons.engine.profile.FrameProfiler.Stage#SHADERS}) from the
+     * cost of acquiring, blitting and flipping the frame
+     * ({@link com.larsons.engine.profile.FrameProfiler.Stage#PRESENT}), because
+     * those two answer different questions about whether a GPU backend is
+     * worth building.
+     */
+    default void setProfiler(com.larsons.engine.profile.FrameProfiler profiler) {}
 }
