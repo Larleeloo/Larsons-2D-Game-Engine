@@ -248,20 +248,45 @@ public final class FrameReport {
     }
 
     /**
-     * Write a report next to the game. Returns the path written, or
+     * Write a report next to the game. Returns the path actually written, or
      * {@code null} if it could not be saved — a profiling run is never allowed
      * to take the game down with it.
+     *
+     * <p>An existing report is never overwritten; a run lands beside it as
+     * {@code frame-profile-2.txt} and so on. Measurements are taken in sets —
+     * shaders on against shaders off, one machine against another — and
+     * silently clobbering the run someone just took would lose exactly the
+     * half of the comparison they were in the middle of making.
      */
     public static Path write(Path path, Snapshot snapshot, DeviceProfile device,
                              String context) {
         try {
             Path parent = path.toAbsolutePath().getParent();
             if (parent != null) Files.createDirectories(parent);
-            Files.writeString(path, render(snapshot, device, context));
-            return path;
+            Path target = available(path);
+            Files.writeString(target, render(snapshot, device, context));
+            return target;
         } catch (IOException | RuntimeException e) {
             System.err.println("[profile] could not write report: " + e.getMessage());
             return null;
         }
+    }
+
+    /** {@code path} if free, else the first {@code name-N.ext} that is. */
+    private static Path available(Path path) {
+        if (!Files.exists(path)) return path;
+
+        String fileName = path.getFileName().toString();
+        int dot = fileName.lastIndexOf('.');
+        String stem = dot < 0 ? fileName : fileName.substring(0, dot);
+        String extension = dot < 0 ? "" : fileName.substring(dot);
+
+        Path parent = path.toAbsolutePath().getParent();
+        for (int n = 2; n < 1000; n++) {
+            Path candidate = (parent == null ? Path.of("") : parent)
+                    .resolve(stem + "-" + n + extension);
+            if (!Files.exists(candidate)) return candidate;
+        }
+        return path; // a thousand reports in one folder; overwrite is fair.
     }
 }

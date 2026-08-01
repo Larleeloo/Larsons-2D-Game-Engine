@@ -126,10 +126,22 @@ public class Engine {
     /** The machine these measurements were taken on. */
     public DeviceProfile device() { return device; }
 
-    /** Turn measurement on or off; enabling always starts a fresh window. */
+    /**
+     * Turn measurement on or off; enabling always starts a fresh window.
+     *
+     * <p>Enabling also re-arms {@code larsons.profile.seconds}, so each F3
+     * press starts a new timed run. That is what makes the interesting
+     * workflow work: launch with a duration but <em>without</em>
+     * {@code larsons.profile}, walk into whatever scene you actually want
+     * measured, and press F3 there — the timer starts on the scene you care
+     * about rather than on the menu the game happened to boot into.
+     */
     public void setProfilingEnabled(boolean on) {
         profiler.setEnabled(on);
-        if (on) profiledSeconds = 0;
+        if (on) {
+            profiledSeconds = 0;
+            autoReportDone = false;
+        }
     }
 
     /** Whether the on-screen readout is drawn (measurement is independent). */

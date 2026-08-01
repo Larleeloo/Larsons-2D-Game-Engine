@@ -399,6 +399,24 @@ class FrameProfilerTest {
     }
 
     @Test
+    void asecondReportDoesNotClobberTheFirst(@TempDir Path dir) throws Exception {
+        // Measurements are taken in sets — shaders on against shaders off —
+        // so a second run must not delete the half already captured.
+        FrameProfiler profiler = enabled();
+        profiler.record(Stage.SCENE, agoMs(3));
+        profiler.endFrame();
+
+        Path out = dir.resolve("frame-profile.txt");
+        Path first = FrameReport.write(out, profiler.snapshot(), DeviceProfile.detect(), "run one");
+        Path second = FrameReport.write(out, profiler.snapshot(), DeviceProfile.detect(), "run two");
+
+        assertEquals(out, first);
+        assertEquals(dir.resolve("frame-profile-2.txt"), second);
+        assertTrue(Files.readString(first).contains("run one"), "the first run should survive");
+        assertTrue(Files.readString(second).contains("run two"));
+    }
+
+    @Test
     void emptySnapshotRendersWithoutBlowingUp() {
         String text = FrameReport.render(Snapshot.EMPTY, DeviceProfile.detect(), null);
         assertTrue(text.contains("No frames measured"), text);
