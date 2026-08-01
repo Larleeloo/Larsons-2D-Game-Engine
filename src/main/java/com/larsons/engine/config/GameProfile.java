@@ -223,6 +223,26 @@ public class GameProfile {
      * settings become the active configuration without losing which game type
      * (folder of levels) is in play, or whether it is play-only.
      */
+    /**
+     * Put every feature toggle back to the engine's standard default, keeping
+     * the game-type identity {@link #applyFeaturesFrom} keeps.
+     *
+     * <p><b>Why a game type has no feature settings of its own to edit.</b> A
+     * game type is a folder of levels, and each level carries the configuration
+     * it plays with ({@link com.larsons.engine.level.Level#settings}) — so a
+     * feature set stored on the game type could only ever be the template new
+     * levels start from. That made it invisible at the point where it mattered:
+     * a creator who turned mobs off on the game type met a level with no mobs
+     * much later, in a form that had a mobs toggle of its own saying something
+     * different. Two places to set one thing, one of which acts at a distance.
+     *
+     * <p>So the template is fixed at the defaults, and every real decision is
+     * made per level, where it can be seen next to the level it applies to.
+     */
+    public void resetFeaturesToDefaults() {
+        applyFeaturesFrom(new GameProfile());
+    }
+
     public void applyFeaturesFrom(GameProfile src) {
         if (src == null) return;
         String keepName = name;

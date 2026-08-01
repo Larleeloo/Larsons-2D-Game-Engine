@@ -9,24 +9,26 @@ import com.larsons.engine.ui.ConfigForm;
 import java.nio.file.Path;
 
 /**
- * Builds the shared set of feature toggles for a {@link GameProfile}, so the
- * launch-time editor and the in-game pause menu present exactly the same
- * options. Each control edits the profile in place via lambdas.
+ * Builds the feature toggles for a level's own {@link GameProfile} — the
+ * <em>Load Level → Edit Settings</em> form, and the only place these are
+ * asked about. Each control edits the profile in place via lambdas.
+ *
+ * <p>The launch-time game-type editor used to show this same list as a
+ * template for levels created later. It no longer does: see
+ * {@link GameProfile#resetFeaturesToDefaults()} for why one question asked in
+ * two places, only one of which is visible where it takes effect, is worse
+ * than the flexibility it bought.
  */
 final class ProfileForms {
 
     private ProfileForms() {}
 
     static void addFeatureOptions(ConfigForm form, GameProfile p) {
-        // A level's own format decides how it is built and played, and it keeps
-        // that format for life: the three are different worlds, not three views
-        // of one, so there is no "switch perspective" toggle to offer. This is
-        // only the format new levels start in (see LevelFormat and the
-        // creative-mode picker), which is why it reads as a default.
-        form.addEnum("Default level format", LevelFormat.values(),
-                () -> LevelFormat.of(p.perspective),
-                v -> p.perspective = v.perspective());
-
+        // No level-format row here. The level's format is its own property and
+        // the settings screen already asks for it directly, above this list —
+        // a second "default format" control beside it could only disagree with
+        // the first, and saving the level overwrites it anyway
+        // (Level.captureSettings pins the saved perspective to the real one).
         form.addToggle("Zoom enabled", () -> p.zoomEnabled, v -> p.zoomEnabled = v);
         form.addDouble("Min zoom", () -> p.minZoom, v -> p.minZoom = v, 0.1, 4.0, 0.1)
                 .enabledWhen(() -> p.zoomEnabled);

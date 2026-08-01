@@ -230,7 +230,7 @@ This engine was built against six explicit requirements:
 | 4 | **Out of the box on any Java machine** | The engine uses **only the JDK** (Java2D / AWT / Swing / sockets). No third-party runtime dependencies — JSON parsing, networking, and shader execution are all in-engine. |
 | 5 | **Shader support** | ✅ Implemented — see [Shaders](#shaders). Every [`ShaderPass`](src/main/java/com/larsons/engine/graphics/shader/ShaderPass.java) is defined **GLSL-first** (real GPU fragment-shader source, exportable as `.frag` files) with a semantically identical multithreaded CPU fallback, so effects run everywhere today and on a GPU backend without porting. |
 | 6 | **Editing outline of game essentials** | Working, minimal implementations of sprite sheets, level loading, and menu customization, wired together by the demo scenes. |
-| ★ | **Feature toggles + game types** | Clickable toggles enable/disable features. Toggles are stored **per level** ([`Level.settings`](src/main/java/com/larsons/engine/level/Level.java)) so one game type can group diverse levels; the game type ([`GameProfile`](src/main/java/com/larsons/engine/config/GameProfile.java) under `resources/gametypes/`) is the folder + the template new levels inherit. **Load Level** picks an individual level and either plays it or edits its settings. |
+| ★ | **Feature toggles + game types** | Clickable toggles enable/disable features. Toggles are stored **per level** ([`Level.settings`](src/main/java/com/larsons/engine/level/Level.java)) so one game type can group diverse levels; the game type ([`GameProfile`](src/main/java/com/larsons/engine/config/GameProfile.java) under `resources/gametypes/`) is just the folder, with its own feature values pinned to the defaults so there is exactly one place — the level — where a feature is decided. **Load Level** picks an individual level and either plays it or edits its settings. |
 
 ---
 
@@ -2622,26 +2622,35 @@ the menu is open, again like Minecraft.
 
 ## Game types, levels & feature toggles
 
-A **game type** is a named **folder of levels** plus a default set of feature
-toggles, stored as a JSON
+A **game type** is a named **folder of levels**, stored as a JSON
 [`GameProfile`](src/main/java/com/larsons/engine/config/GameProfile.java). The
-idea: the engine is one big level loader, and the toggles tell it which features
-to turn on so the *same* engine can drive a platformer, a top-down adventure, an
-isometric builder, etc.
+idea: the engine is one big level loader, and a level's toggles tell it which
+features to turn on so the *same* engine can drive a platformer, a top-down
+adventure, an isometric builder, etc.
 
-**Toggles are tied to each level, not to the game type.** Every level carries
-its own copy of the settings ([`Level.settings`](src/main/java/com/larsons/engine/level/Level.java)),
+**Feature settings belong to a level, and only to a level.** Every level
+carries its own copy ([`Level.settings`](src/main/java/com/larsons/engine/level/Level.java)),
 so a single game type can group wildly different levels — a lit, gravity-on
 boss arena next to an unlit, top-down puzzle room. Loading a level loads its
-toggles. The game type's own profile is just the **template** new levels start
-from (and remembers which level to open by default).
+settings.
+
+**The game type has no feature settings to edit.** Its own copy is pinned to
+the engine defaults ([`resetFeaturesToDefaults`](src/main/java/com/larsons/engine/config/GameProfile.java)),
+so the template a new level starts from is one predictable thing. This is
+deliberate: a value set on the game type could only ever act at a distance —
+days later, on a level created long afterwards, from a screen the creator had
+left — while that level's own settings form sat there showing something
+different. One question asked in two places, only one of which is visible where
+it takes effect, is worse than the flexibility it bought. The profile still
+carries the name, the texture pack, the sound pack, and which level to open by
+default.
 
 **Flow on launch:**
 
 1. **Startup** — pick an existing game type (to keep creating levels within it)
    or *Create New Game Type*.
-2. **Editor** — name it and flip the default feature toggles new levels inherit.
-3. **Save** — the template is written to `resources/gametypes/<name>.json`.
+2. **Editor** — name it. That is the whole screen.
+3. **Save** — written to `resources/gametypes/<name>.json`.
 4. **Main menu** — **Play Level** opens the last level you played; **Load Level**
    lists the game type's individual levels
    ([`LevelSelectScene`](src/main/java/com/larsons/engine/demo/LevelSelectScene.java)).
@@ -2658,11 +2667,13 @@ Levels are authored and saved in **Creative Mode**, which snapshots the active
 toggles into the level on every save, and are stored under
 `resources/levels/<game-type>/<level>.json`.
 
-**Currently configurable features:**
+**Currently configurable features** — all of them per level, in
+*Load Level → Edit Settings*:
 
 | Feature | Type | Notes |
 |---------|------|-------|
-| Default level format | cycler | Side-Scroller / Top-Down / Isometric — the format **new** levels start in (each level then carries its own, for life) |
+| Level name | text | renames this level |
+| Level format | cycler | Side-Scroller / Top-Down / Isometric — this level's own format, which it keeps for life |
 | Zoom enabled | toggle | gates the zoom controls + range |
 | Min / Max / Default zoom | steppers | enabled only when zoom is on |
 | Min / Max framerate | steppers | **Max** is applied live as the render cap |
