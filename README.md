@@ -938,15 +938,42 @@ verdict that neither is justified yet.
 
 ### Running a measurement
 
-Reproducibly, without anyone timing a keystroke:
+**From IntelliJ:** pick **Profile (timed run, press F3)** from the run
+configuration dropdown. **From a terminal:**
 
 ```bash
-java -Dlarsons.profile=true \
-     -Dlarsons.profile.overlay=false \
-     -Dlarsons.profile.seconds=30 \
-     -Dlarsons.profile.out=frame-profile.txt \
-     -jar Larsons-2D-Game-Engine.jar
+./gradlew runProfiled
 ```
+
+Either way the profiler is *armed but not recording*. Load a level, start
+playing, and press **F3** there — it records for 30 seconds, writes
+`frame-profile.txt` into the project root, and stops. Press F3 again for
+another run; reports never overwrite each other.
+
+That ordering is the point. **Profiling the menu the game booted into measures
+a scene that draws no world**, which is the easiest way to get a confident
+wrong answer out of this.
+
+```bash
+./gradlew runProfiled -Pprofile.seconds=60      # longer sample
+./gradlew runProfiled -Pprofile.hud=true        # watch it live instead
+./gradlew runProfiled -Pprofile.out=air-on.txt  # name the report
+```
+
+Driving a built jar directly works too, and is what to use on a machine
+without the project checked out:
+
+```bash
+java -Dlarsons.profile.seconds=30 \
+     -Dlarsons.profile.out=frame-profile.txt \
+     -jar build/libs/Larsons-2D-Game-Engine-0.1.0.jar
+```
+
+Add `-Dlarsons.profile=true` to that if you want recording to begin at launch
+rather than on F3 — useful for a scene the game boots straight into, wrong for
+anything you have to navigate to. Note the jar path is relative: run it from
+the project root, after `./gradlew jar`, or the JVM will report
+`Unable to access jarfile`.
 
 | Property | Default | Effect |
 |----------|---------|--------|

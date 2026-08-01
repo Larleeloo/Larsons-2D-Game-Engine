@@ -4,6 +4,9 @@ build/
 share/
 # A texture pack dropped next to the project instead (see TexturePack)
 /textures/
+# Frame profiler reports (see README "Frame profiler"). Keep the ones you mean
+# to compare somewhere deliberate — these are the throwaway runs.
+/frame-profile*.txt
 !gradle/wrapper/gradle-wrapper.jar
 !**/src/main/**/build/
 !**/src/test/**/build/
