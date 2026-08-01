@@ -302,6 +302,9 @@ On launch you'll choose or create a **game type** before playing — see
 - **Multiplayer:** from the main menu, *Multiplayer (Host / Join)* — host a
   server on a port, or type a `host[:port]` address and join (see
   [Online play](#online-play)).
+- **Profiling:** **F3** toggles the frame-cost readout in any scene, **F4**
+  writes a report to disk (see
+  [Frame profiler](#frame-profiler-where-the-time-actually-goes)).
 
 ---
 
@@ -826,6 +829,12 @@ the CPU, and how the same passes run unmodified on a GPU backend. For full GPU
 *scene* rendering the remaining porting work is a backend-neutral draw API,
 since scenes currently draw with `Graphics2D`.
 
+Both of those are large jobs, and which (if either) is worth doing is a
+question about measurements rather than architecture. The
+[frame profiler](#frame-profiler-where-the-time-actually-goes) splits a frame
+into `scene` and `shaders` precisely so the answer can be looked up instead of
+guessed.
+
 ---
 
 ## Shaders
@@ -897,6 +906,82 @@ plus a small player glow. It rides the same `ShaderChain` as the post-FX
 of the post-FX master switch, and it deliberately ignores `uStrength`:
 darkness *is* its strength. In multiplayer the time of day comes from server
 snapshots, so night falls for everyone together.
+
+---
+
+## Frame profiler (where the time actually goes)
+
+Press **F3** in any scene for a live breakdown of the frame; **F4** writes a
+report next to the game.
+
+The engine's next large rendering decision is whether to move work onto the
+GPU, and there are two separable jobs behind that question — shading the
+finished frame on the GPU, and drawing the scene itself on the GPU. They cost
+very different amounts to build, and **which one is worth doing depends
+entirely on which one dominates a real frame.** An FPS counter cannot answer
+that; 45 FPS tells you the frame is slow, not which part of it is. So the
+profiler splits a frame along exactly the lines the decision runs on:
+
+| Stage | What it is | What it means for the GPU question |
+|-------|-----------|-----------------------------------|
+| `update` | Fixed-step simulation | Not a rendering cost. A GPU backend would not move it. |
+| `scene` | Every `Graphics2D` call the scene issues | **The budget a GPU scene renderer competes for.** |
+| `shaders` | The post-processing chain, split per pass | **The budget a GPU shader backend competes for.** |
+| `present` | Acquiring, blitting and flipping the frame | Largely fixed platform cost — the floor any backend must beat. |
+| `overlay` | The readout itself | Measured so it can be subtracted, not silently added. |
+| `idle` | Time the frame limiter spent waiting | **Headroom.** A frame with time to spare needs no new renderer. |
+
+Beyond the table the report gives the figures a decision actually turns on —
+work per frame against the budget, headroom, sustainable FPS, the dominant
+stage — and a **verdict** phrased in terms of those two jobs, including the
+verdict that neither is justified yet.
+
+### Running a measurement
+
+Reproducibly, without anyone timing a keystroke:
+
+```bash
+java -Dlarsons.profile=true \
+     -Dlarsons.profile.overlay=false \
+     -Dlarsons.profile.seconds=30 \
+     -Dlarsons.profile.out=frame-profile.txt \
+     -jar Larsons-2D-Game-Engine.jar
+```
+
+| Property | Default | Effect |
+|----------|---------|--------|
+| `larsons.profile` | `false` | Start with profiling on |
+| `larsons.profile.overlay` | `true` | Draw the HUD (turn off for a clean measurement) |
+| `larsons.profile.seconds` | `0` | Write a report after this many seconds, then stop |
+| `larsons.profile.out` | `frame-profile.txt` | Where that report goes |
+
+Run the same scene for the same duration on each machine you care about and
+diff the reports. **Measure the weakest machine that has to hold the frame
+rate, not the development one** — the numbers that decide a months-long
+rewrite should come from the hardware that is actually struggling.
+
+### Reading a result on a laptop
+
+Every report carries the machine it was taken on, because the fields that move
+frame times on the low end are easy to overlook:
+
+- **Display scale.** The one most often missed. On a HiDPI panel a "1280×720"
+  window is backed by 2560×1440 real pixels, so every full-screen CPU pass
+  costs **four times** what the logical size suggests. A Retina laptop can be
+  four times slower at post-processing than its specification implies.
+- **Cores.** The CPU shader chain fans out across cores via `ParallelRows`, so
+  post-processing is the stage that degrades first on a machine with fewer
+  cores than the development one.
+- **Java2D pipeline.** Whether any hardware blitting is in play at all. Note
+  that enabling *any* shader pass gives it up regardless: reaching the pixels
+  means `DataBufferInt.getData()`, and Java2D stops caching an image in video
+  memory once a caller holds a pointer into its raster.
+- **Refresh rate.** A 120 FPS cap on a 60 Hz panel spends half its frames on
+  images nobody sees.
+
+The profiler is inert when off — one predictable branch per stage per frame —
+and the HUD's own cost is timed into `overlay` and excluded from every reported
+figure, so the readout never inflates the frame it is measuring.
 
 ---
 
@@ -2825,6 +2910,14 @@ anything, so it is an untested port target rather than ready source
   core so the engine itself stays JDK-only (requirement #4); the remaining
   work for GPU *scene* rendering is a backend-neutral draw API, since scenes
   draw with `Graphics2D`.
+  **Measure before starting.** The
+  [frame profiler](#frame-profiler-where-the-time-actually-goes) exists to
+  decide this: it reports `scene` and `shaders` separately, and a frame with
+  headroom to spare justifies neither. Note also that ordering matters — once
+  the scene is drawn by GL the finished frame is already a GPU texture, so
+  GPU post-processing follows almost for free, whereas doing post-processing
+  first means building a per-frame upload path that the scene backend then
+  makes redundant.
 - **Netcode next steps:** interest management for large worlds, lag
   compensation for hit detection.
 - **Deeper ports from the Side-Scroller engine:** alchemy/crafting recipes,

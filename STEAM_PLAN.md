@@ -261,6 +261,23 @@ carries the launch and the GPU backend stays a roadmap item. If it doesn't,
 see Appendix A for what the GPU port actually costs — it is more than the
 roadmap implies.
 
+**The instrument now exists.** The
+[frame profiler](README.md#frame-profiler-where-the-time-actually-goes)
+(F3 in game, or `-Dlarsons.profile.seconds=30` for a scripted run) splits a
+frame into `update` / `scene` / `shaders` / `present` / `idle`, breaks the
+shader chain down per pass, and records the machine — cores, display scale,
+Java2D pipeline, refresh rate — alongside the timings. Run it on the weakest
+target machine at each resolution and paste the reports here; that is this
+item's deliverable. Two things it is built to stop:
+
+- **Reading a HiDPI laptop wrong.** A "1280×720" window on a Retina panel is
+  2560×1440 real pixels, so full-screen CPU passes cost 4× what the window
+  size implies. The report states the multiplier rather than leaving it to be
+  discovered.
+- **Funding the wrong job.** `scene` and `shaders` are the budgets the two
+  candidate GPU projects compete for, and they are reported separately with a
+  verdict naming which — including "neither, there is headroom".
+
 ---
 
 ## 6. Phased roadmap
@@ -269,8 +286,12 @@ roadmap implies.
 
 - [ ] Add `.github/workflows/ci.yml` running `./gradlew test` on push and PR.
 - [ ] Add a `LICENSE` file.
+- [x] Build the instrument: a per-stage frame profiler that separates scene
+      drawing from post-processing and records the machine alongside the
+      timings (`FrameProfiler` / `FrameReport`, F3 in game).
 - [ ] Benchmark the real shader chain at 1080p/1440p on low-end hardware.
-      Record the numbers here.
+      Record the numbers here. Run:
+      `java -Dlarsons.profile=true -Dlarsons.profile.overlay=false -Dlarsons.profile.seconds=30 -jar <jar>`
 - [ ] Prototype a `jpackage` build on Windows. Confirm it launches on a machine
       with no JDK installed.
 - [ ] Correct the overstated claims in `README.md` (see Appendix B).

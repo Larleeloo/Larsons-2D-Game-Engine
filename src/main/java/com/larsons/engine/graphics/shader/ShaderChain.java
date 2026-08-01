@@ -1,5 +1,7 @@
 package com.larsons.engine.graphics.shader;
 
+import com.larsons.engine.profile.FrameProfiler;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -19,6 +21,18 @@ public final class ShaderChain {
     private volatile float strength = 1.0f;
     private final long startNanos = System.nanoTime();
     private int[] scratch = new int[0];
+
+    /**
+     * Optional per-pass timing. Attached by the engine so a profile can say
+     * which effect costs what — the difference between "post-processing is
+     * expensive" and "bloom is expensive and the other six passes are free".
+     */
+    private FrameProfiler profiler;
+
+    /** Attach (or clear, with {@code null}) the profiler timing each pass. */
+    public void setProfiler(FrameProfiler profiler) {
+        this.profiler = profiler;
+    }
 
     /** Replace the active passes (atomic; safe to call from any thread). */
     public void setPasses(List<ShaderPass> newPasses) {
@@ -71,10 +85,16 @@ public final class ShaderChain {
         if (scratch.length < n) scratch = new int[n];
 
         ShaderContext ctx = new ShaderContext(width, height, time(), strength);
+        FrameProfiler prof = profiler;
         int[] src = pixels;
         int[] dst = scratch;
         for (ShaderPass pass : active) {
-            pass.apply(src, dst, width, height, ctx);
+            long started = prof == null ? 0L : prof.begin();
+            try {
+                pass.apply(src, dst, width, height, ctx);
+            } finally {
+                if (prof != null) prof.recordPass(pass.name(), started);
+            }
             int[] tmp = src;
             src = dst;
             dst = tmp;
