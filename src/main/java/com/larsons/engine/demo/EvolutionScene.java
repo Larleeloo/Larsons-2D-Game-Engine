@@ -18,9 +18,11 @@ import com.larsons.engine.fx.Particles;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.shader.Shaders;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.graphics.draw.Java2DTarget;
+import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.Menu;
 import com.larsons.engine.ui.MenuTheme;
@@ -210,6 +212,12 @@ public class EvolutionScene extends AbstractScene {
                 .add("Resume", () -> paused = false)
                 .add("Save experiment", this::saveNow)
                 .add("Reset the lab (respend your credits)", this::startReset)
+                // The lab is saved on the way out, so leaving for the controls
+                // screen and coming back costs the experiment nothing.
+                .add("Controls (Key Binds)", () -> {
+                    saveNow();
+                    KeyBindsScene.open(scenes, "evolution");
+                })
                 .add("Save and quit to menu", () -> {
                     saveNow();
                     scenes.transitionTo("evolutionlobby");
@@ -246,9 +254,9 @@ public class EvolutionScene extends AbstractScene {
 
         if (paused) {
             if (resetting) {
-                if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) resetting = false;
+                if (KeyBinds.pressed(input, GameAction.MENU_BACK)) resetting = false;
                 else resetMenu.update(dt, input);
-            } else if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+            } else if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
                 paused = false;
             } else {
                 pauseMenu.update(dt, input);
@@ -256,7 +264,7 @@ public class EvolutionScene extends AbstractScene {
             return;
         }
         if (showHelp) {
-            if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)
+            if (KeyBinds.pressed(input, GameAction.MENU_BACK)
                     || input.isKeyJustPressed(KeyEvent.VK_H)) showHelp = false;
             return;
         }
@@ -284,7 +292,8 @@ public class EvolutionScene extends AbstractScene {
     }
 
     private void handleKeys(InputManager input) {
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK)
+                || KeyBinds.pressed(input, GameAction.PAUSE)) {
             paused = true;
             return;
         }
@@ -338,10 +347,10 @@ public class EvolutionScene extends AbstractScene {
     /** Pan with the right button or WASD/arrows; zoom on the wheel, around the cursor. */
     private void handleCamera(InputManager input) {
         double panSpeed = 420 / camera.zoom * (1.0 / 60);
-        if (input.isKeyDown(KeyEvent.VK_A) || input.isKeyDown(KeyEvent.VK_LEFT)) camera.x -= panSpeed;
-        if (input.isKeyDown(KeyEvent.VK_D) || input.isKeyDown(KeyEvent.VK_RIGHT)) camera.x += panSpeed;
-        if (input.isKeyDown(KeyEvent.VK_W) || input.isKeyDown(KeyEvent.VK_UP)) camera.y -= panSpeed;
-        if (input.isKeyDown(KeyEvent.VK_S) || input.isKeyDown(KeyEvent.VK_DOWN)) camera.y += panSpeed;
+        if (KeyBinds.down(input, GameAction.MOVE_LEFT)) camera.x -= panSpeed;
+        if (KeyBinds.down(input, GameAction.MOVE_RIGHT)) camera.x += panSpeed;
+        if (KeyBinds.down(input, GameAction.MOVE_UP)) camera.y -= panSpeed;
+        if (KeyBinds.down(input, GameAction.MOVE_DOWN)) camera.y += panSpeed;
 
         if (input.isRightMouseJustPressed()) {
             panning = true;

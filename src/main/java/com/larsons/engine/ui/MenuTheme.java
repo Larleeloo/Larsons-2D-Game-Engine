@@ -17,6 +17,8 @@ public class MenuTheme {
     public Color itemSelected = new Color(255, 210, 90);
     public Color itemDisabled = new Color(90, 90, 100);
     public Color accent = new Color(255, 210, 90);
+    /** Something the player should look at twice — a key bound to two actions. */
+    public Color warning = new Color(235, 120, 110);
 
     public Font titleFont = new Font("SansSerif", Font.BOLD, 48);
     public Font subtitleFont = new Font("SansSerif", Font.PLAIN, 20);
@@ -40,6 +42,7 @@ public class MenuTheme {
         t.itemSelected = new Color(200, 120, 20);
         t.itemDisabled = new Color(170, 174, 185);
         t.accent = new Color(200, 120, 20);
+        t.warning = new Color(180, 50, 40);
         return t;
     }
 }

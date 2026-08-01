@@ -49,6 +49,9 @@ public class StartupScene extends AbstractScene {
                 () -> scenes.transitionTo("decklobby"));
         menu.add("Evolution (Artificial Life Simulator)",
                 () -> scenes.transitionTo("evolutionlobby"));
+        // Controls are a property of the player, not of a game type, so they
+        // are reachable before one is even chosen.
+        menu.add("Controls (Key Binds)", () -> KeyBindsScene.open(scenes, "startup"));
         menu.add("Quit", () -> System.exit(0));
     }
 

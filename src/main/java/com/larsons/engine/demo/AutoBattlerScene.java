@@ -24,9 +24,11 @@ import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.shader.Shaders;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.graphics.draw.Java2DTarget;
+import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 
 import java.awt.AlphaComposite;
@@ -340,7 +342,8 @@ public class AutoBattlerScene extends AbstractScene {
         boolean disconnected = !client.isConnected();
         boolean over = client.gameOver() != null;
 
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK)
+                || KeyBinds.pressed(input, GameAction.PAUSE)) {
             if (disconnected || over) {
                 leave();
                 return;

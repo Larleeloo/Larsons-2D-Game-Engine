@@ -54,7 +54,9 @@ import com.larsons.engine.graphics.SurfaceDecorPainter;
 import com.larsons.engine.graphics.TerrainCache;
 import com.larsons.engine.graphics.TerrainPainter;
 import com.larsons.engine.graphics.shader.LightingPass;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.level.CutsceneDirector;
 import com.larsons.engine.level.CutscenePlayer;
 import com.larsons.engine.level.DoorDirectory;
@@ -79,6 +81,7 @@ import com.larsons.engine.sim.StatRuleEngine;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.ContainerPanel;
 import com.larsons.engine.ui.CraftingPanel;
+import com.larsons.engine.ui.KeyBindForm;
 import com.larsons.engine.ui.MenuTheme;
 import com.larsons.engine.world.Block;
 import com.larsons.engine.world.World;
@@ -92,7 +95,6 @@ import java.awt.Graphics2D;
 import java.awt.RadialGradientPaint;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
-import java.awt.event.KeyEvent;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -298,6 +300,8 @@ public class PlayScene extends AbstractScene {
 
     private boolean paused;
     private ConfigForm pauseForm;
+    /** The controls sheet, shown over the pause menu while it is open. */
+    private ConfigForm bindsForm;
 
     // Scratch buffer for zero-allocation world-to-screen projection.
     private final int[] corner = new int[2];
@@ -471,8 +475,8 @@ public class PlayScene extends AbstractScene {
     public void update(double dt, InputManager input) {
         if (leaving) return; // session torn down; waiting out the scene fade
         if (net != null && !net.client().isConnected()) {
-            if (input.isKeyJustPressed(KeyEvent.VK_ENTER)
-                    || input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+            if (KeyBinds.pressed(input, GameAction.MENU_SELECT)
+                    || KeyBinds.pressed(input, GameAction.MENU_BACK)) {
                 leaveSession();
             }
             return;
@@ -495,8 +499,8 @@ public class PlayScene extends AbstractScene {
         // director drives the camera, Enter/Esc skips to the end.
         if (cutscenes != null && cutscenes.active() != null) {
             animClock += dt;
-            if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)
-                    || input.isKeyJustPressed(KeyEvent.VK_ENTER)) {
+            if (KeyBinds.pressed(input, GameAction.MENU_BACK)
+                    || KeyBinds.pressed(input, GameAction.MENU_SELECT)) {
                 cutscenes.skip();
             } else {
                 cutscenes.advance(dt);
@@ -505,7 +509,8 @@ public class PlayScene extends AbstractScene {
             if (cut != null) camera.centerOn(cut.cameraX(), cut.cameraY());
             return;
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        if (KeyBinds.pressed(input, GameAction.PAUSE)
+                || KeyBinds.pressed(input, GameAction.MENU_BACK)) {
             if (craftingPanel != null) {
                 craftingPanel = null;
             } else if (containerPanel != null) {
@@ -534,7 +539,7 @@ public class PlayScene extends AbstractScene {
         // The container panel keeps the inventory open beside it, so E still
         // closes it while the inventory shows.
         if (net == null && (!showInventory || containerPanel != null)
-                && input.isKeyJustPressed(KeyEvent.VK_E)) {
+                && KeyBinds.pressed(input, GameAction.INTERACT)) {
             if (craftingPanel != null) {
                 craftingPanel = null;
             } else if (containerPanel != null) {
@@ -551,7 +556,7 @@ public class PlayScene extends AbstractScene {
                 }
             }
         }
-        if (net != null && !showInventory && input.isKeyJustPressed(KeyEvent.VK_E)) {
+        if (net != null && !showInventory && KeyBinds.pressed(input, GameAction.INTERACT)) {
             Snapshot snap = net.client().latest();
             if (snap != null) {
                 EntityView riding = snap.vehicleRiddenBy(me.id);
@@ -586,8 +591,8 @@ public class PlayScene extends AbstractScene {
         // very next burst.
         particles.setSpace(PerspectiveSpace.of(camera.getPerspective()));
         if (p.zoomEnabled) {
-            if (input.isKeyDown(KeyEvent.VK_EQUALS)) camera.zoom = clampZoom(camera.zoom + dt * 2, p);
-            if (input.isKeyDown(KeyEvent.VK_MINUS)) camera.zoom = clampZoom(camera.zoom - dt * 2, p);
+            if (KeyBinds.down(input, GameAction.ZOOM_IN)) camera.zoom = clampZoom(camera.zoom + dt * 2, p);
+            if (KeyBinds.down(input, GameAction.ZOOM_OUT)) camera.zoom = clampZoom(camera.zoom - dt * 2, p);
         }
 
         if (craftingPanel != null) {
@@ -603,7 +608,7 @@ public class PlayScene extends AbstractScene {
                 // interactions and hotbar selection live so stacks can be
                 // arranged and [Q]-stashed without closing the chest.
                 for (int k = 0; k < Inventory.HOTBAR; k++) {
-                    if (input.isKeyJustPressed(KeyEvent.VK_1 + k)) inventory.select(k);
+                    if (KeyBinds.pressed(input, GameAction.hotbar(k))) inventory.select(k);
                 }
                 int wheel = input.getWheelRotation();
                 if (wheel != 0) inventory.scrollSelect(wheel > 0 ? 1 : -1);
@@ -614,16 +619,16 @@ public class PlayScene extends AbstractScene {
         }
 
         PlayerInput in = new PlayerInput(
-                input.isKeyDown(KeyEvent.VK_A) || input.isKeyDown(KeyEvent.VK_LEFT),
-                input.isKeyDown(KeyEvent.VK_D) || input.isKeyDown(KeyEvent.VK_RIGHT),
-                input.isKeyDown(KeyEvent.VK_W) || input.isKeyDown(KeyEvent.VK_UP),
-                input.isKeyDown(KeyEvent.VK_S) || input.isKeyDown(KeyEvent.VK_DOWN),
+                KeyBinds.down(input, GameAction.MOVE_LEFT),
+                KeyBinds.down(input, GameAction.MOVE_RIGHT),
+                KeyBinds.down(input, GameAction.MOVE_UP),
+                KeyBinds.down(input, GameAction.MOVE_DOWN),
                 ++inputSeq);
-        in.sprint = input.isKeyDown(KeyEvent.VK_SHIFT);
+        in.sprint = KeyBinds.down(input, GameAction.SPRINT);
         // Space is the jump key, and the only one: W/Up steer, swim and climb.
         // A fresh press is what drives mid-air jumps (double jump and beyond),
         // so holding Space doesn't burn the whole allowance in one tick.
-        in.jump = input.isKeyJustPressed(KeyEvent.VK_SPACE);
+        in.jump = KeyBinds.pressed(input, GameAction.JUMP);
         // The server resolves attacks against what this player holds.
         in.selected = inventory.selectedIndex();
         // Relic passives — extra air jumps, speed, slow fall, flight,
@@ -635,7 +640,7 @@ public class PlayScene extends AbstractScene {
             updateMeleeControls(input, p, in);
             // [R] fires the character's ultimate at the cursor, once charged.
             // (Q is already "drop one of the held stack".)
-            if (input.isKeyJustPressed(KeyEvent.VK_R)) tryUltimate(p);
+            if (KeyBinds.pressed(input, GameAction.ULTIMATE)) tryUltimate(p);
         } else {
             if (world != null) world.cancelMining();
             cancelPredictedMining();
@@ -790,7 +795,7 @@ public class PlayScene extends AbstractScene {
         // Cutscene triggers watch the player: zones fire on entry, INTERACT
         // ones on E (doors and stations already had their chance above).
         if (cutscenes != null) {
-            boolean interact = input.isKeyJustPressed(KeyEvent.VK_E)
+            boolean interact = KeyBinds.pressed(input, GameAction.INTERACT)
                     && craftingPanel == null && containerPanel == null && !showInventory;
             if (cutscenes.checkTriggers(me.x + size / 2.0, me.y + size / 2.0,
                     interact, ts(), camera.x, camera.y) != null) {
@@ -957,18 +962,18 @@ public class PlayScene extends AbstractScene {
             cursorSlot = -1;
             return;
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_I)) {
+        if (KeyBinds.pressed(input, GameAction.INVENTORY)) {
             showInventory = !showInventory;
             cursorSlot = -1;
         }
         for (int k = 0; k < Inventory.HOTBAR; k++) {
-            if (input.isKeyJustPressed(KeyEvent.VK_1 + k)) inventory.select(k);
+            if (KeyBinds.pressed(input, GameAction.hotbar(k))) inventory.select(k);
         }
         int wheel = input.getWheelRotation();
         if (wheel != 0) inventory.scrollSelect(wheel > 0 ? 1 : -1);
 
         // Q tosses one item from the selected stack into the world.
-        if (input.isKeyJustPressed(KeyEvent.VK_Q)) {
+        if (KeyBinds.pressed(input, GameAction.DROP_ITEM)) {
             dropStack(inventory.selectedIndex(), 1);
         }
 
@@ -976,7 +981,7 @@ public class PlayScene extends AbstractScene {
         // active, or consume the food/potion. Online it's a request — the
         // server owns health, mana, the world, and the inventory, and pushes
         // the results back.
-        if (input.isKeyJustPressed(KeyEvent.VK_F)) {
+        if (KeyBinds.pressed(input, GameAction.USE_ITEM)) {
             ItemDef def = inventory.selectedDef();
             boolean edible = def != null && def.heal() > 0 && me.health < me.maxHealth;
             boolean manaDrink = def != null && "mana_potion".equals(def.key())
@@ -995,7 +1000,8 @@ public class PlayScene extends AbstractScene {
                 if (inventory.consumeSelected()) {
                     world.spawnVehicle(vehDef.key(),
                             me.x + (me.facingLeft ? -24 : 24), me.y);
-                    ruleStatus = vehDef.name() + " deployed — [E] to ride";
+                    ruleStatus = vehDef.name() + " deployed — ["
+                            + KeyBinds.label(GameAction.INTERACT) + "] to ride";
                     ruleStatusTime = 3.0;
                     itemSound(def.key(), "use", "place");
                 }
@@ -1090,8 +1096,8 @@ public class PlayScene extends AbstractScene {
      */
     private void handleMouseActions(InputManager input, GameProfile p, PlayerInput in,
                                     double dt) {
-        boolean leftClick = input.isMouseJustPressed();
-        boolean rightClick = input.isRightMouseJustPressed();
+        boolean leftClick = KeyBinds.pressed(input, GameAction.ATTACK);
+        boolean rightClick = KeyBinds.pressed(input, GameAction.PLACE);
 
         double[] aim = camera.screenToWorld(input.getMouseX(), input.getMouseY());
         double ts = ts();
@@ -1107,7 +1113,7 @@ public class PlayScene extends AbstractScene {
         // local world accumulates the progress; online the mining intent
         // rides the input command and the server accumulates the identical
         // progress, so blocks are exactly as durable in multiplayer.
-        boolean miningNow = input.isMouseDown() && !shoots
+        boolean miningNow = KeyBinds.down(input, GameAction.ATTACK) && !shoots
                 && p.blockEditingEnabled && inReach && level.tileAt(col, row) > 0;
         if (miningNow && net != null) {
             swingTime = Math.max(swingTime, 0.1);
@@ -1281,10 +1287,10 @@ public class PlayScene extends AbstractScene {
      */
     private void updateMeleeControls(InputManager input, GameProfile p, PlayerInput in) {
         if (!p.combatEnabled) return;
-        in.shield = input.isKeyDown(KeyEvent.VK_C);
-        MeleeAction requested = input.isKeyJustPressed(KeyEvent.VK_V) ? MeleeAction.PARRY
-                : input.isKeyJustPressed(KeyEvent.VK_X) ? MeleeAction.LUNGE
-                : input.isKeyJustPressed(KeyEvent.VK_Z) ? MeleeAction.DASH
+        in.shield = KeyBinds.down(input, GameAction.GUARD);
+        MeleeAction requested = KeyBinds.pressed(input, GameAction.PARRY) ? MeleeAction.PARRY
+                : KeyBinds.pressed(input, GameAction.LUNGE) ? MeleeAction.LUNGE
+                : KeyBinds.pressed(input, GameAction.DASH) ? MeleeAction.DASH
                 : MeleeAction.NONE;
         if (requested == MeleeAction.NONE) return;
         double[] aim = camera.screenToWorld(mouseX, mouseY);
@@ -1863,7 +1869,18 @@ public class PlayScene extends AbstractScene {
     }
 
     private void updatePaused(double dt, InputManager input) {
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        // The controls sheet sits over the pause menu rather than replacing the
+        // scene, so rebinding mid-level costs neither the level nor the session.
+        if (bindsForm != null) {
+            if (!bindsForm.isCapturing() && KeyBinds.pressed(input, GameAction.MENU_BACK)) {
+                bindsForm = null;
+            } else {
+                bindsForm.update(dt, input);
+            }
+            return;
+        }
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK)
+                || KeyBinds.pressed(input, GameAction.PAUSE)) {
             resume();
             return;
         }
@@ -2026,7 +2043,7 @@ public class PlayScene extends AbstractScene {
         g.setFont(SMALL_FONT);
         String label = running
                 ? u.name() + "  " + String.format("%.1fs", me.ultActive)
-                : ready ? u.name() + "  [R] READY"
+                : ready ? u.name() + "  [" + KeyBinds.label(GameAction.ULTIMATE) + "] READY"
                 : u.name() + "  " + (int) (me.ultCharge * 100) + "%";
         g.setColor(Color.WHITE);
         g.drawString(label, x + (w - g.getFontMetrics().stringWidth(label)) / 2, y + h - 4);
@@ -2172,6 +2189,7 @@ public class PlayScene extends AbstractScene {
 
     private void resume() {
         paused = false;
+        bindsForm = null;
         syncCameraFromProfile();
     }
 
@@ -2196,6 +2214,7 @@ public class PlayScene extends AbstractScene {
             // A level's feature toggles are edited in Load Level → Edit
             // Settings, not here — the pause menu stays simple.
             pauseForm.addAction("Resume", this::resume);
+            pauseForm.addAction("Controls (Key Binds)", this::openKeyBinds);
             pauseForm.addAction("Save Level", this::saveLevel);
             pauseForm.addAction("Edit in Creative",
                             () -> scenes.transitionTo("creative"))
@@ -2204,12 +2223,18 @@ public class PlayScene extends AbstractScene {
         } else {
             // Online the server owns the world.
             pauseForm.addAction("Resume", this::resume);
+            pauseForm.addAction("Controls (Key Binds)", this::openKeyBinds);
             pauseForm.addAction("Edit in Creative",
                             () -> scenes.transitionTo("creative"))
                     .enabledWhen(() -> p.creativeEnabled);
             pauseForm.addAction(net.isHost() ? "Stop Server & Quit" : "Disconnect & Quit",
                     this::leaveSession);
         }
+    }
+
+    /** Open the controls sheet over the pause menu (see {@link #updatePaused}). */
+    private void openKeyBinds() {
+        bindsForm = KeyBindForm.forActiveBinds(() -> bindsForm = null);
     }
 
     /**
@@ -2237,12 +2262,24 @@ public class PlayScene extends AbstractScene {
         g.fillRect(0, 0, viewportWidth, viewportHeight);
         g.setComposite(old);
 
+        if (bindsForm != null) {
+            bindsForm.render(g, viewportWidth, viewportHeight);
+            g.setFont(HUD_FONT);
+            if (bindsForm.isCapturing()) {
+                g.setColor(new Color(255, 210, 90));
+                g.drawString("Press any key or mouse button · Esc to cancel",
+                        24, viewportHeight - 44);
+            }
+            g.setColor(new Color(120, 120, 140));
+            g.drawString(KeyBindForm.HINT, 24, viewportHeight - 24);
+            return;
+        }
         pauseForm.render(g, viewportWidth, viewportHeight);
         g.setColor(new Color(120, 120, 140));
         g.setFont(HUD_FONT);
         g.drawString(net == null
-                        ? "Esc to resume · Save Level keeps this world; edit toggles in Load Level → Edit Settings"
-                        : "Esc to resume · game keeps running on the server while paused",
+                        ? "Back to resume · Save Level keeps this world; edit toggles in Load Level → Edit Settings"
+                        : "Back to resume · game keeps running on the server while paused",
                 24, viewportHeight - 24);
     }
 
@@ -2436,7 +2473,7 @@ public class PlayScene extends AbstractScene {
         DoorLink link = doors.get(door.type);
         String text = link == null || link.targetLevel().isEmpty()
                 ? "This door leads nowhere (yet)"
-                : "[E] Enter " + link.label();
+                : "[" + KeyBinds.label(GameAction.INTERACT) + "] Enter " + link.label();
         g.setFont(HUD_FONT);
         int tw = g.getFontMetrics().stringWidth(text);
         int x = (viewportWidth - tw) / 2, y = viewportHeight - 88;
@@ -2454,24 +2491,30 @@ public class PlayScene extends AbstractScene {
             if (me.riding >= 0) {
                 Vehicle v = world.vehicle(me.riding);
                 if (v != null) {
-                    text = "[E] Dismount " + v.def.name()
+                    text = "[" + KeyBinds.label(GameAction.INTERACT) + "] Dismount " + v.def.name()
                             + (v.def.projectile() != null ? " · click fires" : "");
                 }
             } else {
                 Vehicle near = world.mountableNear(me.x + ps() / 2, me.y + ps() / 2);
-                if (near != null) text = "[E] Ride " + near.def.name();
+                if (near != null) {
+                    text = "[" + KeyBinds.label(GameAction.INTERACT) + "] Ride "
+                            + near.def.name();
+                }
             }
         } else {
             Snapshot snap = net.client().latest();
             if (snap == null) return;
             if (predictedVehicle != null) {
-                text = "[E] Dismount " + predictedVehicle.def.name()
+                text = "[" + KeyBinds.label(GameAction.INTERACT) + "] Dismount "
+                        + predictedVehicle.def.name()
                         + (predictedVehicle.def.projectile() != null ? " · click fires" : "");
             } else {
                 EntityView near = nearestSnapshotVehicle(snap);
                 VehicleDef def = near == null ? null
                         : VehicleRegistry.standard().get(near.key);
-                if (def != null) text = "[E] Ride " + def.name();
+                if (def != null) {
+                    text = "[" + KeyBinds.label(GameAction.INTERACT) + "] Ride " + def.name();
+                }
             }
         }
         if (text == null) return;
@@ -3017,10 +3060,17 @@ public class PlayScene extends AbstractScene {
             if (net.isHost()) hud.append(" · hosting :").append(net.hostedServer().getPort());
         }
         if (profile().zoomEnabled) hud.append("    |    zoom ").append(String.format("%.2f", camera.zoom));
-        hud.append("    |    [Esc] pause");
-        if (profile().zoomEnabled) hud.append("  [+/-] zoom");
-        if (profile().itemsEnabled) hud.append("  [I] inventory");
-        if (Ultimates.of(me) != null) hud.append("  [R] ultimate");
+        hud.append("    |    [").append(KeyBinds.label(GameAction.PAUSE)).append("] pause");
+        if (profile().zoomEnabled) {
+            hud.append("  [").append(KeyBinds.label(GameAction.ZOOM_IN)).append("/")
+                    .append(KeyBinds.label(GameAction.ZOOM_OUT)).append("] zoom");
+        }
+        if (profile().itemsEnabled) {
+            hud.append("  [").append(KeyBinds.label(GameAction.INVENTORY)).append("] inventory");
+        }
+        if (Ultimates.of(me) != null) {
+            hud.append("  [").append(KeyBinds.label(GameAction.ULTIMATE)).append("] ultimate");
+        }
         g.drawString(hud.toString(), 12, 24);
     }
 
@@ -3123,10 +3173,16 @@ public class PlayScene extends AbstractScene {
         g.drawString("Inventory", x0, y0 - 24);
         g.setFont(SMALL_FONT);
         g.setColor(new Color(170, 170, 190));
+        String drop = KeyBinds.label(GameAction.DROP_ITEM);
+        String close = KeyBinds.label(GameAction.MENU_BACK);
         g.drawString(containerPanel != null
-                ? "Click to pick up / place stacks · [Q] stash · [E]/[Esc] close"
+                ? "Click to pick up / place stacks · [" + drop + "] stash · ["
+                        + KeyBinds.label(GameAction.INTERACT) + "]/[" + close + "] close"
                 : "Click to pick up / place stacks · click outside to drop"
-                + " · [Q] drop one · [F] eat · [I]/[Esc] close", x0, y0 - 8);
+                        + " · [" + drop + "] drop one · ["
+                        + KeyBinds.label(GameAction.USE_ITEM) + "] eat · ["
+                        + KeyBinds.label(GameAction.INVENTORY) + "]/[" + close + "] close",
+                x0, y0 - 8);
 
         for (int i = 0; i < Inventory.SIZE; i++) {
             int cx = x0 + (i % Inventory.COLS) * (INV_SLOT + INV_PAD);

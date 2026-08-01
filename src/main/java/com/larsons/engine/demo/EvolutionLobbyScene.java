@@ -7,9 +7,11 @@ import com.larsons.engine.evolution.Genome;
 import com.larsons.engine.evolution.History;
 import com.larsons.engine.evolution.Nucleotide;
 import com.larsons.engine.evolution.Phenotype;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.graphics.draw.Java2DTarget;
+import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.Menu;
 import com.larsons.engine.ui.MenuItem;
@@ -20,7 +22,6 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
-import java.awt.event.KeyEvent;
 import java.util.List;
 
 /**
@@ -89,6 +90,8 @@ public class EvolutionLobbyScene extends AbstractScene {
         }
         menu.add("Reference Book (" + discovered + " organisms in your history)",
                 () -> scenes.transitionTo("evolutioncatalog"));
+        menu.add("Controls (Key Binds)",
+                () -> KeyBindsScene.open(scenes, "evolutionlobby"));
         menu.add("Back to Game Types", () -> scenes.transitionTo("startup"));
     }
 
@@ -157,7 +160,7 @@ public class EvolutionLobbyScene extends AbstractScene {
     @Override
     public void update(double dt, InputManager input) {
         if (choosingColor) {
-            if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+            if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
                 choosingColor = false;
                 buildMenu();
                 return;
@@ -165,7 +168,7 @@ public class EvolutionLobbyScene extends AbstractScene {
             colorMenu.update(dt, input);
             return;
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
             scenes.transitionTo("startup");
             return;
         }

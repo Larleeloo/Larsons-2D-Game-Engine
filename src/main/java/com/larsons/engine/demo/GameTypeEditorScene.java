@@ -66,6 +66,9 @@ public class GameTypeEditorScene extends AbstractScene {
             ctx.applyLiveSettings();
             scenes.transitionTo("menu");
         });
+        // Key binds are the player's, not the game type's, so this opens the
+        // shared controls screen rather than saving anything into the profile.
+        form.addAction("Controls (Key Binds)", () -> KeyBindsScene.open(scenes, "editor"));
         form.addAction("Back", () -> scenes.transitionTo("startup"));
     }
 

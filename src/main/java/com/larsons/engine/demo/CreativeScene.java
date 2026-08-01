@@ -59,7 +59,10 @@ import com.larsons.engine.graphics.TerrainCache;
 import com.larsons.engine.graphics.TerrainPainter;
 import com.larsons.engine.graphics.TextureKeys;
 import com.larsons.engine.graphics.TexturePack;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.KeyBindStore;
+import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.level.Brush;
 import com.larsons.engine.level.Cutscene;
 import com.larsons.engine.level.CutsceneDirector;
@@ -88,6 +91,7 @@ import com.larsons.engine.sim.StatRuleEngine;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.ContainerPanel;
 import com.larsons.engine.ui.CraftingPanel;
+import com.larsons.engine.ui.KeyBindForm;
 import com.larsons.engine.ui.MenuTheme;
 import com.larsons.engine.ui.SpriteEditorPanel;
 import com.larsons.engine.ui.UiText;
@@ -289,7 +293,7 @@ public class CreativeScene extends AbstractScene {
 
     private enum Dialog { NONE, NEW_LEVEL, SAVE, LOAD, CONFIRM_EXIT, GENERATE, DOORS, TEXTURE,
         CUSTOM, RULES, BRUSH, CUTSCENES, CUTSCENE_ACTORS, CUTSCENE_STEPS, MINIGAME,
-        ROSTER, SOUNDS, SOUND, SOUND_OPTIONS, LEVEL_MUSIC, SUNLIGHT }
+        ROSTER, SOUNDS, SOUND, SOUND_OPTIONS, LEVEL_MUSIC, SUNLIGHT, KEYBINDS }
 
     /** {@code custom} marks user-created objects (badged, deletable). */
     private record Entry(String kind, String key, String name, BufferedImage icon,
@@ -322,6 +326,9 @@ public class CreativeScene extends AbstractScene {
     private String status = "";
     private double statusTime;
     private double animClock; // drives skinned sprite animation
+
+    /** Where the controls window writes a rebind (see {@code Dialog.KEYBINDS}). */
+    private final KeyBindStore keyBindStore = new KeyBindStore();
 
     // Undo/redo (Ctrl+Z / Ctrl+Y). One history step per action: a whole drag,
     // or a whole window session, comes back in a single keystroke.
@@ -819,6 +826,7 @@ public class CreativeScene extends AbstractScene {
         tools.add(new Entry("sunlight", "sunlight", "Light Direction…", sunlightIcon()));
         tools.add(new Entry("rules", "rules", "Stat Rules…", rulesIcon()));
         tools.add(new Entry("soundeditor", "", "Sound Editor…", soundEditorIcon()));
+        tools.add(new Entry("keybinds", "keybinds", "Controls (Key Binds)…", keyBindsIcon()));
         palette.put(Category.TOOLS, tools);
 
         for (Category c : Category.values()) {
@@ -910,7 +918,8 @@ public class CreativeScene extends AbstractScene {
             return;
         }
 
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK)
+                || KeyBinds.pressed(input, GameAction.PAUSE)) {
             if (net != null) {
                 scenes.transitionTo("play"); // back to the running session
             } else {
@@ -922,24 +931,28 @@ public class CreativeScene extends AbstractScene {
         // --- undo / redo ---
         // Before anything else: whatever the last action was, this takes it
         // back, and it must not be read as a fresh edit on the way through.
-        boolean ctrl = input.isKeyDown(KeyEvent.VK_CONTROL);
-        if (ctrl && input.isKeyJustPressed(KeyEvent.VK_Z)) {
-            if (input.isKeyDown(KeyEvent.VK_SHIFT)) redoEdit();
-            else undoEdit();
+        // Redo is checked first: its default binding (Ctrl+Shift+Z) contains
+        // undo's (Ctrl+Z), so the more specific one has to win.
+        if (KeyBinds.pressed(input, GameAction.EDITOR_REDO)) {
+            redoEdit();
             return;
         }
-        if (ctrl && input.isKeyJustPressed(KeyEvent.VK_Y)) {
-            redoEdit();
+        if (KeyBinds.pressed(input, GameAction.EDITOR_UNDO)) {
+            undoEdit();
             return;
         }
 
         // --- pan & zoom ---
         double pan = PAN_SPEED * dt / camera.zoom;
-        if (input.isKeyDown(KeyEvent.VK_W) || input.isKeyDown(KeyEvent.VK_UP)) camera.y -= pan;
-        if ((input.isKeyDown(KeyEvent.VK_S) && !input.isKeyDown(KeyEvent.VK_CONTROL))
-                || input.isKeyDown(KeyEvent.VK_DOWN)) camera.y += pan;
-        if (input.isKeyDown(KeyEvent.VK_A) || input.isKeyDown(KeyEvent.VK_LEFT)) camera.x -= pan;
-        if (input.isKeyDown(KeyEvent.VK_D) || input.isKeyDown(KeyEvent.VK_RIGHT)) camera.x += pan;
+        // The camera pans on the movement binds; Ctrl is held for the editor's
+        // own shortcuts (save), so panning stands still while it is down.
+        boolean ctrl = input.isKeyDown(KeyEvent.VK_CONTROL);
+        if (!ctrl) {
+            if (KeyBinds.down(input, GameAction.MOVE_UP)) camera.y -= pan;
+            if (KeyBinds.down(input, GameAction.MOVE_DOWN)) camera.y += pan;
+            if (KeyBinds.down(input, GameAction.MOVE_LEFT)) camera.x -= pan;
+            if (KeyBinds.down(input, GameAction.MOVE_RIGHT)) camera.x += pan;
+        }
 
         boolean overSidebar = input.getMouseX() < SIDEBAR_W;
         int wheel = input.getWheelRotation();
@@ -955,41 +968,41 @@ public class CreativeScene extends AbstractScene {
         }
 
         // --- shortcuts ---
-        if (input.isKeyJustPressed(KeyEvent.VK_TAB)) {
+        if (KeyBinds.pressed(input, GameAction.EDITOR_NEXT_PALETTE)) {
             category = Category.values()[(category.ordinal() + 1) % Category.values().length];
             setStatus("Palette: " + categoryName(category));
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_G)) {
+        if (KeyBinds.pressed(input, GameAction.EDITOR_TOGGLE_GRID)) {
             showGrid = !showGrid;
             setStatus("Grid " + (showGrid ? "on" : "off"));
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_B)) {
+        if (KeyBinds.pressed(input, GameAction.EDITOR_DECOR_LAYER)) {
             decorForeground = !decorForeground;
             setStatus("Decorations paint into the "
                     + (decorForeground ? "FOREGROUND" : "BACKGROUND"));
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_OPEN_BRACKET)) {
+        if (KeyBinds.pressed(input, GameAction.EDITOR_BRUSH_SMALLER)) {
             brushSize = Math.max(Brush.MIN_SIZE, brushSize - 1);
             setStatus("Brush: " + Brush.label(brushShape) + " " + brushSize);
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_CLOSE_BRACKET)) {
+        if (KeyBinds.pressed(input, GameAction.EDITOR_BRUSH_BIGGER)) {
             brushSize = Math.min(Brush.MAX_SIZE, brushSize + 1);
             setStatus("Brush: " + Brush.label(brushShape) + " " + brushSize);
         }
         if (net == null) {
-            if (input.isKeyJustPressed(KeyEvent.VK_P)) {
+            if (KeyBinds.pressed(input, GameAction.EDITOR_PLAYTEST)) {
                 enterTest();
                 return;
             }
-            if (input.isKeyDown(KeyEvent.VK_CONTROL) && input.isKeyJustPressed(KeyEvent.VK_S)) {
+            if (KeyBinds.pressed(input, GameAction.EDITOR_SAVE)) {
                 openDialog(Dialog.SAVE);
                 return;
             }
-            if (input.isKeyJustPressed(KeyEvent.VK_L)) {
+            if (KeyBinds.pressed(input, GameAction.EDITOR_LOAD)) {
                 openDialog(Dialog.LOAD);
                 return;
             }
-            if (input.isKeyJustPressed(KeyEvent.VK_N)) {
+            if (KeyBinds.pressed(input, GameAction.EDITOR_NEW)) {
                 openDialog(Dialog.NEW_LEVEL);
                 return;
             }
@@ -1003,10 +1016,10 @@ public class CreativeScene extends AbstractScene {
         // --- mouse editing ---
         if (overSidebar) {
             endStroke(); // the pointer left the canvas: the stroke is over
-            if (input.isMouseJustPressed()) {
+            if (KeyBinds.pressed(input, GameAction.EDITOR_PAINT)) {
                 handlePaletteClick(input.getMouseX(), input.getMouseY());
             }
-            if (input.isRightMouseJustPressed()) {
+            if (KeyBinds.pressed(input, GameAction.EDITOR_ERASE)) {
                 handlePaletteRightClick(input.getMouseX(), input.getMouseY());
             }
             lastPaintCol = lastPaintRow = Integer.MIN_VALUE;
@@ -1019,23 +1032,26 @@ public class CreativeScene extends AbstractScene {
         int col = (int) Math.floor(aim[0] / ts);
         int row = (int) Math.floor(aim[1] / ts);
 
-        if (input.isMiddleMouseJustPressed()) {
+        if (KeyBinds.pressed(input, GameAction.EDITOR_PICK)) {
             pickBlock(col, row);
         }
         // One stroke, one undo step: the step opens on the press and closes when
         // the button comes up, so a drag across half the level comes back in a
         // single Ctrl+Z instead of a cell at a time.
-        if (input.isMouseDown()) {
+        boolean painting = KeyBinds.down(input, GameAction.EDITOR_PAINT);
+        boolean paintStarted = KeyBinds.pressed(input, GameAction.EDITOR_PAINT);
+        boolean erasing = KeyBinds.down(input, GameAction.EDITOR_ERASE);
+        if (painting) {
             Entry entry = selectedEntry();
             boolean paintable = entry != null
                     && (entry.kind.equals("block") || entry.kind.equals("eraser"));
             boolean newCell = col != lastPaintCol || row != lastPaintRow;
-            if (input.isMouseJustPressed() || (paintable && newCell)) {
+            if (paintStarted || (paintable && newCell)) {
                 // Opened here rather than on the press, because a drag that
                 // began over the sidebar arrives on the canvas with the press
                 // already spent — and it still paints, so it is still a stroke.
                 beginStroke(entry);
-                paintAt(entry, aim[0], aim[1], col, row, input.isMouseJustPressed());
+                paintAt(entry, aim[0], aim[1], col, row, paintStarted);
                 lastPaintCol = col;
                 lastPaintRow = row;
             }
@@ -1045,8 +1061,8 @@ public class CreativeScene extends AbstractScene {
         // Erasing takes one layer off the top per cell, so a held button must
         // not fire again on the same cell the next frame: a stack would come
         // apart in a single click, and the floor would go with the wall.
-        if (input.isRightMouseDown()) {
-            if (input.isRightMouseJustPressed()
+        if (erasing) {
+            if (KeyBinds.pressed(input, GameAction.EDITOR_ERASE)
                     || col != lastEraseCol || row != lastEraseRow) {
                 beginStroke("erase");
                 eraseAt(aim[0], aim[1], col, row);
@@ -1056,8 +1072,8 @@ public class CreativeScene extends AbstractScene {
         } else {
             lastEraseCol = lastEraseRow = Integer.MIN_VALUE;
         }
-        if (!input.isMouseDown() && !input.isRightMouseDown()) {
-            endStroke(); // both buttons up: the stroke is one finished action
+        if (!painting && !erasing) {
+            endStroke(); // both released: the stroke is one finished action
         }
 
         particles.update(dt);
@@ -1109,7 +1125,7 @@ public class CreativeScene extends AbstractScene {
                         commitEdit();
                         setStatus("Level resized to " + level.width + "x" + level.height
                                 + (level.isChunked() ? " (chunked storage)" : "")
-                                + " · [Ctrl+Z] undo");
+                                + " · [" + KeyBinds.label(GameAction.EDITOR_UNDO) + "] undo");
                     }
                     pendingLevelW = level.width;
                     pendingLevelH = level.height;
@@ -1383,7 +1399,7 @@ public class CreativeScene extends AbstractScene {
         String label = history.undoLabel();
         history.undo();
         ctx.sound(SoundKeys.ui("undo"));
-        setStatus("Undid " + label + " · [Ctrl+Y] redo"
+        setStatus("Undid " + label + " · [" + KeyBinds.label(GameAction.EDITOR_REDO) + "] redo"
                 + (history.canUndo() ? " · " + history.undoDepth() + " more to undo" : ""));
     }
 
@@ -1982,6 +1998,7 @@ public class CreativeScene extends AbstractScene {
                 case "soundeditor" -> openSoundList(e.key);
                 case "soundgroup" -> openSoundList(e.key);
                 case "soundoptions" -> openDialog(Dialog.SOUND_OPTIONS);
+                case "keybinds" -> openDialog(Dialog.KEYBINDS);
                 case "levelmusic" -> {
                     musicTrack = level.music == null ? "" : level.music;
                     openDialog(Dialog.LEVEL_MUSIC);
@@ -2288,8 +2305,11 @@ public class CreativeScene extends AbstractScene {
         testSounds.setCharacter(testCharacter.key);
         ctx.sound(SoundKeys.world("level_load"));
         camera.zoom = Math.max(profile().minZoom, Math.min(profile().maxZoom, 1.0));
-        setStatus("Play-test — [Shift] sprint · hold click to mine · [E] doors/stations"
-                + " · P/Esc returns to editing");
+        setStatus("Play-test — [" + KeyBinds.label(GameAction.SPRINT) + "] sprint · hold ["
+                + KeyBinds.label(GameAction.ATTACK) + "] to mine · ["
+                + KeyBinds.label(GameAction.INTERACT) + "] doors/stations · ["
+                + KeyBinds.label(GameAction.EDITOR_PLAYTEST) + "]/["
+                + KeyBinds.label(GameAction.MENU_BACK) + "] returns to editing");
     }
 
     private void startTestWorld() {
@@ -2417,8 +2437,8 @@ public class CreativeScene extends AbstractScene {
         // A running cutscene owns the frame: the world holds still, the
         // director drives the camera, Enter/Esc skips to the end.
         if (cutsceneDirector != null && cutsceneDirector.active() != null) {
-            if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)
-                    || input.isKeyJustPressed(KeyEvent.VK_ENTER)) {
+            if (KeyBinds.pressed(input, GameAction.MENU_BACK)
+                    || KeyBinds.pressed(input, GameAction.MENU_SELECT)) {
                 cutsceneDirector.skip();
             } else {
                 cutsceneDirector.advance(dt);
@@ -2432,7 +2452,8 @@ public class CreativeScene extends AbstractScene {
             camera.centerOn(testMe.x + p.playerSize / 2.0, testMe.y + p.playerSize / 2.0);
             return; // resume normal play next tick
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK)
+                || KeyBinds.pressed(input, GameAction.PAUSE)) {
             if (craftingPanel != null) {
                 craftingPanel = null;
             } else if (containerPanel != null) {
@@ -2444,7 +2465,7 @@ public class CreativeScene extends AbstractScene {
             }
             return;
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_P)) {
+        if (KeyBinds.pressed(input, GameAction.EDITOR_PLAYTEST)) {
             exitTest();
             return;
         }
@@ -2472,7 +2493,7 @@ public class CreativeScene extends AbstractScene {
                 // interactions and hotbar selection live so stacks can be
                 // arranged and [Q]-stashed without closing the chest.
                 for (int k = 0; k < Inventory.HOTBAR; k++) {
-                    if (input.isKeyJustPressed(KeyEvent.VK_1 + k)) testInv.select(k);
+                    if (KeyBinds.pressed(input, GameAction.hotbar(k))) testInv.select(k);
                 }
                 int wheel = input.getWheelRotation();
                 if (wheel != 0) testInv.scrollSelect(wheel > 0 ? 1 : -1);
@@ -2483,14 +2504,14 @@ public class CreativeScene extends AbstractScene {
         }
 
         PlayerInput in = new PlayerInput(
-                input.isKeyDown(KeyEvent.VK_A) || input.isKeyDown(KeyEvent.VK_LEFT),
-                input.isKeyDown(KeyEvent.VK_D) || input.isKeyDown(KeyEvent.VK_RIGHT),
-                input.isKeyDown(KeyEvent.VK_W) || input.isKeyDown(KeyEvent.VK_UP),
-                input.isKeyDown(KeyEvent.VK_S) || input.isKeyDown(KeyEvent.VK_DOWN),
+                KeyBinds.down(input, GameAction.MOVE_LEFT),
+                KeyBinds.down(input, GameAction.MOVE_RIGHT),
+                KeyBinds.down(input, GameAction.MOVE_UP),
+                KeyBinds.down(input, GameAction.MOVE_DOWN),
                 ++inputSeq);
-        in.sprint = input.isKeyDown(KeyEvent.VK_SHIFT);
+        in.sprint = KeyBinds.down(input, GameAction.SPRINT);
         // Space jumps in play-test too; W/Up only ever steer (see PlayScene).
-        in.jump = input.isKeyJustPressed(KeyEvent.VK_SPACE);
+        in.jump = KeyBinds.pressed(input, GameAction.JUMP);
         testInv.applyPassivesTo(testMe, p.itemsEnabled);
         double preX = testMe.x, preY = testMe.y;
         // The melee machine before the body moves: a lunge's burst and a
@@ -2560,7 +2581,7 @@ public class CreativeScene extends AbstractScene {
             setStatus(ruleFiredMessage(fired.rule()));
         }
 
-        if (input.isKeyJustPressed(KeyEvent.VK_E)) {
+        if (KeyBinds.pressed(input, GameAction.INTERACT)) {
             if (craftingPanel != null) {
                 craftingPanel = null;
             } else if (containerPanel != null) {
@@ -2575,7 +2596,7 @@ public class CreativeScene extends AbstractScene {
             updateTestMeleeControls(input, p);
             // [R] fires the character's ultimate at the cursor, once charged —
             // the same key and the same World resolution as in play.
-            if (input.isKeyJustPressed(KeyEvent.VK_R)) tryTestUltimate(p);
+            if (KeyBinds.pressed(input, GameAction.ULTIMATE)) tryTestUltimate(p);
         } else {
             testWorld.cancelMining();
             mineSoundTimer = 0;
@@ -2588,7 +2609,7 @@ public class CreativeScene extends AbstractScene {
         // Cutscene triggers watch the player: zones fire on entry, INTERACT
         // ones on E (doors and stations already had their chance above).
         if (cutsceneDirector != null) {
-            boolean interact = input.isKeyJustPressed(KeyEvent.VK_E)
+            boolean interact = KeyBinds.pressed(input, GameAction.INTERACT)
                     && craftingPanel == null && containerPanel == null;
             Cutscene started = cutsceneDirector.checkTriggers(
                     testMe.x + p.playerSize / 2.0, testMe.y + p.playerSize / 2.0,
@@ -2677,20 +2698,20 @@ public class CreativeScene extends AbstractScene {
             cursorSlot = -1;
             return;
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_I)) {
+        if (KeyBinds.pressed(input, GameAction.INVENTORY)) {
             showInventory = !showInventory;
             cursorSlot = -1;
         }
         for (int k = 0; k < Inventory.HOTBAR; k++) {
-            if (input.isKeyJustPressed(KeyEvent.VK_1 + k)) testInv.select(k);
+            if (KeyBinds.pressed(input, GameAction.hotbar(k))) testInv.select(k);
         }
         int wheel = input.getWheelRotation();
         if (wheel != 0) testInv.scrollSelect(wheel > 0 ? 1 : -1);
 
-        if (input.isKeyJustPressed(KeyEvent.VK_Q)) {
+        if (KeyBinds.pressed(input, GameAction.DROP_ITEM)) {
             dropTestStack(testInv.selectedIndex(), 1);
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_F)) {
+        if (KeyBinds.pressed(input, GameAction.USE_ITEM)) {
             ItemDef def = testInv.selectedDef();
             if (def != null && "mana_potion".equals(def.key())
                     && testMe.mana < PlayerState.MAX_MANA && testInv.consumeSelected()) {
@@ -2756,7 +2777,7 @@ public class CreativeScene extends AbstractScene {
      * click places.
      */
     private void updateTestMouseActions(InputManager input, GameProfile p, double dt) {
-        if (input.isRightMouseJustPressed()) handleTestRightClick(p);
+        if (KeyBinds.pressed(input, GameAction.PLACE)) handleTestRightClick(p);
 
         double[] aim = camera.screenToWorld(mouseX, mouseY);
         double ts = level.tileSize;
@@ -2768,7 +2789,8 @@ public class CreativeScene extends AbstractScene {
 
         // Hold-to-mine: durability progress while the button stays down.
         boolean shoots = p.projectilesEnabled && held != null && held.projectile() != null;
-        boolean miningNow = input.isMouseDown() && !shoots && p.blockEditingEnabled
+        boolean miningNow = KeyBinds.down(input, GameAction.ATTACK) && !shoots
+                && p.blockEditingEnabled
                 && inReach && level.tileAt(col, row) > 0;
         if (miningNow) {
             swingTime = Math.max(swingTime, 0.1);
@@ -2798,7 +2820,7 @@ public class CreativeScene extends AbstractScene {
             testWorld.cancelMining();
         }
 
-        if (!input.isMouseJustPressed()) return;
+        if (!KeyBinds.pressed(input, GameAction.ATTACK)) return;
         if (shoots) {
             swingTime = 0.1;
             Projectile fired = testWorld.playerShoot(testMe, testInv, aim[0], aim[1]);
@@ -2841,9 +2863,9 @@ public class CreativeScene extends AbstractScene {
      */
     private void updateTestMeleeControls(InputManager input, GameProfile p) {
         if (!p.combatEnabled) return;
-        MeleeAction requested = input.isKeyJustPressed(KeyEvent.VK_V) ? MeleeAction.PARRY
-                : input.isKeyJustPressed(KeyEvent.VK_X) ? MeleeAction.LUNGE
-                : input.isKeyJustPressed(KeyEvent.VK_Z) ? MeleeAction.DASH
+        MeleeAction requested = KeyBinds.pressed(input, GameAction.PARRY) ? MeleeAction.PARRY
+                : KeyBinds.pressed(input, GameAction.LUNGE) ? MeleeAction.LUNGE
+                : KeyBinds.pressed(input, GameAction.DASH) ? MeleeAction.DASH
                 : MeleeAction.NONE;
         if (requested == MeleeAction.NONE) return;
         double[] aim = camera.screenToWorld(mouseX, mouseY);
@@ -2860,7 +2882,7 @@ public class CreativeScene extends AbstractScene {
         MeleeProfile weapon = testMeleeProfile(p);
         ItemDef held = p.itemsEnabled ? testInv.selectedDef() : null;
         testMeleeItem = held == null ? "" : held.key();
-        boolean guard = p.combatEnabled && input.isKeyDown(KeyEvent.VK_C)
+        boolean guard = p.combatEnabled && KeyBinds.down(input, GameAction.GUARD)
                 && !showInventory && craftingPanel == null && containerPanel == null;
         boolean planar = level.perspective != Perspective.SIDE_SCROLL || !p.gravityEnabled;
         Melee.step(testMe, testMelee, weapon, testMeleeItem, guard, planar, dt);
@@ -3020,6 +3042,7 @@ public class CreativeScene extends AbstractScene {
                     ? "every sound in the game" : soundCategory);
             case SOUND -> "Sound — " + soundLabel;
             case SOUND_OPTIONS -> "Sound Options";
+            case KEYBINDS -> "Controls (Key Binds)";
             case LEVEL_MUSIC -> "Level Music — " + level.name;
             default -> "";
         }).theme(MenuTheme.dark());
@@ -3066,7 +3089,7 @@ public class CreativeScene extends AbstractScene {
                             + level.height + ") — " + format().displayName()
                             + " creative mode"
                             + (level.isChunked() ? ", chunked" : "")
-                            + " · [Ctrl+Z] goes back to the last one");
+                            + " · [" + KeyBinds.label(GameAction.EDITOR_UNDO) + "] goes back to the last one");
                 });
                 dialogForm.addAction("Cancel", this::closeDialog);
             }
@@ -3101,7 +3124,7 @@ public class CreativeScene extends AbstractScene {
                         ctx.save();
                         afterLevelSwap();
                         setStatus("Loaded \"" + level.name + "\""
-                                + " · [Ctrl+Z] goes back to the last one");
+                                + " · [" + KeyBinds.label(GameAction.EDITOR_UNDO) + "] goes back to the last one");
                     });
                 }
                 dialogForm.addAction("Cancel", this::closeDialog);
@@ -3132,6 +3155,8 @@ public class CreativeScene extends AbstractScene {
             case SOUNDS -> buildSoundListForm();
             case SOUND -> buildSoundForm();
             case SOUND_OPTIONS -> buildSoundOptionsForm();
+            case KEYBINDS -> KeyBindForm.fill(dialogForm, KeyBinds.active(),
+                    () -> keyBindStore.trySave(KeyBinds.active()), this::closeDialog);
             case LEVEL_MUSIC -> buildLevelMusicForm();
             case SUNLIGHT -> buildSunlightForm();
             default -> { /* NONE */ }
@@ -3457,7 +3482,7 @@ public class CreativeScene extends AbstractScene {
                 doorEditIndex = 0;
                 closeDialog();
                 setStatus("Door \"" + editing.label() + "\" removed from the directory"
-                        + " · [Ctrl+Z] puts it back");
+                        + " · [" + KeyBinds.label(GameAction.EDITOR_UNDO) + "] puts it back");
             });
         }
         dialogForm.addAction("Close", this::closeDialog);
@@ -4289,7 +4314,7 @@ public class CreativeScene extends AbstractScene {
                 closeDialog();
                 setStatus("Deleted the " + texEntry.name + " character —"
                         + " levels offering it fall back to the rest of the roster"
-                        + " · [Ctrl+Z] brings it back");
+                        + " · [" + KeyBinds.label(GameAction.EDITOR_UNDO) + "] brings it back");
             } else {
                 setStatus("The built-in character can't be deleted");
             }
@@ -4300,7 +4325,8 @@ public class CreativeScene extends AbstractScene {
             afterCustomChange();
             closeDialog();
             setStatus("Deleted custom " + texEntry.name
-                    + " — levels using it show placeholders · [Ctrl+Z] brings it back");
+                    + " — levels using it show placeholders · ["
+                    + KeyBinds.label(GameAction.EDITOR_UNDO) + "] brings it back");
         } else {
             setStatus("Couldn't delete " + texEntry.name);
         }
@@ -5540,7 +5566,9 @@ public class CreativeScene extends AbstractScene {
     }
 
     private void updateDialog(double dt, InputManager input) {
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        // A window listening for a new key binding owns every press, including
+        // the one that would otherwise close it.
+        if (!dialogForm.isCapturing() && KeyBinds.pressed(input, GameAction.MENU_BACK)) {
             closeDialog();
             return;
         }
@@ -6770,6 +6798,10 @@ public class CreativeScene extends AbstractScene {
                 return "Opens the door manager: name doors and link each to another"
                         + " level of this game type.";
             }
+            case "keybinds" -> {
+                return "Opens the controls: put any action — editing shortcuts"
+                        + " included — on any key or mouse button.";
+            }
             case "managecutscenes" -> {
                 return "Opens the cutscene manager: script triggerable scenes with"
                         + " actors, animation states, and step scripts.";
@@ -6859,24 +6891,43 @@ public class CreativeScene extends AbstractScene {
         String mode = format().displayName().toUpperCase();
         if (testing) {
             bar = "PLAY-TEST (" + mode + ") — " + level.name + chunkInfo
-                    + "   ·   WASD move · Shift sprint · hold click to mine · right-click place"
-                    + " · 1-5 hotbar · [I] inventory · [E] doors/stations · [P]/[Esc] editor";
+                    + "   ·   move · [" + KeyBinds.label(GameAction.SPRINT) + "] sprint · hold ["
+                    + KeyBinds.label(GameAction.ATTACK) + "] to mine · ["
+                    + KeyBinds.label(GameAction.PLACE) + "] place · hotbar keys · ["
+                    + KeyBinds.label(GameAction.INVENTORY) + "] inventory · ["
+                    + KeyBinds.label(GameAction.INTERACT) + "] doors/stations · ["
+                    + KeyBinds.label(GameAction.EDITOR_PLAYTEST) + "]/["
+                    + KeyBinds.label(GameAction.MENU_BACK) + "] editor";
         } else if (net != null) {
-            bar = mode + " CREATIVE (ONLINE) — painting the server's world   ·   [Tab] category"
-                    + " · right-click erase · [G] grid · [Esc] back to game";
+            bar = mode + " CREATIVE (ONLINE) — painting the server's world   ·   ["
+                    + KeyBinds.label(GameAction.EDITOR_NEXT_PALETTE) + "] category · ["
+                    + KeyBinds.label(GameAction.EDITOR_ERASE) + "] erase · ["
+                    + KeyBinds.label(GameAction.EDITOR_TOGGLE_GRID) + "] grid · ["
+                    + KeyBinds.label(GameAction.MENU_BACK) + "] back to game";
         } else {
             // The undo count is on the bar because it is the answer to "can I
             // try this?" — it says how far back the editor can still walk.
             String undo = history.canUndo()
-                    ? " · [Ctrl+Z] undo " + history.undoLabel()
+                    ? " · [" + KeyBinds.label(GameAction.EDITOR_UNDO) + "] undo "
+                    + history.undoLabel()
                     + (history.undoDepth() > 1 ? " (" + history.undoDepth() + ")" : "")
                     : "";
-            String redo = history.canRedo() ? " · [Ctrl+Y] redo" : "";
+            String redo = history.canRedo()
+                    ? " · [" + KeyBinds.label(GameAction.EDITOR_REDO) + "] redo" : "";
             bar = mode + " CREATIVE — " + level.name + " (" + level.width + "x" + level.height + ")"
                     + chunkInfo
-                    + "   ·   [Tab] category · right-click erase · middle pick · [B] layer"
-                    + " · [ ] brush · [G] grid · [P] test · [Ctrl+S] save · [L] load · [N] new"
-                    + undo + redo + " · [Esc] menu";
+                    + "   ·   [" + KeyBinds.label(GameAction.EDITOR_NEXT_PALETTE) + "] category · ["
+                    + KeyBinds.label(GameAction.EDITOR_ERASE) + "] erase · ["
+                    + KeyBinds.label(GameAction.EDITOR_PICK) + "] pick · ["
+                    + KeyBinds.label(GameAction.EDITOR_DECOR_LAYER) + "] layer · ["
+                    + KeyBinds.label(GameAction.EDITOR_BRUSH_SMALLER) + " "
+                    + KeyBinds.label(GameAction.EDITOR_BRUSH_BIGGER) + "] brush · ["
+                    + KeyBinds.label(GameAction.EDITOR_TOGGLE_GRID) + "] grid · ["
+                    + KeyBinds.label(GameAction.EDITOR_PLAYTEST) + "] test · ["
+                    + KeyBinds.label(GameAction.EDITOR_SAVE) + "] save · ["
+                    + KeyBinds.label(GameAction.EDITOR_LOAD) + "] load · ["
+                    + KeyBinds.label(GameAction.EDITOR_NEW) + "] new"
+                    + undo + redo + " · [" + KeyBinds.label(GameAction.MENU_BACK) + "] menu";
         }
         g.drawString(bar, x0 + 12, 19);
     }
@@ -7487,6 +7538,25 @@ public class CreativeScene extends AbstractScene {
         g.fillPolygon(new int[]{22, 36, 36, 22}, new int[]{30, 30, 36, 36}, 4);
         g.setColor(new Color(150, 160, 180));
         g.fillRect(18, 20, 12, 12);
+        g.dispose();
+        return img;
+    }
+
+    /** Controls… icon: three keycaps with one picked out. */
+    private static BufferedImage keyBindsIcon() {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        for (int i = 0; i < 3; i++) {
+            for (int row = 0; row < 2; row++) {
+                boolean lit = i == 1 && row == 0;
+                int x = 4 + i * 11;
+                int y = 10 + row * 12;
+                g.setColor(lit ? new Color(255, 210, 90) : new Color(80, 88, 110));
+                g.fillRoundRect(x, y, 10, 10, 3, 3);
+                g.setColor(lit ? new Color(120, 96, 30) : new Color(150, 158, 180));
+                g.drawRoundRect(x, y, 10, 10, 3, 3);
+            }
+        }
         g.dispose();
         return img;
     }
