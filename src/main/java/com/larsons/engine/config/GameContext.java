@@ -13,6 +13,7 @@ import com.larsons.engine.graphics.shader.ShaderPass;
 import com.larsons.engine.graphics.shader.Shaders;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.net.NetSession;
+import com.larsons.engine.profile.DisplayCap;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -187,7 +188,11 @@ public class GameContext {
             Sounds.setPitchVariation(profile.soundPitchVariation);
         }
         if (engine != null && profile != null) {
-            engine.setTargetFps(profile.maxFps);
+            // The level says what is allowed; the machine in front of the
+            // player picks inside it. See DisplayCap for why those are two
+            // decisions and only one of them belongs to the level.
+            engine.setTargetFps(DisplayCap.forDisplay(
+                    engine.device(), profile.minFps, profile.maxFps));
             syncShaders(engine.shaders(), profile);
         }
     }

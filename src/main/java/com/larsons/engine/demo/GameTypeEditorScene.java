@@ -12,11 +12,23 @@ import java.awt.Font;
 import java.awt.Graphics2D;
 
 /**
- * Launch-time game-type editor: name the game type and set the <em>default</em>
- * features its levels start from. Toggles are stored per level, so these are the
- * template a newly created level inherits (and can then diverge from); each
- * level saves its own settings. Edits the active {@link GameProfile} in place
- * and saves it (as JSON) into {@code resources/gametypes/}.
+ * Launch-time game-type editor: name the game type. That is the whole of it.
+ *
+ * <p><b>A game type is a folder of levels, not a configuration.</b> Every level
+ * carries the settings it plays with ({@link com.larsons.engine.level.Level#settings}),
+ * so anything set here could only ever be the template a newly created level
+ * starts from — a value that acts at a distance, days later, from a screen the
+ * creator has long since left, and that the level's own settings form will
+ * cheerfully contradict. Asking the same question in two places, where only one
+ * of them is visible at the point it takes effect, is how a map maker ends up
+ * with a level whose mobs are off for no reason they can see.
+ *
+ * <p>So the feature set is fixed at the engine defaults
+ * ({@link GameProfile#resetFeaturesToDefaults()}) and every decision is made per
+ * level, in <em>Load Level → Edit Settings</em>, next to the level it applies
+ * to. The profile is still saved as JSON into {@code resources/gametypes/} —
+ * it carries the name, the texture pack, the sound pack and which level was
+ * last played.
  */
 public class GameTypeEditorScene extends AbstractScene {
     private final GameContext ctx;
@@ -29,9 +41,18 @@ public class GameTypeEditorScene extends AbstractScene {
     public void onEnter() {
         GameProfile p = ctx.profile();
         status = "";
+
+        // The game type's own feature values are always the defaults, so the
+        // template every new level starts from is one predictable thing rather
+        // than whatever a previous session happened to leave behind.
+        p.resetFeaturesToDefaults();
+
         form = new ConfigForm("Create / Edit Game Type").theme(MenuTheme.dark());
         form.addText("Game type name", () -> p.name, v -> p.name = v, 40);
-        ProfileForms.addFeatureOptions(form, p);
+        form.addNote("A game type is just a folder of levels. Every level carries its own "
+                + "settings — format, gravity, mobs, combat, lighting, shaders, zoom — and you "
+                + "edit them per level in Load Level → Edit Settings, next to the level "
+                + "they apply to.");
         form.addAction("Save Game Type", () -> {
             p.normalize();
             ctx.save();

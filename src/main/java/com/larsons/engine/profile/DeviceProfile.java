@@ -75,19 +75,34 @@ public record DeviceProfile(String os, String osVersion, String arch, int cores,
     }
 
     /**
-     * Which Java2D rendering pipeline the JVM was asked to use. These are opt-in
-     * system properties rather than anything the engine sets, so the answer is
-     * usually "software (default)" — which is itself worth recording, because it
-     * means no hardware blitting is in play at all.
+     * Which Java2D rendering pipeline is in play, as far as it can be known.
+     *
+     * <p>Only the opt-in system properties are observable; the JVM does not
+     * expose which pipeline it actually chose. So when nothing is set this
+     * reports the <em>platform default</em> rather than claiming software
+     * rendering — an earlier version said "software (default)" on macOS, which
+     * was doubly misleading, since the platform default there is Metal and a
+     * hardware-backed destination is precisely what makes unaccelerated
+     * antialiased drawing expensive.
      */
     private static String detectPipeline() {
-        if (flag("sun.java2d.opengl")) return "OpenGL (sun.java2d.opengl)";
-        if (flag("sun.java2d.metal")) return "Metal (sun.java2d.metal)";
-        if (flag("sun.java2d.d3d")) return "Direct3D (sun.java2d.d3d)";
-        if ("false".equalsIgnoreCase(System.getProperty("sun.java2d.d3d"))) {
-            return "software (d3d disabled)";
+        if (flag("sun.java2d.opengl")) return "OpenGL (forced)";
+        if (flag("sun.java2d.metal")) return "Metal (forced)";
+        if (flag("sun.java2d.d3d")) return "Direct3D (forced)";
+        if ("false".equalsIgnoreCase(System.getProperty("sun.java2d.d3d"))
+                || "false".equalsIgnoreCase(System.getProperty("sun.java2d.opengl"))
+                || "false".equalsIgnoreCase(System.getProperty("sun.java2d.metal"))) {
+            return "software (hardware pipeline disabled)";
         }
-        return "software (default)";
+        return platformDefaultPipeline() + " (platform default, not forced)";
+    }
+
+    /** The pipeline a JVM uses on this OS when nothing is specified. */
+    private static String platformDefaultPipeline() {
+        String os = System.getProperty("os.name", "").toLowerCase();
+        if (os.contains("mac")) return "Metal";
+        if (os.contains("win")) return "Direct3D";
+        return "X11/software";
     }
 
     private static boolean flag(String key) {

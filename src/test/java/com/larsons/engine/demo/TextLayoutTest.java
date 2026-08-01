@@ -234,10 +234,13 @@ class TextLayoutTest {
     // --- the copy the engine actually ships ---------------------------------------
 
     @Test
-    void theGameTypeFeatureFormNeedsNoShortening() {
+    void theLevelSettingsFeatureFormNeedsNoShortening() {
+        // The shape LevelSelectScene builds: the level's own name and format,
+        // then its feature settings. The game-type editor no longer shows this
+        // list at all — a level is where these are decided.
         GameProfile p = new GameProfile("Platformer");
-        ConfigForm form = new ConfigForm("Create / Edit Game Type").theme(MenuTheme.dark());
-        form.addText("Game type name", () -> p.name, v -> p.name = v, 40);
+        ConfigForm form = new ConfigForm("Settings — Test Level").theme(MenuTheme.dark());
+        form.addText("Level name", () -> p.name, v -> p.name = v, 32);
         ProfileForms.addFeatureOptions(form, p);
 
         Graphics2D g = layout(form, W);

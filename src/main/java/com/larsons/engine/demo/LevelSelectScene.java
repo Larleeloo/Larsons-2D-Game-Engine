@@ -136,8 +136,8 @@ public class LevelSelectScene extends AbstractScene {
         form = new ConfigForm("Settings — " + editLevel.name).theme(MenuTheme.dark());
         form.addText("Level name", () -> editLevel.name, v -> editLevel.name = v, 32);
         // The level's own format: which creative mode edits it and how it
-        // plays. (The feature list below carries a "default level format" too
-        // — that one only seeds levels created later.)
+        // plays. The only format control there is — everything below is this
+        // level's own feature settings.
         form.addEnum("Level format", LevelFormat.values(),
                 () -> editLevel.format(), v -> editLevel.setFormat(v));
         addRosterOptions();

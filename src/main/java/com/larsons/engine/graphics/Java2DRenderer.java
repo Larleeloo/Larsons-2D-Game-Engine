@@ -20,18 +20,43 @@ import java.awt.image.DataBufferInt;
  * passive {@code repaint()}) pairs naturally with the fixed-timestep loop and
  * makes hitting a 120 FPS target (requirement #1) straightforward.
  *
- * <p><b>Shaders.</b> When a {@link ShaderChain} with active passes is attached,
- * the frame is drawn into an offscreen {@code INT_RGB} image instead, the chain
- * runs over its raw pixel array (in parallel row stripes — the CPU stand-in for
- * fragment-shader parallelism), and the result is blitted to the canvas. With
- * no passes active the offscreen hop is skipped entirely, so shaders cost
- * nothing when disabled.
+ * <p><b>Every frame is composed offscreen</b> — drawn into an {@code INT_RGB}
+ * {@link BufferedImage}, then blitted to the canvas as one image. A
+ * {@link ShaderChain} with active passes runs over that image's raw pixel array
+ * (in parallel row stripes — the CPU stand-in for fragment-shader parallelism)
+ * in between.
  *
- * <p><b>The shader path costs more than the passes themselves.</b> Reaching the
- * pixels means {@code DataBufferInt.getData()}, and Java2D permanently stops
- * caching an image in video memory once a caller holds a pointer into its
- * raster. So enabling any pass gives up whatever hardware blitting the platform
- * was doing for the frame, on top of the per-pass CPU work. That is why
+ * <p><b>Why offscreen always, and not only for shaders.</b> This used to draw
+ * straight at the {@link BufferStrategy} whenever no pass was active, on the
+ * reasonable-sounding theory that skipping the copy must be cheaper. Profiling
+ * an M1 MacBook Air said otherwise, by a factor of nine: the same scene cost
+ * 133 ms drawn at the window and 15 ms drawn into an image. Two things drive
+ * that, and they compound:
+ *
+ * <ul>
+ *   <li><b>Antialiased shapes are not accelerated.</b> The scene issues
+ *       hundreds of small antialiased fills, strokes and glyphs per frame, and
+ *       platform pipelines (Metal on macOS, OpenGL/D3D elsewhere) rasterize
+ *       those in software regardless. Drawn at a hardware-backed surface, each
+ *       one is a software render followed by its own upload; drawn into an
+ *       image, they are plain writes into an {@code int[]} with no round trip
+ *       at all.</li>
+ *   <li><b>HiDPI multiplies it.</b> A hardware surface is sized in <em>device</em>
+ *       pixels, so on a 2x display the same scene covers four times the area.
+ *       The offscreen image is sized in logical pixels and upscaled once on
+ *       the blit — which for nearest-neighbour pixel art is the correct
+ *       presentation anyway, not a compromise.</li>
+ * </ul>
+ *
+ * <p>So the copy is not a cost to be avoided; it is what turns a few hundred
+ * unaccelerated round trips into one blit that hardware handles well. The old
+ * path is still reachable via {@code -Dlarsons.render.direct=true} for
+ * measuring the difference on a given machine.
+ *
+ * <p><b>Shaders cost a little more than their passes.</b> Reaching the pixels
+ * means {@code DataBufferInt.getData()}, and Java2D stops caching an image in
+ * video memory once a caller holds a pointer into its raster — so the final
+ * blit of a shaded frame gives up hardware acceleration. That is why
  * {@link com.larsons.engine.profile.FrameProfiler.Stage#SHADERS} and
  * {@link com.larsons.engine.profile.FrameProfiler.Stage#PRESENT} are timed
  * separately: turning passes on can move both numbers.
@@ -47,10 +72,22 @@ public class Java2DRenderer implements Renderer {
     private boolean offscreenFrame;
     private FrameProfiler profiler;
 
+    /**
+     * Escape hatch back to drawing straight at the window
+     * ({@code -Dlarsons.render.direct=true}). Kept so the two paths can be
+     * measured against each other on a given machine rather than taken on
+     * trust — that comparison is what identified the cost in the first place.
+     */
+    private final boolean directToSurface =
+            "true".equalsIgnoreCase(System.getProperty("larsons.render.direct"));
+
     public Java2DRenderer(Canvas canvas, Color clearColor) {
         this.canvas = canvas;
         this.clearColor = clearColor;
     }
+
+    /** Whether frames are composed offscreen and blitted (the default). */
+    public boolean isOffscreen() { return !directToSurface; }
 
     @Override
     public void setShaderChain(ShaderChain chain) {
@@ -83,7 +120,7 @@ public class Java2DRenderer implements Renderer {
     /** Acquire and clear this frame's surface. Timed as presentation overhead. */
     private Graphics2D acquireFrame() {
         ensureStrategy();
-        offscreenFrame = shaders != null && shaders.hasPasses();
+        offscreenFrame = !directToSurface;
         if (offscreenFrame) {
             int w = getWidth(), h = getHeight();
             if (offscreen == null || offscreen.getWidth() != w || offscreen.getHeight() != h) {
@@ -111,25 +148,29 @@ public class Java2DRenderer implements Renderer {
             currentGraphics = null;
         }
         if (offscreenFrame && offscreen != null) {
-            int[] pixels = ((DataBufferInt) offscreen.getRaster().getDataBuffer()).getData();
+            if (shaders != null && shaders.hasPasses()) {
+                int[] pixels = ((DataBufferInt) offscreen.getRaster().getDataBuffer()).getData();
 
-            // The shader chain is timed on its own: it is the budget a GPU
-            // shader backend would compete for, and it is the one part of the
-            // frame whose cost scales with pixel count rather than with how
-            // much the scene drew.
-            if (profiler != null) {
-                profiler.record(FrameProfiler.Stage.PRESENT, presentStart);
-                long shaderStart = profiler.begin();
-                try {
+                // The shader chain is timed on its own: it is the budget a GPU
+                // shader backend would compete for, and it is the one part of
+                // the frame whose cost scales with pixel count rather than
+                // with how much the scene drew.
+                if (profiler != null) {
+                    profiler.record(FrameProfiler.Stage.PRESENT, presentStart);
+                    long shaderStart = profiler.begin();
+                    try {
+                        shaders.apply(pixels, offscreen.getWidth(), offscreen.getHeight());
+                    } finally {
+                        profiler.record(FrameProfiler.Stage.SHADERS, shaderStart);
+                    }
+                    presentStart = profiler.begin();
+                } else {
                     shaders.apply(pixels, offscreen.getWidth(), offscreen.getHeight());
-                } finally {
-                    profiler.record(FrameProfiler.Stage.SHADERS, shaderStart);
                 }
-                presentStart = profiler.begin();
-            } else {
-                shaders.apply(pixels, offscreen.getWidth(), offscreen.getHeight());
             }
 
+            // One blit of one finished image, whatever the scene did to build
+            // it. This is the operation hardware pipelines are good at.
             Graphics2D g = (Graphics2D) strategy.getDrawGraphics();
             try {
                 g.drawImage(offscreen, 0, 0, null);
