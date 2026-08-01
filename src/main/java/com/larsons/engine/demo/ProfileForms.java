@@ -4,6 +4,8 @@ import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.graphics.shader.Shaders;
 import com.larsons.engine.level.LevelFormat;
+import com.larsons.engine.profile.DeviceProfile;
+import com.larsons.engine.profile.DisplayCap;
 import com.larsons.engine.ui.ConfigForm;
 
 import java.nio.file.Path;
@@ -37,8 +39,12 @@ final class ProfileForms {
         form.addDouble("Default zoom", () -> p.defaultZoom, v -> p.defaultZoom = v, 0.1, 8.0, 0.1)
                 .enabledWhen(() -> p.zoomEnabled);
 
-        form.addInt("Min framerate", () -> p.minFps, v -> p.minFps = v, 10, 240, 5);
-        form.addInt("Max framerate", () -> p.maxFps, v -> p.maxFps = v, 10, 240, 5);
+        // The level sets the range it allows; the machine running it picks
+        // inside that range from its own display refresh rate (see DisplayCap).
+        // Nobody has to guess what hardware a level will be opened on.
+        form.addInt("Lowest allowed FPS", () -> p.minFps, v -> p.minFps = v, 10, 240, 5);
+        form.addInt("Highest allowed FPS", () -> p.maxFps, v -> p.maxFps = v, 10, 240, 5);
+        form.addNote(DisplayCap.describeRule(DeviceProfile.detect()));
 
         form.addToggle("Gravity / jumping", () -> p.gravityEnabled, v -> p.gravityEnabled = v);
         form.addToggle("Show HUD", () -> p.hudVisible, v -> p.hudVisible = v);
