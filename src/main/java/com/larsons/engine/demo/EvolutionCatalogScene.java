@@ -11,6 +11,8 @@ import com.larsons.engine.evolution.Phenotype;
 import com.larsons.engine.evolution.SpeciesRecord;
 import com.larsons.engine.evolution.Trait;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.graphics.draw.DrawTarget;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.scene.AbstractScene;
 
 import java.awt.BasicStroke;
@@ -222,7 +224,9 @@ public class EvolutionCatalogScene extends AbstractScene {
     }
 
     @Override
-    public void render(Graphics2D g, float alpha) {
+    public void render(DrawTarget target, float alpha) {
+        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
+        Graphics2D g = Java2DTarget.graphicsOf(target);
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setColor(BG);
         g.fillRect(0, 0, viewportWidth, viewportHeight);

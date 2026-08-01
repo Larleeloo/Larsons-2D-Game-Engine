@@ -1,5 +1,6 @@
 package com.larsons.engine;
 
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.audio.SoundKeys;
 import com.larsons.engine.audio.SoundLoader;
 import com.larsons.engine.audio.SoundPack;
@@ -68,7 +69,7 @@ class SoundEditorTest {
             for (int i = 0; i < frames; i++) {
                 input.newFrame();
                 scenes.update(1.0 / 120.0, input);
-                scenes.render(g, 0f);
+                scenes.render(Java2DTarget.unsized(g), 0f);
             }
         }
 

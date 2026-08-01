@@ -43,6 +43,7 @@ import com.larsons.engine.graphics.CutscenePainter;
 import com.larsons.engine.graphics.DecorPainter;
 import com.larsons.engine.graphics.DepthPass;
 import com.larsons.engine.graphics.draw.DrawTarget;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.graphics.EntitySprites;
 import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.ParallaxBackground;
@@ -1870,8 +1871,17 @@ public class PlayScene extends AbstractScene {
         ctx.applyLiveSettings();
     }
 
+    /** This frame's draw target, set at the top of {@link #render}. */
+    private DrawTarget frameTarget;
+
     @Override
-    public void render(Graphics2D g, float alpha) {
+    public void render(DrawTarget target, float alpha) {
+        // Most of this scene is not ported off Graphics2D yet; see
+        // Java2DTarget.graphicsOf. The frame's target is held so the painters
+        // that *are* ported (the terrain) draw through it, which is also what
+        // puts their operations into the frame's draw-call count.
+        this.frameTarget = target;
+        Graphics2D g = Java2DTarget.graphicsOf(target);
         if (leaving) {
             // Session gone; hold a blank frame while the menu fade finishes.
             ctx.lighting().setDarkness(0);
@@ -2318,7 +2328,7 @@ public class PlayScene extends AbstractScene {
      * it instead of being painted over them (see {@link TerrainPainter}).
      */
     private void drawTiles(Graphics2D g, DepthPass standing) {
-        TerrainPainter.draw(g, level, camera, visibleTileBounds(), animClock,
+        TerrainPainter.draw(frameTarget, level, camera, visibleTileBounds(), animClock,
                 standing, this::drawOpenLid, miningStroke());
     }
 

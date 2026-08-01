@@ -1,5 +1,6 @@
 package com.larsons.engine.scene;
 
+import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.input.InputManager;
 
 import java.awt.AlphaComposite;
@@ -96,16 +97,15 @@ public class SceneManager {
         if (current != null) current.update(dt, input);
     }
 
-    public void render(Graphics2D g, float alpha) {
-        if (current != null) current.render(g, alpha);
+    public void render(DrawTarget target, float alpha) {
+        if (current != null) current.render(target, alpha);
 
         if (transitioning) {
-            Composite old = g.getComposite();
-            g.setComposite(AlphaComposite.getInstance(
-                    AlphaComposite.SRC_OVER, Math.max(0f, Math.min(1f, fade))));
-            g.setColor(Color.BLACK);
-            g.fillRect(0, 0, width, height);
-            g.setComposite(old);
+            // The fade is scoped rather than set-and-restored, which is what a
+            // batching backend needs and what Java2D wanted anyway.
+            target.pushAlpha(Math.max(0f, Math.min(1f, fade)));
+            target.fillRect(0, 0, width, height, Color.BLACK);
+            target.popAlpha();
         }
     }
 

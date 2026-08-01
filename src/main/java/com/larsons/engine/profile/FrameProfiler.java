@@ -1,5 +1,7 @@
 package com.larsons.engine.profile;
 
+import com.larsons.engine.graphics.draw.DrawStats;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -97,6 +99,12 @@ public final class FrameProfiler {
     private final Map<String, long[]> passSamples = new LinkedHashMap<>();
     private final Map<String, Long> passPending = new LinkedHashMap<>();
 
+    // Per-frame draw-call counts, in the same ring slot as that frame's timings.
+    private final int[] drawOps = new int[WINDOW];
+    private final int[] drawBatches = new int[WINDOW];
+    private final int[] drawImages = new int[WINDOW];
+    private final int[] drawGlyphs = new int[WINDOW];
+
     private int cursor;      // next ring slot to write
     private int recorded;    // frames written, saturating at WINDOW
     private long totalFrames;
@@ -126,6 +134,10 @@ public final class FrameProfiler {
     public void reset() {
         for (long[] row : samples) Arrays.fill(row, 0L);
         Arrays.fill(pending, 0L);
+        Arrays.fill(drawOps, 0);
+        Arrays.fill(drawBatches, 0);
+        Arrays.fill(drawImages, 0);
+        Arrays.fill(drawGlyphs, 0);
         passSamples.clear();
         passPending.clear();
         cursor = 0;
@@ -149,6 +161,25 @@ public final class FrameProfiler {
         if (!enabled || startNanos == 0L) return;
         long elapsed = System.nanoTime() - startNanos;
         if (elapsed > 0) pending[stage.ordinal()] += elapsed;
+    }
+
+    /**
+     * Record what the frame asked the renderer to draw.
+     *
+     * <p>This is the other half of the GPU question. The stage timings say
+     * scene drawing is what costs; this says whether that cost is a few
+     * expensive operations or a great many cheap ones, and how many draw calls
+     * a batching backend would collapse them into. A frame of ten thousand
+     * operations merging into thirty batches is one a GPU renderer transforms;
+     * ten thousand merging into eight thousand is one whose <em>art</em> needs
+     * atlasing first, and no backend work would rescue it.
+     */
+    public void recordDraws(DrawStats frameStats) {
+        if (!enabled || frameStats == null) return;
+        drawOps[cursor] = frameStats.operations();
+        drawBatches[cursor] = frameStats.batches();
+        drawImages[cursor] = frameStats.images();
+        drawGlyphs[cursor] = frameStats.glyphs();
     }
 
     /**
@@ -186,6 +217,12 @@ public final class FrameProfiler {
         passPending.clear();
 
         cursor = (cursor + 1) % WINDOW;
+        // The next slot is cleared as it is reached, so a frame that records
+        // no draws reads as zero rather than inheriting the lap before it.
+        drawOps[cursor] = 0;
+        drawBatches[cursor] = 0;
+        drawImages[cursor] = 0;
+        drawGlyphs[cursor] = 0;
         if (recorded < WINDOW) recorded++;
         totalFrames++;
 
@@ -225,7 +262,9 @@ public final class FrameProfiler {
 
         double budgetMs = 1000.0 / targetFps;
         return new Snapshot(recorded, totalFrames, targetFps, budgetMs,
-                List.copyOf(stageStats), List.copyOf(passStats));
+                List.copyOf(stageStats), List.copyOf(passStats),
+                new Draws(mean(drawOps), mean(drawBatches),
+                        mean(drawImages), mean(drawGlyphs)));
     }
 
     /**
@@ -261,6 +300,34 @@ public final class FrameProfiler {
         return nanos / 1_000_000.0;
     }
 
+    /** Mean of the recorded window of an int ring. */
+    private double mean(int[] ring) {
+        if (recorded == 0) return 0;
+        long sum = 0;
+        for (int i = 0; i < recorded; i++) sum += ring[i];
+        return (double) sum / recorded;
+    }
+
+    /**
+     * What an average frame asked the renderer to draw.
+     *
+     * <p>{@link #mergeRatio()} is the figure the GPU decision turns on: how
+     * many operations a batching backend would fold into each draw call. One
+     * means no two consecutive operations are compatible and batching buys
+     * nothing; double digits means the draw order is already GPU-shaped.
+     */
+    public record Draws(double operations, double batches, double images, double glyphs) {
+
+        public static final Draws NONE = new Draws(0, 0, 0, 0);
+
+        public boolean isEmpty() { return operations <= 0; }
+
+        /** Operations per draw call a batching backend would issue. */
+        public double mergeRatio() {
+            return batches <= 0 ? 0 : operations / batches;
+        }
+    }
+
     /** Mean/percentile summary of one stage or one shader pass, in milliseconds. */
     public record Stats(String name, int samples, double meanMs, double p50Ms,
                         double p95Ms, double p99Ms, double maxMs) {
@@ -276,10 +343,11 @@ public final class FrameProfiler {
      * {@link #headroomPct()}, how much of the frame budget was left over.
      */
     public record Snapshot(int windowFrames, long totalFrames, int targetFps,
-                           double budgetMs, List<Stats> stages, List<Stats> passes) {
+                           double budgetMs, List<Stats> stages, List<Stats> passes,
+                           Draws draws) {
 
         public static final Snapshot EMPTY =
-                new Snapshot(0, 0, 120, 1000.0 / 120, List.of(), List.of());
+                new Snapshot(0, 0, 120, 1000.0 / 120, List.of(), List.of(), Draws.NONE);
 
         public boolean isEmpty() { return windowFrames == 0; }
 

@@ -1,5 +1,6 @@
 package com.larsons.engine;
 
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
@@ -407,7 +408,7 @@ class NetworkTest {
             for (int i = 0; i < 10; i++) {
                 input.newFrame();
                 scenes.update(1.0 / 120.0, input);
-                scenes.render(g, 0f);
+                scenes.render(Java2DTarget.unsized(g), 0f);
             }
 
             // The server goes away (the host quit); the client notices...
@@ -424,7 +425,7 @@ class NetworkTest {
             for (int i = 0; i < 120; i++) { // enough frames to finish the fade
                 input.newFrame();
                 scenes.update(1.0 / 120.0, input);
-                scenes.render(g, 0f);
+                scenes.render(Java2DTarget.unsized(g), 0f);
             }
             assertEquals("MainMenuScene", scenes.current().name(),
                     "the quit should land on the menu without crashing");

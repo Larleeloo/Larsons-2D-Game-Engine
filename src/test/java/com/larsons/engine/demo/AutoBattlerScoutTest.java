@@ -1,5 +1,6 @@
 package com.larsons.engine.demo;
 
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.autobattler.AutoClient;
 import com.larsons.engine.autobattler.AutoGame;
 import com.larsons.engine.autobattler.AutoServer;
@@ -125,7 +126,7 @@ class AutoBattlerScoutTest {
         for (int i = 0; i < ticks; i++) {
             input.newFrame();
             scenes.update(1.0 / 60.0, input);
-            scenes.render(g, 0f);
+            scenes.render(Java2DTarget.unsized(g), 0f);
         }
     }
 

@@ -10,6 +10,8 @@ import com.larsons.engine.deckbuilder.DeckSession;
 import com.larsons.engine.deckbuilder.Leader;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.net.Protocol;
+import com.larsons.engine.graphics.draw.DrawTarget;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.MenuTheme;
@@ -220,7 +222,9 @@ public class DeckLobbyScene extends AbstractScene {
     }
 
     @Override
-    public void render(Graphics2D g, float alpha) {
+    public void render(DrawTarget target, float alpha) {
+        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
+        Graphics2D g = Java2DTarget.graphicsOf(target);
         if (session == null) {
             form.render(g, viewportWidth, viewportHeight);
             String s = status;

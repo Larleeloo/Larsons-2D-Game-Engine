@@ -2,6 +2,7 @@ package com.larsons.engine.core;
 
 import com.larsons.engine.graphics.Java2DRenderer;
 import com.larsons.engine.graphics.Renderer;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.graphics.shader.ShaderChain;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.profile.DeviceProfile;
@@ -236,15 +237,25 @@ public class Engine {
     private void draw(double alpha) {
         Graphics2D g = renderer.beginFrame();
         try {
+            // One target for the whole frame. Everything the scene draws goes
+            // through it, so its DrawStats are the frame's own draw-call
+            // count — the number that says what a batching backend would buy.
+            Java2DTarget target = new Java2DTarget(g, renderer.getWidth(), renderer.getHeight());
+
             // Only the scene's own drawing is timed here. The renderer reports
             // its shader and present costs itself, so the three stay separable.
             long sceneStart = profiler.begin();
             try {
-                scenes.render(g, (float) alpha);
+                scenes.render(target, (float) alpha);
             } finally {
                 profiler.record(FrameProfiler.Stage.SCENE, sceneStart);
+                profiler.recordDraws(target.stats());
             }
             if (overlayVisible) {
+                // Drawn straight at the Graphics2D, deliberately: the readout
+                // is not part of the game, and routing it through the frame's
+                // target would fold its own draw calls into the count it is
+                // reporting.
                 long overlayStart = profiler.begin();
                 try {
                     ProfileOverlay.draw(g, profiler.latest(), device, loop.getFps());

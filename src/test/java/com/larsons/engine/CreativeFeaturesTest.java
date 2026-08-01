@@ -1,5 +1,6 @@
 package com.larsons.engine;
 
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.level.DoorDirectory;
 import com.larsons.engine.level.DoorLink;
@@ -356,7 +357,7 @@ class CreativeFeaturesTest {
         for (int i = 0; i < 20; i++) {
             input.newFrame();
             scenes.update(1.0 / 120.0, input);
-            scenes.render(g, 0f);
+            scenes.render(Java2DTarget.unsized(g), 0f);
         }
         g.dispose();
         assertEquals("CreativeScene", scenes.current().name());
@@ -387,7 +388,7 @@ class CreativeFeaturesTest {
         for (int i = 0; i < 5; i++) {
             input.newFrame();
             scenes.update(1.0 / 120.0, input);
-            scenes.render(g, 0f);
+            scenes.render(Java2DTarget.unsized(g), 0f);
         }
 
         // P enters play-test: the test player simulates and draws with the
@@ -398,7 +399,7 @@ class CreativeFeaturesTest {
         for (int i = 0; i < 10; i++) {
             input.newFrame();
             scenes.update(1.0 / 120.0, input);
-            scenes.render(g, 0f);
+            scenes.render(Java2DTarget.unsized(g), 0f);
         }
         g.dispose();
         assertEquals("CreativeScene", scenes.current().name());
