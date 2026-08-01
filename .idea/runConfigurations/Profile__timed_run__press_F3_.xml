@@ -1,0 +1,35 @@
+<component name="ProjectRunConfigurationManager">
+  <!--
+    Runs the game with the frame profiler armed. It does NOT start recording at
+    launch: load a level, press F3 there, play for 30 seconds, and it writes
+    frame-profile.txt into the project root by itself.
+
+    For a longer sample or a named report, edit "Run options" below to add
+    -Pprofile.seconds=60 or -Pprofile.out=air-shaders-on.txt
+  -->
+  <configuration default="false" name="Profile (timed run, press F3)" type="GradleRunConfiguration" factoryName="Gradle">
+    <ExternalSystemSettings>
+      <option name="env">
+        <map />
+      </option>
+      <option name="executionName" />
+      <option name="externalProjectPath" value="$PROJECT_DIR$" />
+      <option name="externalSystemIdString" value="GRADLE" />
+      <option name="scriptParameters" value="" />
+      <option name="taskDescriptions">
+        <list />
+      </option>
+      <option name="taskNames">
+        <list>
+          <option value="runProfiled" />
+        </list>
+      </option>
+      <option name="vmOptions" />
+    </ExternalSystemSettings>
+    <ExternalSystemDebugServerProcess>false</ExternalSystemDebugServerProcess>
+    <ExternalSystemReattachDebugProcess>true</ExternalSystemReattachDebugProcess>
+    <DebugAllEnabled>false</DebugAllEnabled>
+    <RunAsTest>false</RunAsTest>
+    <method v="2" />
+  </configuration>
+</component>
