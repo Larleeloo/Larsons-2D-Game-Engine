@@ -1,6 +1,8 @@
 package com.larsons.engine.graphics;
 
 import com.larsons.engine.level.Level;
+import com.larsons.engine.graphics.draw.DrawTarget;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.sim.PerspectiveSpace;
 import com.larsons.engine.world.Block;
 
@@ -183,6 +185,13 @@ public final class TerrainPainter {
     /** One frame's terrain, with the scratch state a sweep over the cells needs. */
     private static final class Pass {
         private final Graphics2D g;
+        /**
+         * One draw target for the whole pass. Built here rather than per tile
+         * because this loop runs over every visible cell — around two thousand
+         * of them at 1080p — and a wrapper allocated inside it would cost more
+         * than the drawing it wraps.
+         */
+        private final DrawTarget target;
         private final Level level;
         private final Camera camera;
         private final double animClock;
@@ -206,6 +215,7 @@ public final class TerrainPainter {
         Pass(Graphics2D g, Level level, Camera camera, double animClock,
              CellDecorator decor) {
             this.g = g;
+            this.target = Java2DTarget.unsized(g);
             this.level = level;
             this.camera = camera;
             this.animClock = animClock;
@@ -277,7 +287,7 @@ public final class TerrainPainter {
                     : layered ? face(block.topTextureKey(), block.textureKey())
                     : skin(block.textureKey());
             if (skin != null) {
-                TilePainter.drawTexture(g, skin, xs, ys, !iso);
+                TilePainter.drawTexture(target, skin, xs, ys, !iso);
             } else {
                 g.setColor(color);
                 g.fillPolygon(xs, ys, 4);
@@ -339,7 +349,7 @@ public final class TerrainPainter {
             for (int i = 0; i < 4; i++) ys[i] -= (int) Math.round(lift);
             BufferedImage top = face(block.topTextureKey(), block.textureKey());
             if (top != null) {
-                TilePainter.drawTexture(g, top, xs, ys, !iso);
+                TilePainter.drawTexture(target, top, xs, ys, !iso);
             } else {
                 g.setColor(color);
                 g.fillPolygon(xs, ys, 4);
@@ -366,7 +376,7 @@ public final class TerrainPainter {
                 // Never a screen-aligned rectangle: a side is a parallelogram
                 // in isometric and a plain band straight down, and the warping
                 // path draws both from the quad's own edges.
-                TilePainter.drawTexture(g, skin, faceX, faceY, false);
+                TilePainter.drawTexture(target, skin, faceX, faceY, false);
                 return;
             }
             g.setColor(shade(color, SIDE_SHADE));
