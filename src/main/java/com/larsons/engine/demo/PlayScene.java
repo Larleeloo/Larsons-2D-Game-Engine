@@ -51,6 +51,7 @@ import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.PlayerSprites;
 import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.SurfaceDecorPainter;
+import com.larsons.engine.graphics.TerrainCache;
 import com.larsons.engine.graphics.TerrainPainter;
 import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.input.InputManager;
@@ -1874,6 +1875,13 @@ public class PlayScene extends AbstractScene {
     /** This frame's draw target, set at the top of {@link #render}. */
     private DrawTarget frameTarget;
 
+    /**
+     * The baked floor. Terrain is the biggest thing on screen and the least
+     * likely to change, so it is drawn into chunk images and blitted rather
+     * than rebuilt cell by cell every frame.
+     */
+    private final TerrainCache terrainCache = new TerrainCache();
+
     @Override
     public void render(DrawTarget target, float alpha) {
         // Most of this scene is not ported off Graphics2D yet; see
@@ -2328,8 +2336,13 @@ public class PlayScene extends AbstractScene {
      * it instead of being painted over them (see {@link TerrainPainter}).
      */
     private void drawTiles(Graphics2D g, DepthPass standing) {
+        // The decorator is passed only when there is actually something to
+        // decorate. A decorator that does nothing still forces the floor to be
+        // repainted cell by cell, because the painter cannot know it is a
+        // no-op — so "no open container" has to mean "no decorator".
         TerrainPainter.draw(frameTarget, level, camera, visibleTileBounds(), animClock,
-                standing, this::drawOpenLid, miningStroke());
+                standing, containerPanel == null ? null : this::drawOpenLid,
+                miningStroke(), terrainCache);
     }
 
     /**

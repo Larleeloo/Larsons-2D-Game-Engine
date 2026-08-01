@@ -195,7 +195,25 @@ public final class TerrainPainter {
     public static void draw(DrawTarget target, Level level, Camera camera, int[] bounds,
                             double animClock, DepthPass raised, CellDecorator decor,
                             Mining mining) {
-        new Pass(target, level, camera, animClock, decor).run(bounds, raised, mining);
+        draw(target, level, camera, bounds, animClock, raised, decor, mining, null);
+    }
+
+    /**
+     * Paint the terrain, reusing {@code cache}'s baked floor chunks where it
+     * can.
+     *
+     * <p>The cache is skipped outright when a {@link CellDecorator} is in play.
+     * A decorator draws something animated over a finished top face — the
+     * swinging lid of an open container — and baking that into a chunk image
+     * would freeze it mid-swing until the level was edited. A caller that has
+     * nothing to decorate should pass {@code null} rather than a decorator
+     * that does nothing, which is what lets the floor be cached at all.
+     */
+    public static void draw(DrawTarget target, Level level, Camera camera, int[] bounds,
+                            double animClock, DepthPass raised, CellDecorator decor,
+                            Mining mining, TerrainCache cache) {
+        new Pass(target, level, camera, animClock, decor)
+                .run(bounds, raised, mining, decor == null ? cache : null);
     }
 
     /** {@link #draw(DrawTarget, Level, Camera, int[], double, DepthPass, CellDecorator, Mining)}. */
@@ -213,7 +231,7 @@ public final class TerrainPainter {
          * loop runs over every visible cell (around two thousand at 1080p) and
          * anything allocated inside it would cost more than the drawing.
          */
-        private final DrawTarget target;
+        private DrawTarget target;
         private final Level level;
         private final Camera camera;
         private final double animClock;
@@ -263,16 +281,19 @@ public final class TerrainPainter {
             this.shadowY = offset[1] * camera.zoom;
         }
 
-        void run(int[] bounds, DepthPass raisedPass, Mining mining) {
+        void run(int[] bounds, DepthPass raisedPass, Mining mining, TerrainCache cache) {
             Path2D.Double shadows = layered ? new Path2D.Double() : null;
-            for (int r = bounds[1]; r <= bounds[3]; r++) {
-                for (int c = bounds[0]; c <= bounds[2]; c++) {
-                    int id = level.tileAt(c, r);
-                    if (id <= 0) continue;
-                    project(c, r);
-                    drawFloor(c, r, id);
-                    if (shadows != null && level.upperAt(c, r) > 0) addShadow(shadows);
-                }
+            if (cache != null && TerrainCache.enabled()
+                    && TerrainCache.faithfulIn(camera.getPerspective())) {
+                // The floor comes out of the cache as a handful of blits. The
+                // shadows still have to be gathered live, because they are cast
+                // by blocks that are not in the cache and must land under the
+                // actors rather than inside a chunk image.
+                cache.drawFloor(target, level, camera, bounds, animClock, this::renderChunk);
+                cache.endFrame();
+                if (shadows != null) gatherShadows(bounds, shadows);
+            } else {
+                sweepFloor(bounds, shadows);
             }
             if (shadows != null) {
                 // One fill for every shadow in the frame: overlapping casters
@@ -288,6 +309,46 @@ public final class TerrainPainter {
                 raisedPass.at(baseDepth(mining.col(), mining.row()), () ->
                         drawMiningCracks(target, camera, level, mining.col(), mining.row(),
                                 mining.progress()));
+            }
+        }
+
+        /** Draw every floor cell in the bounds, gathering shadows as it goes. */
+        private void sweepFloor(int[] bounds, Path2D.Double shadows) {
+            for (int r = bounds[1]; r <= bounds[3]; r++) {
+                for (int c = bounds[0]; c <= bounds[2]; c++) {
+                    int id = level.tileAt(c, r);
+                    if (id <= 0) continue;
+                    project(c, r);
+                    drawFloor(c, r, id);
+                    if (shadows != null && level.upperAt(c, r) > 0) addShadow(shadows);
+                }
+            }
+        }
+
+        /** The shadow shapes alone, for when the floor came from the cache. */
+        private void gatherShadows(int[] bounds, Path2D.Double shadows) {
+            for (int r = bounds[1]; r <= bounds[3]; r++) {
+                for (int c = bounds[0]; c <= bounds[2]; c++) {
+                    if (level.tileAt(c, r) <= 0 || level.upperAt(c, r) <= 0) continue;
+                    project(c, r);
+                    addShadow(shadows);
+                }
+            }
+        }
+
+        /**
+         * Paint one chunk's floor into a target of its own — the same per-cell
+         * work the live sweep does, aimed at a chunk image instead of the
+         * screen. Swapping the target for the duration is what lets one
+         * implementation serve both.
+         */
+        private void renderChunk(DrawTarget into, int col0, int row0, int col1, int row1) {
+            DrawTarget previous = target;
+            target = into;
+            try {
+                sweepFloor(new int[]{col0, row0, col1, row1}, null);
+            } finally {
+                target = previous;
             }
         }
 
