@@ -52,6 +52,7 @@ public final class FrameReport {
         if (context != null && !context.isBlank()) {
             out.append("context  : ").append(context).append('\n');
         }
+        out.append("build    : ").append(BuildInfo.describe()).append('\n');
         out.append("machine  : ").append(device.summary()).append('\n');
         out.append("java2d   : ").append(device.pipeline()).append('\n');
         out.append("display  : ").append(displayLine(device)).append('\n');
@@ -68,6 +69,10 @@ public final class FrameReport {
         out.append('\n');
 
         out.append(table("Frame stages", snapshot.stages(), snapshot));
+
+        if (!snapshot.sections().isEmpty()) {
+            out.append('\n').append(table("Scene breakdown", snapshot.sections(), snapshot));
+        }
 
         if (!snapshot.passes().isEmpty()) {
             out.append('\n').append(table("Shader passes", snapshot.passes(), snapshot));

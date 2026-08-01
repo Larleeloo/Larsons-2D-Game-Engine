@@ -230,8 +230,9 @@ public class Engine {
     private String describeContext() {
         String scene = scenes.current() == null
                 ? "no scene" : scenes.current().getClass().getSimpleName();
-        return "%s, %dx%d, %d shader pass(es)".formatted(
-                scene, renderer.getWidth(), renderer.getHeight(), shaders.passes().size());
+        return "%s, %dx%d, %d shader pass(es), terrain cache %s".formatted(
+                scene, renderer.getWidth(), renderer.getHeight(), shaders.passes().size(),
+                com.larsons.engine.graphics.TerrainCache.enabled() ? "on" : "off");
     }
 
     private void draw(double alpha) {

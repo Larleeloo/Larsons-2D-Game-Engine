@@ -1,3 +1,5 @@
+import java.time.Instant
+
 plugins {
     id("java")
     id("application")
@@ -104,6 +106,31 @@ tasks.register<JavaExec>("runServer") {
     description = "Run the headless dedicated game server"
     mainClass = "com.larsons.engine.net.ServerMain"
     classpath = sourceSets["main"].runtimeClasspath
+}
+
+// Stamp the build's commit into the jar, so a frame profile taken on another
+// machine can be traced to the code that produced it. Two profiles once came
+// back that were impossible to interpret without knowing whether the build
+// predated the work they were meant to measure.
+val buildInfo = tasks.register("buildInfo") {
+    val out = layout.buildDirectory.file("generated/build-info.properties")
+    outputs.file(out)
+    doLast {
+        val commit = try {
+            providers.exec {
+                commandLine("git", "rev-parse", "--short", "HEAD")
+            }.standardOutput.asText.get().trim()
+        } catch (e: Exception) {
+            "unknown"
+        }
+        val file = out.get().asFile
+        file.parentFile.mkdirs()
+        file.writeText("commit=$commit\nbuilt=${Instant.now()}\n")
+    }
+}
+
+tasks.named<ProcessResources>("processResources") {
+    from(buildInfo)
 }
 
 // Make `java -jar build/libs/<name>.jar` work directly (no external deps).

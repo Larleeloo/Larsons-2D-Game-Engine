@@ -1893,6 +1893,22 @@ public class PlayScene extends AbstractScene {
     private DrawTarget frameTarget;
 
     /**
+     * Time one named phase of this frame's drawing.
+     *
+     * <p>"Scene: 19 ms" is the same half-answer a frame counter gives — it
+     * says the drawing is slow, not which drawing, and terrain, sprites and
+     * HUD have completely different fixes. Free when profiling is off.
+     */
+    private void phase(String name, Runnable work) {
+        long started = ctx.profiler().begin();
+        try {
+            work.run();
+        } finally {
+            ctx.profiler().recordSection(name, started);
+        }
+    }
+
+    /**
      * The baked floor. Terrain is the biggest thing on screen and the least
      * likely to change, so it is drawn into chunk images and blitted rather
      * than rebuilt cell by cell every frame.
@@ -1933,18 +1949,18 @@ public class PlayScene extends AbstractScene {
         // tile it was planted on.
         boolean sceneryBehind = PerspectiveSpace.of(camera.getPerspective())
                 .scenerySitsBehindTerrain();
-        if (sceneryBehind) drawDecorLayer(g, false);
+        if (sceneryBehind) phase("decor", () -> drawDecorLayer(g, false));
         // Everything standing on the floor shares one queue on a plane, so
         // whether the player is in front of a tree — or of a wall — is settled
         // by where they are standing rather than by a fixed layer order. The
         // side view's layers are fixed and correct, so its pass draws straight
         // through in call order.
         DepthPass standing = DepthPass.of(camera.getPerspective());
-        drawTiles(g, standing);   // queues the crack overlay with its block
+        phase("terrain", () -> drawTiles(g, standing)); // queues cracks with the block
         if (p.gridVisible) drawGrid(g); // projects to a diamond lattice in isometric
-        if (!sceneryBehind) drawDecorLayer(g, false, standing);
+        if (!sceneryBehind) phase("decor", () -> drawDecorLayer(g, false, standing));
         drawDoors(g);
-        drawWorldEntities(g, p, standing);
+        phase("entities", () -> drawWorldEntities(g, p, standing));
         if (mgView != null) MiniGameHud.drawWorld(g, camera, level, mgView, animClock);
         if (net != null) drawRemotePlayers(g, standing);
         if (mgView != null) {
@@ -1961,7 +1977,9 @@ public class PlayScene extends AbstractScene {
             drawHeldObject(g, me.x, me.y, me.z, ps(), me.facing, meleeItem,
                     melee.action(), melee.progress(), meleeProfile(p));
         });
-        standing.flush();
+        // The depth queue is where the plan views actually pay: everything
+        // standing on the floor was deferred to here, sorted, and drawn.
+        phase("depth-flush", standing::flush);
         if (melee.action() != MeleeAction.NONE) {
             drawMeleeArc(g, meleeProfile(p));
         } else if (swingTime > 0) {
@@ -1970,19 +1988,27 @@ public class PlayScene extends AbstractScene {
         if (cutscenes != null && cutscenes.active() != null) {
             CutscenePainter.drawActors(g, camera, cutscenes.active());
         }
-        drawDecorLayer(g, true); // foreground scenery covers players
-        if (p.particlesEnabled) particles.render(g, camera);
+        phase("decor", () -> drawDecorLayer(g, true)); // foreground covers players
+        if (p.particlesEnabled) phase("particles", () -> particles.render(g, camera));
         if (net == null) drawDoorHint(g, p);
         drawVehicleHint(g, p);
-        if (p.hudVisible) drawHud(g);
-        if (mgView != null) MiniGameHud.drawHud(g, viewportWidth, viewportHeight, mgView, me.id);
-        if (p.itemsEnabled) drawHotbar(g);
-        if (p.combatEnabled || p.mobsEnabled) drawHealthBar(g);
-        drawResourceBars(g);
-        drawUltimateMeter(g);
-        if (net == null) drawStatRuleBars(g);
-        drawRuleStatus(g);
-        if (net != null) drawEvents(g);
+        // Everything from here down is screen-space overlay rather than world
+        // drawing, and it is almost entirely text — the 334 drawString calls a
+        // GPU backend would need a baked glyph atlas to serve. Worth knowing
+        // separately from the world it sits over.
+        phase("hud", () -> {
+            if (p.hudVisible) drawHud(g);
+            if (mgView != null) {
+                MiniGameHud.drawHud(g, viewportWidth, viewportHeight, mgView, me.id);
+            }
+            if (p.itemsEnabled) drawHotbar(g);
+            if (p.combatEnabled || p.mobsEnabled) drawHealthBar(g);
+            drawResourceBars(g);
+            drawUltimateMeter(g);
+            if (net == null) drawStatRuleBars(g);
+            drawRuleStatus(g);
+            if (net != null) drawEvents(g);
+        });
         if (showInventory) drawInventory(g);
         if (craftingPanel != null) {
             craftingPanel.render(g, viewportWidth, viewportHeight, inventory, animClock);
