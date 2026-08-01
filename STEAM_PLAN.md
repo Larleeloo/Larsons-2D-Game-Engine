@@ -284,7 +284,10 @@ roadmap implies.
 - [ ] Build the game *in-engine using creative mode* — this is the dogfooding
       that finds the real bugs.
 - [ ] Fullscreen, resolution options, DPI, multi-monitor (§4.4).
-- [ ] Settings menu: video, audio volumes, key rebinding.
+- [ ] Settings menu: video, audio volumes. **Key rebinding is done** — every
+      action is bindable to any key or mouse button from the *Controls (Key
+      Binds)* screen, saved in `config/keybinds.json` (see the README's
+      [Custom key binds](README.md#custom-key-binds-rebind-anything)).
 - [ ] Save system, with an eye toward Steam Cloud later.
 - [ ] Controller support if the game is real-time (§5.1).
 

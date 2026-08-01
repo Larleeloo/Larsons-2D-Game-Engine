@@ -4,7 +4,9 @@ import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GamePackage;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.config.GameTypeStore;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelStore;
 import com.larsons.engine.scene.AbstractScene;
@@ -16,7 +18,6 @@ import java.awt.Color;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
-import java.awt.event.KeyEvent;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -80,6 +81,9 @@ public class MainMenuScene extends AbstractScene {
                     .add("Rename Game Type", this::startRename)
                     .add("Export Game Type (.larsonsengine)", this::startExport);
         }
+        // Controls belong to the player rather than to the game type, so the
+        // entry is here whether the type is finalized or not.
+        menu.add("Controls (Key Binds)", () -> KeyBindsScene.open(scenes, "menu"));
         // Deleting is library management (removing a type you no longer want),
         // not content editing, so it stays available even for finalized types.
         menu.add("Delete Game Type", this::startDelete)
@@ -250,19 +254,19 @@ public class MainMenuScene extends AbstractScene {
     @Override
     public void update(double dt, InputManager input) {
         if (renaming) {
-            if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+            if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
                 renaming = false;
                 return;
             }
             renameForm.update(dt, input);
         } else if (exporting) {
-            if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+            if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
                 exporting = false;
                 return;
             }
             exportForm.update(dt, input);
         } else if (deleting) {
-            if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+            if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
                 deleting = false; // Esc backs out of the destructive confirmation
                 return;
             }

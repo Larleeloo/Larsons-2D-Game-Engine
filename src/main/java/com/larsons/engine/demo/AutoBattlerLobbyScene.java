@@ -6,7 +6,9 @@ import com.larsons.engine.autobattler.AutoProto;
 import com.larsons.engine.autobattler.AutoServer;
 import com.larsons.engine.autobattler.AutoSession;
 import com.larsons.engine.config.GameContext;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.net.Protocol;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
@@ -17,7 +19,6 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.Rectangle;
-import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -72,6 +73,8 @@ public class AutoBattlerLobbyScene extends AbstractScene {
         form.addAction("Customize Skins", () -> scenes.transitionTo("skins"));
         form.addAction("Customize Board", () -> scenes.transitionTo("boardtheme"));
         form.addAction("How to Play", () -> scenes.transitionTo("autoguide"));
+        form.addAction("Controls (Key Binds)",
+                () -> KeyBindsScene.open(scenes, "autolobby"));
         form.addAction("Back", () -> scenes.transitionTo("startup"));
     }
 
@@ -96,7 +99,7 @@ public class AutoBattlerLobbyScene extends AbstractScene {
         }
 
         if (session == null) {
-            if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+            if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
                 scenes.transitionTo("startup");
                 return;
             }
@@ -121,7 +124,7 @@ public class AutoBattlerLobbyScene extends AbstractScene {
             return;
         }
 
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
             session.close();
             session = null;
             status = "";

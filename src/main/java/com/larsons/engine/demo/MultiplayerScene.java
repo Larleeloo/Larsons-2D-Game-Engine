@@ -1,7 +1,9 @@
 package com.larsons.engine.demo;
 
 import com.larsons.engine.config.GameContext;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.level.LevelLoader;
 import com.larsons.engine.net.GameClient;
 import com.larsons.engine.net.GameServer;
@@ -14,7 +16,6 @@ import com.larsons.engine.ui.MenuTheme;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.Graphics2D;
-import java.awt.event.KeyEvent;
 
 /**
  * The Multiplayer screen (requirement #3), modelled on Minecraft Java
@@ -83,7 +84,7 @@ public class MultiplayerScene extends AbstractScene {
             return;
         }
 
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
             scenes.transitionTo("menu");
             return;
         }

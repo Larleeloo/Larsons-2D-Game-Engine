@@ -4,7 +4,9 @@ import com.larsons.engine.graphics.DirectionalSprites;
 import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.PlayerSprites;
 import com.larsons.engine.graphics.Skins;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.KeyBinds;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -12,7 +14,6 @@ import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.Rectangle;
-import java.awt.event.KeyEvent;
 import java.awt.image.BufferedImage;
 import java.util.List;
 
@@ -83,15 +84,18 @@ public final class CharacterPicker {
             done = true;
             return true;
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_LEFT) || input.isKeyJustPressed(KeyEvent.VK_A)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_LEFT)
+                || KeyBinds.pressed(input, GameAction.MOVE_LEFT)) {
             index = (index - 1 + roster.size()) % roster.size();
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_RIGHT) || input.isKeyJustPressed(KeyEvent.VK_D)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_RIGHT)
+                || KeyBinds.pressed(input, GameAction.MOVE_RIGHT)) {
             index = (index + 1) % roster.size();
         }
-        // Number keys jump straight to a character, like a hotbar slot.
-        for (int i = 0; i < Math.min(9, roster.size()); i++) {
-            if (input.isKeyJustPressed(KeyEvent.VK_1 + i)) index = i;
+        // Number keys jump straight to a character — the hotbar binds, so a
+        // player who moved those keys picks with the keys they moved them to.
+        for (int i = 0; i < Math.min(GameAction.hotbarCount(), roster.size()); i++) {
+            if (KeyBinds.pressed(input, GameAction.hotbar(i))) index = i;
         }
         int mx = input.getMouseX(), my = input.getMouseY();
         boolean click = input.isMouseJustPressed();
@@ -103,8 +107,7 @@ public final class CharacterPicker {
                 return true;
             }
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_ENTER)
-                || input.isKeyJustPressed(KeyEvent.VK_SPACE)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_SELECT)) {
             done = true;
             return true;
         }

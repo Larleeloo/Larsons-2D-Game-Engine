@@ -1,6 +1,9 @@
 package com.larsons.engine.ui;
 
+import com.larsons.engine.input.GameAction;
+import com.larsons.engine.input.InputBinding;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.KeyBinds;
 
 import java.awt.Color;
 import java.awt.FontMetrics;
@@ -30,6 +33,14 @@ import java.util.function.Supplier;
  * disabled (greyed out and skipped) via {@code enabledWhen} — e.g. the zoom
  * range is disabled when zoom itself is off.
  *
+ * <p>{@link #addKeyBind} adds a rebinding row: two slots per action, each
+ * showing the key or mouse button it holds. Activating a slot puts the form
+ * into <em>capture</em> — the next press of anything at all lands in that slot
+ * — which is why a form is asked {@link #isCapturing()} before anything else
+ * reads input. Because it is an ordinary row type, controls can be rebound
+ * wherever a form fits: the dedicated controls screen, an in-game pause menu,
+ * or beside a game type's other settings.
+ *
  * <p>A row is laid out control-first: the control is right-aligned in the
  * content column, and the label gets whatever is left of the column, shortened
  * with an ellipsis if it needs to be (see {@link UiText}). Nothing a caller
@@ -40,7 +51,10 @@ import java.util.function.Supplier;
 public class ConfigForm {
 
     /** What kind of control a row renders as. */
-    public enum Control { TOGGLE, STEPPER, CYCLER, TEXT, ACTION, SLIDER, NOTE }
+    public enum Control { TOGGLE, STEPPER, CYCLER, TEXT, ACTION, SLIDER, NOTE, KEYBIND }
+
+    /** Shared empty box for rows without a given sub-control. */
+    private static final Rectangle EMPTY = new Rectangle();
 
     /** Base class for a form row. */
     public abstract static class Option {
@@ -77,6 +91,11 @@ public class ConfigForm {
         public Rectangle decBounds() { return decBox; }
         /** Increment / next hit box for steppers & cyclers (0-size if n/a). */
         public Rectangle incBounds() { return incBox; }
+        /**
+         * Hit box of binding slot {@code slot} on a key-bind row (0-size for
+         * every other row, and for a slot scrolled off screen).
+         */
+        public Rectangle keyBindSlotBounds(int slot) { return EMPTY; }
 
         /** Which control this row renders as. */
         public abstract Control control();
@@ -208,6 +227,36 @@ public class ConfigForm {
         }
     }
 
+    /**
+     * A rebinding row: one action, and a box per binding slot showing the key
+     * or mouse button in it. The row itself holds no state beyond which slot
+     * has focus — the bindings live in the {@link KeyBinds} it was given, so a
+     * rebind is in force the moment it is made.
+     */
+    static final class KeyBindOption extends Option {
+        final KeyBinds binds;
+        final GameAction action;
+        final Rectangle[] slotBox = new Rectangle[KeyBinds.SLOTS];
+        int slot; // which box the keyboard is working on
+
+        KeyBindOption(String label, KeyBinds binds, GameAction action) {
+            super(label);
+            this.binds = binds;
+            this.action = action;
+            for (int i = 0; i < slotBox.length; i++) slotBox[i] = new Rectangle();
+        }
+
+        @Override public Control control() { return Control.KEYBIND; }
+        @Override public Rectangle keyBindSlotBounds(int slot) {
+            return slot >= 0 && slot < slotBox.length ? slotBox[slot] : EMPTY;
+        }
+        @Override String valueText() { return binds.describe(action); }
+        /** Left/right move between the primary and alternate slot. */
+        @Override void adjust(int dir) {
+            slot = Math.floorMod(slot + dir, KeyBinds.SLOTS);
+        }
+    }
+
     /** Clear space kept between a row's label and the control it belongs to. */
     private static final int LABEL_GAP = 16;
     /** Space either side of an action button's label. */
@@ -222,6 +271,10 @@ public class ConfigForm {
     private static final int MIN_FIELD_W = 240, MAX_FIELD_W = 380;
     /** Widest a stepper/cycler value box grows before its text is shortened. */
     private static final int MAX_VALUE_W = 200;
+    /** Width of one binding slot box on a key-bind row. */
+    private static final int BIND_BOX_W = 150;
+    /** Gap between the two binding slot boxes. */
+    private static final int BIND_GAP = 8;
 
     private final List<Option> options = new ArrayList<>();
     private MenuTheme theme = MenuTheme.defaultTheme();
@@ -244,6 +297,12 @@ public class ConfigForm {
     private boolean draggingThumb;
     private int dragGrabOffset;      // cursor offset inside the thumb at grab time
     private boolean followSelection; // bring the selection into view next render
+
+    // Key-bind capture: the row and slot waiting for a press, and who to tell
+    // once one lands (the controls screen saves the file from there).
+    private KeyBindOption capturing;
+    private int captureSlot;
+    private Runnable bindListener;
 
     public ConfigForm(String title) { this.title = title; }
 
@@ -282,18 +341,56 @@ public class ConfigForm {
         return add(new SliderOption(label, get, set, min, max));
     }
 
+    /**
+     * Add a rebinding row for {@code action}, editing {@code binds} in place.
+     * The row is labelled with the action's own name; pass a label to override
+     * it (the controls screen does not need to).
+     */
+    public Option addKeyBind(KeyBinds binds, GameAction action) {
+        return addKeyBind(action.label(), binds, action);
+    }
+
+    public Option addKeyBind(String label, KeyBinds binds, GameAction action) {
+        return add(new KeyBindOption(label, binds, action));
+    }
+
+    /** Called whenever a binding is assigned or cleared (for saving). */
+    public ConfigForm onKeyBindChange(Runnable listener) {
+        this.bindListener = listener;
+        return this;
+    }
+
+    /** Whether the form is waiting for the player to press their new binding. */
+    public boolean isCapturing() { return capturing != null; }
+
+    /** The action being rebound, or {@code null} when not capturing. */
+    public GameAction capturingAction() {
+        return capturing == null ? null : capturing.action;
+    }
+
     private Option add(Option o) { options.add(o); return o; }
 
     public void update(double dt, InputManager input) {
         if (options.isEmpty()) return;
+
+        // Capturing owns the frame: every press belongs to the binding being
+        // set, not to the menu it is being set from.
+        if (capturing != null) {
+            updateCapture(input);
+            return;
+        }
 
         for (Option o : options) {
             o.enabled = o.enabledWhen == null || o.enabledWhen.getAsBoolean();
         }
         ensureSelectedEnabled(1);
 
-        if (input.isKeyJustPressed(KeyEvent.VK_DOWN)) move(1);
-        if (input.isKeyJustPressed(KeyEvent.VK_UP)) move(-1);
+        // Navigation runs on the player's own binds. While a text field is
+        // being edited, bindings that type a character are ignored, so a menu
+        // key moved onto a letter still spells that letter into the field.
+        boolean editing = options.get(selected).enabled && options.get(selected).isText();
+        if (KeyBinds.pressed(input, GameAction.MENU_DOWN, editing)) move(1);
+        if (KeyBinds.pressed(input, GameAction.MENU_UP, editing)) move(-1);
         // Mouse wheel scrolls the view directly, leaving the selection put.
         int wheel = input.getWheelRotation();
         if (wheel != 0) scroll = clampScroll(scroll + wheel);
@@ -302,10 +399,20 @@ public class ConfigForm {
         boolean selText = sel.enabled && sel.isText();
 
         if (sel.enabled && !selText) {
-            if (input.isKeyJustPressed(KeyEvent.VK_LEFT)) sel.adjust(-1);
-            if (input.isKeyJustPressed(KeyEvent.VK_RIGHT)) sel.adjust(1);
-            if (input.isKeyJustPressed(KeyEvent.VK_ENTER) || input.isKeyJustPressed(KeyEvent.VK_SPACE)) {
-                sel.activate();
+            if (KeyBinds.pressed(input, GameAction.MENU_LEFT)) sel.adjust(-1);
+            if (KeyBinds.pressed(input, GameAction.MENU_RIGHT)) sel.adjust(1);
+            if (KeyBinds.pressed(input, GameAction.MENU_SELECT)) {
+                if (sel instanceof KeyBindOption kb) beginCapture(kb, kb.slot);
+                else sel.activate();
+                if (capturing != null) return; // the press that opened it is spent
+            }
+            // Delete/Backspace empties the focused binding slot — the way to
+            // say "this action has no key" without having to press one.
+            if (sel instanceof KeyBindOption kb
+                    && (input.isKeyJustPressed(KeyEvent.VK_DELETE)
+                    || input.isKeyJustPressed(KeyEvent.VK_BACK_SPACE))) {
+                kb.binds.clear(kb.action, kb.slot);
+                if (bindListener != null) bindListener.run();
             }
         }
 
@@ -336,12 +443,27 @@ public class ConfigForm {
         // The scroll bar takes precedence over row interaction while in use.
         if (handleScrollBar(input, mx, my, click)) return;
 
+        boolean rightClick = input.isRightMouseJustPressed();
+
         for (int i = 0; i < options.size(); i++) {
             Option o = options.get(i);
             if (!o.enabled || !o.selectable) continue;
             if (o.rowBox.contains(mx, my)) {
                 selected = i;
-                if (click) {
+                if (o instanceof KeyBindOption kb && (click || rightClick)) {
+                    // Click a slot to rebind it, right-click to empty it.
+                    for (int s = 0; s < KeyBinds.SLOTS; s++) {
+                        if (!kb.slotBox[s].contains(mx, my)) continue;
+                        kb.slot = s;
+                        if (click) {
+                            beginCapture(kb, s);
+                        } else {
+                            kb.binds.clear(kb.action, s);
+                            if (bindListener != null) bindListener.run();
+                        }
+                        return;
+                    }
+                } else if (click) {
                     if (o.decBox.width > 0 && o.decBox.contains(mx, my)) o.adjust(-1);
                     else if (o instanceof SliderOption s && s.mainBox.contains(mx, my)) {
                         draggingSlider = s;
@@ -353,6 +475,31 @@ public class ConfigForm {
                 }
             }
         }
+    }
+
+    private void beginCapture(KeyBindOption row, int slot) {
+        capturing = row;
+        captureSlot = slot;
+        row.slot = slot;
+    }
+
+    /**
+     * Wait for the press that becomes the new binding. Anything the hardware
+     * reports counts — letters, function keys, the numpad, any mouse button —
+     * with Ctrl/Shift/Alt folded in when they were held, which is how
+     * {@code Ctrl+S} gets bound. Escape backs out, leaving the slot as it was,
+     * so a capture opened by accident is never a trap.
+     */
+    private void updateCapture(InputManager input) {
+        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+            capturing = null;
+            return;
+        }
+        InputBinding pressed = input.consumeAnyPress();
+        if (pressed == null || !pressed.isBound()) return;
+        capturing.binds.set(capturing.action, captureSlot, pressed);
+        capturing = null;
+        if (bindListener != null) bindListener.run();
     }
 
     private void move(int dir) {
@@ -446,6 +593,9 @@ public class ConfigForm {
             o.incBox.setBounds(0, 0, 0, 0);
             o.mainBox.setBounds(0, 0, 0, 0);
             o.labelBox.setBounds(0, 0, 0, 0);
+            if (o instanceof KeyBindOption kb) {
+                for (Rectangle box : kb.slotBox) box.setBounds(0, 0, 0, 0);
+            }
 
             if (i < scroll || i >= scroll + visibleCount) continue; // off-screen
 
@@ -643,6 +793,40 @@ public class ConfigForm {
                 g.setColor(color);
                 g.drawString(value, rightEdge - valW + 8, baseY);
                 yield trackX;
+            }
+            case KEYBIND -> {
+                KeyBindOption kb = (KeyBindOption) o;
+                boolean rowSelected = options.get(selected) == o;
+                boolean clash = kb.binds.hasConflict(kb.action);
+                // Bindings are set a little smaller than the labels they sit
+                // beside: "Middle Mouse" has to fit its box whole, and a name
+                // cut to "Middle Mou…" is no use to the player reading it.
+                java.awt.Font labelFont = g.getFont();
+                g.setFont(theme.itemFont.deriveFont(theme.itemFont.getSize2D() * 0.78f));
+                FontMetrics bfm = g.getFontMetrics();
+                int x = rightEdge;
+                for (int s = KeyBinds.SLOTS - 1; s >= 0; s--) {
+                    x -= BIND_BOX_W;
+                    kb.slotBox[s].setBounds(x, boxTop, BIND_BOX_W, boxH);
+                    boolean waiting = capturing == kb && captureSlot == s;
+                    InputBinding b = kb.binds.binding(kb.action, s);
+                    String text = waiting ? "Press…" : (b.isBound() ? b.display() : "—");
+                    Color box = !o.enabled ? theme.itemDisabled
+                            : waiting ? theme.accent
+                            : (clash && b.isBound()) ? theme.warning
+                            : (rowSelected && kb.slot == s) ? theme.itemSelected
+                            : theme.itemDisabled;
+                    g.setColor(box);
+                    g.drawRoundRect(x, boxTop, BIND_BOX_W, boxH, 8, 8);
+                    String shown = UiText.fit(bfm, text, BIND_BOX_W - 12);
+                    g.setColor(!o.enabled ? theme.itemDisabled
+                            : waiting ? theme.accent
+                            : (clash && b.isBound()) ? theme.warning : theme.title);
+                    g.drawString(shown, x + (BIND_BOX_W - bfm.stringWidth(shown)) / 2, baseY);
+                    x -= BIND_GAP;
+                }
+                g.setFont(labelFont); // the row's label is drawn after this
+                yield x + BIND_GAP;
             }
             default -> rightEdge;
         };

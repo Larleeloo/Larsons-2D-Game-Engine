@@ -1,12 +1,13 @@
 package com.larsons.engine.ui;
 
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.KeyBinds;
 
 import java.awt.Color;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.Rectangle;
-import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -14,8 +15,10 @@ import java.util.List;
  * A reusable, customizable menu (requirement #6: menu customization).
  *
  * <p>A menu is a title (+ optional subtitle) over a vertical list of
- * {@link MenuItem}s, navigable by keyboard (up/down + enter/space) and mouse
- * (hover to select, click to activate). Appearance comes entirely from a
+ * {@link MenuItem}s, navigable by keyboard (the {@code MENU_UP} /
+ * {@code MENU_DOWN} / {@code MENU_SELECT} key binds, up/down + enter/space out
+ * of the box) and mouse (hover to select, click to activate). Appearance comes
+ * entirely from a
  * {@link MenuTheme}, and items are added fluently, so building a custom menu is
  * a few chained calls.
  *
@@ -101,16 +104,12 @@ public class Menu {
     public void update(double dt, InputManager input) {
         if (items.isEmpty()) return;
 
-        if (input.isKeyJustPressed(KeyEvent.VK_DOWN)
-                || input.isKeyJustPressed(KeyEvent.VK_S)) {
-            move(1);
-        }
-        if (input.isKeyJustPressed(KeyEvent.VK_UP)
-                || input.isKeyJustPressed(KeyEvent.VK_W)) {
-            move(-1);
-        }
-        if (input.isKeyJustPressed(KeyEvent.VK_ENTER)
-                || input.isKeyJustPressed(KeyEvent.VK_SPACE)) {
+        // Navigation runs on the player's own binds (defaults: arrows + W/S,
+        // Enter/Space to choose), so a rebind in the controls menu moves every
+        // menu in the engine at once.
+        if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) move(1);
+        if (KeyBinds.pressed(input, GameAction.MENU_UP)) move(-1);
+        if (KeyBinds.pressed(input, GameAction.MENU_SELECT)) {
             items.get(selected).activate();
             return;
         }

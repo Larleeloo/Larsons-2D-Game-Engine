@@ -5,7 +5,9 @@ import com.larsons.engine.autobattler.AutoSprites;
 import com.larsons.engine.autobattler.BoardTheme;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.graphics.AssetLoader;
+import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.MenuTheme;
@@ -19,7 +21,6 @@ import java.awt.Graphics2D;
 import java.awt.Polygon;
 import java.awt.Rectangle;
 import java.awt.Shape;
-import java.awt.event.KeyEvent;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -207,7 +208,7 @@ public class BoardCustomizeScene extends AbstractScene {
     @Override
     public void update(double dt, InputManager input) {
         animClock += dt;
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
             scenes.transitionTo("autolobby");
             return;
         }
@@ -249,10 +250,10 @@ public class BoardCustomizeScene extends AbstractScene {
         if (previewTw > 0) {
             double step = 0.25;
             double dc = 0, dr = 0;
-            if (input.isKeyJustPressed(KeyEvent.VK_LEFT)) dc -= step;
-            if (input.isKeyJustPressed(KeyEvent.VK_RIGHT)) dc += step;
-            if (input.isKeyJustPressed(KeyEvent.VK_UP)) dr -= step;
-            if (input.isKeyJustPressed(KeyEvent.VK_DOWN)) dr += step;
+            if (KeyBinds.pressed(input, GameAction.MENU_LEFT)) dc -= step;
+            if (KeyBinds.pressed(input, GameAction.MENU_RIGHT)) dc += step;
+            if (KeyBinds.pressed(input, GameAction.MENU_UP)) dr -= step;
+            if (KeyBinds.pressed(input, GameAction.MENU_DOWN)) dr += step;
             if (dc != 0 || dr != 0) {
                 theme.nudgeProp(selectedSlot, dc, dr);
                 persist(BoardTheme.SLOT_LABELS[selectedSlot] + " nudged");
