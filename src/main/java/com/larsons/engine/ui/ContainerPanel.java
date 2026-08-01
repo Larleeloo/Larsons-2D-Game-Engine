@@ -10,6 +10,8 @@ import com.larsons.engine.input.InputManager;
 import com.larsons.engine.level.Level;
 
 import java.awt.AlphaComposite;
+import com.larsons.engine.graphics.draw.DrawTarget;
+
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Composite;
@@ -333,14 +335,13 @@ public final class ContainerPanel {
      * perspective because it's built from the quad's own corners
      * ({@code xs}/{@code ys}: TL, TR, BR, BL).
      */
-    public static void drawLid(Graphics2D g, int[] xs, int[] ys, double open, Color base) {
+    public static void drawLid(DrawTarget target, int[] xs, int[] ys, double open, Color base) {
         if (open <= 0.01) return; // fully closed = the plain tile
         double depth = 0.34; // lid depth as a fraction of the tile
         // The interior shows where the lid swung away.
         int[] ix = {xs[0], xs[1], edgeX(xs, depth, true), edgeX(xs, depth, false)};
         int[] iy = {ys[0], ys[1], edgeY(ys, depth, true), edgeY(ys, depth, false)};
-        g.setColor(new Color(0, 0, 0, (int) (130 * open)));
-        g.fillPolygon(ix, iy, 4);
+        target.fillPolygon(ix, iy, 4, new Color(0, 0, 0, (int) (130 * open)));
         // Free edge travels depth → -depth: through zero it reads as the lid
         // rotating toward the viewer, past it as standing open above the block.
         double t = depth * (1 - 2 * open);
@@ -349,11 +350,10 @@ public final class ContainerPanel {
         // Highlight fades in near the closed endpoints so the swing starts
         // and ends in the tile's own colours instead of popping.
         double emph = Math.min(1, open * 4);
-        g.setColor(mix(base, open > 0.5 ? base.darker() : base.brighter(), emph));
-        g.fillPolygon(lx, ly, 4);
-        g.setColor(mix(base.darker(), base.darker().darker(), emph));
-        g.setStroke(new BasicStroke(1.5f));
-        g.drawPolygon(lx, ly, 4);
+        target.fillPolygon(lx, ly, 4,
+                mix(base, open > 0.5 ? base.darker() : base.brighter(), emph));
+        target.drawPolygon(lx, ly, 4,
+                mix(base.darker(), base.darker().darker(), emph).getRGB(), 1.5f);
     }
 
     private static Color mix(Color a, Color b, double t) {

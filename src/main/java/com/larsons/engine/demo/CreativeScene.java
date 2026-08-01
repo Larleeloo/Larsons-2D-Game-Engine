@@ -44,6 +44,7 @@ import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.CutscenePainter;
 import com.larsons.engine.graphics.DecorPainter;
 import com.larsons.engine.graphics.DepthPass;
+import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.graphics.EntitySprites;
 import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.Perspective;
@@ -5717,11 +5718,11 @@ public class CreativeScene extends AbstractScene {
     }
 
     /** The animated lid on the chest or barrel whose panel is open. */
-    private void drawOpenLid(Graphics2D g, int col, int row, int[] quadX, int[] quadY,
+    private void drawOpenLid(DrawTarget target, int col, int row, int[] quadX, int[] quadY,
                              Block block, Color color) {
         if (containerPanel == null || block == null || !block.container()) return;
         if (col != containerPanel.col() || row != containerPanel.row()) return;
-        ContainerPanel.drawLid(g, quadX, quadY, containerPanel.openness(), color);
+        ContainerPanel.drawLid(target, quadX, quadY, containerPanel.openness(), color);
     }
 
     /** Lift the projected quad in {@link #pys} off the floor by {@code px}. */

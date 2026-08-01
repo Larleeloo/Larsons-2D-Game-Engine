@@ -118,6 +118,14 @@ public final class Java2DTarget implements DrawTarget {
         g.fillPolygon(xs, ys, count);
     }
 
+    @Override
+    public void fillShape(Shape shape, int argb) {
+        if (shape == null) return;
+        stats.record(DrawStats.Kind.SHAPE, null);
+        g.setColor(new Color(argb, true));
+        g.fill(shape);
+    }
+
     // --- outlines --------------------------------------------------------------
 
     @Override

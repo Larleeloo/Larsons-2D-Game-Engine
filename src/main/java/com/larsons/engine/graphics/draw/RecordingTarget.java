@@ -132,6 +132,15 @@ public final class RecordingTarget implements DrawTarget {
     }
 
     @Override
+    public void fillShape(java.awt.Shape shape, int argb) {
+        if (shape == null) return;
+        stats.record(DrawStats.Kind.SHAPE, null);
+        java.awt.Rectangle b = shape.getBounds();
+        commands.add(new Cmd.Shape("fillShape",
+                new int[]{b.x, b.y, b.width, b.height}, argb, 0f));
+    }
+
+    @Override
     public void drawRect(int x, int y, int w, int h, int argb, float thickness) {
         stats.record(DrawStats.Kind.SHAPE, null);
         commands.add(new Cmd.Shape("drawRect", new int[]{x, y, w, h}, argb, thickness));
