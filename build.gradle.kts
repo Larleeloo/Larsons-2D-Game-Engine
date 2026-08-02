@@ -20,11 +20,34 @@ java {
     targetCompatibility = JavaVersion.VERSION_21
 }
 
+// The OS this build is running on, for LWJGL's native artifacts. Test-only —
+// see the dependencies block.
+val lwjglNatives = when {
+    org.gradle.internal.os.OperatingSystem.current().isMacOsX ->
+        if (System.getProperty("os.arch") == "aarch64") "natives-macos-arm64" else "natives-macos"
+    org.gradle.internal.os.OperatingSystem.current().isWindows -> "natives-windows"
+    else -> "natives-linux"
+}
+
 dependencies {
     // Test-only. Nothing here ships in the runtime classpath.
     testImplementation(platform("org.junit:junit-bom:5.10.0"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+
+    // Also test-only, and deliberately so. The engine ships with zero runtime
+    // dependencies (requirement #4) and this must not change that — LWJGL is
+    // here to *check* the shaders, by compiling every ShaderPass.glsl() through
+    // a real driver. Until this existed the GLSL had never been compiled by
+    // anything, and STEAM_PLAN's Appendix A was right to call the exported
+    // .frag files never-compiled drafts.
+    testImplementation(platform("org.lwjgl:lwjgl-bom:3.3.3"))
+    testImplementation("org.lwjgl:lwjgl")
+    testImplementation("org.lwjgl:lwjgl-opengl")
+    testImplementation("org.lwjgl:lwjgl-glfw")
+    testRuntimeOnly("org.lwjgl:lwjgl::$lwjglNatives")
+    testRuntimeOnly("org.lwjgl:lwjgl-opengl::$lwjglNatives")
+    testRuntimeOnly("org.lwjgl:lwjgl-glfw::$lwjglNatives")
 }
 
 application {

@@ -285,6 +285,8 @@ item's deliverable. Two things it is built to stop:
 ### Phase 0 — Cheap wins (days)
 
 - [ ] Add `.github/workflows/ci.yml` running `./gradlew test` on push and PR.
+      (The shader compile check runs there too, and skips where the runner has
+      no GL context — install Mesa on the runner to have it actually check.)
 - [ ] Add a `LICENSE` file.
 - [x] Build the instrument: a per-stage frame profiler that separates scene
       drawing from post-processing and records the machine alongside the
@@ -435,11 +437,20 @@ The per-frame path is
 
 **Consequences for this plan:**
 
-1. **The GLSL is unverified text.** Nothing compiles it — no CI, no `glslang`,
-   no `shaderc`. `ShaderTest` asserts only substring presence (`#version 330
-   core`, `uniform sampler2D uTexture`, `void main()`, `fragColor`). A syntax
-   error or bad swizzle in any shader body would pass every test in the repo.
-   Treat the exported `.frag` files as never-compiled drafts.
+1. **~~The GLSL is unverified text.~~ Verified 2026-08-02 — and it is fine.**
+   `ShaderCompileTest` now compiles every pass through a real driver (LWJGL,
+   test-only, so the zero-runtime-dependency promise is untouched) and links
+   each against the shared fullscreen vertex shader. **All ten shaders build:**
+   the nine in `allBuiltIns()` plus `LightingPass`, which is tested separately
+   because it is not in that list and is the one with array uniforms and a
+   uniform-bounded loop. The test skips rather than fails where no GL context
+   exists, so headless CI is unaffected, and it carries a deliberately broken
+   shader as a negative control — which earned its keep immediately by
+   catching that the first "invalid" shader written for it was in fact valid
+   (`.qqqq` is the `stpq` swizzle set).
+
+   So this worry was unfounded. The remaining risk in this appendix is item 2,
+   which is about *behaviour*, not syntax, and is untouched by compiling.
 2. **Parity is not guaranteed and cannot be checked.** `BloomPass` states in its
    own javadoc that the GLSL form is "a single-shader ring-sampled
    approximation" of the multi-stage CPU bloom. No test could catch drift
