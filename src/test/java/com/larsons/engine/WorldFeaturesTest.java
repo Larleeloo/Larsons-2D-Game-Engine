@@ -515,8 +515,9 @@ class WorldFeaturesTest {
         ParallaxBackground bg = new ParallaxBackground(new Color(24, 28, 38), 42);
         BufferedImage frame = new BufferedImage(320, 180, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = frame.createGraphics();
-        bg.render(g, 0, 0, 320, 180);
-        bg.render(g, 5000, 200, 320, 180); // large camera offsets tile seamlessly
+        Java2DTarget target = new Java2DTarget(g, 320, 180);
+        bg.render(target, 0, 0, 320, 180);
+        bg.render(target, 5000, 200, 320, 180); // large camera offsets tile seamlessly
         g.dispose();
     }
 }

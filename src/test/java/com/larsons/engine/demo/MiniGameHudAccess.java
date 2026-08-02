@@ -1,10 +1,9 @@
 package com.larsons.engine.demo;
 
 import com.larsons.engine.graphics.Camera;
+import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.minigame.MiniGameView;
-
-import java.awt.Graphics2D;
 
 /**
  * A public door onto {@link MiniGameHud}, which is package-private and should
@@ -25,13 +24,13 @@ public final class MiniGameHudAccess {
 
     private MiniGameHudAccess() {}
 
-    public static void drawWorld(Graphics2D g, Camera camera, Level level,
+    public static void drawWorld(DrawTarget target, Camera camera, Level level,
                                  MiniGameView view, double animClock) {
-        MiniGameHud.drawWorld(g, camera, level, view, animClock);
+        MiniGameHud.drawWorld(target, camera, level, view, animClock);
     }
 
-    public static void drawHud(Graphics2D g, int vw, int vh,
+    public static void drawHud(DrawTarget target, int vw, int vh,
                                MiniGameView view, int localPlayerId) {
-        MiniGameHud.drawHud(g, vw, vh, view, localPlayerId);
+        MiniGameHud.drawHud(target, vw, vh, view, localPlayerId);
     }
 }

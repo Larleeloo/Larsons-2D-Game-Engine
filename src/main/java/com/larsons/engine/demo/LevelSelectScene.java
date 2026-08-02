@@ -227,9 +227,9 @@ public class LevelSelectScene extends AbstractScene {
         g.setColor(new Color(18, 18, 28));
         g.fillRect(0, 0, viewportWidth, viewportHeight);
         if (view == View.EDIT) {
-            form.render(g, viewportWidth, viewportHeight);
+            form.render(target, viewportWidth, viewportHeight);
         } else {
-            menu.render(g, viewportWidth, viewportHeight);
+            menu.render(target, viewportWidth, viewportHeight);
         }
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         if (!status.isEmpty()) {

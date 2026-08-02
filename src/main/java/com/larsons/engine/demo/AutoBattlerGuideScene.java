@@ -226,9 +226,16 @@ public class AutoBattlerGuideScene extends AbstractScene {
 
     // ------------------------------------------------------------------ render
 
+    /** This frame's target, for the widgets already ported off Graphics2D. */
+    private DrawTarget frameTarget;
+
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
+        // Most of this scene is not ported off Graphics2D yet; see
+        // Java2DTarget.graphicsOf. The frame's target is held so the widgets
+        // that *are* ported draw through it, which is also what puts their
+        // operations into the frame's draw-call count.
+        this.frameTarget = target;
         Graphics2D g = Java2DTarget.graphicsOf(target);
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setColor(new Color(16, 18, 30));
@@ -1159,7 +1166,7 @@ public class AutoBattlerGuideScene extends AbstractScene {
             g.setColor(def.clazz.color);
             g.drawString(def.clazz.label, tx, y + 54);
             if (!def.attackElements.isEmpty()) {
-                AutoSprites.drawElementPips(g, def.attackElements,
+                AutoSprites.drawElementPips(frameTarget, def.attackElements,
                         x + w - 8 - def.attackElements.size() * 6, y + 32, 9);
             }
         } else {

@@ -67,7 +67,7 @@ public class StartupScene extends AbstractScene {
     public void render(DrawTarget target, float alpha) {
         // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
         Graphics2D g = Java2DTarget.graphicsOf(target);
-        menu.render(g, viewportWidth, viewportHeight);
+        menu.render(target, viewportWidth, viewportHeight);
         g.setColor(new Color(120, 120, 140));
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         g.drawString("Game types are saved as JSON under resources/gametypes/",

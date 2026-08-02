@@ -1,5 +1,7 @@
 package com.larsons.engine.autobattler;
 
+import com.larsons.engine.graphics.draw.DrawTarget;
+
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Graphics2D;
@@ -271,36 +273,48 @@ public final class AutoSprites {
     }
 
     /** A row of small element pips (diamonds) centred on {@code cx}. */
-    public static void drawElementPips(Graphics2D g, java.util.List<Element> elements,
+    public static void drawElementPips(DrawTarget target, java.util.List<Element> elements,
                                        int cx, int y, int size) {
         if (elements.isEmpty()) return;
         int total = elements.size() * size + (elements.size() - 1) * 2;
         int x = cx - total / 2;
+        int[] xs = new int[4], ys = new int[4];
         for (Element e : elements) {
-            int[] xs = {x + size / 2, x + size, x + size / 2, x};
-            int[] ys = {y, y + size / 2, y + size, y + size / 2};
-            g.setColor(e.color);
-            g.fillPolygon(xs, ys, 4);
-            g.setColor(new Color(20, 22, 32));
-            g.drawPolygon(xs, ys, 4);
+            diamond(xs, ys, x, y, size);
+            target.fillPolygon(xs, ys, 4, e.color);
+            target.drawPolygon(xs, ys, 4, PIP_EDGE, 1f);
             x += size + 2;
         }
     }
 
     /** Star pips drawn above upgraded units. */
-    public static void drawStars(Graphics2D g, int star, int cx, int y, int size) {
+    public static void drawStars(DrawTarget target, int star, int cx, int y, int size) {
         if (star <= 1) return;
-        Color c = star >= 3 ? new Color(255, 200, 80) : new Color(210, 215, 230);
-        g.setColor(c);
+        int color = star >= 3 ? STAR_GOLD : STAR_SILVER;
         int total = star * size + (star - 1) * 2;
         int x = cx - total / 2;
+        int[] xs = new int[4], ys = new int[4];
         for (int i = 0; i < star; i++) {
-            int[] xs = {x + size / 2, x + size, x + size / 2, x};
-            int[] ys = {y, y + size / 2, y + size, y + size / 2};
-            g.fillPolygon(xs, ys, 4);
+            diamond(xs, ys, x, y, size);
+            target.fillPolygon(xs, ys, 4, color);
             x += size + 2;
         }
     }
+
+    /** The pip shape both of the above draw, written into reused scratch arrays. */
+    private static void diamond(int[] xs, int[] ys, int x, int y, int size) {
+        xs[0] = x + size / 2; ys[0] = y;
+        xs[1] = x + size;     ys[1] = y + size / 2;
+        xs[2] = x + size / 2; ys[2] = y + size;
+        xs[3] = x;            ys[3] = y + size / 2;
+    }
+
+    // Hoisted: drawn once per pip, per unit, on a board of up to sixteen.
+    // The scratch arrays in the two callers are hoisted for the same reason —
+    // this is the innermost loop the auto-battler HUD has.
+    private static final int PIP_EDGE = new Color(20, 22, 32).getRGB();
+    private static final int STAR_GOLD = new Color(255, 200, 80).getRGB();
+    private static final int STAR_SILVER = new Color(210, 215, 230).getRGB();
 
     private interface Painter {
         void paint(Graphics2D g);

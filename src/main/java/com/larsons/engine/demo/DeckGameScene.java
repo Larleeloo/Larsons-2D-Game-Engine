@@ -594,7 +594,7 @@ public class DeckGameScene extends AbstractScene {
         if (pendingLoc != null) renderTerritoryPick(g);
 
         // The particle layer: rendered bright, bloomed by the shader chain.
-        particles.render(g, camera);
+        particles.render(target, camera);
 
         renderFloatersAndToasts(g);
         renderBanner(g);

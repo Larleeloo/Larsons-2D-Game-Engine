@@ -669,7 +669,7 @@ public class EvolutionScene extends AbstractScene {
         }
         drawLightField(g, dish);
         drawDishContents(g, dish);
-        particles.render(g, camera);
+        particles.render(target, camera);
         drawRipples(g);
         drawToolGhost(g, dish);
 
@@ -689,7 +689,7 @@ public class EvolutionScene extends AbstractScene {
         if (paused) {
             dim(g, 170);
             if (resetting) {
-                resetMenu.render(g, viewportWidth, viewportHeight);
+                resetMenu.render(target, viewportWidth, viewportHeight);
                 g.setFont(new Font("SansSerif", Font.PLAIN, 15));
                 g.setColor(WARN);
                 drawCentered(g, "Dishes, bench, instruments, credits and this game's catalog: all gone",
@@ -701,7 +701,7 @@ public class EvolutionScene extends AbstractScene {
                                 + " achievements is kept",
                         viewportWidth / 2, viewportHeight / 4 + 114);
             } else {
-                pauseMenu.render(g, viewportWidth, viewportHeight);
+                pauseMenu.render(target, viewportWidth, viewportHeight);
             }
         }
     }

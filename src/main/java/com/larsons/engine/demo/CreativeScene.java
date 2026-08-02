@@ -5630,10 +5630,10 @@ public class CreativeScene extends AbstractScene {
         }
         standing.flush();
         if (testing && cutsceneDirector != null && cutsceneDirector.active() != null) {
-            CutscenePainter.drawActors(g, camera, cutsceneDirector.active());
+            CutscenePainter.drawActors(target, camera, cutsceneDirector.active());
         }
         drawDecorLayer(g, true); // foreground scenery covers players
-        if (p.particlesEnabled) particles.render(g, camera);
+        if (p.particlesEnabled) particles.render(target, camera);
 
         if (!testing) {
             drawCursorPreview(g);
@@ -5642,7 +5642,7 @@ public class CreativeScene extends AbstractScene {
         }
         // The play-test's character choice sits over the level being tested.
         if (testing && testPicker != null) {
-            testPicker.render(g, viewportWidth, viewportHeight);
+            testPicker.render(target, viewportWidth, viewportHeight);
         }
         drawTopBar(g);
         if (testing) {
@@ -5653,13 +5653,13 @@ public class CreativeScene extends AbstractScene {
             drawDoorHint(g);
             if (showInventory) drawTestInventory(g);
             if (craftingPanel != null) {
-                craftingPanel.render(g, viewportWidth, viewportHeight, testInv, animClock);
+                craftingPanel.render(target, viewportWidth, viewportHeight, testInv, animClock);
             }
             if (containerPanel != null) {
-                containerPanel.render(g, viewportWidth, viewportHeight, animClock);
+                containerPanel.render(target, viewportWidth, viewportHeight, animClock);
             }
             if (cutsceneDirector != null && cutsceneDirector.active() != null) {
-                CutscenePainter.drawOverlay(g, viewportWidth, viewportHeight,
+                CutscenePainter.drawOverlay(target, viewportWidth, viewportHeight,
                         cutsceneDirector.active());
             }
         }
@@ -5668,7 +5668,7 @@ public class CreativeScene extends AbstractScene {
         if (dialog != Dialog.NONE) drawDialog(g);
         // "Create texture" floats over the dialog that opened it, so closing
         // the paint window puts the creator back in that dialog.
-        if (spriteEditor != null) spriteEditor.render(g, viewportWidth, viewportHeight);
+        if (spriteEditor != null) spriteEditor.render(target, viewportWidth, viewportHeight);
     }
 
     /** Crack overlay on the block being held-mined, scaled by progress. */
@@ -7163,7 +7163,7 @@ public class CreativeScene extends AbstractScene {
         g.setColor(new Color(8, 8, 14));
         g.fillRect(0, 0, viewportWidth, viewportHeight);
         g.setComposite(old);
-        dialogForm.render(g, viewportWidth, viewportHeight);
+        dialogForm.render(frameTarget, viewportWidth, viewportHeight);
         g.setColor(new Color(130, 130, 150));
         g.setFont(SMALL_FONT);
         g.drawString("Enter activates · Esc cancels · type to edit text fields",

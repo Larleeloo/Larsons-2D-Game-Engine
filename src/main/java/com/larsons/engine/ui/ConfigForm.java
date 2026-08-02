@@ -5,9 +5,10 @@ import com.larsons.engine.input.InputBinding;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.input.KeyBinds;
 
+import com.larsons.engine.graphics.draw.DrawTarget;
+
 import java.awt.Color;
-import java.awt.FontMetrics;
-import java.awt.Graphics2D;
+import java.awt.Font;
 import java.awt.Rectangle;
 import java.awt.event.KeyEvent;
 import java.util.ArrayList;
@@ -275,6 +276,11 @@ public class ConfigForm {
     private static final int BIND_BOX_W = 150;
     /** Gap between the two binding slot boxes. */
     private static final int BIND_GAP = 8;
+
+    /** The selected row's wash, and the scroll track's. Theme colours do the rest. */
+    private static final int ROW_HIGHLIGHT = new Color(255, 255, 255, 18).getRGB();
+    private static final int TRACK = new Color(255, 255, 255, 28).getRGB();
+    private static final int SLIDER_TRACK_OFF = new Color(80, 80, 90).getRGB();
 
     private final List<Option> options = new ArrayList<>();
     private MenuTheme theme = MenuTheme.defaultTheme();
@@ -553,23 +559,23 @@ public class ConfigForm {
         if (!o.enabled || !o.selectable) move(dir);
     }
 
-    public void render(Graphics2D g, int viewportW, int viewportH) {
+    public void render(DrawTarget target, int viewportW, int viewportH) {
         int contentW = Math.min(640, viewportW - 80);
         int contentX = (viewportW - contentW) / 2;
 
-        g.setFont(theme.titleFont);
-        g.setColor(theme.title);
-        FontMetrics tfm = g.getFontMetrics();
-        int titleY = Math.max(tfm.getAscent() + 24, viewportH / 8);
+        Font titleFont = theme.titleFont;
+        int titleY = Math.max(target.textAscent(titleFont) + 24, viewportH / 8);
         // Titles carry names the creator chose ("Settings — <level>"), so they
         // are shortened to the room right of the column rather than run off it.
         if (title != null) {
-            g.drawString(UiText.fit(tfm, title, viewportW - contentX - 24), contentX, titleY);
+            target.drawText(UiText.fit(target, titleFont, title, viewportW - contentX - 24),
+                    contentX, titleY, titleFont, theme.title);
         }
 
-        g.setFont(theme.itemFont);
-        FontMetrics fm = g.getFontMetrics();
-        int startY = titleY + 50 + fm.getAscent();
+        Font itemFont = theme.itemFont;
+        int ascent = target.textAscent(itemFont);
+        int lineHeight = target.textHeight(itemFont);
+        int startY = titleY + 50 + ascent;
 
         // Long forms scroll. Capture the layout as fields so update() can drive
         // the scroll bar and wheel on the next frame.
@@ -600,39 +606,39 @@ public class ConfigForm {
             if (i < scroll || i >= scroll + visibleCount) continue; // off-screen
 
             int baseY = startY + (i - scroll) * rowHeight;
-            int boxTop = baseY - fm.getAscent() - 2;
-            int boxH = fm.getHeight() + 6;
+            int boxTop = baseY - ascent - 2;
+            int boxH = lineHeight + 6;
             o.rowBox.setBounds(contentX - 8, boxTop, contentW + 16, boxH);
 
             Color labelColor = !o.enabled ? theme.itemDisabled
                     : (i == selected ? theme.itemSelected : theme.item);
 
             if (i == selected && o.enabled && o.selectable) {
-                g.setColor(new Color(255, 255, 255, 18));
-                g.fillRect(o.rowBox.x, o.rowBox.y, o.rowBox.width, o.rowBox.height);
+                target.fillRect(o.rowBox.x, o.rowBox.y, o.rowBox.width, o.rowBox.height,
+                        ROW_HIGHLIGHT);
             }
 
             if (o.control() == Control.NOTE) {
-                renderNoteRow(g, o, contentX, contentW, boxTop);
-                g.setFont(theme.itemFont);
+                renderNoteRow(target, o, contentX, contentW, boxTop);
                 continue;
             }
 
             if (o.control() == Control.ACTION) {
-                renderActionRow(g, fm, o, contentX, contentW, baseY, boxTop, boxH, labelColor);
+                renderActionRow(target, o, contentX, contentW, baseY, boxTop, boxH, labelColor);
                 continue;
             }
 
             // The control is placed first so the label knows how much room is
             // left: a long label is shortened, never drawn over the field.
-            int controlLeft = renderValue(g, fm, o, contentX, contentW, baseY, boxTop, boxH, labelColor);
-            String label = UiText.fit(fm, o.label, controlLeft - LABEL_GAP - contentX);
-            o.labelBox.setBounds(contentX, boxTop, fm.stringWidth(label), boxH);
-            g.setColor(labelColor);
-            g.drawString(label, contentX, baseY);
+            int controlLeft = renderValue(target, o, contentX, contentW,
+                    baseY, boxTop, boxH, labelColor);
+            String label = UiText.fit(target, itemFont, o.label,
+                    controlLeft - LABEL_GAP - contentX);
+            o.labelBox.setBounds(contentX, boxTop, target.textWidth(label, itemFont), boxH);
+            target.drawText(label, contentX, baseY, itemFont, labelColor);
         }
 
-        drawScrollBar(g, fm, contentX, contentW, startY, viewportH);
+        drawScrollBar(target, ascent, contentX, contentW, startY, viewportH);
     }
 
     /**
@@ -640,7 +646,7 @@ public class ConfigForm {
      * thumb to the visible fraction and positioning it by {@link #scroll}. Records
      * the track/thumb boxes for {@link #handleScrollBar} to hit-test next frame.
      */
-    private void drawScrollBar(Graphics2D g, FontMetrics fm,
+    private void drawScrollBar(DrawTarget target, int ascent,
                                int contentX, int contentW, int startY, int viewportH) {
         scrollTrack.setBounds(0, 0, 0, 0);
         scrollThumb.setBounds(0, 0, 0, 0);
@@ -648,7 +654,7 @@ public class ConfigForm {
 
         int barW = 10;
         int barX = contentX + contentW + 14;
-        int barTop = startY - fm.getAscent() - 2;
+        int barTop = startY - ascent - 2;
         int barBottom = Math.min(viewportH - 24, barTop + visibleCount * rowHeight);
         int barH = Math.max(rowHeight, barBottom - barTop);
         scrollTrack.setBounds(barX, barTop, barW, barH);
@@ -659,10 +665,9 @@ public class ConfigForm {
         int thumbY = barTop + Math.round((float) scroll / maxScroll * travel);
         scrollThumb.setBounds(barX, thumbY, barW, thumbH);
 
-        g.setColor(new Color(255, 255, 255, 28));
-        g.fillRoundRect(barX, barTop, barW, barH, barW, barW);
-        g.setColor(draggingThumb ? theme.accent : theme.item);
-        g.fillRoundRect(barX, thumbY, barW, thumbH, barW, barW);
+        target.fillRoundRect(barX, barTop, barW, barH, barW, barW, TRACK);
+        target.fillRoundRect(barX, thumbY, barW, thumbH, barW, barW,
+                draggingThumb ? theme.accent : theme.item);
     }
 
     /**
@@ -671,23 +676,22 @@ public class ConfigForm {
      * rows carry, so they wrap rather than being cut down to one line — only an
      * overrun past the last line is ellipsised.
      */
-    private void renderNoteRow(Graphics2D g, Option o, int contentX, int contentW, int boxTop) {
-        g.setFont(theme.noteFont);
-        FontMetrics nfm = g.getFontMetrics();
-        int lineH = nfm.getHeight();
+    private void renderNoteRow(DrawTarget target, Option o,
+                               int contentX, int contentW, int boxTop) {
+        Font noteFont = theme.noteFont;
+        int lineH = target.textHeight(noteFont);
         int maxLines = Math.max(1, (rowHeight - 6) / lineH);
-        List<String> lines = UiText.wrap(nfm, o.label, contentW, maxLines);
+        List<String> lines = UiText.wrap(target, noteFont, o.label, contentW, maxLines);
         if (lines.isEmpty()) return;
 
         // Centre the block in the row slot so a one-line note sits level with
         // the rows above and below it.
         int blockH = lines.size() * lineH;
-        int y = boxTop + (rowHeight - 6 - blockH) / 2 + nfm.getAscent();
+        int y = boxTop + (rowHeight - 6 - blockH) / 2 + target.textAscent(noteFont);
         int widest = 0;
-        g.setColor(theme.itemDisabled);
         for (String line : lines) {
-            g.drawString(line, contentX, y);
-            widest = Math.max(widest, nfm.stringWidth(line));
+            target.drawText(line, contentX, y, noteFont, theme.itemDisabled);
+            widest = Math.max(widest, target.textWidth(line, noteFont));
             y += lineH;
         }
         o.labelBox.setBounds(contentX, boxTop, widest, blockH);
@@ -698,38 +702,41 @@ public class ConfigForm {
      * content column — a label too wide for it is shortened rather than left to
      * spill across the screen.
      */
-    private void renderActionRow(Graphics2D g, FontMetrics fm, Option o,
-                                 int contentX, int contentW, int baseY, int boxTop, int boxH, Color color) {
-        String label = UiText.fit(fm, o.label, contentW - BUTTON_PAD);
-        int tw = fm.stringWidth(label);
+    private void renderActionRow(DrawTarget target, Option o, int contentX, int contentW,
+                                 int baseY, int boxTop, int boxH, Color color) {
+        Font font = theme.itemFont;
+        String label = UiText.fit(target, font, o.label, contentW - BUTTON_PAD);
+        int tw = target.textWidth(label, font);
         int bw = tw + BUTTON_PAD;
         int bx = contentX + (contentW - bw) / 2;
         o.mainBox.setBounds(bx, boxTop, bw, boxH);
         o.labelBox.setBounds(bx + (bw - tw) / 2, boxTop, tw, boxH);
-        g.setColor(color);
-        g.drawRoundRect(bx, boxTop, bw, boxH, 10, 10);
-        g.drawString(label, bx + (bw - tw) / 2, baseY);
+        target.drawRoundRect(bx, boxTop, bw, boxH, 10, 10, color);
+        target.drawText(label, bx + (bw - tw) / 2, baseY, font, color);
     }
 
     /**
      * Draw the row's control, right-aligned in the content column, and return
      * the x of its leftmost box — the point the row's label has to stop before.
      */
-    private int renderValue(Graphics2D g, FontMetrics fm, Option o,
-                            int contentX, int contentW, int baseY, int boxTop, int boxH, Color color) {
+    private int renderValue(DrawTarget target, Option o, int contentX, int contentW,
+                            int baseY, int boxTop, int boxH, Color color) {
         int rightEdge = contentX + contentW;
         String value = o.valueText();
+        Font font = theme.itemFont;
 
         return switch (o.control()) {
             case TOGGLE -> {
                 String text = value;
-                int pw = Math.max(64, fm.stringWidth(text) + 28);
+                int pw = Math.max(64, target.textWidth(text, font) + 28);
                 int px = rightEdge - pw;
                 o.mainBox.setBounds(px, boxTop, pw, boxH);
                 boolean on = "ON".equals(text);
-                g.setColor(o.enabled ? (on ? theme.accent : theme.itemDisabled) : theme.itemDisabled);
-                g.drawRoundRect(px, boxTop, pw, boxH, boxH, boxH);
-                g.drawString(text, px + (pw - fm.stringWidth(text)) / 2, baseY);
+                Color c = o.enabled ? (on ? theme.accent : theme.itemDisabled)
+                        : theme.itemDisabled;
+                target.drawRoundRect(px, boxTop, pw, boxH, boxH, boxH, c);
+                target.drawText(text, px + (pw - target.textWidth(text, font)) / 2, baseY,
+                        font, c);
                 yield px;
             }
             case STEPPER, CYCLER -> {
@@ -742,8 +749,8 @@ public class ConfigForm {
                 // A cycler's values are content too (level names, door labels),
                 // so the value box is capped and its text shortened instead of
                 // being allowed to push the arrows back over the label.
-                String shown = UiText.fit(fm, value, MAX_VALUE_W - 16);
-                int valW = Math.max(60, fm.stringWidth(shown) + 16);
+                String shown = UiText.fit(target, font, value, MAX_VALUE_W - 16);
+                int valW = Math.max(60, target.textWidth(shown, font) + 16);
                 int valRight = incX - gap;
                 int valX = valRight - valW;
                 int decX = valX - gap - boxW;
@@ -751,47 +758,52 @@ public class ConfigForm {
                 o.decBox.setBounds(decX, boxTop, boxW, boxH);
                 o.incBox.setBounds(incX, boxTop, boxW, boxH);
 
-                g.setColor(color);
-                g.drawRoundRect(decX, boxTop, boxW, boxH, 8, 8);
-                g.drawString(dec, decX + (boxW - fm.stringWidth(dec)) / 2, baseY);
-                g.drawRoundRect(incX, boxTop, boxW, boxH, 8, 8);
-                g.drawString(inc, incX + (boxW - fm.stringWidth(inc)) / 2, baseY);
-                g.drawString(shown, valX + (valW - fm.stringWidth(shown)) / 2, baseY);
+                target.drawRoundRect(decX, boxTop, boxW, boxH, 8, 8, color);
+                target.drawText(dec, decX + (boxW - target.textWidth(dec, font)) / 2, baseY,
+                        font, color);
+                target.drawRoundRect(incX, boxTop, boxW, boxH, 8, 8, color);
+                target.drawText(inc, incX + (boxW - target.textWidth(inc, font)) / 2, baseY,
+                        font, color);
+                target.drawText(shown, valX + (valW - target.textWidth(shown, font)) / 2,
+                        baseY, font, color);
                 yield decX;
             }
             case TEXT -> {
                 int fw = Math.max(MIN_FIELD_W, Math.min(MAX_FIELD_W,
-                        contentW - fm.stringWidth(o.label) - LABEL_GAP));
+                        contentW - target.textWidth(o.label, font) - LABEL_GAP));
                 int fx = rightEdge - fw;
                 o.mainBox.setBounds(fx, boxTop, fw, boxH);
-                g.setColor(o.enabled ? theme.item : theme.itemDisabled);
-                g.drawRoundRect(fx, boxTop, fw, boxH, 8, 8);
+                target.drawRoundRect(fx, boxTop, fw, boxH, 8, 8,
+                        o.enabled ? theme.item : theme.itemDisabled);
                 boolean editing = options.get(selected) == o;
                 // Show the end of the value: typing appends, so the tail is the
                 // part being worked on. Anything longer is cut at the field's
                 // edge instead of running on across the screen.
-                String shown = UiText.fitTail(fm, value + (editing ? "_" : ""), fw - 2 * FIELD_PAD);
-                g.setColor(o.enabled ? theme.title : theme.itemDisabled);
-                g.drawString(shown, fx + FIELD_PAD, baseY);
+                String shown = UiText.fitTail(target, font, value + (editing ? "_" : ""),
+                        fw - 2 * FIELD_PAD);
+                target.drawText(shown, fx + FIELD_PAD, baseY, font,
+                        o.enabled ? theme.title : theme.itemDisabled);
                 yield fx;
             }
             case SLIDER -> {
                 SliderOption s = (SliderOption) o;
-                int valW = Math.max(48, fm.stringWidth(String.valueOf(s.max)) + 12);
+                int valW = Math.max(48, target.textWidth(String.valueOf(s.max), font) + 12);
                 int trackW = 200;
                 int trackX = rightEdge - valW - trackW;
                 o.mainBox.setBounds(trackX, boxTop, trackW, boxH);
                 double t = (s.get.getAsInt() - s.min) / (double) (s.max - s.min);
                 t = Math.max(0, Math.min(1, t));
                 int cy = boxTop + boxH / 2;
-                g.setColor(o.enabled ? theme.itemDisabled : new Color(80, 80, 90));
-                g.fillRoundRect(trackX, cy - 2, trackW, 4, 4, 4);
-                g.setColor(o.enabled ? theme.accent : theme.itemDisabled);
-                g.fillRoundRect(trackX, cy - 2, (int) (trackW * t), 4, 4, 4);
+                if (o.enabled) {
+                    target.fillRoundRect(trackX, cy - 2, trackW, 4, 4, 4, theme.itemDisabled);
+                } else {
+                    target.fillRoundRect(trackX, cy - 2, trackW, 4, 4, 4, SLIDER_TRACK_OFF);
+                }
+                Color fill = o.enabled ? theme.accent : theme.itemDisabled;
+                target.fillRoundRect(trackX, cy - 2, (int) (trackW * t), 4, 4, 4, fill);
                 int thumbX = trackX + (int) (trackW * t);
-                g.fillOval(thumbX - 6, cy - 7, 14, 14);
-                g.setColor(color);
-                g.drawString(value, rightEdge - valW + 8, baseY);
+                target.fillOval(thumbX - 6, cy - 7, 14, 14, fill);
+                target.drawText(value, rightEdge - valW + 8, baseY, font, color);
                 yield trackX;
             }
             case KEYBIND -> {
@@ -801,9 +813,7 @@ public class ConfigForm {
                 // Bindings are set a little smaller than the labels they sit
                 // beside: "Middle Mouse" has to fit its box whole, and a name
                 // cut to "Middle Mou…" is no use to the player reading it.
-                java.awt.Font labelFont = g.getFont();
-                g.setFont(theme.itemFont.deriveFont(theme.itemFont.getSize2D() * 0.78f));
-                FontMetrics bfm = g.getFontMetrics();
+                Font bindFont = font.deriveFont(font.getSize2D() * 0.78f);
                 int x = rightEdge;
                 for (int s = KeyBinds.SLOTS - 1; s >= 0; s--) {
                     x -= BIND_BOX_W;
@@ -816,16 +826,15 @@ public class ConfigForm {
                             : (clash && b.isBound()) ? theme.warning
                             : (rowSelected && kb.slot == s) ? theme.itemSelected
                             : theme.itemDisabled;
-                    g.setColor(box);
-                    g.drawRoundRect(x, boxTop, BIND_BOX_W, boxH, 8, 8);
-                    String shown = UiText.fit(bfm, text, BIND_BOX_W - 12);
-                    g.setColor(!o.enabled ? theme.itemDisabled
-                            : waiting ? theme.accent
-                            : (clash && b.isBound()) ? theme.warning : theme.title);
-                    g.drawString(shown, x + (BIND_BOX_W - bfm.stringWidth(shown)) / 2, baseY);
+                    target.drawRoundRect(x, boxTop, BIND_BOX_W, boxH, 8, 8, box);
+                    String shown = UiText.fit(target, bindFont, text, BIND_BOX_W - 12);
+                    target.drawText(shown,
+                            x + (BIND_BOX_W - target.textWidth(shown, bindFont)) / 2, baseY,
+                            bindFont, !o.enabled ? theme.itemDisabled
+                                    : waiting ? theme.accent
+                                    : (clash && b.isBound()) ? theme.warning : theme.title);
                     x -= BIND_GAP;
                 }
-                g.setFont(labelFont); // the row's label is drawn after this
                 yield x + BIND_GAP;
             }
             default -> rightEdge;

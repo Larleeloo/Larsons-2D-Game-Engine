@@ -92,9 +92,11 @@ much faster it makes things.
    the Java2D path working and tested.
 3. **Pixel parity is the contract.** "Looks fine" is not a result. Every port
    step compares rendered output against a reference and states the error.
-4. **The suite stays green.** Last full run: **810 tests, 0 failures, 3 skipped**
-   (the skips are display-dependent and skip rather than fail by design). A step
-   ends with that or better.
+4. **The suite stays green.** Last full run: **840 tests, 0 failures, 10 skipped**
+   (was 810/0/3 when this was written; B0 and B1 added the rest). The skips are
+   environment-dependent and skip rather than fail by design — three need a
+   display, seven need a GL driver this container has not got. A step ends with
+   that or better.
 5. **Nothing merges that cannot be measured.** If a change is supposed to make
    the frame faster, the profiler says so before it lands. This rule exists
    because it has already caught three things in this work that felt right and
@@ -355,6 +357,118 @@ that legitimately should: `Java2DTarget`, `Java2DRenderer`, `Renderer`,
 `AssetLoader`, `Skins`, and the sprite factories that call
 `BufferedImage.createGraphics()` to bake an image (which is Java2D by
 definition and stays that way — see B5).
+
+#### B2 — done
+
+All twelve ported, in the order above. Every one verified against B0's goldens
+at **0.00** — these are pure translations, so any nonzero error would have been
+a bug, and the bar was held rather than relaxed.
+
+Where `Graphics2D` survives in the twelve, it is a `createGraphics()` bake and
+stays: `ParallaxBackground` (layer art), `CutscenePainter` (the placeholder
+figure), `CharacterPicker.icon`, `AutoSprites.cached`. `CraftingPanel`,
+`Menu`, `ContainerPanel`, `SpriteEditorPanel`, `ConfigForm` and `MiniGameHud`
+no longer name it at all.
+
+**Two hidden-state dependencies the port surfaced.** Both are the class of bug
+this step exists to find, and neither is visible by reading the diff:
+
+1. `CharacterPicker`'s ultimate rule was drawn with whatever stroke width the
+   *card border above it* had last set — 2.5px under the selected card, 1.2px
+   elsewhere. Passing the obvious `1f` would have thinned it. The port states
+   the width explicitly and the golden confirms it.
+2. `SpriteEditorPanel`'s preview-box border ran at the ambient stroke width,
+   which its frame-strip loop carefully restored after every box. Here the
+   inherited value happened to be the default; the port states it.
+
+Removing the seven per-painter `setRenderingHint(ANTIALIASING, ON)` calls was a
+no-op, as expected: `Java2DRenderer` sets it for the whole frame already, and
+B0's harness sets the same two hints for the same reason. The goldens are what
+turned "expected" into "checked".
+
+**Supporting changes, each forced by the port rather than chosen:**
+
+- `UiText` gained a `Measure` abstraction so `fit`/`fitTail`/`wrap` serve both a
+  `FontMetrics` and a `(DrawTarget, Font)` without a second copy of each
+  bisection. Not a compatibility shim of the kind this step forbids — `UiText`
+  draws nothing, so it has no backend to be tied to, and the `DrawTarget`
+  overload is what will keep layout identical when B6 changes rasterisation.
+- `AutoBattlerScene` and `AutoBattlerGuideScene` gained the `frameTarget` field
+  `PlayScene` and `CreativeScene` already had, so their `AutoSprites` overlays
+  reach the frame's target. Their draws were previously uncounted.
+- `Engine` draws `ProfileOverlay` through a **second** `Java2DTarget` over the
+  same surface. The old code bypassed the seam deliberately, so the readout's
+  own draw calls would not be folded into the count it reports; a separate
+  target keeps that separation while still going through `DrawTarget`.
+
+**Verified.** Goldens 0.00 on all fifteen frames, plus six new
+`RecordingTarget` sequence tests (`PortedPainterTest`) for the properties a
+golden is blind to — that `ContainerPanel`'s open animation pushes transform
+then alpha and unwinds both, that a settled panel issues *no* state changes at
+all, that `Menu` draws its scroll bar after the rows it scrolls over, and that
+the escort path emits two `drawDashedLine` calls rather than thirty short
+solid ones. §7 says these two instruments answer different questions; they do.
+
+Suite: **840 tests, 0 failures, 10 skipped**.
+
+#### A correction to this document, found while doing B2
+
+B2 says to hoist `new Color(...)` into constants because "`DrawStats` keys
+batches on the colour object, so a fresh `Color` per call breaks every merge."
+**That is not true of the code as written**, and it was worth checking rather
+than repeating. `Java2DTarget` records every flat shape as
+`stats.record(Kind.SHAPE, null)` — the batch key is `null`, so colour does not
+break a shape batch at all. Only `IMAGE` (keyed by source image) and `TEXT`
+(keyed by font) carry keys.
+
+`DrawStats` is right and the guidance was wrong. A GL backend folds colour into
+the vertex, exactly as `pushAlpha` will (see B1's composite audit), so
+consecutive differently-coloured flat shapes genuinely *do* collapse into one
+draw — which is what `null` models.
+
+Hoisting is still worth doing, for the reason that survives the correction: it
+removes an allocation per call on a path that runs every frame. The
+checkerboard in `SpriteEditorPanel` alone was allocating a `Color` per cell,
+hundreds a frame. The comments in the ported classes now say that rather than
+the batching claim.
+
+#### Draw-call baseline, per golden frame
+
+Recorded through `GoldenFrames.record()` — the same fixed scenes as the pixel
+comparison, so B5 and B6 can publish before-and-after numbers that cannot drift
+between measurements.
+
+| frame | ops | batches | merge | shape | image | text | state |
+|-------|----:|--------:|------:|------:|------:|-----:|------:|
+| world-side-scroll | 145 | 5 | **29.00×** | 142 | 3 | 0 | 0 |
+| world-top-down | 149 | 5 | **29.80×** | 146 | 3 | 0 | 0 |
+| world-isometric | 153 | 5 | **30.60×** | 150 | 3 | 0 | 0 |
+| particles | 62 | 1 | **62.00×** | 62 | 0 | 0 | 0 |
+| sprite-editor | 1545 | 86 | 17.97× | 1495 | 3 | 35 | 12 |
+| container-panel | 35 | 12 | 2.92× | 26 | 3 | 6 | 0 |
+| character-picker | 58 | 22 | 2.64× | 10 | 3 | 45 | 0 |
+| auto-sprites | 17 | 7 | 2.43× | 11 | 6 | 0 | 0 |
+| parallax-background | 9 | 5 | 1.80× | 1 | 8 | 0 | 0 |
+| profile-overlay | 28 | 16 | 1.75× | 15 | 0 | 13 | 0 |
+| main-menu | 8 | 5 | 1.60× | 3 | 0 | 5 | 0 |
+| config-form | 21 | 14 | 1.50× | 8 | 0 | 13 | 0 |
+| minigame-hud | 12 | 8 | 1.50× | 8 | 0 | 4 | 0 |
+| cutscene | 10 | 7 | 1.43× | 4 | 2 | 4 | 0 |
+| crafting-panel | 36 | 33 | **1.09×** | 9 | 12 | 15 | 0 |
+
+**What this says, before B5 and B6 touch anything.** The world already batches
+30× — flat terrain quads collapse almost completely, and a GL backend will
+serve them from one draw call. The UI does not, and the reason is legible in
+the columns: `crafting-panel` at 1.09× is twelve images and fifteen text runs
+*interleaved* (icon, name, icon, count, icon, count…), so nearly every
+operation changes the batch key. That is precisely the case B5's sprite atlas
+and B6's glyph atlas exist for — with both in place those two columns collapse
+to one texture and one atlas, and the interleaving stops mattering.
+
+It is also a warning about where to look. `crafting-panel` and
+`character-picker` (45 text runs) are the frames whose numbers should move in
+B5/B6; `world-*` are already near the ceiling and will not, so an atlas
+measured only against a world scene would look like it did nothing.
 
 ---
 
@@ -999,7 +1113,7 @@ Counts from `src/main/java`, 2026-08-02, commit `85196b9`.
 | Measure | Count |
 |---------|-------|
 | `Java2DTarget.graphicsOf` call sites | 39 (+1 definition) |
-| Files naming `Graphics2D` | 48 (19 in `demo/`, 29 elsewhere) |
+| Files naming `Graphics2D` | 48 before B2; **44 after** (19 in `demo/`, 25 elsewhere), and of the 25 all but `Engine`, `Java2DTarget`, `Java2DRenderer`, `Renderer` and `Scene`/`SceneManager` are `createGraphics()` bakes or comments |
 | `drawString` sites | 350 |
 | `drawImage` sites | 95 |
 | Files naming `BufferedImage` | 34 |

@@ -1,12 +1,11 @@
 package com.larsons.engine.graphics;
 
+import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.level.Cutscene;
 import com.larsons.engine.level.CutscenePlayer;
 
-import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
@@ -36,13 +35,25 @@ public final class CutscenePainter {
     /** Letterbox bar height as a fraction of the viewport height. */
     private static final double BAR_FRACTION = 0.11;
 
+    // Hoisted out of the draw loop: one allocation at class-load instead of
+    // one per caption line per frame. (Not, as it turns out, for batching —
+    // see RENDER_PLAN's B2 note: DrawStats keys flat shapes on nothing at all,
+    // because a GL backend folds colour into the vertex and batches them
+    // regardless. The allocation is the real cost, and it is the caller's.)
+    private static final int BAR = Color.BLACK.getRGB();
+    private static final int HINT = new Color(210, 210, 220).getRGB();
+    private static final int CAPTION_BOX = new Color(10, 10, 18, 215).getRGB();
+    private static final int CAPTION_EDGE = new Color(255, 255, 255, 60).getRGB();
+    private static final int SPEAKER = new Color(255, 220, 120).getRGB();
+    private static final int CAPTION = new Color(235, 235, 245).getRGB();
+
     private static final Map<String, List<BufferedImage>> SHEETS = new HashMap<>();
     private static final Map<String, BufferedImage> PLACEHOLDERS = new HashMap<>();
 
     private CutscenePainter() {}
 
     /** Draw every visible actor through the scene's camera. */
-    public static void drawActors(Graphics2D g, Camera camera, CutscenePlayer player) {
+    public static void drawActors(DrawTarget target, Camera camera, CutscenePlayer player) {
         int[] corner = new int[2];
         for (CutscenePlayer.ActorView a : player.actors()) {
             if (!a.visible) continue;
@@ -52,59 +63,47 @@ public final class CutscenePainter {
             camera.worldToScreen(a.x, a.y, corner);
             int dx = corner[0] - w / 2, dy = corner[1] - w;
             if (a.facingLeft) {
-                g.drawImage(img, dx + w, dy, -w, w, null);
+                target.drawImage(img, dx + w, dy, -w, w);
             } else {
-                g.drawImage(img, dx, dy, w, w, null);
+                target.drawImage(img, dx, dy, w, w);
             }
         }
     }
 
     /** The letterbox bars, caption box, and skip hint (draw over the HUD). */
-    public static void drawOverlay(Graphics2D g, int width, int height,
+    public static void drawOverlay(DrawTarget target, int width, int height,
                                    CutscenePlayer player) {
         // Bars ease in over the first third of a second.
         int bar = (int) Math.round(height * BAR_FRACTION
                 * Math.min(1, player.time() * 3));
-        g.setColor(Color.BLACK);
-        g.fillRect(0, 0, width, bar);
-        g.fillRect(0, height - bar, width, bar);
+        target.fillRect(0, 0, width, bar, BAR);
+        target.fillRect(0, height - bar, width, bar, BAR);
 
-        g.setFont(HINT_FONT);
-        g.setColor(new Color(210, 210, 220));
         String hint = "▶ " + player.cutscene().name + "  ·  Enter/Esc skips";
-        g.drawString(hint, width - g.getFontMetrics().stringWidth(hint) - 10,
-                Math.max(14, bar - 6));
+        target.drawText(hint, width - target.textWidth(hint, HINT_FONT) - 10,
+                Math.max(14, bar - 6), HINT_FONT, HINT);
 
         String caption = player.caption();
         if (caption.isEmpty()) return;
-        g.setFont(CAPTION_FONT);
-        FontMetrics fm = g.getFontMetrics();
-        List<String> lines = wrap(caption, fm, (int) (width * 0.7));
-        int lineH = fm.getHeight();
+        List<String> lines = wrap(target, caption, CAPTION_FONT, (int) (width * 0.7));
+        int lineH = target.textHeight(CAPTION_FONT);
         int boxW = 0;
-        for (String line : lines) boxW = Math.max(boxW, fm.stringWidth(line));
+        for (String line : lines) boxW = Math.max(boxW, target.textWidth(line, CAPTION_FONT));
         boxW += 28;
         String speaker = player.speaker();
         int boxH = lines.size() * lineH + 18 + (speaker.isEmpty() ? 0 : 16);
         int bx = (width - boxW) / 2;
         int by = height - Math.max(bar, 8) - boxH - 8;
-        g.setColor(new Color(10, 10, 18, 215));
-        g.fillRoundRect(bx, by, boxW, boxH, 12, 12);
-        g.setColor(new Color(255, 255, 255, 60));
-        g.setStroke(new BasicStroke(1f));
-        g.drawRoundRect(bx, by, boxW, boxH, 12, 12);
+        target.fillRoundRect(bx, by, boxW, boxH, 12, 12, CAPTION_BOX);
+        target.drawRoundRect(bx, by, boxW, boxH, 12, 12, CAPTION_EDGE, 1f);
         int ty = by + 14;
         if (!speaker.isEmpty()) {
-            g.setFont(SPEAKER_FONT);
-            g.setColor(new Color(255, 220, 120));
-            g.drawString(speaker, bx + 14, ty + 4);
+            target.drawText(speaker, bx + 14, ty + 4, SPEAKER_FONT, SPEAKER);
             ty += 16;
-            g.setFont(CAPTION_FONT);
         }
-        g.setColor(new Color(235, 235, 245));
         for (String line : lines) {
             ty += lineH;
-            g.drawString(line, bx + 14, ty - 4);
+            target.drawText(line, bx + 14, ty - 4, CAPTION_FONT, CAPTION);
         }
     }
 
@@ -168,12 +167,12 @@ public final class CutscenePainter {
         PLACEHOLDERS.clear();
     }
 
-    private static List<String> wrap(String text, FontMetrics fm, int maxWidth) {
+    private static List<String> wrap(DrawTarget target, String text, Font font, int maxWidth) {
         List<String> lines = new ArrayList<>();
         StringBuilder line = new StringBuilder();
         for (String word : text.split("\\s+")) {
             String candidate = line.isEmpty() ? word : line + " " + word;
-            if (!line.isEmpty() && fm.stringWidth(candidate) > maxWidth) {
+            if (!line.isEmpty() && target.textWidth(candidate, font) > maxWidth) {
                 lines.add(line.toString());
                 line = new StringBuilder(word);
             } else {

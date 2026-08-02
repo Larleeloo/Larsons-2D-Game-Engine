@@ -1,5 +1,7 @@
 package com.larsons.engine.graphics;
 
+import com.larsons.engine.graphics.draw.DrawTarget;
+
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
@@ -44,7 +46,8 @@ public final class ParallaxBackground {
      * camera focus in world pixels; layers slide against it by their depth
      * factor and tile horizontally forever.
      */
-    public void render(Graphics2D g, double camX, double camY, int viewportW, int viewportH) {
+    public void render(DrawTarget target, double camX, double camY,
+                       int viewportW, int viewportH) {
         for (Layer layer : layers) {
             BufferedImage img = layer.image;
             int w = img.getWidth();
@@ -55,7 +58,7 @@ public final class ParallaxBackground {
             int offset = (int) Math.floor(camX * layer.factorX) % w;
             if (offset < 0) offset += w;
             for (int x = -offset; x < viewportW; x += w) {
-                g.drawImage(img, x, y, null);
+                target.drawImage(img, x, y);
             }
         }
     }

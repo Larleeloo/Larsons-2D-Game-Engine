@@ -9,14 +9,10 @@ import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.level.Level;
 
-import java.awt.AlphaComposite;
 import com.larsons.engine.graphics.draw.DrawTarget;
 
-import java.awt.BasicStroke;
 import java.awt.Color;
-import java.awt.Composite;
 import java.awt.Font;
-import java.awt.Graphics2D;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.util.List;
@@ -44,6 +40,16 @@ public final class ContainerPanel {
 
     private static final Font TITLE_FONT = new Font("SansSerif", Font.BOLD, 16);
     private static final Font SMALL_FONT = new Font("SansSerif", Font.PLAIN, 11);
+
+    // Hoisted: the twelve slots each drew the same wash and the same edge and
+    // allocated both again every frame.
+    private static final int PANEL_BG = new Color(10, 10, 16, 235).getRGB();
+    private static final int PANEL_EDGE = new Color(255, 210, 130).getRGB();
+    private static final int HINT = new Color(170, 170, 190).getRGB();
+    private static final int SLOT_BG = new Color(255, 255, 255, 24).getRGB();
+    private static final int SLOT_EDGE = new Color(255, 255, 255, 60).getRGB();
+    private static final int COUNT_SHADOW = Color.BLACK.getRGB();
+    private static final int COUNT_TEXT = Color.WHITE.getRGB();
 
     private static final int SLOT = 46;
     private static final int PAD = 6;
@@ -262,7 +268,7 @@ public final class ContainerPanel {
 
     // --- rendering -----------------------------------------------------------------
 
-    public void render(Graphics2D g, int vw, int vh, double animClock) {
+    public void render(DrawTarget target, int vw, int vh, double animClock) {
         double open = openness();
         if (open <= 0.01) return;
         int[] o = origin(vw, vh);
@@ -271,60 +277,54 @@ public final class ContainerPanel {
 
         // Opening/closing: the panel grows out of / shrinks into its centre
         // while fading, so the chest visibly "opens" rather than popping.
-        AffineTransform oldTx = g.getTransform();
-        Composite oldComp = g.getComposite();
-        if (open < 1) {
+        boolean animating = open < 1;
+        if (animating) {
             double s = 0.7 + 0.3 * open;
             double cx = o[0] + gw / 2.0, cy = o[1] + gh / 2.0;
-            g.translate(cx, cy);
-            g.scale(s, s);
-            g.translate(-cx, -cy);
-            g.setComposite(AlphaComposite.getInstance(
-                    AlphaComposite.SRC_OVER, (float) open));
+            AffineTransform grow = new AffineTransform();
+            grow.translate(cx, cy);
+            grow.scale(s, s);
+            grow.translate(-cx, -cy);
+            target.pushTransform(grow);
+            target.pushAlpha((float) open);
         }
 
         List<ItemStack> box = contents();
 
-        g.setColor(new Color(10, 10, 16, 235));
-        g.fillRoundRect(o[0] - 20, o[1] - 56, gw + 40, gh + 92, 14, 14);
-        g.setColor(new Color(255, 210, 130));
-        g.setStroke(new BasicStroke(2f));
-        g.drawRoundRect(o[0] - 20, o[1] - 56, gw + 40, gh + 92, 14, 14);
-        g.setFont(TITLE_FONT);
+        target.fillRoundRect(o[0] - 20, o[1] - 56, gw + 40, gh + 92, 14, 14, PANEL_BG);
+        target.drawRoundRect(o[0] - 20, o[1] - 56, gw + 40, gh + 92, 14, 14,
+                PANEL_EDGE, 2f);
         // The title is the block's name, which a creator may have made long.
-        g.drawString(UiText.fit(g.getFontMetrics(), title, gw), o[0], o[1] - 32);
-        g.setFont(SMALL_FONT);
-        g.setColor(new Color(170, 170, 190));
-        g.drawString("Click takes · empty slot / [Q] stashes · [E] close",
-                o[0], o[1] - 14);
+        target.drawText(UiText.fit(target, TITLE_FONT, title, gw),
+                o[0], o[1] - 32, TITLE_FONT, PANEL_EDGE);
+        target.drawText("Click takes · empty slot / [Q] stashes · [E] close",
+                o[0], o[1] - 14, SMALL_FONT, HINT);
 
         for (int i = 0; i < Level.CONTAINER_SLOTS; i++) {
             int cx = o[0] + (i % COLS) * (SLOT + PAD);
             int cy = o[1] + (i / COLS) * (SLOT + PAD);
-            g.setColor(new Color(255, 255, 255, 24));
-            g.fillRoundRect(cx, cy, SLOT, SLOT, 8, 8);
-            g.setColor(new Color(255, 255, 255, 60));
-            g.setStroke(new BasicStroke(1f));
-            g.drawRoundRect(cx, cy, SLOT, SLOT, 8, 8);
+            target.fillRoundRect(cx, cy, SLOT, SLOT, 8, 8, SLOT_BG);
+            target.drawRoundRect(cx, cy, SLOT, SLOT, 8, 8, SLOT_EDGE, 1f);
             if (i >= box.size()) continue;
             ItemStack s = box.get(i);
             ItemDef def = items.get(s.key);
             if (def == null) continue;
             BufferedImage img = Skins.frame("item/" + s.key, animClock);
             if (img == null) img = EntitySprites.item(def, 32);
-            g.drawImage(img, cx + 6, cy + 6, SLOT - 12, SLOT - 12, null);
+            target.drawImage(img, cx + 6, cy + 6, SLOT - 12, SLOT - 12);
             if (s.count > 1) {
                 String n = String.valueOf(s.count);
-                int tw = g.getFontMetrics().stringWidth(n);
-                g.setColor(Color.BLACK);
-                g.drawString(n, cx + SLOT - tw - 3, cy + SLOT - 3);
-                g.setColor(Color.WHITE);
-                g.drawString(n, cx + SLOT - tw - 4, cy + SLOT - 4);
+                // The count keeps the small font the hint line left set.
+                int tw = target.textWidth(n, SMALL_FONT);
+                target.drawText(n, cx + SLOT - tw - 3, cy + SLOT - 3, SMALL_FONT, COUNT_SHADOW);
+                target.drawText(n, cx + SLOT - tw - 4, cy + SLOT - 4, SMALL_FONT, COUNT_TEXT);
             }
         }
 
-        g.setTransform(oldTx);
-        g.setComposite(oldComp);
+        if (animating) {
+            target.popAlpha();
+            target.popTransform();
+        }
     }
 
     /**

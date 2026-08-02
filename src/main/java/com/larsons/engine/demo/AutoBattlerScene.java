@@ -1051,9 +1051,16 @@ public class AutoBattlerScene extends AbstractScene {
 
     // ------------------------------------------------------------------ render
 
+    /** This frame's target, for the widgets already ported off Graphics2D. */
+    private DrawTarget frameTarget;
+
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
+        // Most of this scene is not ported off Graphics2D yet; see
+        // Java2DTarget.graphicsOf. The frame's target is held so the widgets
+        // that *are* ported draw through it, which is also what puts their
+        // operations into the frame's draw-call count.
+        this.frameTarget = target;
         Graphics2D g = Java2DTarget.graphicsOf(target);
         int w = viewportWidth, h = viewportHeight;
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -1075,7 +1082,7 @@ public class AutoBattlerScene extends AbstractScene {
         } else {
             drawPlanningUnits(g);
         }
-        particles.render(g, camera);
+        particles.render(target, camera);
         drawFloaters(g);
 
         drawTopHud(g);
@@ -1308,7 +1315,7 @@ public class AutoBattlerScene extends AbstractScene {
             }
             drawUnitInWorld(g, def, size, true, AnimState.IDLE, animClock,
                     out[0], out[1], u.id);
-            AutoSprites.drawStars(g, u.star, out[0], out[1] - size + size / 8, 8);
+            AutoSprites.drawStars(frameTarget, u.star, out[0], out[1] - size + size / 8, 8);
             drawItemPips(g, u, out[0], out[1] + size / 6);
         }
     }
@@ -1353,7 +1360,7 @@ public class AutoBattlerScene extends AbstractScene {
             double stateTime = fx != null ? fx.time : 0;
             drawUnitInWorld(g, def, size, friendly, state, stateTime,
                     out[0], out[1], u.id());
-            AutoSprites.drawStars(g, u.star(), out[0], out[1] - size + size / 12, 7);
+            AutoSprites.drawStars(frameTarget, u.star(), out[0], out[1] - size + size / 12, 7);
 
             // Health + mana bars.
             int bw = (int) (40 * camera.zoom);
@@ -1887,7 +1894,7 @@ public class AutoBattlerScene extends AbstractScene {
             int size = r.width - 10;
             BufferedImage img = unitImage(def, size, true, AnimState.IDLE, animClock);
             g.drawImage(img, r.x + 5, r.y + 2, size, size, null);
-            AutoSprites.drawStars(g, u.star, r.x + r.width / 2, r.y + 2, 7);
+            AutoSprites.drawStars(frameTarget, u.star, r.x + r.width / 2, r.y + 2, 7);
             drawItemPips(g, u, r.x + r.width / 2, r.y + r.height - 12);
         }
     }
@@ -1963,7 +1970,7 @@ public class AutoBattlerScene extends AbstractScene {
             BufferedImage img = unitImage(def, 54, true, AnimState.IDLE, animClock);
             g.drawImage(img, r.x + 6, r.y + r.height / 2 - 27, 54, 54, null);
             if (!def.attackElements.isEmpty()) {
-                AutoSprites.drawElementPips(g, def.attackElements,
+                AutoSprites.drawElementPips(frameTarget, def.attackElements,
                         r.x + 33, r.y + r.height - 20, 9);
             }
             g.setFont(new Font("SansSerif", Font.BOLD, 14));
@@ -2079,7 +2086,7 @@ public class AutoBattlerScene extends AbstractScene {
             int size = (int) (52 * camera.zoom);
             BufferedImage img = unitImage(u.def(), size, true, AnimState.IDLE, animClock);
             drawGhost(g, img, lastMouseX, lastMouseY, size);
-            AutoSprites.drawStars(g, u.star, lastMouseX, lastMouseY - size / 2, 8);
+            AutoSprites.drawStars(frameTarget, u.star, lastMouseX, lastMouseY - size / 2, 8);
         } else if (grabItemIndex >= 0 && grabItemIndex < you.items().size()) {
             AutoItem item = AutoItems.get(you.items().get(grabItemIndex));
             if (item == null) return;
@@ -2236,7 +2243,7 @@ public class AutoBattlerScene extends AbstractScene {
             int ux = gx + u.col * cs, uy = gy + gridRow * cs;
             BufferedImage img = unitImage(def, cs - 6, true, AnimState.IDLE, animClock);
             g.drawImage(img, ux + 3, uy + 2, cs - 6, cs - 6, null);
-            AutoSprites.drawStars(g, u.star, ux + cs / 2, uy + 1, 5);
+            AutoSprites.drawStars(frameTarget, u.star, ux + cs / 2, uy + 1, 5);
             drawItemPips(g, u, ux + cs / 2, uy + cs - 8);
         }
 
@@ -2256,7 +2263,7 @@ public class AutoBattlerScene extends AbstractScene {
             int ux = gx + u.bench * (bs + 2);
             BufferedImage img = unitImage(def, bs - 4, true, AnimState.IDLE, animClock);
             g.drawImage(img, ux + 2, by + 4, bs - 4, bs - 4, null);
-            AutoSprites.drawStars(g, u.star, ux + bs / 2, by + 3, 4);
+            AutoSprites.drawStars(frameTarget, u.star, ux + bs / 2, by + 3, 4);
         }
 
         // Stats column on the right.

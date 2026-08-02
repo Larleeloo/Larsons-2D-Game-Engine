@@ -4,9 +4,10 @@ import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.input.KeyBinds;
 
+import com.larsons.engine.graphics.draw.DrawTarget;
+
 import java.awt.Color;
-import java.awt.FontMetrics;
-import java.awt.Graphics2D;
+import java.awt.Font;
 import java.awt.Rectangle;
 import java.util.ArrayList;
 import java.util.List;
@@ -38,6 +39,9 @@ public class Menu {
     private static final int SIDE_MARGIN = 24;
     /** Space either side of an item, leaving room for the '>' caret and bar. */
     private static final int ITEM_MARGIN = 48;
+
+    /** The scroll track's wash. Theme colours supply the rest. */
+    private static final int TRACK = new Color(255, 255, 255, 28).getRGB();
     private String title;
     private String subtitle;
     private final List<MenuItem> items = new ArrayList<>();
@@ -189,25 +193,23 @@ public class Menu {
         return false;
     }
 
-    public void render(Graphics2D g, int viewportW, int viewportH) {
+    public void render(DrawTarget target, int viewportW, int viewportH) {
         if (theme.drawBackground) {
-            g.setColor(theme.background);
-            g.fillRect(0, 0, viewportW, viewportH);
+            target.fillRect(0, 0, viewportW, viewportH, theme.background);
         }
 
         // Title + subtitle.
         int textW = viewportW - 2 * SIDE_MARGIN;
-        g.setFont(theme.titleFont);
-        g.setColor(theme.title);
-        drawCentered(g, title, viewportW / 2, viewportH / 4, textW, titleBox);
-        g.setFont(theme.subtitleFont);
-        g.setColor(theme.item);
-        drawCentered(g, subtitle, viewportW / 2, viewportH / 4 + 42, textW, subtitleBox);
+        drawCentered(target, title, theme.titleFont, theme.title,
+                viewportW / 2, viewportH / 4, textW, titleBox);
+        drawCentered(target, subtitle, theme.subtitleFont, theme.item,
+                viewportW / 2, viewportH / 4 + 42, textW, subtitleBox);
 
         // Items — scrolled when they overflow the region below the subtitle.
-        g.setFont(theme.itemFont);
-        FontMetrics fm = g.getFontMetrics();
-        int spacing = Math.max(fm.getHeight() + 8, theme.itemSpacing);
+        Font itemFont = theme.itemFont;
+        int itemAscent = target.textAscent(itemFont);
+        int itemHeight = target.textHeight(itemFont);
+        int spacing = Math.max(itemHeight + 8, theme.itemSpacing);
         int regionTop = viewportH / 4 + 84;               // below the subtitle
         int regionBottom = Math.max(regionTop + spacing, viewportH - 56); // above scene hints
         int regionH = regionBottom - regionTop;
@@ -223,7 +225,7 @@ public class Menu {
 
         // Centre the block vertically when it all fits; top-align when scrolling.
         int rowsShown = Math.min(items.size(), visibleCount);
-        int firstY = regionTop + fm.getAscent()
+        int firstY = regionTop + itemAscent
                 + (maxScroll == 0 ? Math.max(0, (regionH - rowsShown * spacing) / 2) : 0);
 
         for (int k = 0; k < items.size(); k++) {
@@ -233,28 +235,30 @@ public class Menu {
             it.x = it.y = it.width = it.height = 0;
             if (k < scroll || k >= scroll + visibleCount) continue;
 
-            String label = UiText.fit(fm, it.text(), viewportW - 2 * ITEM_MARGIN);
-            int tw = fm.stringWidth(label);
+            String label = UiText.fit(target, itemFont, it.text(),
+                    viewportW - 2 * ITEM_MARGIN);
+            int tw = target.textWidth(label, itemFont);
             int x = viewportW / 2 - tw / 2;
             int y = firstY + (k - scroll) * spacing;
 
             it.x = x - 16;
-            it.y = y - fm.getAscent() - 6;
+            it.y = y - itemAscent - 6;
             it.width = tw + 32;
-            it.height = fm.getHeight() + 12;
+            it.height = itemHeight + 12;
 
+            Color color;
             if (!it.enabled) {
-                g.setColor(theme.itemDisabled);
+                color = theme.itemDisabled;
             } else if (k == selected) {
-                g.setColor(theme.itemSelected);
-                g.drawString(">", x - 28, y);
+                color = theme.itemSelected;
+                target.drawText(">", x - 28, y, itemFont, color);
             } else {
-                g.setColor(theme.item);
+                color = theme.item;
             }
-            g.drawString(label, x, y);
+            target.drawText(label, x, y, itemFont, color);
         }
 
-        drawScrollBar(g, viewportW, regionTop, regionBottom);
+        drawScrollBar(target, viewportW, regionTop, regionBottom);
     }
 
     /**
@@ -262,7 +266,8 @@ public class Menu {
      * the thumb to the visible fraction and positioning it by {@link #scroll}.
      * Records the track/thumb boxes for {@link #handleScrollBar} next frame.
      */
-    private void drawScrollBar(Graphics2D g, int viewportW, int regionTop, int regionBottom) {
+    private void drawScrollBar(DrawTarget target, int viewportW,
+                               int regionTop, int regionBottom) {
         scrollTrack.setBounds(0, 0, 0, 0);
         scrollThumb.setBounds(0, 0, 0, 0);
         if (maxScroll <= 0) return; // everything fits; no bar needed
@@ -279,23 +284,23 @@ public class Menu {
         int thumbY = barTop + Math.round((float) scroll / maxScroll * travel);
         scrollThumb.setBounds(barX, thumbY, barW, thumbH);
 
-        g.setColor(new Color(255, 255, 255, 28));
-        g.fillRoundRect(barX, barTop, barW, barH, barW, barW);
-        g.setColor(draggingThumb ? theme.accent : theme.item);
-        g.fillRoundRect(barX, thumbY, barW, thumbH, barW, barW);
+        target.fillRoundRect(barX, barTop, barW, barH, barW, barW, TRACK);
+        target.fillRoundRect(barX, thumbY, barW, thumbH, barW, barW,
+                draggingThumb ? theme.accent : theme.item);
     }
 
     /**
      * Draw {@code s} centred on {@code cx}, shortened to {@code maxW} if it is
      * wider than that, and record where it landed in {@code box}.
      */
-    private void drawCentered(Graphics2D g, String s, int cx, int cy, int maxW, Rectangle box) {
+    private void drawCentered(DrawTarget target, String s, Font font, Color color,
+                              int cx, int cy, int maxW, Rectangle box) {
         box.setBounds(0, 0, 0, 0);
         if (s == null) return;
-        FontMetrics fm = g.getFontMetrics();
-        String shown = UiText.fit(fm, s, maxW);
-        int tw = fm.stringWidth(shown);
-        box.setBounds(cx - tw / 2, cy - fm.getAscent(), tw, fm.getHeight());
-        g.drawString(shown, cx - tw / 2, cy);
+        String shown = UiText.fit(target, font, s, maxW);
+        int tw = target.textWidth(shown, font);
+        box.setBounds(cx - tw / 2, cy - target.textAscent(font), tw,
+                target.textHeight(font));
+        target.drawText(shown, cx - tw / 2, cy, font, color);
     }
 }

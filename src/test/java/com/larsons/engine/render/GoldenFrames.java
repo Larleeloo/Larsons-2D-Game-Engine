@@ -22,7 +22,9 @@ import com.larsons.engine.graphics.ParallaxBackground;
 import com.larsons.engine.graphics.SpriteCanvas;
 import com.larsons.engine.graphics.SurfaceDecorPainter;
 import com.larsons.engine.graphics.TerrainPainter;
+import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.graphics.draw.Java2DTarget;
+import com.larsons.engine.graphics.draw.RecordingTarget;
 import com.larsons.engine.level.Cutscene;
 import com.larsons.engine.level.CutscenePlayer;
 import com.larsons.engine.level.Level;
@@ -111,10 +113,20 @@ public final class GoldenFrames {
     /** One named picture, drawn at a fixed size from fixed inputs. */
     public record Frame(String name, int width, int height, Painter painter) {}
 
-    /** What a frame does with the target it is handed. */
+    /**
+     * What a frame does with the target it is handed.
+     *
+     * <p>{@link DrawTarget}, not {@link Java2DTarget}: as of B2 every painter
+     * in this catalogue draws through the seam and none of them reaches for a
+     * {@code Graphics2D}. That makes the catalogue itself backend-neutral —
+     * the same scenes can be recorded through a {@code RecordingTarget} to
+     * count draw calls, and rendered through a {@code GlTarget} in B8 to
+     * compare pixels. That comparison is the reason this interface is worth
+     * widening now rather than when B8 needs it.
+     */
     @FunctionalInterface
     public interface Painter {
-        void paint(Java2DTarget target);
+        void paint(DrawTarget target);
     }
 
     /**
@@ -225,7 +237,7 @@ public final class GoldenFrames {
     }
 
     /** The world phases in the order {@code PlayScene} runs them. */
-    private static void paintWorld(Java2DTarget target, LevelFormat format) {
+    private static void paintWorld(DrawTarget target, LevelFormat format) {
         Level level = worldLevel(format);
         Camera camera = new Camera(level.perspective, target.width(), target.height());
         camera.tileSize = level.tileSize;
@@ -266,14 +278,13 @@ public final class GoldenFrames {
      * a non-multiple of the 1024px layer width on purpose, so the horizontal
      * tiling seam is inside the frame and a change to the wrap arithmetic shows.
      */
-    private static void paintParallax(Java2DTarget target) {
+    private static void paintParallax(DrawTarget target) {
         ParallaxBackground bg = new ParallaxBackground(new Color(46, 62, 92), SEED);
         target.clear(bg.background().getRGB());
-        bg.render(Java2DTarget.graphicsOf(target), 6210, 400,
-                target.width(), target.height());
+        bg.render(target, 6210, 400, target.width(), target.height());
     }
 
-    private static void paintCutscene(Java2DTarget target) {
+    private static void paintCutscene(DrawTarget target) {
         // No sprite sheets ship with the engine, so both actors resolve to the
         // procedural placeholder figure — which is exactly the path a player
         // without art sees, and the one worth goldening.
@@ -296,12 +307,11 @@ public final class GoldenFrames {
                 target.width(), target.height());
         camera.centerOn(240, 160);
 
-        CutscenePainter.drawActors(Java2DTarget.graphicsOf(target), camera, player);
-        CutscenePainter.drawOverlay(Java2DTarget.graphicsOf(target),
-                target.width(), target.height(), player);
+        CutscenePainter.drawActors(target, camera, player);
+        CutscenePainter.drawOverlay(target, target.width(), target.height(), player);
     }
 
-    private static void paintCraftingPanel(Java2DTarget target) {
+    private static void paintCraftingPanel(DrawTarget target) {
         ItemRegistry items = ItemRegistry.standard();
         Inventory inv = new Inventory(items);
         inv.add("wood", 12);
@@ -309,20 +319,19 @@ public final class GoldenFrames {
         CraftingPanel panel = new CraftingPanel(
                 com.larsons.engine.crafting.Recipe.STATION_CRAFTING,
                 RecipeRegistry.standard(), items);
-        panel.render(Java2DTarget.graphicsOf(target),
-                target.width(), target.height(), inv, CLOCK);
+        panel.render(target, target.width(), target.height(), inv, CLOCK);
     }
 
-    private static void paintCharacterPicker(Java2DTarget target) {
+    private static void paintCharacterPicker(DrawTarget target) {
         List<CharacterProfile> roster = List.of(
                 new CharacterProfile("scout", "Scout"),
                 new CharacterProfile("warden", "Warden"),
                 new CharacterProfile("alchemist", "Alchemist"));
         CharacterPicker picker = new CharacterPicker(roster, "Frostmarch", "warden");
-        picker.render(Java2DTarget.graphicsOf(target), target.width(), target.height());
+        picker.render(target, target.width(), target.height());
     }
 
-    private static void paintMenu(Java2DTarget target) {
+    private static void paintMenu(DrawTarget target) {
         Menu menu = new Menu("Larsons Engine")
                 .subtitle("a rather long subtitle that has to be shortened to fit")
                 .add("Play", () -> {})
@@ -330,12 +339,10 @@ public final class GoldenFrames {
                 .add("Multiplayer", () -> {})
                 .add("Settings", () -> {})
                 .add("Quit", () -> {});
-        menu.render(Java2DTarget.graphicsOf(target), target.width(), target.height());
+        menu.render(target, target.width(), target.height());
     }
 
-    private static void paintAutoSprites(Java2DTarget target) {
-        Graphics2D g = Java2DTarget.graphicsOf(target);
-
+    private static void paintAutoSprites(DrawTarget target) {
         // The baked unit art is most of what AutoSprites is, so the frame draws
         // some of it rather than goldening the two overlay helpers alone.
         int x = 12;
@@ -343,19 +350,19 @@ public final class GoldenFrames {
         // would make the golden fail the day a unit is renamed, which is not a
         // rendering regression.
         for (var def : AutoUnits.roster().subList(0, 3)) {
-            g.drawImage(AutoSprites.unit(def, 56, true), x, 16, null);
-            g.drawImage(AutoSprites.unit(def, 56, false), x, 84, null);
+            target.drawImage(AutoSprites.unit(def, 56, true), x, 16);
+            target.drawImage(AutoSprites.unit(def, 56, false), x, 84);
             x += 64;
         }
 
-        AutoSprites.drawElementPips(g,
+        AutoSprites.drawElementPips(target,
                 List.of(Element.values()[0], Element.values()[1], Element.values()[2]),
                 240, 30, 14);
-        AutoSprites.drawStars(g, 3, 240, 90, 20);
-        AutoSprites.drawStars(g, 2, 240, 140, 14);
+        AutoSprites.drawStars(target, 3, 240, 90, 20);
+        AutoSprites.drawStars(target, 2, 240, 140, 14);
     }
 
-    private static void paintContainerPanel(Java2DTarget target) {
+    private static void paintContainerPanel(DrawTarget target) {
         ItemRegistry items = ItemRegistry.standard();
         Level level = Level.empty("golden", 8, 8, 32);
         level.setTile(2, 2, level.blocks.get("chest").id());
@@ -369,11 +376,10 @@ public final class GoldenFrames {
         // goldening that would golden a blank screen. Run it past OPEN_TIME so
         // the reference is the panel as a player sees it.
         panel.tick(0.5);
-        panel.render(Java2DTarget.graphicsOf(target),
-                target.width(), target.height(), CLOCK);
+        panel.render(target, target.width(), target.height(), CLOCK);
     }
 
-    private static void paintParticles(Java2DTarget target) {
+    private static void paintParticles(DrawTarget target) {
         // Seeded, or every run is a different picture. This is the reason
         // Particles gained a seeded constructor.
         Particles fx = new Particles(SEED);
@@ -386,10 +392,10 @@ public final class GoldenFrames {
                 com.larsons.engine.graphics.Perspective.SIDE_SCROLL,
                 target.width(), target.height());
         camera.centerOn(target.width() / 2.0, target.height() / 2.0);
-        fx.render(Java2DTarget.graphicsOf(target), camera);
+        fx.render(target, camera);
     }
 
-    private static void paintSpriteEditor(Java2DTarget target) {
+    private static void paintSpriteEditor(DrawTarget target) {
         SpriteCanvas canvas = new SpriteCanvas(16, 16);
         // A recognisable pattern, so a pixel that moves is visible rather than
         // hidden in an empty canvas.
@@ -402,10 +408,10 @@ public final class GoldenFrames {
         }
         SpriteEditorPanel panel = new SpriteEditorPanel(
                 "Sprite Editor", "sprites/hero.png", canvas);
-        panel.render(Java2DTarget.graphicsOf(target), target.width(), target.height());
+        panel.render(target, target.width(), target.height());
     }
 
-    private static void paintConfigForm(Java2DTarget target) {
+    private static void paintConfigForm(DrawTarget target) {
         boolean[] fullscreen = {true};
         int[] volume = {70};
         double[] gamma = {1.15};
@@ -418,7 +424,7 @@ public final class GoldenFrames {
         form.addDouble("Gamma", () -> gamma[0], v -> gamma[0] = v, 0.5, 2.0, 0.05);
         form.addText("Level path", () -> name[0], v -> name[0] = v, 64);
         form.addAction("Reset to defaults", () -> {});
-        form.render(Java2DTarget.graphicsOf(target), target.width(), target.height());
+        form.render(target, target.width(), target.height());
     }
 
     /**
@@ -436,7 +442,7 @@ public final class GoldenFrames {
      * out: the overlay prints the machine's core count, so
      * {@code DeviceProfile.detect()} would golden the build agent.
      */
-    private static void paintProfileOverlay(Java2DTarget target) {
+    private static void paintProfileOverlay(DrawTarget target) {
         double[] mean = {2.11, 11.49, 1.04, 3.71, 0.18, 0.00};
         double[] p99 = {15.27, 14.02, 2.20, 9.74, 0.51, 0.00};
         List<FrameProfiler.Stats> stages = new ArrayList<>();
@@ -455,10 +461,10 @@ public final class GoldenFrames {
         DeviceProfile device = new DeviceProfile("Mac OS X", "14.4", "aarch64", 8,
                 4096, "21.0.10", "Eclipse Adoptium", "Metal", 2560, 1600, 60, 2.0);
 
-        ProfileOverlay.draw(Java2DTarget.graphicsOf(target), snapshot, device, 58.0);
+        ProfileOverlay.draw(target, snapshot, device, 58.0);
     }
 
-    private static void paintMiniGameHud(Java2DTarget target) {
+    private static void paintMiniGameHud(DrawTarget target) {
         Level level = Level.empty("golden", 12, 9, 32);
         Block grass = level.blocks.get("grass");
         for (int col = 0; col < level.width; col++) {
@@ -478,9 +484,26 @@ public final class GoldenFrames {
         view.flags.add(new MiniGameView.FlagView(0, 0, 2 * 32, 5 * 32, -1));
         view.flags.add(new MiniGameView.FlagView(1, 1, 9 * 32, 5 * 32, 0));
 
-        Graphics2D g = Java2DTarget.graphicsOf(target);
-        MiniGameHudAccess.drawWorld(g, camera, level, view, CLOCK);
-        MiniGameHudAccess.drawHud(g, target.width(), target.height(), view, 0);
+        MiniGameHudAccess.drawWorld(target, camera, level, view, CLOCK);
+        MiniGameHudAccess.drawHud(target, target.width(), target.height(), view, 0);
+    }
+
+    /**
+     * The same frame recorded rather than rasterised, so its draw calls can be
+     * counted.
+     *
+     * <p>This is the instrument the whole GPU case rests on: a frame of ten
+     * thousand operations that collapse into thirty batches is a frame a GL
+     * backend transforms, and one that collapses into eight thousand is a
+     * frame that needs its art atlasing first (B5). Having it here, over the
+     * same fixed scenes as the pixel comparison, means the before-and-after
+     * numbers B5 has to publish come from scenes that cannot drift between the
+     * two measurements.
+     */
+    public static RecordingTarget record(Frame frame) {
+        RecordingTarget target = new RecordingTarget(frame.width(), frame.height());
+        frame.painter().paint(target);
+        return target;
     }
 
     // --- environment fingerprint ----------------------------------------------
