@@ -30,12 +30,26 @@ public final class DrawStats {
 
     /** What makes two consecutive operations mergeable into one draw call. */
     public enum Kind {
-        /** Solid-colour geometry: rectangles, ovals, polygons, lines. */
+        /** Solid-colour geometry: rectangles, ovals, arcs, polygons, lines. */
         SHAPE,
         /** Textured geometry; batches only with the same source image. */
         IMAGE,
         /** Glyph quads; batches only within one font's atlas. */
         TEXT,
+        /**
+         * A gradient fill — its own kind because it never merges with
+         * anything, including the next gradient.
+         *
+         * <p>Counting these as {@link #SHAPE} would be the comfortable choice
+         * and the wrong one. A flat shape is a quad in the shared batch; a
+         * gradient is a distinct paint, and on a GL backend either its own
+         * shader or its own generated texture. Folding them in would let a
+         * screen of eighteen gradients report a merge ratio it could never
+         * achieve, and the merge ratio is the single number the whole GPU case
+         * rests on (B5). An instrument that flatters the thing it measures is
+         * worse than no instrument.
+         */
+        GRADIENT,
         /** Clip, alpha or transform changes — always break a batch. */
         STATE
     }
@@ -45,6 +59,7 @@ public final class DrawStats {
     private int shapes;
     private int images;
     private int glyphs;
+    private int gradients;
     private int stateChanges;
 
     private Kind lastKind;
@@ -57,11 +72,14 @@ public final class DrawStats {
             case SHAPE -> shapes++;
             case IMAGE -> images++;
             case TEXT -> glyphs++;
+            case GRADIENT -> gradients++;
             case STATE -> stateChanges++;
         }
-        // State changes break the run outright; otherwise a matching kind and
-        // key extends the batch a real backend would already have open.
-        if (kind == Kind.STATE) {
+        // State changes break the run outright, and so does a gradient — it
+        // cannot join the batch before it and nothing can join it. Otherwise a
+        // matching kind and key extends the batch a real backend would already
+        // have open.
+        if (kind == Kind.STATE || kind == Kind.GRADIENT) {
             batches++;
             lastKind = null;
             lastKey = null;
@@ -86,6 +104,7 @@ public final class DrawStats {
         shapes = 0;
         images = 0;
         glyphs = 0;
+        gradients = 0;
         stateChanges = 0;
         lastKind = null;
         lastKey = null;
@@ -105,6 +124,9 @@ public final class DrawStats {
     public int images() { return images; }
 
     public int glyphs() { return glyphs; }
+
+    /** Gradient fills — each one its own batch. See {@link Kind#GRADIENT}. */
+    public int gradients() { return gradients; }
 
     public int stateChanges() { return stateChanges; }
 
@@ -126,14 +148,16 @@ public final class DrawStats {
         copy.shapes = shapes;
         copy.images = images;
         copy.glyphs = glyphs;
+        copy.gradients = gradients;
         copy.stateChanges = stateChanges;
         return copy;
     }
 
     @Override
     public String toString() {
-        return "%d ops -> %d batches (%.1fx): %d shape, %d image, %d text, %d state"
-                .formatted(operations, batches, mergeRatio(),
-                        shapes, images, glyphs, stateChanges);
+        return ("%d ops -> %d batches (%.1fx): %d shape, %d image, %d text, "
+                + "%d gradient, %d state")
+                .formatted(operations, batches, mergeRatio(), shapes, images,
+                        glyphs, gradients, stateChanges);
     }
 }

@@ -25,11 +25,20 @@ import java.awt.image.BufferedImage;
  * state change. Painters written against this interface do not know or care
  * which they are talking to.
  *
- * <p><b>Deliberately small.</b> Fourteen verbs, chosen by counting what the
- * engine really calls rather than by mirroring Graphics2D. A wide surface is a
- * wide GL backend, and every verb added here is a verb that has to be batched,
- * tested and kept consistent across backends. Anything expressible as a
- * combination of these is left to the caller.
+ * <p><b>Deliberately small, and sized by measurement.</b> The verbs here were
+ * chosen by counting what the engine really calls rather than by mirroring
+ * Graphics2D. A wide surface is a wide GL backend, and every verb added is a
+ * verb that has to be batched, tested and kept consistent across backends.
+ * Anything expressible as a combination of these is left to the caller.
+ *
+ * <p>The first cut covered what the <em>world</em> draws. The UI draws
+ * different things, so B1 counted those too and added exactly what the count
+ * demanded: rounded rectangles (161 fills, 82 outlines — the most-used shape
+ * in the engine), arcs (32 sites, all cooldown rings and radial meters),
+ * gradients (12 linear, 6 radial), and dashed lines. Nothing was added on the
+ * grounds that a drawing API "ought to" have it. Two things the audit
+ * explicitly declined to add are recorded on {@link #drawDashedLine} (caps and
+ * joins) and in {@link #pushAlpha} (non-{@code SRC_OVER} composites).
  *
  * <p><b>Integer coordinates.</b> The call sites this replaces are integer
  * pixel work, and matching them exactly is what lets the Java2D
@@ -74,12 +83,86 @@ public interface DrawTarget {
         fillRect(x, y, w, h, color.getRGB());
     }
 
+    /**
+     * Rounded rectangle, as {@code Graphics2D.fillRoundRect}. {@code arcW} and
+     * {@code arcH} are the full width and height of the corner ellipse, not
+     * its radius — the same convention Graphics2D uses, so a ported call site
+     * keeps its numbers.
+     *
+     * <p>The most-called shape in the UI by a distance: 161 sites, against 82
+     * for its outline and none at all in the world painters. Panels, buttons,
+     * slots, tooltips and cards are all this one verb.
+     */
+    void fillRoundRect(int x, int y, int w, int h, int arcW, int arcH, int argb);
+
+    default void fillRoundRect(int x, int y, int w, int h, int arcW, int arcH, Color color) {
+        fillRoundRect(x, y, w, h, arcW, arcH, color.getRGB());
+    }
+
     /** Filled ellipse inscribed in the given box, as {@code Graphics2D.fillOval}. */
     void fillOval(int x, int y, int w, int h, int argb);
 
     default void fillOval(int x, int y, int w, int h, Color color) {
         fillOval(x, y, w, h, color.getRGB());
     }
+
+    /**
+     * Filled pie slice of the ellipse inscribed in the given box, as
+     * {@code Graphics2D.fillArc}: {@code startDeg} measured from three
+     * o'clock, {@code arcDeg} sweeping counter-clockwise.
+     *
+     * <p><b>Why an arc is a real verb and not a polygon fan.</b> There are
+     * only 32 arc sites and every one of them is a UI element — a cooldown
+     * ring, a radial meter. Emulating them with polygons antialiases visibly
+     * differently along the curve, which is exactly the "nothing changed
+     * except everything looks slightly wrong" that the golden frames exist to
+     * catch and that is miserable to chase afterwards. A GL backend
+     * tessellates this itself, with a segment count scaled by the on-screen
+     * radius, where it has the size to scale by.
+     */
+    void fillArc(int x, int y, int w, int h, int startDeg, int arcDeg, int argb);
+
+    default void fillArc(int x, int y, int w, int h, int startDeg, int arcDeg, Color color) {
+        fillArc(x, y, w, h, startDeg, arcDeg, color.getRGB());
+    }
+
+    // --- gradients -------------------------------------------------------------
+
+    /**
+     * Fill {@code (x, y, w, h)} with a linear ramp running from
+     * {@code (x0, y0)} to {@code (x1, y1)}, in the same coordinate space as
+     * the rectangle. Beyond either end the ramp holds its end colour, matching
+     * a non-cyclic {@code GradientPaint}.
+     *
+     * <p>Every site is a full-viewport or full-panel backdrop, which is why
+     * this takes a rectangle rather than an arbitrary shape: a gradient over a
+     * general path would mean either a stencil pass or a per-pixel shader on
+     * the GL backend, to serve zero call sites.
+     */
+    void fillLinearGradient(int x, int y, int w, int h,
+                            int x0, int y0, int argb0,
+                            int x1, int y1, int argb1);
+
+    default void fillLinearGradient(int x, int y, int w, int h,
+                                    int x0, int y0, Color c0,
+                                    int x1, int y1, Color c1) {
+        fillLinearGradient(x, y, w, h, x0, y0, c0.getRGB(), x1, y1, c1.getRGB());
+    }
+
+    /**
+     * Fill the disc of {@code radius} about {@code (cx, cy)} with a radial
+     * ramp. {@code fractions} are distances from the centre in [0,1], strictly
+     * increasing, and {@code argbStops} is the colour at each — the argument
+     * order and semantics of {@code RadialGradientPaint}, one array per
+     * concept rather than a paint object, because this is called per item per
+     * frame and a paint per call is a paint per frame per item.
+     *
+     * <p>The two arrays must be the same length. Every current site is a
+     * rarity halo: opaque tint at the centre falling to fully transparent at
+     * the rim, which is why the disc rather than a bounding box is the filled
+     * region — the corners are always transparent anyway.
+     */
+    void fillRadialGradient(int cx, int cy, int radius, float[] fractions, int[] argbStops);
 
     /**
      * Filled polygon over the first {@code count} points. The arrays may be
@@ -123,10 +206,26 @@ public interface DrawTarget {
         drawRect(x, y, w, h, color.getRGB(), 1f);
     }
 
+    /** Outline of {@link #fillRoundRect}, with the same corner convention. */
+    void drawRoundRect(int x, int y, int w, int h, int arcW, int arcH,
+                       int argb, float thickness);
+
+    default void drawRoundRect(int x, int y, int w, int h, int arcW, int arcH, Color color) {
+        drawRoundRect(x, y, w, h, arcW, arcH, color.getRGB(), 1f);
+    }
+
     void drawOval(int x, int y, int w, int h, int argb, float thickness);
 
     default void drawOval(int x, int y, int w, int h, Color color) {
         drawOval(x, y, w, h, color.getRGB(), 1f);
+    }
+
+    /** Outline of {@link #fillArc} — the curve alone, not the two radii. */
+    void drawArc(int x, int y, int w, int h, int startDeg, int arcDeg,
+                 int argb, float thickness);
+
+    default void drawArc(int x, int y, int w, int h, int startDeg, int arcDeg, Color color) {
+        drawArc(x, y, w, h, startDeg, arcDeg, color.getRGB(), 1f);
     }
 
     void drawPolygon(int[] xs, int[] ys, int count, int argb, float thickness);
@@ -139,6 +238,31 @@ public interface DrawTarget {
 
     default void drawLine(int x1, int y1, int x2, int y2, Color color) {
         drawLine(x1, y1, x2, y2, color.getRGB(), 1f);
+    }
+
+    /**
+     * A line broken into {@code dash}-long marks separated by {@code gap}-long
+     * spaces, with round caps and joins.
+     *
+     * <p><b>Why this exists and caps/joins do not.</b> The stroke audit for
+     * this step went through all 135 {@code setStroke} sites. Every one is
+     * either a plain width — already covered by the {@code thickness} argument
+     * the outline verbs take — or a dash pattern, and every dash site also
+     * asks for round caps, because a dash with butt caps reads as a different
+     * decoration entirely. So caps and joins get no member of their own: there
+     * is no site that varies them independently, and a knob nothing turns is a
+     * knob both backends have to implement and test for nobody.
+     *
+     * <p>Rounded ends are therefore part of what this verb <em>is</em>, not a
+     * default that might change. A GL backend emits one quad per mark with a
+     * semicircle at each end; nothing has to know about {@code BasicStroke}.
+     */
+    void drawDashedLine(int x1, int y1, int x2, int y2, int argb,
+                        float thickness, float dash, float gap);
+
+    default void drawDashedLine(int x1, int y1, int x2, int y2, Color color,
+                                float thickness, float dash, float gap) {
+        drawDashedLine(x1, y1, x2, y2, color.getRGB(), thickness, dash, gap);
     }
 
     // --- images ----------------------------------------------------------------
@@ -209,6 +333,19 @@ public interface DrawTarget {
     /**
      * Multiply everything drawn until the matching {@link #popAlpha()} by
      * {@code alpha} in [0,1].
+     *
+     * <p><b>This is the whole of the engine's compositing.</b> B1's composite
+     * audit walked all 28 {@code setComposite} sites: 24 are
+     * {@code AlphaComposite.SRC_OVER} with an alpha, which is exactly this,
+     * and the only two that are not — {@code AlphaComposite.Clear} in
+     * {@code TerrainCache} and {@code EntitySprites} — are punching
+     * transparent holes in an image being <em>baked</em> with
+     * {@code createGraphics()}, not drawn to a frame. Baking is Java2D by
+     * definition and stays that way, so no destination-modifying blend mode
+     * has to cross this interface. That matters more than it sounds: a GL
+     * backend implements this as a multiply into the vertex colour, which
+     * costs nothing and does not break the batch, whereas {@code CLEAR} or
+     * {@code DST_OUT} would mean a blend-state change and a flush per push.
      */
     void pushAlpha(float alpha);
 

@@ -7,10 +7,14 @@ import java.awt.Composite;
 import java.awt.Font;
 import java.awt.FontMetrics;
 import java.awt.Graphics2D;
+import java.awt.GradientPaint;
+import java.awt.Paint;
+import java.awt.RadialGradientPaint;
 import java.awt.Rectangle;
 import java.awt.Shape;
 import java.awt.Stroke;
 import java.awt.geom.AffineTransform;
+import java.awt.geom.Point2D;
 import java.awt.image.BufferedImage;
 import java.util.ArrayDeque;
 import java.util.Deque;
@@ -124,10 +128,24 @@ public final class Java2DTarget implements DrawTarget {
     }
 
     @Override
+    public void fillRoundRect(int x, int y, int w, int h, int arcW, int arcH, int argb) {
+        stats.record(DrawStats.Kind.SHAPE, null);
+        g.setColor(new Color(argb, true));
+        g.fillRoundRect(x, y, w, h, arcW, arcH);
+    }
+
+    @Override
     public void fillOval(int x, int y, int w, int h, int argb) {
         stats.record(DrawStats.Kind.SHAPE, null);
         g.setColor(new Color(argb, true));
         g.fillOval(x, y, w, h);
+    }
+
+    @Override
+    public void fillArc(int x, int y, int w, int h, int startDeg, int arcDeg, int argb) {
+        stats.record(DrawStats.Kind.SHAPE, null);
+        g.setColor(new Color(argb, true));
+        g.fillArc(x, y, w, h, startDeg, arcDeg);
     }
 
     @Override
@@ -156,11 +174,29 @@ public final class Java2DTarget implements DrawTarget {
     }
 
     @Override
+    public void drawRoundRect(int x, int y, int w, int h, int arcW, int arcH,
+                              int argb, float thickness) {
+        stats.record(DrawStats.Kind.SHAPE, null);
+        g.setColor(new Color(argb, true));
+        applyStroke(thickness);
+        g.drawRoundRect(x, y, w, h, arcW, arcH);
+    }
+
+    @Override
     public void drawOval(int x, int y, int w, int h, int argb, float thickness) {
         stats.record(DrawStats.Kind.SHAPE, null);
         g.setColor(new Color(argb, true));
         applyStroke(thickness);
         g.drawOval(x, y, w, h);
+    }
+
+    @Override
+    public void drawArc(int x, int y, int w, int h, int startDeg, int arcDeg,
+                        int argb, float thickness) {
+        stats.record(DrawStats.Kind.SHAPE, null);
+        g.setColor(new Color(argb, true));
+        applyStroke(thickness);
+        g.drawArc(x, y, w, h, startDeg, arcDeg);
     }
 
     @Override
@@ -177,6 +213,54 @@ public final class Java2DTarget implements DrawTarget {
         g.setColor(new Color(argb, true));
         applyStroke(thickness);
         g.drawLine(x1, y1, x2, y2);
+    }
+
+    @Override
+    public void drawDashedLine(int x1, int y1, int x2, int y2, int argb,
+                               float thickness, float dash, float gap) {
+        stats.record(DrawStats.Kind.SHAPE, null);
+        g.setColor(new Color(argb, true));
+        // Not routed through applyStroke: that caches on width alone, and a
+        // dashed stroke and a plain one of the same width are different
+        // strokes. Caching them together would draw a dashed line solid, or
+        // the next solid line dashed, depending on which came first — and
+        // both look like a painter bug rather than a cache bug.
+        g.setStroke(new BasicStroke(Math.max(0.01f, thickness),
+                BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 0f,
+                new float[]{Math.max(0.01f, dash), Math.max(0.01f, gap)}, 0f));
+        g.drawLine(x1, y1, x2, y2);
+        // The cached plain stroke is no longer what Graphics2D holds.
+        stroke = null;
+        strokeWidth = -1;
+    }
+
+    // --- gradients -------------------------------------------------------------
+
+    @Override
+    public void fillLinearGradient(int x, int y, int w, int h,
+                                   int x0, int y0, int argb0,
+                                   int x1, int y1, int argb1) {
+        stats.record(DrawStats.Kind.GRADIENT, null);
+        Paint previous = g.getPaint();
+        g.setPaint(new GradientPaint(x0, y0, new Color(argb0, true),
+                x1, y1, new Color(argb1, true)));
+        g.fillRect(x, y, w, h);
+        g.setPaint(previous);
+    }
+
+    @Override
+    public void fillRadialGradient(int cx, int cy, int radius,
+                                   float[] fractions, int[] argbStops) {
+        if (radius < 1 || fractions.length == 0
+                || fractions.length != argbStops.length) return;
+        stats.record(DrawStats.Kind.GRADIENT, null);
+        Color[] colors = new Color[argbStops.length];
+        for (int i = 0; i < argbStops.length; i++) colors[i] = new Color(argbStops[i], true);
+        Paint previous = g.getPaint();
+        g.setPaint(new RadialGradientPaint(
+                new Point2D.Float(cx, cy), radius, fractions, colors));
+        g.fillOval(cx - radius, cy - radius, radius * 2, radius * 2);
+        g.setPaint(previous);
     }
 
     /** Only build a {@link BasicStroke} when the width actually changed. */

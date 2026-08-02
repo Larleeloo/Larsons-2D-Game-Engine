@@ -233,6 +233,79 @@ resulting pixels. Suite green.
 
 **Done when.** No planned UI port needs a Java2D call `DrawTarget` cannot express.
 
+#### B1 — done
+
+Seven members added, in `DrawTarget`, `Java2DTarget` and `RecordingTarget`:
+
+| Member | Serves |
+|--------|--------|
+| `fillRoundRect(x, y, w, h, arcW, arcH, argb)` | 161 sites |
+| `drawRoundRect(..., thickness)` | 82 sites |
+| `fillArc(x, y, w, h, startDeg, arcDeg, argb)` | 15 sites |
+| `drawArc(..., thickness)` | 17 sites |
+| `fillLinearGradient(x, y, w, h, x0, y0, argb0, x1, y1, argb1)` | 3 render-time sites |
+| `fillRadialGradient(cx, cy, radius, float[] fractions, int[] argbStops)` | 3 sites |
+| `drawDashedLine(x1, y1, x2, y2, argb, thickness, dash, gap)` | the stroke audit's finding, below |
+
+Member count is **26 → 33** abstract methods, plus 16 `Color` convenience
+overloads. (This document previously said 22 → 29; that count treated the four
+`drawImage` overloads as one verb. Either basis, seven were added.)
+
+`DrawStats.Kind` gained **`GRADIENT`**, and a gradient breaks the batch on both
+sides like a state change does. Counting gradients as `SHAPE` would have been
+the comfortable choice and the wrong one: a gradient is a distinct paint, and
+on GL either its own shader or its own generated texture, so folding it in
+would let a screen of gradients report a merge ratio it can never achieve.
+The merge ratio is the number the whole GPU case rests on (B5) and an
+instrument that flatters what it measures is worse than none.
+
+**The composite audit — all 28 `setComposite` sites.**
+
+| Composite | Sites | Decision |
+|-----------|-------|----------|
+| `AlphaComposite.SRC_OVER` with an alpha | 24 (12 set / 12 restore) | Already covered by `pushAlpha`/`popAlpha`. No change. |
+| `AlphaComposite.Clear` | 2 — `TerrainCache:396`, `EntitySprites:185` | **Not supported, and correctly so.** Both punch transparent holes in an image being *baked* through `createGraphics()`, not drawn to a frame. Baking is Java2D by definition (Appendix A) and stays that way. |
+| The `Java2DTarget` implementation itself | 2 | n/a |
+
+No `SRC`, no `DST_OUT`, no destination-modifying blend of any kind reaches a
+frame. This is a better result than the step expected and it matters for B8:
+`pushAlpha` becomes a multiply into the vertex colour, which costs nothing and
+does not break the batch, where `CLEAR` would have meant a blend-state change
+and a flush per push.
+
+**The stroke audit — all 135 `setStroke` / 164 `BasicStroke` sites.**
+
+Every site is one of exactly two things: a plain width, or a dash pattern.
+
+- *Plain widths* — already covered by the `thickness` argument the outline
+  verbs take. No change.
+- *Dashes* — three sites: `MiniGameHud:128` and `CreativeScene:5992` (both the
+  escort waypoint path, `{8, 8}`) and `CreativeScene:7403` (`{5, 5}`, inside
+  `waypointIcon()`, which bakes a `BufferedImage` and so stays Java2D). Two
+  render-time sites, hence `drawDashedLine`.
+- *Caps and joins* — **deliberately given no member.** Every render-time site
+  that sets `CAP_ROUND`/`JOIN_ROUND` also sets a dash pattern, because a dash
+  with butt caps reads as a different decoration; there is no site anywhere
+  that varies caps independently of dashing. Round ends are therefore part of
+  what `drawDashedLine` *is*, not a default. Every remaining `CAP_`/`JOIN_`
+  use — `AutoSprites`, `EntitySprites`, `CreativeScene:7403` — is inside a
+  `createGraphics()` bake. A knob nothing turns is a knob both backends must
+  implement and test for nobody.
+
+**Verified.** Seven new `DrawTargetTest` tests, each asserting the recorded
+command *and* the resulting pixels — the recording half catches a painter
+calling the wrong verb, the pixel half catches a backend implementing it
+wrongly, and neither catches the other's failure. Two are shaped by what
+actually goes wrong rather than by the happy path: the arc test asserts the
+left half of a 90°–270° sweep is lit and the right half is not (which is what
+catches an implementation measuring angles clockwise), and
+`aDashedLineDoesNotLeaveTheNextPlainLineDashed` covers a real bug the stroke
+cache would otherwise have had — it keys on width alone, so a dashed and a
+plain stroke of the same width collided.
+
+Suite: **834 tests, 0 failures, 10 skipped**. Goldens unchanged at 0.00, as a
+step that adds members and ports nothing must leave them.
+
 ---
 
 ### B2 — Port the shared painters and UI widgets
@@ -930,8 +1003,8 @@ Counts from `src/main/java`, 2026-08-02, commit `85196b9`.
 | `drawString` sites | 350 |
 | `drawImage` sites | 95 |
 | Files naming `BufferedImage` | 34 |
-| `DrawTarget` members today | 22 |
-| `DrawTarget` members after B1 | 29 |
+| `DrawTarget` members today | 26 abstract (22 verbs, counting `drawImage`'s four overloads as one) |
+| `DrawTarget` members after B1 | 33 abstract (26 before), + 16 `Color` overloads |
 
 Of the 29 non-demo files naming `Graphics2D`, these should still name it after
 B4 and are **not** migration targets: `Java2DTarget`, `Java2DRenderer`,
