@@ -451,15 +451,37 @@ The per-frame path is
 
    So this worry was unfounded. The remaining risk in this appendix is item 2,
    which is about *behaviour*, not syntax, and is untouched by compiling.
-2. **Parity is not guaranteed and cannot be checked.** `BloomPass` states in its
-   own javadoc that the GLSL form is "a single-shader ring-sampled
-   approximation" of the multi-stage CPU bloom. No test could catch drift
-   anywhere else, because there's no GLSL execution to compare against.
-3. **The roadmap's GPU backend is not a cheap port.** The README implies the
-   shader library "needs no changes, by design." The *interfaces* are indeed
-   ready — genuinely good design — but the shader sources themselves have never
-   been compiled by anything. Budget debugging time for every pass, and add a
-   `glslang` validation step to CI before relying on any of it.
+2. **~~Parity is not guaranteed and cannot be checked.~~ Checked 2026-08-02 —
+   and it holds.** `ShaderParityTest` runs each pass both ways over the same
+   frame and compares every channel of every pixel. Mean absolute channel
+   error, out of 255:
+
+   | pass | error |
+   |------|-------|
+   | pixelate, wave, chromatic_aberration, color_grade, invert | **0.00** |
+   | scanlines | 0.04 |
+   | vignette | 0.32 |
+   | grayscale | 0.47 |
+   | bloom | 3.58 |
+
+   So eight of the nine are the same picture to within rounding, and bloom —
+   the one that says in its own javadoc it is an approximation — is much
+   closer than that wording suggests. There is no hidden drift. The suite also
+   checks that `uStrength` at zero returns every frame untouched, which is the
+   cheapest way to catch a uniform that never reaches its shader.
+3. **~~The roadmap's GPU backend is not a cheap port.~~ Revised.** This
+   followed from items 1 and 2, and both have since been answered: every
+   shader compiles on a real driver, and every one behaves like its CPU twin.
+   The "budget debugging time for every pass" warning has been spent and cost
+   nothing. Better than a `glslang` step, CI now compiles and *executes* the
+   shaders, which is a stronger check than syntax validation.
+
+   What remains for a GPU backend is therefore the part that was never in
+   doubt: the plumbing. A context, a framebuffer, ping-pong between two
+   textures, and the uniform binding — all of which
+   `src/test/java/com/larsons/engine/GlShaderHarness.java` already does, in
+   about two hundred lines, because parity testing needed exactly the same
+   machinery. That harness is the shape of the backend.
 
 None of this is a defect in the CPU pipeline, which works. The architecture is
 sound and the port target is real. It is simply less finished than the
