@@ -146,7 +146,15 @@ public interface DrawTarget {
     /** Draw {@code image} at its natural size with its top-left at {@code (x, y)}. */
     void drawImage(BufferedImage image, int x, int y);
 
-    /** Draw {@code image} scaled into the given box. */
+    /**
+     * Draw {@code image} scaled into the given box.
+     *
+     * <p><b>A negative width or height mirrors it</b> about that axis, with
+     * {@code (x, y)} still the corner the box is measured from — the idiom the
+     * engine already uses to face a sprite the other way from one sheet. Free
+     * on both backends: Java2D accepts it directly, and a GPU backend swaps the
+     * quad's texture coordinates.
+     */
     void drawImage(BufferedImage image, int x, int y, int w, int h);
 
     /**

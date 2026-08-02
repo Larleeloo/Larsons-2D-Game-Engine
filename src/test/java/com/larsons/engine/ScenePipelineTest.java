@@ -70,6 +70,21 @@ class ScenePipelineTest {
     }
 
     @Test
+    void entitiesReachTheFrameTargetToo() {
+        // Entities were the largest steady cost left in the scene (around
+        // 4 ms) and drew straight at Graphics2D, so they contributed nothing to
+        // the frame's draw count and a GPU backend could not have served them.
+        // A scene with mobs, drops and projectiles in it must now leave image
+        // operations on the target.
+        DrawStats stats = renderFrames("play-ish", new CreativeScene(
+                new GameContext(null, new GameTypeStore())), 30);
+
+        assertTrue(stats.images() > 0,
+                "no textured draws reached the frame target — sprites are still "
+                        + "bypassing it, and the merge ratio is measuring terrain alone");
+    }
+
+    @Test
     void theFrameTargetSeesImagesOnceTerrainIsCached() {
         // The baked floor arrives as blits rather than per-cell fills, so a
         // cached scene should be issuing image operations.

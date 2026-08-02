@@ -1889,6 +1889,16 @@ public class PlayScene extends AbstractScene {
         ctx.applyLiveSettings();
     }
 
+    // Entity overlay colours, built once rather than per mob per frame.
+    private static final Color HURT_TINT = new Color(255, 60, 60, 90);
+    private static final Color BURNING_TINT = new Color(255, 130, 40, 70);
+    private static final Color CHILLED_TINT = new Color(120, 200, 255, 80);
+    private static final Color POISONED_TINT = new Color(120, 210, 80, 65);
+    private static final Color SHIELD_RING = new Color(120, 230, 255, 180);
+    private static final Color HEALTH_BACK = new Color(0, 0, 0, 150);
+    private static final Color HEALTH_FILL = new Color(90, 220, 90);
+    private static final Color DROP_SHADOW = new Color(0, 0, 0, 70);
+
     /** This frame's draw target, set at the top of {@link #render}. */
     private DrawTarget frameTarget;
 
@@ -1960,7 +1970,7 @@ public class PlayScene extends AbstractScene {
         if (p.gridVisible) drawGrid(g); // projects to a diamond lattice in isometric
         if (!sceneryBehind) phase("decor", () -> drawDecorLayer(g, false, standing));
         drawDoors(g);
-        phase("entities", () -> drawWorldEntities(g, p, standing));
+        phase("entities", () -> drawWorldEntities(target, p, standing));
         if (mgView != null) MiniGameHud.drawWorld(g, camera, level, mgView, animClock);
         if (net != null) drawRemotePlayers(g, standing);
         if (mgView != null) {
@@ -2570,28 +2580,28 @@ public class PlayScene extends AbstractScene {
     }
 
     /** Mobs + items + projectiles + vehicles: the offline world's, or the snapshot's. */
-    private void drawWorldEntities(Graphics2D g, GameProfile p, DepthPass into) {
+    private void drawWorldEntities(DrawTarget target, GameProfile p, DepthPass into) {
         if (net == null) {
             for (Vehicle v : world.vehicles()) {
                 into.at(footDepth(v.x, v.y, v.def.size()), () ->
-                        drawVehicleSprite(g, v.def, v.x, v.y, v.facingLeft));
+                        drawVehicleSprite(target, v.def, v.x, v.y, v.facingLeft));
             }
             for (DroppedItem item : world.items()) {
                 into.at(footDepth(item.x, item.y, DroppedItem.SIZE), () ->
-                        drawItemSprite(g, item.key, item.x, item.y, item.count));
+                        drawItemSprite(target, item.key, item.x, item.y, item.count));
             }
             for (Mob m : world.mobs()) {
                 // A mob mid-move draws that move, on its weapon's own sheets.
                 String state = m.meleeAction().isEmpty()
                         ? stateKeyFor(m.state.ordinal(), m.hurting()) : m.meleeAction();
                 into.at(footDepth(m.x, m.y, m.def.size()), () ->
-                        drawMobSprite(g, m.def, m.x, m.y, m.facing, m.health, m.hurting(),
+                        drawMobSprite(target, m.def, m.x, m.y, m.facing, m.health, m.hurting(),
                                 state, m.statusBits(), m.weaponKey(),
                                 m.melee.action(), m.meleeProgress()));
             }
             for (Projectile pr : world.projectiles()) {
                 into.at(footDepth(pr.x, pr.y, 0), () ->
-                        drawProjectileSprite(g, pr.def.key(), pr.x, pr.y, pr.z, pr.vx, pr.vy));
+                        drawProjectileSprite(target, pr.def.key(), pr.x, pr.y, pr.z, pr.vx, pr.vy));
             }
         } else {
             // Replicated entities interpolate between the two buffered
@@ -2613,13 +2623,13 @@ public class PlayScene extends AbstractScene {
                 if (def != null) {
                     double vx = lerpX(old.get(v.id), v, t), vy = lerpY(old.get(v.id), v, t);
                     into.at(footDepth(vx, vy, def.size()), () ->
-                            drawVehicleSprite(g, def, vx, vy, v.facingLeft));
+                            drawVehicleSprite(target, def, vx, vy, v.facingLeft));
                 }
             }
             if (predictedVehicle != null) {
                 into.at(footDepth(predictedVehicle.x, predictedVehicle.y,
                         predictedVehicle.def.size()), () ->
-                        drawVehicleSprite(g, predictedVehicle.def, predictedVehicle.x,
+                        drawVehicleSprite(target, predictedVehicle.def, predictedVehicle.x,
                                 predictedVehicle.y, predictedVehicle.facingLeft));
             }
             old = viewsById(from.items());
@@ -2627,7 +2637,7 @@ public class PlayScene extends AbstractScene {
                 double ix = lerpX(old.get(item.id), item, t);
                 double iy = lerpY(old.get(item.id), item, t);
                 into.at(footDepth(ix, iy, DroppedItem.SIZE), () ->
-                        drawItemSprite(g, item.key, ix, iy, item.count));
+                        drawItemSprite(target, item.key, ix, iy, item.count));
             }
             MobRegistry mobs = MobRegistry.standard();
             old = viewsById(from.mobs());
@@ -2642,7 +2652,7 @@ public class PlayScene extends AbstractScene {
                             ? stateKeyFor(mv.aiState, false) : mv.meleeAction;
                     MeleeAction move = MeleeAction.byKey(mv.meleeAction);
                     into.at(footDepth(mx, my, def.size()), () ->
-                            drawMobSprite(g, def, mx, my, mv.facing, mv.health, false,
+                            drawMobSprite(target, def, mx, my, mv.facing, mv.health, false,
                                     state, mv.status, mv.weapon, move, mv.meleeProgress));
                 }
             }
@@ -2650,7 +2660,7 @@ public class PlayScene extends AbstractScene {
             for (EntityView s : to.shots()) {
                 double sx = lerpX(old.get(s.id), s, t), sy = lerpY(old.get(s.id), s, t);
                 into.at(footDepth(sx, sy, 0), () ->
-                        drawProjectileSprite(g, s.key, sx, sy, s.z, s.vx, s.vy));
+                        drawProjectileSprite(target, s.key, sx, sy, s.z, s.vx, s.vy));
             }
         }
     }
@@ -2671,7 +2681,7 @@ public class PlayScene extends AbstractScene {
     }
 
     /** A vehicle, flipped to its facing like mobs are. */
-    private void drawVehicleSprite(Graphics2D g, VehicleDef def, double x, double y,
+    private void drawVehicleSprite(DrawTarget target, VehicleDef def, double x, double y,
                                    boolean facingLeft) {
         BufferedImage img = Skins.frame("vehicle/" + def.key(), animClock);
         if (img == null) img = EntitySprites.vehicle(def, 48);
@@ -2679,11 +2689,9 @@ public class PlayScene extends AbstractScene {
         camera.worldToScreen(x + def.size() / 2, y + def.size(), corner);
         int dx = corner[0] - w / 2;
         int dy = corner[1] - w;
-        if (facingLeft) {
-            g.drawImage(img, dx + w, dy, -w, w, null);
-        } else {
-            g.drawImage(img, dx, dy, w, w, null);
-        }
+        // Negative width mirrors; see DrawTarget.drawImage.
+        if (facingLeft) target.drawImage(img, dx + w, dy, -w, w);
+        else target.drawImage(img, dx, dy, w, w);
     }
 
     /** Skin action state for a mob AI state ordinal (feeds {@code mob/<key>/<state>}). */
@@ -2707,7 +2715,7 @@ public class PlayScene extends AbstractScene {
      * shadow that marks the target, and grows as it rises in a top-down level,
      * where up points at the viewer.
      */
-    private void drawProjectileSprite(Graphics2D g, String key, double x, double y,
+    private void drawProjectileSprite(DrawTarget target, String key, double x, double y,
                                       double z, double vx, double vy) {
         ProjectileDef def = projectileTypes().get(key);
         if (def == null) return;
@@ -2721,14 +2729,15 @@ public class PlayScene extends AbstractScene {
         if (lift > 0) {
             double shrink = Math.max(0.3, 1 - z / (ts() * 8));
             int sw = Math.max(3, (int) (w * 0.6 * shrink));
-            g.setColor(new Color(0, 0, 0, (int) (80 * shrink)));
-            g.fillOval(corner[0] - sw / 2, corner[1] - sw / 4, sw, Math.max(2, sw / 2));
+            target.fillOval(corner[0] - sw / 2, corner[1] - sw / 4, sw,
+                    Math.max(2, sw / 2), new Color(0, 0, 0, (int) (80 * shrink)));
         }
-        AffineTransform old = g.getTransform();
-        g.translate(corner[0], corner[1] - lift);
-        if (vx != 0 || vy != 0) g.rotate(Math.atan2(vy, vx));
-        g.drawImage(img, -w / 2, -w / 2, w, w, null);
-        g.setTransform(old);
+        AffineTransform spin = AffineTransform.getTranslateInstance(
+                corner[0], corner[1] - lift);
+        if (vx != 0 || vy != 0) spin.rotate(Math.atan2(vy, vx));
+        target.pushTransform(spin);
+        target.drawImage(img, -w / 2, -w / 2, w, w);
+        target.popTransform();
     }
 
     /**
@@ -2738,10 +2747,10 @@ public class PlayScene extends AbstractScene {
      * mob's idle sheet — and falls back to the pre-generated directional art,
      * which is already drawn facing the right way and so is never flipped.
      */
-    private void drawMobSprite(Graphics2D g, MobDef def, double x, double y,
+    private void drawMobSprite(DrawTarget target, MobDef def, double x, double y,
                                Facing facing, double health, boolean hurt,
                                String state, int statusBits) {
-        drawMobSprite(g, def, x, y, facing, health, hurt, state, statusBits,
+        drawMobSprite(target, def, x, y, facing, health, hurt, state, statusBits,
                 def.weapon() == null ? "" : def.weapon(), MeleeAction.NONE, 0);
     }
 
@@ -2751,7 +2760,7 @@ public class PlayScene extends AbstractScene {
      * and the weapon itself is drawn in its hands — the same two sheets a
      * player holding the same thing resolves.
      */
-    private void drawMobSprite(Graphics2D g, MobDef def, double x, double y,
+    private void drawMobSprite(DrawTarget target, MobDef def, double x, double y,
                                Facing facing, double health, boolean hurt,
                                String state, int statusBits, String weapon,
                                MeleeAction move, double moveProgress) {
@@ -2768,47 +2777,28 @@ public class PlayScene extends AbstractScene {
         camera.worldToScreen(x + def.size() / 2, y + def.size(), corner);
         int dx = corner[0] - w / 2;
         int dy = corner[1] - w;
-        if (mirror) {
-            g.drawImage(img, dx + w, dy, -w, w, null);
-        } else {
-            g.drawImage(img, dx, dy, w, w, null);
-        }
+        if (mirror) target.drawImage(img, dx + w, dy, -w, w);
+        else target.drawImage(img, dx, dy, w, w);
         // Whatever it fights with, drawn in its hands and swept by the move.
-        drawHeldObject(g, x, y, 0, def.size(), dir, weapon, move, moveProgress,
-                MeleeProfiles.ofKey(weapon));
-        if (hurt) {
-            g.setColor(new Color(255, 60, 60, 90));
-            g.fillRect(dx, dy, w, w);
-        }
+        drawHeldObject(Java2DTarget.graphicsOf(target), x, y, 0, def.size(), dir, weapon,
+                move, moveProgress, MeleeProfiles.ofKey(weapon));
+        if (hurt) target.fillRect(dx, dy, w, w, HURT_TINT);
         // Elemental status tints (replicated bits, so online matches offline).
-        if ((statusBits & Mob.STATUS_BURNING) != 0) {
-            g.setColor(new Color(255, 130, 40, 70));
-            g.fillRect(dx, dy, w, w);
-        }
-        if ((statusBits & Mob.STATUS_CHILLED) != 0) {
-            g.setColor(new Color(120, 200, 255, 80));
-            g.fillRect(dx, dy, w, w);
-        }
-        if ((statusBits & Mob.STATUS_POISONED) != 0) {
-            g.setColor(new Color(120, 210, 80, 65));
-            g.fillRect(dx, dy, w, w);
-        }
+        if ((statusBits & Mob.STATUS_BURNING) != 0) target.fillRect(dx, dy, w, w, BURNING_TINT);
+        if ((statusBits & Mob.STATUS_CHILLED) != 0) target.fillRect(dx, dy, w, w, CHILLED_TINT);
+        if ((statusBits & Mob.STATUS_POISONED) != 0) target.fillRect(dx, dy, w, w, POISONED_TINT);
         if ((statusBits & Mob.STATUS_SHIELDED) != 0) {
-            g.setColor(new Color(120, 230, 255, 180));
-            g.setStroke(new BasicStroke(2f));
-            g.drawOval(dx - 3, dy - 3, w + 6, w + 6);
+            target.drawOval(dx - 3, dy - 3, w + 6, w + 6, SHIELD_RING.getRGB(), 2f);
         }
         if (health < def.maxHealth() - 0.01) {
             int bw = Math.max(14, w);
-            g.setColor(new Color(0, 0, 0, 150));
-            g.fillRect(dx + w / 2 - bw / 2, dy - 7, bw, 4);
-            g.setColor(new Color(90, 220, 90));
-            g.fillRect(dx + w / 2 - bw / 2, dy - 7,
-                    (int) (bw * Math.max(0, health / def.maxHealth())), 4);
+            target.fillRect(dx + w / 2 - bw / 2, dy - 7, bw, 4, HEALTH_BACK);
+            target.fillRect(dx + w / 2 - bw / 2, dy - 7,
+                    (int) (bw * Math.max(0, health / def.maxHealth())), 4, HEALTH_FILL);
         }
     }
 
-    private void drawItemSprite(Graphics2D g, String key, double x, double y, int count) {
+    private void drawItemSprite(DrawTarget target, String key, double x, double y, int count) {
         ItemDef def = (world != null ? world.itemTypes : ItemRegistry.standard()).get(key);
         if (def == null) return;
         BufferedImage img = Skins.frame("item/" + key, animClock);
@@ -2821,15 +2811,16 @@ public class PlayScene extends AbstractScene {
             // (side-scroll drops bounce physically instead).
             dy = (int) Math.round(Math.sin(animClock * 3 + (x + y) * 0.05) * w * 0.18
                     - w * 0.25);
-            g.setColor(new Color(0, 0, 0, 70));
-            g.fillOval(corner[0], corner[1] + w - w / 4, w, w / 2);
+            target.fillOval(corner[0], corner[1] + w - w / 4, w, w / 2, DROP_SHADOW);
         }
-        drawRarityHalo(g, def, corner[0] + w / 2, corner[1] + dy + w / 2, w);
-        g.drawImage(img, corner[0], corner[1] + dy, w, w, null);
+        // The halo is a radial gradient, which the draw API deliberately has no
+        // verb for; it stays on Graphics2D until there is a second caller.
+        drawRarityHalo(Java2DTarget.graphicsOf(target), def,
+                corner[0] + w / 2, corner[1] + dy + w / 2, w);
+        target.drawImage(img, corner[0], corner[1] + dy, w, w);
         if (count > 1) {
-            g.setFont(SMALL_FONT);
-            g.setColor(Color.WHITE);
-            g.drawString("x" + count, corner[0] + w, corner[1] + dy + w);
+            target.drawText("x" + count, corner[0] + w, corner[1] + dy + w,
+                    SMALL_FONT, Color.WHITE);
         }
     }
 
