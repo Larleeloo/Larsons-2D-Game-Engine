@@ -7,6 +7,8 @@ import com.larsons.engine.demo.AutoBattlerGuideScene;
 import com.larsons.engine.demo.AutoBattlerLobbyScene;
 import com.larsons.engine.demo.BoardCustomizeScene;
 import com.larsons.engine.demo.CreativeScene;
+import com.larsons.engine.demo.EvolutionScene;
+import com.larsons.engine.demo.PlayScene;
 import com.larsons.engine.demo.DeckLobbyScene;
 import com.larsons.engine.demo.EvolutionCatalogScene;
 import com.larsons.engine.demo.EvolutionLobbyScene;
@@ -17,7 +19,9 @@ import com.larsons.engine.demo.MainMenuScene;
 import com.larsons.engine.demo.MultiplayerScene;
 import com.larsons.engine.demo.SkinEditorScene;
 import com.larsons.engine.demo.StartupScene;
+import com.larsons.engine.evolution.EvolutionGame;
 import com.larsons.engine.evolution.EvolutionStore;
+import com.larsons.engine.evolution.Nucleotide;
 import com.larsons.engine.graphics.SkinStore;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.input.KeyBindStore;
@@ -73,28 +77,32 @@ public final class SceneFrames {
     public static final int WIDTH = 800;
     public static final int HEIGHT = 480;
 
+    /** Seed for anything a scene would otherwise roll, shared with {@link GoldenFrames}. */
+    private static final long SEED = GoldenFrames.SEED;
+
     /** The fixed tick every scene is advanced by, matching the engine's sim rate. */
     private static final double DT = 1.0 / 120.0;
 
     /**
      * Scenes deliberately left out of the catalogue, and why.
      *
-     * <p>Each of these draws from a source this harness cannot pin down. They
-     * are still ported in B3 — they are just verified by the suite and by
-     * review rather than by a picture, which is stated here rather than left
-     * for someone to discover as an absence.
+     * <p>Shorter than it first looked. Four scenes were listed here on the
+     * assumption that they roll from an unseeded RNG — PlayScene's mob spawns,
+     * EvolutionScene's population, AutoBattlerScene's shop, DeckGameScene's
+     * shuffle. Measuring instead of assuming showed PlayScene is already
+     * deterministic from a fixed level, and EvolutionScene needed one seeded
+     * game handed to the public {@code adopt} it already had. The two that
+     * remain are excluded for a different reason than the one guessed, which
+     * is the whole argument for checking.
      */
     public static final List<String> NOT_GOLDENABLE = List.of(
-            // Spawns mobs and drops through World.populateFromLevel on an
-            // unseeded RNG, and its cast shadows follow a day/night clock.
-            // The world it draws is goldened by B0's three world-* frames.
-            "PlayScene",
-            // A live artificial-life simulation: population, positions and
-            // energy all come from an unseeded RNG at onEnter.
-            "EvolutionScene",
-            // Rolls a shop from an unseeded RNG on entering the first round.
+            // Both draw nothing at all until a network client hands them a
+            // table: their render methods return immediately on a null client,
+            // so a golden of either would be a golden of the backdrop. The
+            // suite already drives both against a real loopback server
+            // (AutoBattlerSceneTest, DeckGameTest); that is a live server with
+            // live timing, which is the one thing a fixed picture cannot be.
             "AutoBattlerScene",
-            // Shuffles its deck from an unseeded RNG.
             "DeckGameScene");
 
     // --- the catalogue ---------------------------------------------------------
@@ -124,6 +132,15 @@ public final class SceneFrames {
                 ctx -> new EvolutionCatalogScene(ctx, evolutionStore())));
         frames.add(scene("scene-auto-battler-guide", ctx -> new AutoBattlerGuideScene(ctx)));
         frames.add(scene("scene-creative", ctx -> new CreativeScene(ctx)));
+        frames.add(scene("scene-play", ctx -> new PlayScene(ctx, SAMPLE_LEVEL)));
+        frames.add(scene("scene-evolution", ctx -> {
+            EvolutionScene scene = new EvolutionScene(ctx, evolutionStore());
+            // Its onEnter rolls a game off an unseeded Random; adopt a seeded
+            // one first so the dish, the organism and the orbs are the same
+            // every run. Without this the frame differs from itself by 2.72.
+            scene.adopt(EvolutionGame.newGame(Nucleotide.G, SEED));
+            return scene;
+        }));
 
         return frames;
     }
@@ -202,6 +219,9 @@ public final class SceneFrames {
         }
         return store;
     }
+
+    /** The level the engine ships, so the frame does not depend on a saved one. */
+    private static final String SAMPLE_LEVEL = "src/main/resources/levels/sample_level.json";
 
     private static EvolutionStore evolutionStore() {
         return new EvolutionStore(scratch("evolution").toString());

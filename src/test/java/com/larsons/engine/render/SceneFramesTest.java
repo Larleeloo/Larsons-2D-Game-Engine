@@ -85,27 +85,30 @@ class SceneFramesTest {
      * built renders an empty backdrop and then matches its own empty reference
      * for ever. Every frame has to put real ink on the surface.
      *
-     * <p>Measured in pixels rather than draw calls on purpose — a scene could
-     * issue a hundred operations entirely off-screen, or in the background
-     * colour, and this is the question the golden actually depends on.
+     * <p>Measured as <em>horizontal</em> variation, which is the metric that
+     * survives contact with these scenes. Counting pixels that differ from the
+     * background passes trivially on a vertical gradient — AutoBattlerScene
+     * drew exactly that before it was excluded, 100% "inked" and not one thing
+     * on it. A vertical gradient has no horizontal variation at all, and
+     * anything that is actually a screen has plenty.
      */
     @Test
     void everySceneFrameActuallyDrawsSomething() {
         StringBuilder thin = new StringBuilder();
         for (Frame frame : SceneFrames.all()) {
             BufferedImage image = GoldenFrames.render(frame);
-            int background = image.getRGB(0, 0);
-            long inked = 0;
+            long edges = 0;
             for (int y = 0; y < image.getHeight(); y++) {
-                for (int x = 0; x < image.getWidth(); x++) {
-                    if (image.getRGB(x, y) != background) inked++;
+                for (int x = 1; x < image.getWidth(); x++) {
+                    if (image.getRGB(x, y) != image.getRGB(x - 1, y)) edges++;
                 }
             }
-            double fraction = inked / (double) (image.getWidth() * image.getHeight());
-            if (fraction < 0.01) {
-                thin.append("\n  ").append(frame.name()).append(" covers only ")
+            double fraction = edges / (double) (image.getWidth() * image.getHeight());
+            if (fraction < 0.005) {
+                thin.append("\n  ").append(frame.name())
+                        .append(" varies horizontally over only ")
                         .append(String.format("%.3f%%", fraction * 100))
-                        .append(" of its surface");
+                        .append(" of its surface — it is a backdrop, not a screen");
             }
         }
         assertTrue(thin.isEmpty(),
