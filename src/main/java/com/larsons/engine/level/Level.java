@@ -147,24 +147,78 @@ public class Level {
     public boolean registryTiles;
 
     /**
-     * Bumped whenever this level's terrain changes. Anything that caches a
-     * picture of the world watches it: a cached chunk built at revision N is
-     * still the truth at revision N and stale at anything higher, which is a
-     * cheaper question than comparing tiles.
+     * Bumped whenever this level's terrain changes anywhere. Kept as the cheap
+     * "has anything at all moved" question.
      *
      * <p>Deliberately not saved — it describes this session's edits, not the
      * level, and a loaded level starts over at zero.
      */
     private transient long terrainRevision;
 
-    /** The current terrain revision; see {@link #terrainRevision}. */
-    public long terrainRevision() { return terrainRevision; }
+    /**
+     * Per-region change counters, keyed by {@code (col >> REGION_SHIFT,
+     * row >> REGION_SHIFT)}.
+     *
+     * <p><b>Why a whole map instead of one counter.</b> Anything caching a
+     * picture of the terrain has to know when its copy went stale, and a single
+     * global counter answers that far too broadly: one block breaking marks the
+     * entire level dirty. That is not a rare case — liquids run every tick, and
+     * mining, meteors and block placement all rewrite cells during ordinary
+     * play — so a global counter meant the terrain cache threw away every
+     * visible chunk whenever a single drop of water moved, and quietly did the
+     * full per-cell sweep it exists to avoid.
+     *
+     * <p>Regions are the granularity a cache actually invalidates at, so a
+     * change tells only the chunk containing it.
+     */
+    private transient java.util.Map<Long, Long> regionRevisions;
 
     /**
-     * Mark the terrain as changed. Called by the setters, and by anything that
-     * rewrites the grid wholesale (loading, resizing, changing format).
+     * Bumped when the grid is replaced wholesale rather than edited — loading,
+     * resizing, changing format. Everything cached is stale at once, and the
+     * per-region counters start over.
      */
-    public void bumpTerrainRevision() { terrainRevision++; }
+    private transient long terrainGeneration;
+
+    /** Region edge in tiles, as a power of two. */
+    private static final int REGION_SHIFT = 3;
+
+    /** The current global terrain revision — any change to any cell. */
+    public long terrainRevision() { return terrainRevision; }
+
+    /** The wholesale-replacement counter; see {@link #terrainGeneration}. */
+    public long terrainGeneration() { return terrainGeneration; }
+
+    /**
+     * How many times the region containing {@code (col, row)} has changed.
+     * A cache holding a picture of that region compares this against what it
+     * built with.
+     */
+    public long terrainRevisionAt(int col, int row) {
+        if (regionRevisions == null) return 0L;
+        return regionRevisions.getOrDefault(regionKey(col, row), 0L);
+    }
+
+    private static long regionKey(int col, int row) {
+        return ((long) (col >> REGION_SHIFT) << 32) ^ ((row >> REGION_SHIFT) & 0xFFFFFFFFL);
+    }
+
+    /** Record that the cell at {@code (col, row)} changed. */
+    private void markTerrainChanged(int col, int row) {
+        terrainRevision++;
+        if (regionRevisions == null) regionRevisions = new java.util.HashMap<>();
+        regionRevisions.merge(regionKey(col, row), 1L, Long::sum);
+    }
+
+    /**
+     * Mark the whole terrain as replaced — for anything that rewrites the grid
+     * rather than editing cells in it.
+     */
+    public void bumpTerrainRevision() {
+        terrainRevision++;
+        terrainGeneration++;
+        if (regionRevisions != null) regionRevisions.clear();
+    }
     /** Resolves block ids in registry mode. */
     public BlockRegistry blocks = BlockRegistry.standard();
 
@@ -563,7 +617,7 @@ public class Level {
         if (chunked != null) {
             boolean changed = chunked.set(col, row, id);
             if (changed) {
-                bumpTerrainRevision();
+                markTerrainChanged(col, row);
                 if (id == 0) clearCellAttachments(col, row);
             }
             return changed;
@@ -574,7 +628,7 @@ public class Level {
         }
         if (tiles[row][col] == id) return false;
         tiles[row][col] = id;
-        bumpTerrainRevision();
+        markTerrainChanged(col, row);
         if (id == 0) clearCellAttachments(col, row);
         return true;
     }
@@ -592,13 +646,13 @@ public class Level {
         if (id != 0) ensureUpperStorage();
         if (upperChunked != null) {
             boolean changed = upperChunked.set(col, row, id);
-            if (changed) bumpTerrainRevision();
+            if (changed) markTerrainChanged(col, row);
             return changed;
         }
         if (upper == null) return false;  // clearing a layer that never existed
         if (upper[row][col] == id) return false;
         upper[row][col] = id;
-        bumpTerrainRevision();
+        markTerrainChanged(col, row);
         return true;
     }
 
