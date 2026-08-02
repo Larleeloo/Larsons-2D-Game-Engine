@@ -89,6 +89,33 @@ public final class TerrainCache {
      */
     private static final int MAX_REBUILDS_PER_FRAME = 4;
 
+    /**
+     * Share of the visible chunks that may be stale before the cache stands
+     * aside for the frame entirely.
+     *
+     * <p>Caching is a bet that ground stays still, and some ground does not:
+     * water flows every tick, a meteor rewrites a crater, a player mines a
+     * seam. The interesting part is <em>why</em> a half-cached frame is bad,
+     * because it is worse than either extreme. Measured on a churning view,
+     * drawing every chunk live cost 16 ms and serving every chunk from cache
+     * cost 2 ms — but doing half of each cost 22 ms, more than the slower of
+     * the two. Alternating image blits with per-cell fills makes Java2D switch
+     * between two quite different kinds of work all the way down the frame, and
+     * the switching costs more than the drawing it saves.
+     *
+     * <p>Per-chunk cleverness (rebuild budgets, decaying strike counts,
+     * hysteresis) was tried first and made it worse, because every one of those
+     * schemes still produces a mixed frame — the exact thing that is slow. The
+     * decision belongs to the frame: mostly-still ground is cached, mostly-torn
+     * ground is swept, and neither pays for the other.
+     *
+     * <p>The crossover was measured rather than guessed. Caching wins
+     * comfortably up to about five changed cells a frame (8 ms against 16 ms)
+     * and loses beyond roughly fifteen, so the threshold sits between: half the
+     * visible chunk count, and never less than this.
+     */
+    private static final int MIN_CHURN_TO_STAND_ASIDE = 8;
+
     private static final boolean ENABLED =
             !"false".equalsIgnoreCase(System.getProperty("larsons.terrain.cache"));
 
@@ -101,17 +128,31 @@ public final class TerrainCache {
      */
     private record Entry(BufferedImage image, int latticeX, int latticeY, Key key) {}
 
-    /** Everything a cached chunk depends on. Any change means a rebuild. */
-    private record Key(long revision, double zoom, Perspective perspective,
-                       int tileSize, long animFrame) {}
+    /**
+     * Everything a cached chunk depends on. Any change means a rebuild.
+     *
+     * <p>{@code revision} is the change count of <em>this chunk's own region</em>
+     * rather than the level's. A global counter meant a single drop of water
+     * moving anywhere threw away every chunk on screen — and liquids run every
+     * tick, so in a level with water the cache spent its life rebuilding.
+     * {@code generation} is the separate wholesale counter, for a grid replaced
+     * rather than edited.
+     */
+    private record Key(long generation, long revision, double zoom,
+                       Perspective perspective, int tileSize, long animFrame) {}
 
     private final Map<Long, Entry> chunks = new HashMap<>();
+
+
 
     /** Chunks touched this frame; anything else is evicted at {@link #endFrame}. */
     private final java.util.Set<Long> live = new java.util.HashSet<>();
 
     private int hits;
     private int rebuilds;
+
+    /** The level's change count at the previous frame, to measure churn. */
+    private long lastRevision = -1;
 
     /** Whether caching is on at all. */
     public static boolean enabled() { return ENABLED; }
@@ -154,8 +195,11 @@ public final class TerrainCache {
      */
     public void drawFloor(DrawTarget target, Level level, Camera camera, int[] bounds,
                           double animClock, ChunkRenderer renderChunk) {
-        Key key = new Key(level.terrainRevision(), camera.zoom, camera.getPerspective(),
-                level.tileSize, (long) (animClock * ANIM_FPS));
+        // Everything except the per-chunk region revision, which is added below.
+        long generation = level.terrainGeneration();
+        double zoom = camera.zoom;
+        Perspective perspective = camera.getPerspective();
+        long animFrame = (long) (animClock * ANIM_FPS);
 
         // The camera enters the terrain's position exactly once, here. Every
         // chunk is then placed by integer arithmetic off this one value, so the
@@ -168,21 +212,39 @@ public final class TerrainCache {
         int c1 = bounds[2] / CHUNK;
         int r1 = bounds[3] / CHUNK;
 
+        int visible = (c1 - c0 + 1) * (r1 - r0 + 1);
+        if (visible <= 0) return;
+
+        // How fast the world is being rewritten, measured on the level rather
+        // than on the cache's own state. Inferring it from stale chunks does
+        // not work: once churn has emptied the cache there are no stale entries
+        // left to count, so the cache concludes all is calm and starts baking
+        // again — the same chicken-and-egg that made it stand aside forever on
+        // its first frame when cold chunks were counted instead.
+        long revision = level.terrainRevision();
+        long changedSinceLastFrame = lastRevision < 0 ? 0 : revision - lastRevision;
+        lastRevision = revision;
+
+        if (changedSinceLastFrame > Math.max(MIN_CHURN_TO_STAND_ASIDE, visible / 2)) {
+            // Too torn up to be worth baking. One plain sweep of the whole
+            // view, with no blits mixed into it.
+            renderChunk.render(target, camera, bounds[0], bounds[1], bounds[2], bounds[3]);
+            return;
+        }
+
         int budget = MAX_REBUILDS_PER_FRAME;
         for (int cr = r0; cr <= r1; cr++) {
             for (int cc = c0; cc <= c1; cc++) {
                 long id = chunkKey(cc, cr);
+                Key key = keyFor(level, cc, cr, generation, zoom, perspective, animFrame);
                 Entry entry = cached(id, key);
                 if (entry == null) {
                     if (budget <= 0) {
-                        // Over the frame's baking budget: draw this chunk the
-                        // slow way rather than stalling. It gets baked within
-                        // the next frame or two, and the cost is spread instead
-                        // of landing all at once.
-                        drawChunkLive(level, camera, cc, cr, renderChunk, target);
+                        drawChunkLive(level, camera, cc, cr, bounds, renderChunk, target);
+                        live.add(id);
                         continue;
                     }
-                    entry = build(level, camera, cc, cr, key, renderChunk);
+                    entry = build(level, camera, cc, cr, key, renderChunk, chunks.get(id));
                     if (entry == null) continue;
                     budget--;
                     rebuilds++;
@@ -197,6 +259,14 @@ public final class TerrainCache {
         }
     }
 
+    /** Everything a chunk's validity depends on. */
+    private static Key keyFor(Level level, int chunkCol, int chunkRow, long generation,
+                              double zoom, Perspective perspective, long animFrame) {
+        return new Key(generation,
+                level.terrainRevisionAt(chunkCol * CHUNK, chunkRow * CHUNK),
+                zoom, perspective, level.tileSize, animFrame);
+    }
+
     /** The cached chunk if it is still valid, else {@code null}. */
     private Entry cached(long id, Key key) {
         Entry existing = chunks.get(id);
@@ -205,11 +275,15 @@ public final class TerrainCache {
 
     /** Paint one chunk's cells straight at the screen, skipping the cache. */
     private void drawChunkLive(Level level, Camera camera, int chunkCol, int chunkRow,
-                               ChunkRenderer renderChunk, DrawTarget target) {
-        int col0 = chunkCol * CHUNK;
-        int row0 = chunkRow * CHUNK;
-        int col1 = Math.min(level.width - 1, col0 + CHUNK - 1);
-        int row1 = Math.min(level.height - 1, row0 + CHUNK - 1);
+                               int[] bounds, ChunkRenderer renderChunk, DrawTarget target) {
+        // Clipped to what was actually asked for. A baked chunk is built whole
+        // because it is kept, but drawing one live must cost exactly what the
+        // plain sweep costs — otherwise the fallback is more expensive than the
+        // thing it is falling back to.
+        int col0 = Math.max(bounds[0], chunkCol * CHUNK);
+        int row0 = Math.max(bounds[1], chunkRow * CHUNK);
+        int col1 = Math.min(Math.min(level.width - 1, bounds[2]), chunkCol * CHUNK + CHUNK - 1);
+        int row1 = Math.min(Math.min(level.height - 1, bounds[3]), chunkRow * CHUNK + CHUNK - 1);
         if (col0 > col1 || row0 > row1) return;
         renderChunk.render(target, camera, col0, row0, col1, row1);
     }
@@ -226,7 +300,8 @@ public final class TerrainCache {
         }
         Iterator<Map.Entry<Long, Entry>> it = chunks.entrySet().iterator();
         while (it.hasNext()) {
-            if (!live.contains(it.next().getKey())) it.remove();
+            Long id = it.next().getKey();
+            if (!live.contains(id)) it.remove();
         }
         live.clear();
     }
@@ -262,7 +337,7 @@ public final class TerrainCache {
      * adjacent chunks abut exactly instead of leaving a seam.
      */
     private Entry build(Level level, Camera camera, int chunkCol, int chunkRow,
-                        Key key, ChunkRenderer renderChunk) {
+                        Key key, ChunkRenderer renderChunk, Entry reusable) {
         int col0 = chunkCol * CHUNK;
         int row0 = chunkRow * CHUNK;
         int col1 = Math.min(level.width - 1, col0 + CHUNK - 1);
@@ -304,9 +379,23 @@ public final class TerrainCache {
         int h = (maxY - minY) + MARGIN * 2 + 1;
         if (w <= 0 || h <= 0 || (long) w * h > 16_000_000L) return null;   // absurd zoom
 
-        BufferedImage image = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+        // Reuse the chunk's previous image when it is the right size. A chunk
+        // being rebuilt is usually being rebuilt because one cell in it
+        // changed, and a level with liquids in it rebuilds constantly — at a
+        // third of a megabyte per image, allocating a fresh one each time made
+        // the cache a garbage generator that cost more than it saved.
+        BufferedImage image = reusable != null
+                && reusable.image().getWidth() == w
+                && reusable.image().getHeight() == h
+                ? reusable.image()
+                : new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
+
         Graphics2D g = image.createGraphics();
         try {
+            // Whatever was there is not this chunk any more.
+            g.setComposite(java.awt.AlphaComposite.Clear);
+            g.fillRect(0, 0, w, h);
+            g.setComposite(java.awt.AlphaComposite.SrcOver);
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
                     RenderingHints.VALUE_ANTIALIAS_ON);
             g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,

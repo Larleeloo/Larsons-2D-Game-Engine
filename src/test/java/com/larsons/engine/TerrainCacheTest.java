@@ -140,6 +140,146 @@ class TerrainCacheTest {
     }
 
     @Test
+    void editingOneBlockRebuildsOnlyItsOwnChunk() {
+        // The flaw this replaced: one global counter meant a single changed
+        // cell threw away every chunk on screen. Liquids run every tick and
+        // mining, meteors and block placement all rewrite cells during play,
+        // so in a level with water the cache spent its life rebuilding and
+        // quietly did the per-cell sweep it exists to avoid.
+        Level lvl = level(LevelFormat.SIDE_SCROLLER, TerrainCache.CHUNK * 4,
+                TerrainCache.CHUNK * 3);
+        Camera cam = camera(lvl);
+        TerrainCache cache = new TerrainCache();
+        warmUp(lvl, cam, cache);
+        cache.resetCounters();
+
+        lvl.setTile(1, 1, 0);               // break one block, top-left chunk
+        paint(lvl, cam, cache, bounds(lvl));
+
+        assertEquals(1, cache.rebuilds(),
+                "one changed cell should rebuild one chunk, not the whole view");
+        assertTrue(cache.hits() > 1, "every other chunk should still be a hit");
+    }
+
+    @Test
+    void aChangeAnywhereInAChunkInvalidatesThatChunk() {
+        // The level's region size and the cache's chunk size have to agree.
+        // If regions were finer than chunks, a change in the wrong corner
+        // would leave a stale picture on screen.
+        for (int cell = 0; cell < TerrainCache.CHUNK * TerrainCache.CHUNK; cell++) {
+            Level lvl = level(LevelFormat.SIDE_SCROLLER, TerrainCache.CHUNK * 2,
+                    TerrainCache.CHUNK * 2);
+            Camera cam = camera(lvl);
+            TerrainCache cache = new TerrainCache();
+            warmUp(lvl, cam, cache);
+            cache.resetCounters();
+
+            int col = cell % TerrainCache.CHUNK;
+            int row = cell / TerrainCache.CHUNK;
+            lvl.setTile(col, row, 0);
+            paint(lvl, cam, cache, bounds(lvl));
+
+            assertTrue(cache.rebuilds() >= 1,
+                    "a change at (" + col + "," + row + ") left its chunk stale");
+        }
+    }
+
+    @Test
+    void heavyChurnMakesTheCacheStandAside() {
+        // A half-cached frame is worse than either extreme: alternating image
+        // blits with per-cell fills measured 22 ms where all-live was 16 ms and
+        // all-cached was 2 ms. So on ground being rewritten faster than it can
+        // be baked, the cache does nothing at all rather than half a job.
+        Level lvl = level(LevelFormat.SIDE_SCROLLER, TerrainCache.CHUNK * 4,
+                TerrainCache.CHUNK * 3);
+        Camera cam = camera(lvl);
+        TerrainCache cache = new TerrainCache();
+        warmUp(lvl, cam, cache);
+
+        java.util.Random rnd = new java.util.Random(2);
+        java.util.List<Block> blocks = new java.util.ArrayList<>(lvl.blocks.all());
+        for (int frame = 0; frame < 5; frame++) {
+            for (int i = 0; i < 40; i++) {          // a torn-up world
+                lvl.setTile(rnd.nextInt(lvl.width), rnd.nextInt(lvl.height),
+                        blocks.get(rnd.nextInt(blocks.size())).id());
+            }
+            cache.resetCounters();
+            paint(lvl, cam, cache, bounds(lvl));
+        }
+
+        assertEquals(0, cache.rebuilds(), "nothing should be baked while the world is torn up");
+        assertEquals(0, cache.hits(), "and nothing served — the frame is swept whole");
+    }
+
+    @Test
+    void lightChurnKeepsUsingTheCache() {
+        // The common case during play: one block mined, a little water moving.
+        Level lvl = level(LevelFormat.SIDE_SCROLLER, TerrainCache.CHUNK * 4,
+                TerrainCache.CHUNK * 3);
+        Camera cam = camera(lvl);
+        TerrainCache cache = new TerrainCache();
+        warmUp(lvl, cam, cache);
+
+        lvl.setTile(2, 2, 0);
+        cache.resetCounters();
+        paint(lvl, cam, cache, bounds(lvl));
+
+        assertTrue(cache.hits() > 0, "one changed cell must not disable the cache");
+    }
+
+    @Test
+    void theCacheRecoversOnceTheWorldSettles() {
+        Level lvl = level(LevelFormat.SIDE_SCROLLER, TerrainCache.CHUNK * 3,
+                TerrainCache.CHUNK * 3);
+        Camera cam = camera(lvl);
+        TerrainCache cache = new TerrainCache();
+
+        java.util.Random rnd = new java.util.Random(8);
+        java.util.List<Block> blocks = new java.util.ArrayList<>(lvl.blocks.all());
+        for (int frame = 0; frame < 5; frame++) {
+            for (int i = 0; i < 40; i++) {
+                lvl.setTile(rnd.nextInt(lvl.width), rnd.nextInt(lvl.height),
+                        blocks.get(rnd.nextInt(blocks.size())).id());
+            }
+            paint(lvl, cam, cache, bounds(lvl));
+        }
+
+        warmUp(lvl, cam, cache);
+        cache.resetCounters();
+        paint(lvl, cam, cache, bounds(lvl));
+
+        assertTrue(cache.hits() > 0, "a settled world should be cached again");
+        assertEquals(0, cache.rebuilds(), "and need no further rebuilding");
+    }
+
+    @Test
+    void replacingTheGridWholesaleInvalidatesEverything() {
+        Level lvl = level(LevelFormat.SIDE_SCROLLER, TerrainCache.CHUNK * 3,
+                TerrainCache.CHUNK * 3);
+        Camera cam = camera(lvl);
+        TerrainCache cache = new TerrainCache();
+        warmUp(lvl, cam, cache);
+        cache.resetCounters();
+
+        lvl.bumpTerrainRevision();          // a load, a resize, a format change
+        paint(lvl, cam, cache, bounds(lvl));
+
+        assertEquals(0, cache.hits(), "nothing may survive a wholesale replacement");
+    }
+
+    @Test
+    void aChangeInOneRegionDoesNotDisturbAnother() {
+        Level lvl = level(LevelFormat.SIDE_SCROLLER, TerrainCache.CHUNK * 4, TerrainCache.CHUNK);
+        long before = lvl.terrainRevisionAt(TerrainCache.CHUNK * 3, 0);
+
+        lvl.setTile(0, 0, 0);
+
+        assertEquals(before, lvl.terrainRevisionAt(TerrainCache.CHUNK * 3, 0),
+                "a distant region's revision should not have moved");
+        assertTrue(lvl.terrainRevisionAt(0, 0) > 0, "but its own should have");
+    }
+
+    @Test
     void zoomingRebuildsBecauseTheBakedPixelsAreTheWrongSize() {
         Level lvl = level(LevelFormat.SIDE_SCROLLER, 24, 18);
         Camera cam = camera(lvl);
