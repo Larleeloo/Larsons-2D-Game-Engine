@@ -199,11 +199,23 @@ public interface DrawTarget {
     }
 
     // --- outlines --------------------------------------------------------------
+    //
+    // Each outline verb comes in three forms: packed argb with an explicit
+    // thickness, a Color at 1px, and a Color with an explicit thickness. The
+    // third was missing until B3 and its absence showed: every ported call
+    // site that stated a width — and after this migration that is every call
+    // site that used to lean on the ambient stroke — had to write
+    // `SOME_COLOUR.getRGB()` inline, which is noise at best and an invitation
+    // to drop the alpha at worst.
 
     void drawRect(int x, int y, int w, int h, int argb, float thickness);
 
     default void drawRect(int x, int y, int w, int h, Color color) {
         drawRect(x, y, w, h, color.getRGB(), 1f);
+    }
+
+    default void drawRect(int x, int y, int w, int h, Color color, float thickness) {
+        drawRect(x, y, w, h, color.getRGB(), thickness);
     }
 
     /** Outline of {@link #fillRoundRect}, with the same corner convention. */
@@ -214,10 +226,19 @@ public interface DrawTarget {
         drawRoundRect(x, y, w, h, arcW, arcH, color.getRGB(), 1f);
     }
 
+    default void drawRoundRect(int x, int y, int w, int h, int arcW, int arcH,
+                               Color color, float thickness) {
+        drawRoundRect(x, y, w, h, arcW, arcH, color.getRGB(), thickness);
+    }
+
     void drawOval(int x, int y, int w, int h, int argb, float thickness);
 
     default void drawOval(int x, int y, int w, int h, Color color) {
         drawOval(x, y, w, h, color.getRGB(), 1f);
+    }
+
+    default void drawOval(int x, int y, int w, int h, Color color, float thickness) {
+        drawOval(x, y, w, h, color.getRGB(), thickness);
     }
 
     /** Outline of {@link #fillArc} — the curve alone, not the two radii. */
@@ -228,16 +249,29 @@ public interface DrawTarget {
         drawArc(x, y, w, h, startDeg, arcDeg, color.getRGB(), 1f);
     }
 
+    default void drawArc(int x, int y, int w, int h, int startDeg, int arcDeg,
+                         Color color, float thickness) {
+        drawArc(x, y, w, h, startDeg, arcDeg, color.getRGB(), thickness);
+    }
+
     void drawPolygon(int[] xs, int[] ys, int count, int argb, float thickness);
 
     default void drawPolygon(int[] xs, int[] ys, int count, Color color) {
         drawPolygon(xs, ys, count, color.getRGB(), 1f);
     }
 
+    default void drawPolygon(int[] xs, int[] ys, int count, Color color, float thickness) {
+        drawPolygon(xs, ys, count, color.getRGB(), thickness);
+    }
+
     void drawLine(int x1, int y1, int x2, int y2, int argb, float thickness);
 
     default void drawLine(int x1, int y1, int x2, int y2, Color color) {
         drawLine(x1, y1, x2, y2, color.getRGB(), 1f);
+    }
+
+    default void drawLine(int x1, int y1, int x2, int y2, Color color, float thickness) {
+        drawLine(x1, y1, x2, y2, color.getRGB(), thickness);
     }
 
     /**

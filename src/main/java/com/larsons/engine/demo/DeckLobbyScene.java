@@ -338,8 +338,7 @@ public class DeckLobbyScene extends AbstractScene {
             // used to depend on the stroke being set back to 1f afterwards —
             // stated per call now that thickness travels with the draw.
             target.drawRoundRect(cx, cy, cardW, cardH, 12, 12,
-                    (takenByMe ? YOU : takenBy != null ? CARD_TAKEN_EDGE : CARD_FREE_EDGE)
-                            .getRGB(),
+                    takenByMe ? YOU : takenBy != null ? CARD_TAKEN_EDGE : CARD_FREE_EDGE,
                     takenByMe ? 2.5f : 1.2f);
         }
 
