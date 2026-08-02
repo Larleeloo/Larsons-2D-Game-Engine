@@ -20,14 +20,10 @@ import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 
-import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.Rectangle;
-import java.awt.RenderingHints;
-import java.awt.Shape;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.List;
@@ -47,6 +43,15 @@ import java.util.List;
  * "How to Play" button; <b>Esc</b> closes a detail card, then leaves the guide.
  */
 public class AutoBattlerGuideScene extends AbstractScene {
+
+    private static final Color ARROW = new Color(120, 128, 155);
+    private static final Color ROW_START = new Color(50, 58, 84);
+
+    /** Corner scratch, so the flow arrows and element diamonds allocate nothing. */
+    private final int[] arrowXs = new int[3];
+    private final int[] arrowYs = new int[3];
+    private final int[] diamondXs = new int[4];
+    private final int[] diamondYs = new int[4];
 
     private static final Color[] COST_COLORS = {
             new Color(150, 155, 170),  // 1: gray
@@ -115,6 +120,23 @@ public class AutoBattlerGuideScene extends AbstractScene {
     private Detail detail;
 
     private int mouseX, mouseY;
+
+    private static final Font SANS_BOLD_12 = new Font("SansSerif", Font.BOLD, 12);
+    private static final Font SANS_BOLD_13 = new Font("SansSerif", Font.BOLD, 13);
+    private static final Font SANS_BOLD_14 = new Font("SansSerif", Font.BOLD, 14);
+    private static final Font SANS_BOLD_15 = new Font("SansSerif", Font.BOLD, 15);
+    private static final Font SANS_BOLD_18 = new Font("SansSerif", Font.BOLD, 18);
+    private static final Font SANS_BOLD_16 = new Font("SansSerif", Font.BOLD, 16);
+    private static final Font SANS_BOLD_20 = new Font("SansSerif", Font.BOLD, 20);
+    private static final Font SANS_BOLD_22 = new Font("SansSerif", Font.BOLD, 22);
+    private static final Font SANS_BOLD_30 = new Font("SansSerif", Font.BOLD, 30);
+    private static final Font SANS_ITALIC_12 = new Font("SansSerif", Font.ITALIC, 12);
+    private static final Font SANS_ITALIC_13 = new Font("SansSerif", Font.ITALIC, 13);
+    private static final Font SANS_PLAIN_11 = new Font("SansSerif", Font.PLAIN, 11);
+    private static final Font SANS_PLAIN_12 = new Font("SansSerif", Font.PLAIN, 12);
+    private static final Font SANS_PLAIN_13 = new Font("SansSerif", Font.PLAIN, 13);
+    private static final Font SANS_PLAIN_14 = new Font("SansSerif", Font.PLAIN, 14);
+    private static final Font SANS_PLAIN_15 = new Font("SansSerif", Font.PLAIN, 15);
 
     public AutoBattlerGuideScene(GameContext ctx) {
         this.ctx = ctx;
@@ -236,90 +258,80 @@ public class AutoBattlerGuideScene extends AbstractScene {
         // that *are* ported draw through it, which is also what puts their
         // operations into the frame's draw-call count.
         this.frameTarget = target;
-        Graphics2D g = Java2DTarget.graphicsOf(target);
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g.setColor(new Color(16, 18, 30));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
+
+        target.fillRect(0, 0, viewportWidth, viewportHeight, new Color(16, 18, 30));
 
         layoutChrome();
-        drawHeader(g);
-        drawTabs(g);
+        drawHeader(target);
+        drawTabs(target);
 
         // Scrolling content, clipped to the viewport between chrome and footer.
         int top = contentTop();
         int bottom = contentBottom();
-        Shape oldClip = g.getClip();
-        g.setClip(0, top, viewportWidth, bottom - top);
+        target.pushClip(0, top, viewportWidth, bottom - top);
         hotspots.clear();
         int startY = top + 10 - scroll;
         int endY = switch (tab) {
-            case OVERVIEW -> drawOverview(g, startY);
-            case ECONOMY -> drawEconomy(g, startY);
-            case TRAITS -> drawTraits(g, startY);
-            case ELEMENTS -> drawElements(g, startY);
-            case ITEMS -> drawItems(g, startY);
-            case ODDS -> drawOdds(g, startY);
-            case UNITS -> drawUnits(g, startY);
+            case OVERVIEW -> drawOverview(target, startY);
+            case ECONOMY -> drawEconomy(target, startY);
+            case TRAITS -> drawTraits(target, startY);
+            case ELEMENTS -> drawElements(target, startY);
+            case ITEMS -> drawItems(target, startY);
+            case ODDS -> drawOdds(target, startY);
+            case UNITS -> drawUnits(target, startY);
         };
         contentHeight = endY - startY;
-        g.setClip(oldClip);
+        target.popClip();
 
-        drawScrollHint(g);
-        drawFooter(g);
-        if (detail != null) drawDetail(g);
+        drawScrollHint(target);
+        drawFooter(target);
+        if (detail != null) drawDetail(target);
     }
 
-    private void drawHeader(Graphics2D g) {
-        g.setColor(new Color(245, 246, 255));
-        g.setFont(new Font("SansSerif", Font.BOLD, 30));
-        drawCentered(g, "Auto Battler — Field Guide", viewportWidth / 2, 44);
+    private void drawHeader(DrawTarget target) {
+        drawCentered(target, "Auto Battler — Field Guide", viewportWidth / 2, 44,
+                SANS_BOLD_30, new Color(245, 246, 255));
 
         boolean hot = backBtn.contains(mouseX, mouseY);
-        g.setColor(hot ? new Color(60, 70, 100) : new Color(40, 46, 66));
-        g.fillRoundRect(backBtn.x, backBtn.y, backBtn.width, backBtn.height, 10, 10);
-        g.setColor(new Color(150, 160, 195));
-        g.drawRoundRect(backBtn.x, backBtn.y, backBtn.width, backBtn.height, 10, 10);
-        g.setColor(Color.WHITE);
-        g.setFont(new Font("SansSerif", Font.BOLD, 14));
-        drawCentered(g, "‹ Back", backBtn.x + backBtn.width / 2, backBtn.y + 22);
+        target.fillRoundRect(backBtn.x, backBtn.y, backBtn.width, backBtn.height, 10, 10,
+                hot ? new Color(60, 70, 100) : new Color(40, 46, 66));
+        target.drawRoundRect(backBtn.x, backBtn.y, backBtn.width, backBtn.height, 10, 10,
+                new Color(150, 160, 195));
+        drawCentered(target, "‹ Back", backBtn.x + backBtn.width / 2, backBtn.y + 22,
+                SANS_BOLD_14, Color.WHITE);
     }
 
-    private void drawTabs(Graphics2D g) {
-        g.setFont(new Font("SansSerif", Font.BOLD, 15));
+    private void drawTabs(DrawTarget target) {
         for (int i = 0; i < tabRects.size(); i++) {
             Rectangle r = tabRects.get(i);
             boolean active = Tab.values()[i] == tab;
             boolean hot = r.contains(mouseX, mouseY);
-            g.setColor(active ? new Color(70, 90, 130)
+            target.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10, active ? new Color(70, 90, 130)
                     : hot ? new Color(44, 50, 72) : new Color(30, 34, 52));
-            g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-            g.setColor(active ? new Color(255, 210, 90) : new Color(60, 66, 92));
-            g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-            g.setColor(active ? Color.WHITE : new Color(170, 178, 202));
-            drawCentered(g, Tab.values()[i].label, r.x + r.width / 2, r.y + 22);
+            target.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10,
+                    active ? new Color(255, 210, 90) : new Color(60, 66, 92));
+            drawCentered(target, Tab.values()[i].label, r.x + r.width / 2, r.y + 22,
+                    SANS_BOLD_15, active ? Color.WHITE : new Color(170, 178, 202));
         }
     }
 
-    private void drawScrollHint(Graphics2D g) {
+    private void drawScrollHint(DrawTarget target) {
         int max = Math.max(0, contentHeight - (contentBottom() - contentTop() - 16));
         if (max <= 0) return;
         // A slim scroll indicator down the right edge of the viewport.
         int top = contentTop() + 6, bot = contentBottom() - 6;
         int trackH = bot - top;
         int x = viewportWidth - 12;
-        g.setColor(new Color(255, 255, 255, 22));
-        g.fillRoundRect(x, top, 5, trackH, 5, 5);
+        target.fillRoundRect(x, top, 5, trackH, 5, 5, new Color(255, 255, 255, 22));
         int thumbH = Math.max(30, (int) (trackH * (double) trackH / (trackH + max)));
         int thumbY = top + (int) ((trackH - thumbH) * (scroll / (double) max));
-        g.setColor(new Color(150, 160, 195));
-        g.fillRoundRect(x, thumbY, 5, thumbH, 5, 5);
+        target.fillRoundRect(x, thumbY, 5, thumbH, 5, 5, new Color(150, 160, 195));
     }
 
-    private void drawFooter(Graphics2D g) {
-        g.setColor(new Color(120, 126, 148));
-        g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        drawCentered(g, "Click any icon for details  ·  scroll or ↑/↓  ·  ←/→ switch tabs  ·  Esc back",
-                viewportWidth / 2, viewportHeight - 14);
+    private void drawFooter(DrawTarget target) {
+        drawCentered(target,
+                "Click any icon for details  ·  scroll or ↑/↓  ·  ←/→ switch tabs  ·  Esc back",
+                viewportWidth / 2, viewportHeight - 14, SANS_PLAIN_13, new Color(120, 126, 148));
     }
 
     // --- content geometry helpers -------------------------------------------------
@@ -342,31 +354,26 @@ public class AutoBattlerGuideScene extends AbstractScene {
                 && mouseY >= contentTop() && mouseY <= contentBottom();
     }
 
-    private int heading(Graphics2D g, int x, int y, String text) {
-        g.setColor(new Color(255, 214, 100));
-        g.setFont(new Font("SansSerif", Font.BOLD, 22));
-        g.drawString(text, x, y);
+    private int heading(DrawTarget target, int x, int y, String text) {
+        target.drawText(text, x, y, SANS_BOLD_22, new Color(255, 214, 100));
         return y + 12;
     }
 
     /** Draw wrapped body text; returns the y below the last line. */
-    private int paragraph(Graphics2D g, int x, int y, int width, String text, Color color) {
-        g.setFont(new Font("SansSerif", Font.PLAIN, 15));
-        g.setColor(color);
-        FontMetrics fm = g.getFontMetrics();
-        for (String line : wrap(fm, text, width)) {
+    private int paragraph(DrawTarget target, int x, int y, int width, String text, Color color) {
+        for (String line : wrap(target, SANS_PLAIN_15, text, width)) {
             y += 21;
-            g.drawString(line, x, y);
+            target.drawText(line, x, y, SANS_PLAIN_15, color);
         }
         return y;
     }
 
     // ------------------------------------------------------------------ OVERVIEW
 
-    private int drawOverview(Graphics2D g, int y) {
+    private int drawOverview(DrawTarget target, int y) {
         int x = contentX(), w = contentWidth();
-        y = heading(g, x, y + 12, "How Auto Battler Works");
-        y = paragraph(g, x, y, w,
+        y = heading(target, x, y + 12, "How Auto Battler Works");
+        y = paragraph(target, x, y, w,
                 "An online round-based strategy game for 2–10 players in the Auto Chess / "
                 + "Teamfight Tactics tradition. Each round you spend gold to recruit units, "
                 + "position them on your half of a shared 8×8 board, then watch every player's "
@@ -380,21 +387,20 @@ public class AutoBattlerGuideScene extends AbstractScene {
         int nodeH = 74;
         int gap = (w - nodeW * 3) / 2;
         int ny = y;
-        drawPhaseNode(g, x, ny, nodeW, nodeH, "1 · PLAN",
+        drawPhaseNode(target, x, ny, nodeW, nodeH, "1 · PLAN",
                 "Shop, level, position", new Color(90, 150, 235), this::planDetail);
-        drawArrow(g, x + nodeW, ny + nodeH / 2, x + nodeW + gap);
-        drawPhaseNode(g, x + nodeW + gap, ny, nodeW, nodeH, "2 · FIGHT",
+        drawArrow(target, x + nodeW, ny + nodeH / 2, x + nodeW + gap);
+        drawPhaseNode(target, x + nodeW + gap, ny, nodeW, nodeH, "2 · FIGHT",
                 "Boards lock, auto-combat", new Color(235, 130, 90), this::fightDetail);
-        drawArrow(g, x + 2 * nodeW + gap, ny + nodeH / 2, x + 2 * (nodeW + gap));
-        drawPhaseNode(g, x + 2 * (nodeW + gap), ny, nodeW, nodeH, "3 · RESULTS",
+        drawArrow(target, x + 2 * nodeW + gap, ny + nodeH / 2, x + 2 * (nodeW + gap));
+        drawPhaseNode(target, x + 2 * (nodeW + gap), ny, nodeW, nodeH, "3 · RESULTS",
                 "Take damage, gain gold", new Color(120, 200, 140), this::postDetail);
         y = ny + nodeH + 6;
-        g.setColor(new Color(130, 136, 158));
-        g.setFont(new Font("SansSerif", Font.ITALIC, 13));
-        drawCentered(g, "↻ repeats until one player remains", x + w / 2, y + 14);
+        drawCentered(target, "↻ repeats until one player remains", x + w / 2, y + 14,
+                SANS_ITALIC_13, new Color(130, 136, 158));
         y += 30;
 
-        y = heading(g, x, y + 18, "Key Rules");
+        y = heading(target, x, y + 18, "Key Rules");
         y += 4;
         String[] rules = {
                 "2–10 players; the last one alive wins the lobby.",
@@ -407,44 +413,32 @@ public class AutoBattlerGuideScene extends AbstractScene {
                 "Lose a fight and take damage equal to 2 + the winner's surviving unit stars.",
         };
         for (String r : rules) {
-            y = bullet(g, x, y, w, r);
+            y = bullet(target, x, y, w, r);
         }
         return y + 20;
     }
 
-    private int bullet(Graphics2D g, int x, int y, int w, String text) {
-        g.setColor(new Color(255, 214, 100));
-        g.setFont(new Font("SansSerif", Font.BOLD, 15));
-        g.drawString("•", x, y + 20);
-        int ny = paragraph(g, x + 18, y, w - 18, text, new Color(198, 204, 222));
+    private int bullet(DrawTarget target, int x, int y, int w, String text) {
+        target.drawText("•", x, y + 20, SANS_BOLD_15, new Color(255, 214, 100));
+        int ny = paragraph(target, x + 18, y, w - 18, text, new Color(198, 204, 222));
         return ny + 8;
     }
 
-    private void drawPhaseNode(Graphics2D g, int x, int y, int w, int h,
+    private void drawPhaseNode(DrawTarget target, int x, int y, int w, int h,
                                String title, String sub, Color color, Runnable detail) {
         boolean hot = hovered(x, y, w, h);
-        g.setColor(hot ? new Color(40, 46, 70) : new Color(28, 32, 50));
-        g.fillRoundRect(x, y, w, h, 12, 12);
-        g.setColor(color);
-        g.setStroke(new BasicStroke(hot ? 2.5f : 1.5f));
-        g.drawRoundRect(x, y, w, h, 12, 12);
-        g.setStroke(new BasicStroke(1f));
-        g.setColor(color);
-        g.setFont(new Font("SansSerif", Font.BOLD, 18));
-        drawCentered(g, title, x + w / 2, y + 32);
-        g.setColor(new Color(180, 186, 208));
-        g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        drawCentered(g, sub, x + w / 2, y + 54);
+        target.fillRoundRect(x, y, w, h, 12, 12, hot ? new Color(40, 46, 70) : new Color(28, 32, 50));
+        target.drawRoundRect(x, y, w, h, 12, 12, color, hot ? 2.5f : 1.5f);
+        drawCentered(target, title, x + w / 2, y + 32, SANS_BOLD_18, color);
+        drawCentered(target, sub, x + w / 2, y + 54, SANS_PLAIN_13, new Color(180, 186, 208));
         hot(x, y, w, h, detail);
     }
 
-    private void drawArrow(Graphics2D g, int x0, int y, int x1) {
-        g.setColor(new Color(120, 128, 155));
-        g.setStroke(new BasicStroke(2f));
-        g.drawLine(x0 + 4, y, x1 - 4, y);
-        g.fillPolygon(new int[]{x1 - 4, x1 - 12, x1 - 12},
-                new int[]{y, y - 5, y + 5}, 3);
-        g.setStroke(new BasicStroke(1f));
+    private void drawArrow(DrawTarget target, int x0, int y, int x1) {
+        target.drawLine(x0 + 4, y, x1 - 4, y, ARROW, 2f);
+        arrowXs[0] = x1 - 4;  arrowXs[1] = x1 - 12; arrowXs[2] = x1 - 12;
+        arrowYs[0] = y;       arrowYs[1] = y - 5;   arrowYs[2] = y + 5;
+        target.fillPolygon(arrowXs, arrowYs, 3, ARROW);
     }
 
     private void planDetail() {
@@ -488,17 +482,17 @@ public class AutoBattlerGuideScene extends AbstractScene {
 
     // ------------------------------------------------------------------ ECONOMY
 
-    private int drawEconomy(Graphics2D g, int y) {
+    private int drawEconomy(DrawTarget target, int y) {
         int x = contentX(), w = contentWidth();
-        y = heading(g, x, y + 12, "Gold & Economy");
-        y = paragraph(g, x, y, w,
+        y = heading(target, x, y + 12, "Gold & Economy");
+        y = paragraph(target, x, y, w,
                 "Gold is everything. Each planning phase (from round 2 on) pays income, and "
                 + "banking gold earns interest — so there's constant tension between spending "
                 + "to get strong now and saving to snowball later.",
                 new Color(200, 206, 224));
 
         // Income formula, drawn as summed chips.
-        y = heading(g, x, y + 34, "Round Income");
+        y = heading(target, x, y + 34, "Round Income");
         y += 14;
         int[] chipW = new int[5];
         String[] chips = {"Base  5", "Interest  +1 / 10g  (max +5)",
@@ -506,75 +500,62 @@ public class AutoBattlerGuideScene extends AbstractScene {
         Color[] chipCol = {new Color(70, 110, 70), new Color(70, 90, 130),
                 new Color(120, 90, 130), new Color(120, 110, 60)};
         int cx = x;
-        g.setFont(new Font("SansSerif", Font.BOLD, 14));
-        FontMetrics fm = g.getFontMetrics();
         for (int i = 0; i < chips.length; i++) {
-            int cw = fm.stringWidth(chips[i]) + 24;
+            int cw = target.textWidth(chips[i], SANS_BOLD_14) + 24;
             if (cx + cw > x + w) { cx = x; y += 42; }
-            g.setColor(chipCol[i]);
-            g.fillRoundRect(cx, y, cw, 30, 10, 10);
-            g.setColor(new Color(210, 216, 232));
-            g.drawRoundRect(cx, y, cw, 30, 10, 10);
-            g.setColor(Color.WHITE);
-            g.drawString(chips[i], cx + 12, y + 20);
+            target.fillRoundRect(cx, y, cw, 30, 10, 10, chipCol[i]);
+            target.drawRoundRect(cx, y, cw, 30, 10, 10, new Color(210, 216, 232));
+            target.drawText(chips[i], cx + 12, y + 20, SANS_BOLD_14, Color.WHITE);
             cx += cw + 12;
             if (i < chips.length - 1) {
-                g.setColor(new Color(150, 156, 178));
-                g.drawString("+", cx - 10, y + 20);
+                target.drawText("+", cx - 10, y + 20, SANS_BOLD_14, new Color(150, 156, 178));
                 cx += 6;
             }
         }
         y += 42;
-        y = paragraph(g, x, y, w,
+        y = paragraph(target, x, y, w,
                 "Streak bonus: +1 at a 2-streak, +2 at 4, +3 at 6 (win OR loss streaks count). "
                 + "Interest rewards a fat wallet: every 10 gold saved adds +1 income, up to +5 "
                 + "at 50 gold.", new Color(180, 186, 208));
 
         // Costs.
-        y = heading(g, x, y + 28, "Spending");
+        y = heading(target, x, y + 28, "Spending");
         y += 4;
-        y = bullet(g, x, y, w, "Reroll the shop: " + AutoGame.REROLL_COST + " gold.");
-        y = bullet(g, x, y, w, "Buy XP: " + AutoGame.XP_COST + " gold for +"
+        y = bullet(target, x, y, w, "Reroll the shop: " + AutoGame.REROLL_COST + " gold.");
+        y = bullet(target, x, y, w, "Buy XP: " + AutoGame.XP_COST + " gold for +"
                 + AutoGame.XP_PER_BUY + " XP. You also gain +" + AutoGame.XP_PER_ROUND
                 + " XP free each round.");
-        y = bullet(g, x, y, w, "Sell a unit to refund its full gold value back to the pool.");
+        y = bullet(target, x, y, w, "Sell a unit to refund its full gold value back to the pool.");
 
         // Level ladder table.
-        y = heading(g, x, y + 24, "Levels & Board Cap");
+        y = heading(target, x, y + 24, "Levels & Board Cap");
         y += 12;
         int rowH = 26;
         int col0 = x, col1 = x + 120, col2 = x + 320;
-        g.setFont(new Font("SansSerif", Font.BOLD, 14));
-        g.setColor(new Color(160, 168, 190));
-        g.drawString("Level", col0, y);
-        g.drawString("XP to next", col1, y);
-        g.drawString("Units you can field", col2, y);
+        target.drawText("Level", col0, y, SANS_BOLD_14, new Color(160, 168, 190));
+        target.drawText("XP to next", col1, y, SANS_BOLD_14, new Color(160, 168, 190));
+        target.drawText("Units you can field", col2, y, SANS_BOLD_14, new Color(160, 168, 190));
         y += 6;
-        g.setColor(new Color(60, 66, 92));
-        g.drawLine(x, y, x + w, y);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
+        target.drawLine(x, y, x + w, y, new Color(60, 66, 92));
         for (int lvl = 1; lvl <= AutoPlayer.MAX_LEVEL; lvl++) {
             y += rowH;
             boolean start = lvl == new AutoGame.Config().startLevel;
-            g.setColor(start ? new Color(50, 58, 84) : new Color(0, 0, 0, 0));
-            if (start) g.fillRoundRect(x - 6, y - 18, w + 12, rowH - 4, 8, 8);
-            g.setColor(new Color(230, 234, 246));
-            g.drawString("Lv " + lvl + (start ? "  (start)" : ""), col0, y);
+            if (start) target.fillRoundRect(x - 6, y - 18, w + 12, rowH - 4, 8, 8, ROW_START);
+            target.drawText("Lv " + lvl + (start ? "  (start)" : ""), col0, y, SANS_PLAIN_14,
+                    new Color(230, 234, 246));
             String need = lvl >= AutoPlayer.MAX_LEVEL ? "— (max)"
                     : AutoPlayer.XP_TO_NEXT[lvl] + " xp";
-            g.setColor(new Color(180, 186, 208));
-            g.drawString(need, col1, y);
+            target.drawText(need, col1, y, SANS_PLAIN_14, new Color(180, 186, 208));
             // Fielded-unit dots.
             int dot = 10;
             for (int i = 0; i < lvl; i++) {
-                g.setColor(new Color(120, 170, 255));
-                g.fillOval(col2 + i * (dot + 4), y - dot, dot, dot);
+                target.fillOval(col2 + i * (dot + 4), y - dot, dot, dot, new Color(120, 170, 255));
             }
-            g.setColor(new Color(150, 156, 178));
-            g.drawString(String.valueOf(lvl), col2 + lvl * (dot + 4) + 6, y);
+            target.drawText(String.valueOf(lvl), col2 + lvl * (dot + 4) + 6, y, SANS_PLAIN_14,
+                    new Color(150, 156, 178));
         }
         AutoGame.Config c = new AutoGame.Config();
-        y = paragraph(g, x, y + 20, w,
+        y = paragraph(target, x, y + 20, w,
                 "You start at level " + c.startLevel + " with " + c.startGold + " gold and "
                 + c.startHp + " HP. Your board cap equals your level, so leveling is how you "
                 + "field a bigger team.", new Color(180, 186, 208));
@@ -583,72 +564,65 @@ public class AutoBattlerGuideScene extends AbstractScene {
 
     // ------------------------------------------------------------------ TRAITS
 
-    private int drawTraits(Graphics2D g, int y) {
+    private int drawTraits(DrawTarget target, int y) {
         int x = contentX(), w = contentWidth();
-        y = heading(g, x, y + 12, "Synergies (Traits)");
-        y = paragraph(g, x, y, w,
+        y = heading(target, x, y + 12, "Synergies (Traits)");
+        y = paragraph(target, x, y, w,
                 "Every unit has one Origin and one Class. Field enough DIFFERENT units sharing "
                 + "a trait to activate it at a tier — the more you stack, the stronger the bonus, "
                 + "for your whole team, all combat. Click a trait for its per-tier effect.",
                 new Color(200, 206, 224));
-        y = paragraph(g, x, y + 6, w,
+        y = paragraph(target, x, y + 6, w,
                 "Every synergy belongs to one or more functional categories — its role icons "
                 + "sit on the right of each row. Click a category chip to browse just the "
                 + "Healing, Shielding, Damage (…) synergies. Support synergies mainly power "
                 + "up the rest of your team.", new Color(170, 178, 202));
         y += 16;
-        y = drawCategoryFilter(g, x, y, w);
+        y = drawCategoryFilter(target, x, y, w);
         y += 16;
 
         int colGap = 24;
         int colW = (w - colGap) / 2;
         int leftX = x, rightX = x + colW + colGap;
 
-        g.setFont(new Font("SansSerif", Font.BOLD, 16));
-        g.setColor(new Color(150, 200, 235));
-        g.drawString("Origins", leftX, y);
-        g.setColor(new Color(200, 150, 120));
-        g.drawString("Classes", rightX, y);
+        target.drawText("Origins", leftX, y, SANS_BOLD_16, new Color(150, 200, 235));
+        target.drawText("Classes", rightX, y, SANS_BOLD_16, new Color(200, 150, 120));
         y += 8;
 
         int leftY = y, rightY = y;
         for (Trait t : Trait.values()) {
             if (traitFilter != null && !t.categories.contains(traitFilter)) continue;
             if (t.kind == Trait.Kind.ORIGIN) {
-                leftY = drawTraitRow(g, leftX, leftY, colW, t);
+                leftY = drawTraitRow(target, leftX, leftY, colW, t);
             } else {
-                rightY = drawTraitRow(g, rightX, rightY, colW, t);
+                rightY = drawTraitRow(target, rightX, rightY, colW, t);
             }
         }
         if (leftY == y && rightY == y) {
-            g.setColor(new Color(140, 146, 168));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-            g.drawString("No synergies in this category yet.", x, y + 24);
+            target.drawText("No synergies in this category yet.", x, y + 24, SANS_PLAIN_14,
+                    new Color(140, 146, 168));
             return y + 48;
         }
         return Math.max(leftY, rightY) + 20;
     }
 
     /** The clickable category chip row ("All" plus one chip per category). */
-    private int drawCategoryFilter(Graphics2D g, int x, int y, int w) {
+    private int drawCategoryFilter(DrawTarget target, int x, int y, int w) {
         int chipH = 24;
         int cx = x;
-        g.setFont(new Font("SansSerif", Font.BOLD, 12));
-        FontMetrics fm = g.getFontMetrics();
-
-        int allW = fm.stringWidth("All") + 20;
-        if (drawChip(g, cx, y, allW, chipH, "All", null, traitFilter == null)) {
+        int allW = target.textWidth("All", SANS_BOLD_12) + 20;
+        if (drawChip(target, cx, y, allW, chipH, "All", null, traitFilter == null)) {
             hot(cx, y, allW, chipH, () -> traitFilter = null);
         }
         cx += allW + 8;
         for (SynergyCategory cat : SynergyCategory.values()) {
-            int cw = fm.stringWidth(cat.label) + 20 + 16;
+            int cw = target.textWidth(cat.label, SANS_BOLD_12) + 20 + 16;
             if (cx + cw > x + w) {
                 cx = x;
                 y += chipH + 8;
             }
             final SynergyCategory picked = cat;
-            if (drawChip(g, cx, y, cw, chipH, cat.label, cat, traitFilter == cat)) {
+            if (drawChip(target, cx, y, cw, chipH, cat.label, cat, traitFilter == cat)) {
                 hot(cx, y, cw, chipH,
                         () -> traitFilter = traitFilter == picked ? null : picked);
             }
@@ -658,41 +632,34 @@ public class AutoBattlerGuideScene extends AbstractScene {
     }
 
     /** One filter chip; returns true so callers can register its hotspot. */
-    private boolean drawChip(Graphics2D g, int x, int y, int w, int h, String label,
+    private boolean drawChip(DrawTarget target, int x, int y, int w, int h, String label,
                              SynergyCategory cat, boolean active) {
         boolean hot = hovered(x, y, w, h);
-        g.setColor(active ? new Color(70, 82, 118) : hot ? new Color(44, 50, 74)
+        target.fillRoundRect(x, y, w, h, 12, 12, active ? new Color(70, 82, 118) : hot ? new Color(44, 50, 74)
                 : new Color(30, 34, 52));
-        g.fillRoundRect(x, y, w, h, 12, 12);
-        g.setColor(active ? new Color(150, 170, 220) : new Color(56, 62, 88));
-        g.drawRoundRect(x, y, w, h, 12, 12);
+        target.drawRoundRect(x, y, w, h, 12, 12,
+                active ? new Color(150, 170, 220) : new Color(56, 62, 88));
         int tx = x + 10;
         if (cat != null) {
-            g.drawImage(AutoSprites.categoryIcon(cat, 14), x + 8, y + h / 2 - 7, null);
+            target.drawImage(AutoSprites.categoryIcon(cat, 14), x + 8, y + h / 2 - 7);
             tx = x + 26;
         }
-        g.setColor(active ? new Color(235, 238, 250) : new Color(180, 186, 208));
-        g.drawString(label, tx, y + h / 2 + 4);
+        target.drawText(label, tx, y + h / 2 + 4, SANS_BOLD_12,
+                active ? new Color(235, 238, 250) : new Color(180, 186, 208));
         return true;
     }
 
-    private int drawTraitRow(Graphics2D g, int x, int y, int w, Trait t) {
+    private int drawTraitRow(DrawTarget target, int x, int y, int w, Trait t) {
         int h = 42;
         boolean hot = hovered(x, y, w, h);
-        g.setColor(hot ? new Color(40, 46, 70) : new Color(28, 32, 50));
-        g.fillRoundRect(x, y, w, h, 10, 10);
-        g.setColor(new Color(56, 62, 88));
-        g.drawRoundRect(x, y, w, h, 10, 10);
+        target.fillRoundRect(x, y, w, h, 10, 10, hot ? new Color(40, 46, 70) : new Color(28, 32, 50));
+        target.drawRoundRect(x, y, w, h, 10, 10, new Color(56, 62, 88));
 
         // Trait dot.
-        g.setColor(t.color);
-        g.fillOval(x + 12, y + h / 2 - 9, 18, 18);
-        g.setColor(t.color.darker());
-        g.drawOval(x + 12, y + h / 2 - 9, 18, 18);
+        target.fillOval(x + 12, y + h / 2 - 9, 18, 18, t.color);
+        target.drawOval(x + 12, y + h / 2 - 9, 18, 18, t.color.darker());
 
-        g.setColor(new Color(232, 236, 248));
-        g.setFont(new Font("SansSerif", Font.BOLD, 15));
-        g.drawString(t.label, x + 40, y + h / 2 - 2);
+        target.drawText(t.label, x + 40, y + h / 2 - 2, SANS_BOLD_15, new Color(232, 236, 248));
 
         // Threshold pips ("2 / 4 / 6").
         StringBuilder marks = new StringBuilder();
@@ -700,21 +667,20 @@ public class AutoBattlerGuideScene extends AbstractScene {
             if (marks.length() > 0) marks.append(" / ");
             marks.append(th);
         }
-        g.setColor(new Color(150, 156, 178));
-        g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        g.drawString("activates at " + marks, x + 40, y + h / 2 + 14);
+        target.drawText("activates at " + marks, x + 40, y + h / 2 + 14, SANS_PLAIN_12,
+                new Color(150, 156, 178));
 
         int count = countUnitsWithTrait(t);
-        g.setColor(new Color(120, 126, 148));
         String tag = count + " unit" + (count == 1 ? "" : "s");
-        g.drawString(tag, x + w - g.getFontMetrics().stringWidth(tag) - 12, y + h / 2 + 14);
+        target.drawText(tag, x + w - target.textWidth(tag, SANS_PLAIN_12) - 12, y + h / 2 + 14,
+                SANS_PLAIN_12, new Color(120, 126, 148));
 
         // Role icons, top-right of the row.
         int icon = 13;
         int ix = x + w - icon - 10;
         for (int ci = t.categories.size() - 1; ci >= 0; ci--) {
-            g.drawImage(AutoSprites.categoryIcon(t.categories.get(ci), icon),
-                    ix - ci * (icon + 3), y + 7, null);
+            target.drawImage(AutoSprites.categoryIcon(t.categories.get(ci), icon),
+                    ix - ci * (icon + 3), y + 7);
         }
 
         hot(x, y, w, h, () -> traitDetail(t));
@@ -756,10 +722,10 @@ public class AutoBattlerGuideScene extends AbstractScene {
 
     // ------------------------------------------------------------------ ELEMENTS
 
-    private int drawElements(Graphics2D g, int y) {
+    private int drawElements(DrawTarget target, int y) {
         int x = contentX(), w = contentWidth();
-        y = heading(g, x, y + 12, "Elemental Damage");
-        y = paragraph(g, x, y, w,
+        y = heading(target, x, y + 12, "Elemental Damage");
+        y = paragraph(target, x, y, w,
                 "Elements are a second strategic layer on top of synergies — they never replace "
                 + "them. A unit can attack with up to two elements, resist up to two, and be "
                 + "weak to up to two; plenty of units carry none, and plain damage is always "
@@ -768,7 +734,7 @@ public class AutoBattlerGuideScene extends AbstractScene {
                 new Color(200, 206, 224));
         int r10 = (int) Math.round(30 * BattleSim.elementIntensity(10));
         int r20 = (int) Math.round(30 * BattleSim.elementIntensity(20));
-        y = paragraph(g, x, y + 6, w,
+        y = paragraph(target, x, y + 6, w,
                 "The swing GROWS round over round (about +" + r10 + "% into a weakness by "
                 + "round 10, +" + r20 + "% by round 20), so scout your opponents and adapt: "
                 + "late-game, countering the lobby's elements matters as much as your own "
@@ -778,38 +744,35 @@ public class AutoBattlerGuideScene extends AbstractScene {
         for (Element e : Element.values()) {
             int h = 46;
             boolean hot = hovered(x, y, w, h);
-            g.setColor(hot ? new Color(40, 46, 70) : new Color(28, 32, 50));
-            g.fillRoundRect(x, y, w, h, 10, 10);
-            g.setColor(new Color(56, 62, 88));
-            g.drawRoundRect(x, y, w, h, 10, 10);
+            target.fillRoundRect(x, y, w, h, 10, 10,
+                    hot ? new Color(40, 46, 70) : new Color(28, 32, 50));
+            target.drawRoundRect(x, y, w, h, 10, 10, new Color(56, 62, 88));
 
             // Element diamond.
             int d = 18;
             int dx = x + 14, dy = y + h / 2 - d / 2;
-            g.setColor(e.color);
-            g.fillPolygon(new int[]{dx + d / 2, dx + d, dx + d / 2, dx},
-                    new int[]{dy, dy + d / 2, dy + d, dy + d / 2}, 4);
+            diamondXs[0] = dx + d / 2; diamondXs[1] = dx + d;
+            diamondXs[2] = dx + d / 2; diamondXs[3] = dx;
+            diamondYs[0] = dy;         diamondYs[1] = dy + d / 2;
+            diamondYs[2] = dy + d;     diamondYs[3] = dy + d / 2;
+            target.fillPolygon(diamondXs, diamondYs, 4, e.color);
 
-            g.setColor(new Color(232, 236, 248));
-            g.setFont(new Font("SansSerif", Font.BOLD, 15));
-            g.drawString(e.label, x + 44, y + h / 2 - 2);
-            g.setColor(new Color(150, 156, 178));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            g.drawString(trim(g, e.description, w - 200), x + 44, y + h / 2 + 14);
+            target.drawText(e.label, x + 44, y + h / 2 - 2, SANS_BOLD_15, new Color(232, 236, 248));
+            target.drawText(trim(target, SANS_PLAIN_12, e.description, w - 200), x + 44, y + h / 2 + 14,
+                    SANS_PLAIN_12, new Color(150, 156, 178));
 
             int users = countElementUsers(e);
-            g.setColor(new Color(120, 126, 148));
             String tag = users + " attacker" + (users == 1 ? "" : "s");
-            g.drawString(tag, x + w - g.getFontMetrics().stringWidth(tag) - 12,
-                    y + h / 2 + 4);
+            target.drawText(tag, x + w - target.textWidth(tag, SANS_PLAIN_12) - 12, y + h / 2 + 4,
+                    SANS_PLAIN_12, new Color(120, 126, 148));
 
             final Element fixed = e;
             hot(x, y, w, h, () -> elementDetail(fixed));
             y += h + 8;
         }
 
-        y = heading(g, x, y + 16, "Adapting Your Build");
-        y = paragraph(g, x, y, w,
+        y = heading(target, x, y + 16, "Adapting Your Build");
+        y = paragraph(target, x, y, w,
                 "Elemental relics drop from creep rounds (see the Items tab): infusion charms "
                 + "add an element to any unit's attacks, the Radiation Core converts a unit to "
                 + "pure Radiation, and the Prism Ward grants resistance to everything. Use them "
@@ -851,16 +814,16 @@ public class AutoBattlerGuideScene extends AbstractScene {
 
     // ------------------------------------------------------------------ ITEMS
 
-    private int drawItems(Graphics2D g, int y) {
+    private int drawItems(DrawTarget target, int y) {
         int x = contentX(), w = contentWidth();
-        y = heading(g, x, y + 12, "Items");
-        y = paragraph(g, x, y, w,
+        y = heading(target, x, y + 12, "Items");
+        y = paragraph(target, x, y, w,
                 "Item components drop from PvE creep rounds. Equip two components on the same "
                 + "unit and they combine automatically into a powerful finished item. Click any "
                 + "gem for its stats and recipe.", new Color(200, 206, 224));
 
         // Components row.
-        y = heading(g, x, y + 26, "Components");
+        y = heading(target, x, y + 26, "Components");
         y += 14;
         List<String> comps = AutoItems.componentKeys();
         int gem = 34;
@@ -868,20 +831,17 @@ public class AutoBattlerGuideScene extends AbstractScene {
         for (int i = 0; i < comps.size(); i++) {
             AutoItem it = AutoItems.get(comps.get(i));
             int gx = x + i * cellW;
-            drawItemGem(g, it, gx, y, gem);
-            g.setColor(new Color(226, 230, 244));
-            g.setFont(new Font("SansSerif", Font.BOLD, 13));
-            g.drawString(it.name, gx + gem + 8, y + 15);
-            g.setColor(new Color(160, 168, 190));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 11));
-            g.drawString(it.statLine(), gx + gem + 8, y + 31);
+            drawItemGem(target, it, gx, y, gem);
+            target.drawText(it.name, gx + gem + 8, y + 15, SANS_BOLD_13, new Color(226, 230, 244));
+            target.drawText(it.statLine(), gx + gem + 8, y + 31, SANS_PLAIN_11,
+                    new Color(160, 168, 190));
             hot(gx, y, cellW - 6, gem, () -> itemDetail(it));
         }
         y += gem + 20;
 
         // Combination matrix (5×5): row + column headers are components,
         // each cell the combined item they make.
-        y = heading(g, x, y + 8, "Recipe Grid");
+        y = heading(target, x, y + 8, "Recipe Grid");
         y += 14;
         int n = comps.size();
         int head = 40;
@@ -892,37 +852,36 @@ public class AutoBattlerGuideScene extends AbstractScene {
         // Column header gems.
         for (int c = 0; c < n; c++) {
             AutoItem it = AutoItems.get(comps.get(c));
-            drawItemGem(g, it, gridX + c * cell + cell / 2 - 14, y + 4, 28);
+            drawItemGem(target, it, gridX + c * cell + cell / 2 - 14, y + 4, 28);
         }
         // Row header gems + cells.
         for (int r = 0; r < n; r++) {
             AutoItem rowIt = AutoItems.get(comps.get(r));
-            drawItemGem(g, rowIt, x + 4, gridY + r * cell + cell / 2 - 14, 28);
+            drawItemGem(target, rowIt, x + 4, gridY + r * cell + cell / 2 - 14, 28);
             for (int c = 0; c < n; c++) {
                 String combKey = AutoItems.combine(comps.get(r), comps.get(c));
                 AutoItem comb = combKey == null ? null : AutoItems.get(combKey);
                 int bx = gridX + c * cell, by = gridY + r * cell;
                 boolean hot = hovered(bx, by, cell - 3, cell - 3);
-                g.setColor(hot ? new Color(44, 50, 74) : new Color(26, 30, 46));
-                g.fillRoundRect(bx, by, cell - 3, cell - 3, 8, 8);
-                g.setColor(new Color(50, 56, 80));
-                g.drawRoundRect(bx, by, cell - 3, cell - 3, 8, 8);
+                target.fillRoundRect(bx, by, cell - 3, cell - 3, 8, 8,
+                        hot ? new Color(44, 50, 74) : new Color(26, 30, 46));
+                target.drawRoundRect(bx, by, cell - 3, cell - 3, 8, 8, new Color(50, 56, 80));
                 if (comb != null) {
-                    drawItemGem(g, comb, bx + cell / 2 - 15, by + cell / 2 - 17, 28);
+                    drawItemGem(target, comb, bx + cell / 2 - 15, by + cell / 2 - 17, 28);
                     AutoItem fixed = comb;
                     hot(bx, by, cell - 3, cell - 3, () -> itemDetail(fixed));
                 }
             }
         }
         y = gridY + n * cell + 8;
-        y = paragraph(g, x, y, w,
+        y = paragraph(target, x, y, w,
                 "The grid is symmetric — order doesn't matter. Two of the same component make "
                 + "the strongest single-stat items (e.g. two swords → Deathblade).",
                 new Color(170, 178, 202));
 
         // Elemental relics.
-        y = heading(g, x, y + 18, "Elemental Relics");
-        y = paragraph(g, x, y, w,
+        y = heading(target, x, y + 18, "Elemental Relics");
+        y = paragraph(target, x, y, w,
                 "Relics also drop from creep rounds (less often than components). They carry "
                 + "no stats — instead they rewire a unit's elemental affinity, and they never "
                 + "combine. See the Elements tab for the damage rules.",
@@ -937,14 +896,10 @@ public class AutoBattlerGuideScene extends AbstractScene {
                 rx = x;
                 y += gem2 + 18;
             }
-            drawItemGem(g, it, rx, y, gem2);
-            g.setColor(new Color(226, 230, 244));
-            g.setFont(new Font("SansSerif", Font.BOLD, 12));
-            g.drawString(it.name, rx + gem2 + 8, y + 13);
-            g.setColor(new Color(160, 168, 190));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 11));
-            g.drawString(trim(g, it.statLine(), relicCellW - gem2 - 16),
-                    rx + gem2 + 8, y + 27);
+            drawItemGem(target, it, rx, y, gem2);
+            target.drawText(it.name, rx + gem2 + 8, y + 13, SANS_BOLD_12, new Color(226, 230, 244));
+            target.drawText(trim(target, SANS_PLAIN_11, it.statLine(), relicCellW - gem2 - 16), rx + gem2 + 8,
+                    y + 27, SANS_PLAIN_11, new Color(160, 168, 190));
             AutoItem fixed = it;
             hot(rx, y, relicCellW - 6, gem2, () -> itemDetail(fixed));
             rx += relicCellW;
@@ -953,8 +908,8 @@ public class AutoBattlerGuideScene extends AbstractScene {
         return y + 20;
     }
 
-    private void drawItemGem(Graphics2D g, AutoItem it, int x, int y, int size) {
-        g.drawImage(AutoSprites.item(it, size), x, y, null);
+    private void drawItemGem(DrawTarget target, AutoItem it, int x, int y, int size) {
+        target.drawImage(AutoSprites.item(it, size), x, y);
     }
 
     private void itemDetail(AutoItem it) {
@@ -986,10 +941,10 @@ public class AutoBattlerGuideScene extends AbstractScene {
 
     // ------------------------------------------------------------------ ODDS
 
-    private int drawOdds(Graphics2D g, int y) {
+    private int drawOdds(DrawTarget target, int y) {
         int x = contentX(), w = contentWidth();
-        y = heading(g, x, y + 12, "Shop Odds & Rarity");
-        y = paragraph(g, x, y, w,
+        y = heading(target, x, y + 12, "Shop Odds & Rarity");
+        y = paragraph(target, x, y, w,
                 "Units come in five cost tiers — pricier units are rarer and stronger. Your "
                 + "player level shifts the odds of each tier appearing in your shop. Click a "
                 + "cell to read it out.", new Color(200, 206, 224));
@@ -997,15 +952,12 @@ public class AutoBattlerGuideScene extends AbstractScene {
         // Cost legend.
         y += 20;
         int cx = x;
-        g.setFont(new Font("SansSerif", Font.BOLD, 13));
         for (int cost = 1; cost <= 5; cost++) {
             String lbl = cost + "g · " + COST_NAMES[cost - 1];
-            int cw = g.getFontMetrics().stringWidth(lbl) + 30;
+            int cw = target.textWidth(lbl, SANS_BOLD_13) + 30;
             if (cx + cw > x + w) { cx = x; y += 30; }
-            g.setColor(COST_COLORS[cost - 1]);
-            g.fillOval(cx, y, 14, 14);
-            g.setColor(new Color(210, 216, 232));
-            g.drawString(lbl, cx + 20, y + 12);
+            target.fillOval(cx, y, 14, 14, COST_COLORS[cost - 1]);
+            target.drawText(lbl, cx + 20, y + 12, SANS_BOLD_13, new Color(210, 216, 232));
             cx += cw + 10;
         }
         y += 34;
@@ -1015,19 +967,15 @@ public class AutoBattlerGuideScene extends AbstractScene {
         int cell = Math.min(120, (w - labelW) / 5);
         int rowH = 30;
         int gx = x + labelW;
-        g.setFont(new Font("SansSerif", Font.BOLD, 13));
-        g.setColor(new Color(160, 168, 190));
-        g.drawString("Level", x, y + 14);
+        target.drawText("Level", x, y + 14, SANS_BOLD_13, new Color(160, 168, 190));
         for (int cost = 1; cost <= 5; cost++) {
-            g.setColor(COST_COLORS[cost - 1]);
-            drawCentered(g, cost + "g", gx + (cost - 1) * cell + cell / 2, y + 14);
+            drawCentered(target, cost + "g", gx + (cost - 1) * cell + cell / 2, y + 14,
+                    SANS_BOLD_13, COST_COLORS[cost - 1]);
         }
         y += 22;
         for (int lvl = 1; lvl <= AutoUnits.SHOP_ODDS.length; lvl++) {
             int[] row = AutoUnits.SHOP_ODDS[lvl - 1];
-            g.setColor(new Color(210, 216, 232));
-            g.setFont(new Font("SansSerif", Font.BOLD, 13));
-            g.drawString("Lv " + lvl, x, y + 20);
+            target.drawText("Lv " + lvl, x, y + 20, SANS_BOLD_13, new Color(210, 216, 232));
             for (int cost = 1; cost <= 5; cost++) {
                 int pct = row[cost - 1];
                 int bx = gx + (cost - 1) * cell, by = y;
@@ -1035,16 +983,14 @@ public class AutoBattlerGuideScene extends AbstractScene {
                 // Tint the cell by the probability.
                 int a = (int) (25 + 190 * (pct / 100.0));
                 boolean hot = hovered(bx, by, cell - 3, rowH - 3);
-                g.setColor(new Color(base.getRed(), base.getGreen(), base.getBlue(),
+                target.fillRoundRect(bx, by, cell - 3, rowH - 3, 6, 6, new Color(base.getRed(), base.getGreen(), base.getBlue(),
                         pct == 0 ? 12 : a));
-                g.fillRoundRect(bx, by, cell - 3, rowH - 3, 6, 6);
                 if (hot) {
-                    g.setColor(new Color(255, 255, 255, 120));
-                    g.drawRoundRect(bx, by, cell - 3, rowH - 3, 6, 6);
+                    target.drawRoundRect(bx, by, cell - 3, rowH - 3, 6, 6,
+                            new Color(255, 255, 255, 120));
                 }
-                g.setColor(pct == 0 ? new Color(90, 96, 116) : new Color(20, 22, 34));
-                g.setFont(new Font("SansSerif", Font.BOLD, 13));
-                drawCentered(g, pct + "%", bx + (cell - 3) / 2, by + 20);
+                drawCentered(target, pct + "%", bx + (cell - 3) / 2, by + 20, SANS_BOLD_13,
+                        pct == 0 ? new Color(90, 96, 116) : new Color(20, 22, 34));
                 int fl = lvl, fc = cost, fp = pct;
                 hot(bx, by, cell - 3, rowH - 3, () -> oddsDetail(fl, fc, fp));
             }
@@ -1052,25 +998,22 @@ public class AutoBattlerGuideScene extends AbstractScene {
         }
 
         // Pool copies.
-        y = heading(g, x, y + 22, "Shared Unit Pool");
+        y = heading(target, x, y + 22, "Shared Unit Pool");
         y += 14;
-        y = paragraph(g, x, y, w,
+        y = paragraph(target, x, y, w,
                 "All players draw from one shared pool, so contested units dry up. Copies of "
                 + "each unit that exist per cost tier:", new Color(180, 186, 208));
         y += 14;
         int px = x;
-        g.setFont(new Font("SansSerif", Font.BOLD, 14));
         for (int cost = 1; cost <= 5; cost++) {
             String lbl = cost + "g:  " + AutoUnits.POOL_COPIES[cost - 1] + " each";
-            int pw = g.getFontMetrics().stringWidth(lbl) + 24;
+            int pw = target.textWidth(lbl, SANS_BOLD_14) + 24;
             if (px + pw > x + w) { px = x; y += 40; }
             Color base = COST_COLORS[cost - 1];
-            g.setColor(new Color(base.getRed(), base.getGreen(), base.getBlue(), 60));
-            g.fillRoundRect(px, y, pw, 30, 10, 10);
-            g.setColor(base);
-            g.drawRoundRect(px, y, pw, 30, 10, 10);
-            g.setColor(new Color(230, 234, 246));
-            g.drawString(lbl, px + 12, y + 20);
+            target.fillRoundRect(px, y, pw, 30, 10, 10,
+                    new Color(base.getRed(), base.getGreen(), base.getBlue(), 60));
+            target.drawRoundRect(px, y, pw, 30, 10, 10, base);
+            target.drawText(lbl, px + 12, y + 20, SANS_BOLD_14, new Color(230, 234, 246));
             px += pw + 12;
         }
         return y + 44;
@@ -1090,10 +1033,10 @@ public class AutoBattlerGuideScene extends AbstractScene {
 
     // ------------------------------------------------------------------ UNITS
 
-    private int drawUnits(Graphics2D g, int y) {
+    private int drawUnits(DrawTarget target, int y) {
         int x = contentX(), w = contentWidth();
-        y = heading(g, x, y + 12, "Units");
-        y = paragraph(g, x, y, w,
+        y = heading(target, x, y + 12, "Units");
+        y = paragraph(target, x, y, w,
                 "The full roster, grouped by cost. Each card shows a unit's base (1★) stats. "
                 + "Click a card for star-scaled stats and its ability.", new Color(200, 206, 224));
         y += 16;
@@ -1105,82 +1048,69 @@ public class AutoBattlerGuideScene extends AbstractScene {
         for (int cost = 1; cost <= 5; cost++) {
             List<UnitDef> tier = AutoUnits.byCost(cost);
             if (tier.isEmpty()) continue;
-            g.setColor(COST_COLORS[cost - 1]);
-            g.setFont(new Font("SansSerif", Font.BOLD, 16));
-            g.drawString(cost + "g · " + COST_NAMES[cost - 1] + "  (" + tier.size() + ")", x, y + 16);
+            target.drawText(cost + "g · " + COST_NAMES[cost - 1] + "  (" + tier.size() + ")", x,
+                    y + 16, SANS_BOLD_16, COST_COLORS[cost - 1]);
             y += 26;
-            y = drawUnitGrid(g, x, y, cardW, cardH, gap, cols, tier);
+            y = drawUnitGrid(target, x, y, cardW, cardH, gap, cols, tier);
             y += 16;
         }
 
         // Creeps.
         List<UnitDef> creeps = AutoUnits.byCost(0);
         if (!creeps.isEmpty()) {
-            g.setColor(new Color(180, 150, 120));
-            g.setFont(new Font("SansSerif", Font.BOLD, 16));
-            g.drawString("PvE Creeps  (" + creeps.size() + ")", x, y + 16);
+            target.drawText("PvE Creeps  (" + creeps.size() + ")", x, y + 16, SANS_BOLD_16,
+                    new Color(180, 150, 120));
             y += 26;
-            y = drawUnitGrid(g, x, y, cardW, cardH, gap, cols, creeps);
+            y = drawUnitGrid(target, x, y, cardW, cardH, gap, cols, creeps);
         }
         return y + 24;
     }
 
-    private int drawUnitGrid(Graphics2D g, int x, int y, int cardW, int cardH,
+    private int drawUnitGrid(DrawTarget target, int x, int y, int cardW, int cardH,
                              int gap, int cols, List<UnitDef> units) {
         for (int i = 0; i < units.size(); i++) {
             int col = i % cols;
             int cx = x + col * (cardW + gap);
             if (col == 0 && i > 0) y += cardH + gap;
-            drawUnitCard(g, cx, y, cardW, cardH, units.get(i));
+            drawUnitCard(target, cx, y, cardW, cardH, units.get(i));
         }
         return y + cardH;
     }
 
-    private void drawUnitCard(Graphics2D g, int x, int y, int w, int h, UnitDef def) {
+    private void drawUnitCard(DrawTarget target, int x, int y, int w, int h, UnitDef def) {
         boolean creep = def.isCreep();
         boolean hot = hovered(x, y, w, h);
         Color edge = creep ? new Color(150, 130, 110) : COST_COLORS[def.cost - 1];
-        g.setColor(hot ? new Color(38, 44, 66) : new Color(26, 30, 46));
-        g.fillRoundRect(x, y, w, h, 10, 10);
-        g.setColor(edge);
-        g.setStroke(new BasicStroke(hot ? 2f : 1.3f));
-        g.drawRoundRect(x, y, w, h, 10, 10);
-        g.setStroke(new BasicStroke(1f));
+        target.fillRoundRect(x, y, w, h, 10, 10, hot ? new Color(38, 44, 66) : new Color(26, 30, 46));
+        target.drawRoundRect(x, y, w, h, 10, 10, edge, hot ? 2f : 1.3f);
 
         int sprite = 52;
-        g.drawImage(AutoSprites.unit(def, sprite, true), x + 6, y + h / 2 - sprite / 2 - 4, null);
+        target.drawImage(AutoSprites.unit(def, sprite, true), x + 6, y + h / 2 - sprite / 2 - 4);
 
         int tx = x + sprite + 14;
-        g.setColor(new Color(232, 236, 248));
-        g.setFont(new Font("SansSerif", Font.BOLD, 14));
-        g.drawString(trim(g, def.name, w - sprite - 46), tx, y + 20);
+        target.drawText(trim(target, SANS_BOLD_14, def.name, w - sprite - 46), tx, y + 20, SANS_BOLD_14,
+                new Color(232, 236, 248));
         if (!creep) {
-            g.setColor(new Color(255, 214, 100));
-            g.setFont(new Font("SansSerif", Font.BOLD, 13));
             String costStr = def.cost + "g";
-            g.drawString(costStr, x + w - g.getFontMetrics().stringWidth(costStr) - 10, y + 20);
+            target.drawText(costStr, x + w - target.textWidth(costStr, SANS_BOLD_13) - 10, y + 20,
+                    SANS_BOLD_13, new Color(255, 214, 100));
 
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            g.setColor(def.origin.color);
-            g.drawString(def.origin.label, tx, y + 38);
-            g.setColor(def.clazz.color);
-            g.drawString(def.clazz.label, tx, y + 54);
+            target.drawText(def.origin.label, tx, y + 38, SANS_PLAIN_12, def.origin.color);
+            target.drawText(def.clazz.label, tx, y + 54, SANS_PLAIN_12, def.clazz.color);
             if (!def.attackElements.isEmpty()) {
                 AutoSprites.drawElementPips(frameTarget, def.attackElements,
                         x + w - 8 - def.attackElements.size() * 6, y + 32, 9);
             }
         } else {
-            g.setColor(new Color(160, 168, 190));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            g.drawString("PvE creep", tx, y + 38);
+            target.drawText("PvE creep", tx, y + 38, SANS_PLAIN_12, new Color(160, 168, 190));
         }
 
-        g.setColor(new Color(170, 178, 200));
-        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        g.drawString((int) def.hp + " HP · " + (int) def.ad + " AD · " + def.attackSpeed + "/s",
-                tx, y + h - 20);
-        g.drawString("rng " + (int) def.range + " · " + (int) def.armor + " armor"
-                + (def.manaMax > 0 ? " · " + (int) def.manaMax + " mana" : ""), tx, y + h - 6);
+        target.drawText((int) def.hp + " HP · " + (int) def.ad + " AD · " + def.attackSpeed + "/s",
+                tx, y + h - 20, SANS_PLAIN_11, new Color(170, 178, 200));
+        target.drawText("rng " + (int) def.range + " · " + (int) def.armor + " armor"
+                + (
+                        def.manaMax > 0 ? " · " + (int) def.manaMax + " mana" : ""), tx, y + h - 6, SANS_PLAIN_11, new Color(170,
+                        178, 200));
 
         hot(x, y, w, h, () -> unitDetail(def));
     }
@@ -1260,14 +1190,11 @@ public class AutoBattlerGuideScene extends AbstractScene {
 
     // ------------------------------------------------------------------ DETAIL CARD
 
-    private void drawDetail(Graphics2D g) {
+    private void drawDetail(DrawTarget target) {
         // Dim the scene behind the modal.
-        g.setColor(new Color(8, 9, 16, 200));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
+        target.fillRect(0, 0, viewportWidth, viewportHeight, new Color(8, 9, 16, 200));
 
         int cardW = Math.min(520, viewportWidth - 80);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-        FontMetrics fm = g.getFontMetrics();
         int textW = cardW - 40;
 
         // Pre-wrap all lines to compute the card height.
@@ -1280,7 +1207,7 @@ public class AutoBattlerGuideScene extends AbstractScene {
                 flatColor.add(Color.WHITE);
                 continue;
             }
-            for (String piece : wrap(fm, ln, textW)) {
+            for (String piece : wrap(target, SANS_PLAIN_14, ln, textW)) {
                 flat.add(piece);
                 flatColor.add(detail.colors.get(i));
             }
@@ -1291,50 +1218,41 @@ public class AutoBattlerGuideScene extends AbstractScene {
         int cardX = (viewportWidth - cardW) / 2;
         int cardY = Math.max(40, (viewportHeight - cardH) / 2);
 
-        g.setColor(new Color(20, 23, 38, 250));
-        g.fillRoundRect(cardX, cardY, cardW, cardH, 16, 16);
-        g.setColor(detail.titleColor);
-        g.setStroke(new BasicStroke(2f));
-        g.drawRoundRect(cardX, cardY, cardW, cardH, 16, 16);
-        g.setStroke(new BasicStroke(1f));
+        target.fillRoundRect(cardX, cardY, cardW, cardH, 16, 16, new Color(20, 23, 38, 250));
+        target.drawRoundRect(cardX, cardY, cardW, cardH, 16, 16, detail.titleColor, 2f);
 
         int tx = cardX + 20;
         int ty = cardY + 30;
         if (detail.icon != null) {
-            g.drawImage(detail.icon, cardX + 18, cardY + 12, null);
+            target.drawImage(detail.icon, cardX + 18, cardY + 12);
             tx = cardX + 18 + detail.icon.getWidth() + 12;
         }
-        g.setColor(detail.titleColor);
-        g.setFont(new Font("SansSerif", Font.BOLD, 20));
-        g.drawString(detail.title, tx, ty);
+        target.drawText(detail.title, tx, ty, SANS_BOLD_20, detail.titleColor);
 
         int y = cardY + headH + 8;
         for (int i = 0; i < flat.size(); i++) {
             y += 20;
             if (flat.get(i).isEmpty()) continue;
-            g.setColor(flatColor.get(i));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-            g.drawString(flat.get(i), cardX + 20, y);
+            target.drawText(flat.get(i), cardX + 20, y, SANS_PLAIN_14, flatColor.get(i));
         }
 
-        g.setColor(new Color(130, 136, 158));
-        g.setFont(new Font("SansSerif", Font.ITALIC, 12));
-        drawCentered(g, "click anywhere to close", cardX + cardW / 2, cardY + cardH - 13);
+        drawCentered(target, "click anywhere to close", cardX + cardW / 2, cardY + cardH - 13,
+                SANS_ITALIC_12, new Color(130, 136, 158));
     }
 
     // ------------------------------------------------------------------ util
 
-    private void drawCentered(Graphics2D g, String s, int cx, int y) {
-        FontMetrics fm = g.getFontMetrics();
-        g.drawString(s, cx - fm.stringWidth(s) / 2, y);
+    private void drawCentered(DrawTarget target, String s, int cx, int y,
+                              Font font, Color color) {
+        target.drawText(s, cx - target.textWidth(s, font) / 2, y, font, color);
     }
 
-    private static List<String> wrap(FontMetrics fm, String text, int maxWidth) {
+    private static List<String> wrap(DrawTarget target, Font font, String text, int maxWidth) {
         List<String> out = new ArrayList<>();
         StringBuilder line = new StringBuilder();
         for (String word : text.split(" ")) {
             String trial = line.length() == 0 ? word : line + " " + word;
-            if (fm.stringWidth(trial) > maxWidth && line.length() > 0) {
+            if (target.textWidth(trial, font) > maxWidth && line.length() > 0) {
                 out.add(line.toString());
                 line = new StringBuilder(word);
             } else {
@@ -1345,11 +1263,10 @@ public class AutoBattlerGuideScene extends AbstractScene {
         return out;
     }
 
-    private static String trim(Graphics2D g, String s, int maxWidth) {
-        FontMetrics fm = g.getFontMetrics();
-        if (fm.stringWidth(s) <= maxWidth) return s;
+    private static String trim(DrawTarget target, Font font, String s, int maxWidth) {
+        if (target.textWidth(s, font) <= maxWidth) return s;
         String out = s;
-        while (out.length() > 1 && fm.stringWidth(out + "…") > maxWidth) {
+        while (out.length() > 1 && target.textWidth(out + "…", font) > maxWidth) {
             out = out.substring(0, out.length() - 1);
         }
         return out + "…";
