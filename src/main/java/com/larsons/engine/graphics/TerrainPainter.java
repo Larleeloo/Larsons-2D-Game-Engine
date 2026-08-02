@@ -233,7 +233,11 @@ public final class TerrainPainter {
          */
         private DrawTarget target;
         private final Level level;
-        private final Camera camera;
+        /**
+         * Not final: baking a chunk projects through a lattice-aligned camera
+         * rather than the frame's, so the sweep runs with that one swapped in.
+         */
+        private Camera camera;
         private final double animClock;
         private final CellDecorator decor;
         private final boolean iso;
@@ -342,13 +346,17 @@ public final class TerrainPainter {
          * screen. Swapping the target for the duration is what lets one
          * implementation serve both.
          */
-        private void renderChunk(DrawTarget into, int col0, int row0, int col1, int row1) {
-            DrawTarget previous = target;
+        private void renderChunk(DrawTarget into, Camera with,
+                                 int col0, int row0, int col1, int row1) {
+            DrawTarget previousTarget = target;
+            Camera previousCamera = camera;
             target = into;
+            camera = with;
             try {
                 sweepFloor(new int[]{col0, row0, col1, row1}, null);
             } finally {
-                target = previous;
+                target = previousTarget;
+                camera = previousCamera;
             }
         }
 
