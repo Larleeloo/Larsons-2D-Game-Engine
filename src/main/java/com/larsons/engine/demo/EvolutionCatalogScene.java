@@ -13,17 +13,12 @@ import com.larsons.engine.evolution.Trait;
 import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 
-import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.FontMetrics;
-import java.awt.Graphics2D;
 import java.awt.Rectangle;
-import java.awt.RenderingHints;
 import java.awt.event.KeyEvent;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -61,6 +56,26 @@ public class EvolutionCatalogScene extends AbstractScene {
     private static final Color TEXT_DIM = new Color(142, 154, 176);
     private static final Color GOLD = new Color(240, 208, 110);
     private static final Color GOOD = new Color(140, 220, 150);
+    private static final Color TAB_ACTIVE = new Color(52, 64, 88);
+    private static final Color TAB_HOVER = new Color(38, 46, 62);
+    private static final Color ROW_SELECTED = new Color(46, 58, 80);
+    private static final Color ROW_NAME = new Color(186, 196, 214);
+    private static final Color MUTED = new Color(120, 128, 146);
+    private static final Color BAR_TRACK = new Color(40, 48, 64);
+    private static final Color UNLOCKED_FILL = new Color(30, 40, 34);
+    private static final Color UNLOCKED_EDGE = new Color(110, 170, 120);
+    private static final Color UNLOCKED_HINT = new Color(96, 132, 104);
+    private static final Color LOCKED_HINT = new Color(96, 102, 118);
+
+    private static final Font TITLE_FONT = new Font("SansSerif", Font.BOLD, 26);
+    private static final Font BODY_FONT = new Font("SansSerif", Font.PLAIN, 14);
+    private static final Font SMALL_FONT = new Font("SansSerif", Font.PLAIN, 13);
+    private static final Font TINY_FONT = new Font("SansSerif", Font.PLAIN, 12);
+    private static final Font STAT_FONT = new Font("SansSerif", Font.BOLD, 17);
+    private static final Font EMPTY_FONT = new Font("SansSerif", Font.PLAIN, 15);
+    private static final Font DETAIL_TITLE_FONT = new Font("SansSerif", Font.BOLD, 20);
+    private static final Font SEQUENCE_FONT = new Font("Monospaced", Font.PLAIN, 13);
+    private static final Font CARD_TITLE_FONT = new Font("SansSerif", Font.BOLD, 14);
 
     /** How the shelf is ordered. */
     private enum Sort {
@@ -227,17 +242,9 @@ public class EvolutionCatalogScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
-        Graphics2D g = Java2DTarget.graphicsOf(target);
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g.setColor(BG);
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
+        target.fillRect(0, 0, viewportWidth, viewportHeight, BG);
 
-        g.setFont(new Font("SansSerif", Font.BOLD, 26));
-        g.setColor(TEXT);
-        g.drawString("Reference Book", 28, 42);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-        g.setColor(TEXT_DIM);
+        target.drawText("Reference Book", 28, 42, TITLE_FONT, TEXT);
         String subtitle = switch (tab) {
             case CATALOG -> thisGame.size() + " discovered in this game — a reset starts "
                     + "this page over";
@@ -246,37 +253,36 @@ public class EvolutionCatalogScene extends AbstractScene {
                     + " — kept forever";
             case ACHIEVEMENTS -> "Permanent progress: a reset never takes one back";
         };
-        g.drawString(subtitle, 28, 64);
+        target.drawText(subtitle, 28, 64, BODY_FONT, TEXT_DIM);
 
-        drawChrome(g);
+        drawChrome(target);
         switch (tab) {
             case CATALOG, HISTORY -> {
-                if (tab == Tab.HISTORY) drawLifetimeStrip(g);
-                drawSpeciesList(g);
-                drawDetail(g);
+                if (tab == Tab.HISTORY) drawLifetimeStrip(target);
+                drawSpeciesList(target);
+                drawDetail(target);
             }
-            case ACHIEVEMENTS -> drawAchievements(g);
+            case ACHIEVEMENTS -> drawAchievements(target);
         }
 
-        g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        g.setColor(TEXT_DIM);
-        g.drawString("Tab switches page · arrows and wheel scroll · Esc goes back",
-                28, viewportHeight - 18);
+        target.drawText("Tab switches page · arrows and wheel scroll · Esc goes back",
+                28, viewportHeight - 18, SMALL_FONT, TEXT_DIM);
     }
 
-    private void drawChrome(Graphics2D g) {
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
+    private void drawChrome(DrawTarget target) {
         catalogTab.setBounds(viewportWidth - 570, 24, 132, 28);
         historyTab.setBounds(viewportWidth - 430, 24, 104, 28);
         achievementsTab.setBounds(viewportWidth - 318, 24, 140, 28);
         sortButton.setBounds(viewportWidth - 570, 58, 240, 26);
         backButton.setBounds(viewportWidth - 170, 24, 138, 28);
 
-        drawButton(g, catalogTab, "Game Catalog", tab == Tab.CATALOG);
-        drawButton(g, historyTab, "History", tab == Tab.HISTORY);
-        drawButton(g, achievementsTab, "Achievements", tab == Tab.ACHIEVEMENTS);
-        drawButton(g, backButton, "Back", false);
-        if (tab != Tab.ACHIEVEMENTS) drawButton(g, sortButton, "Sorted by " + sort.label, false);
+        drawButton(target, catalogTab, "Game Catalog", tab == Tab.CATALOG);
+        drawButton(target, historyTab, "History", tab == Tab.HISTORY);
+        drawButton(target, achievementsTab, "Achievements", tab == Tab.ACHIEVEMENTS);
+        drawButton(target, backButton, "Back", false);
+        if (tab != Tab.ACHIEVEMENTS) {
+            drawButton(target, sortButton, "Sorted by " + sort.label, false);
+        }
     }
 
     /**
@@ -287,16 +293,15 @@ public class EvolutionCatalogScene extends AbstractScene {
      * <p>This is also where the credit total that a lab reset hands back is
      * shown, since that number <em>is</em> the lifetime score.
      */
-    private void drawButton(Graphics2D g, Rectangle r, String label, boolean active) {
+    private void drawButton(DrawTarget target, Rectangle r, String label, boolean active) {
         boolean hover = r.contains(mouseX, mouseY);
-        g.setColor(active ? new Color(52, 64, 88) : (hover ? new Color(38, 46, 62) : PANEL));
-        g.fillRoundRect(r.x, r.y, r.width, r.height, 6, 6);
-        g.setColor(active ? GOLD : PANEL_EDGE);
-        g.drawRoundRect(r.x, r.y, r.width, r.height, 6, 6);
-        g.setColor(active ? GOLD : TEXT);
-        FontMetrics fm = g.getFontMetrics();
-        g.drawString(label, r.x + (r.width - fm.stringWidth(label)) / 2,
-                r.y + (r.height + fm.getAscent()) / 2 - 2);
+        target.fillRoundRect(r.x, r.y, r.width, r.height, 6, 6,
+                active ? TAB_ACTIVE : (hover ? TAB_HOVER : PANEL));
+        target.drawRoundRect(r.x, r.y, r.width, r.height, 6, 6, active ? GOLD : PANEL_EDGE);
+        target.drawText(label,
+                r.x + (r.width - target.textWidth(label, BODY_FONT)) / 2,
+                r.y + (r.height + target.textAscent(BODY_FONT)) / 2 - 2,
+                BODY_FONT, active ? GOLD : TEXT);
     }
 
     /**
@@ -304,15 +309,13 @@ public class EvolutionCatalogScene extends AbstractScene {
      * player has accumulated across every game they have ever played, which is
      * exactly what a reset does not touch.
      */
-    private void drawLifetimeStrip(Graphics2D g) {
+    private void drawLifetimeStrip(DrawTarget target) {
         int x = 20;
         int y = 92;
         int w = viewportWidth - 40;
         int h = 66;
-        g.setColor(PANEL);
-        g.fillRoundRect(x, y, w, h, 10, 10);
-        g.setColor(PANEL_EDGE);
-        g.drawRoundRect(x, y, w, h, 10, 10);
+        target.fillRoundRect(x, y, w, h, 10, 10, PANEL);
+        target.drawRoundRect(x, y, w, h, 10, 10, PANEL_EDGE);
 
         SpeciesRecord longest = history.longestStrand();
         SpeciesRecord complex = history.mostComplex();
@@ -333,12 +336,11 @@ public class EvolutionCatalogScene extends AbstractScene {
         int cellW = w / cells.length;
         for (int i = 0; i < cells.length; i++) {
             int cx = x + 14 + i * cellW;
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            g.setColor(TEXT_DIM);
-            g.drawString(clip(g, cells[i][0], cellW - 16), cx, y + 24);
-            g.setFont(new Font("SansSerif", Font.BOLD, 17));
-            g.setColor(cells[i][0].startsWith("Credits") ? GOLD : TEXT);
-            g.drawString(clip(g, cells[i][1], cellW - 16), cx, y + 48);
+            target.drawText(clip(target, TINY_FONT, cells[i][0], cellW - 16),
+                    cx, y + 24, TINY_FONT, TEXT_DIM);
+            target.drawText(clip(target, STAT_FONT, cells[i][1], cellW - 16),
+                    cx, y + 48, STAT_FONT,
+                    cells[i][0].startsWith("Credits") ? GOLD : TEXT);
         }
     }
 
@@ -347,7 +349,7 @@ public class EvolutionCatalogScene extends AbstractScene {
         return tab == Tab.HISTORY ? 178 : 100;
     }
 
-    private void drawSpeciesList(Graphics2D g) {
+    private void drawSpeciesList(DrawTarget target) {
         List<SpeciesRecord> list = visibleList();
         int top = listTop();
         int listW = Math.min(560, viewportWidth / 2);
@@ -355,23 +357,22 @@ public class EvolutionCatalogScene extends AbstractScene {
         int rowH = 34;
         int visible = Math.max(1, (bottom - top) / rowH);
 
-        g.setColor(PANEL);
-        g.fillRoundRect(20, top - 8, listW, bottom - top + 16, 10, 10);
-        g.setColor(PANEL_EDGE);
-        g.drawRoundRect(20, top - 8, listW, bottom - top + 16, 10, 10);
+        target.fillRoundRect(20, top - 8, listW, bottom - top + 16, 10, 10, PANEL);
+        target.drawRoundRect(20, top - 8, listW, bottom - top + 16, 10, 10, PANEL_EDGE);
 
         rowRects.clear();
         if (list.isEmpty()) {
-            g.setFont(new Font("SansSerif", Font.PLAIN, 15));
-            g.setColor(TEXT_DIM);
             if (tab == Tab.HISTORY) {
-                g.drawString("You have not discovered anything yet — run an experiment", 40, top + 30);
-                g.drawString("and let something divide.", 40, top + 52);
+                target.drawText("You have not discovered anything yet — run an experiment",
+                        40, top + 30, EMPTY_FONT, TEXT_DIM);
+                target.drawText("and let something divide.", 40, top + 52, EMPTY_FONT, TEXT_DIM);
             } else {
-                g.drawString("This game has not found anything yet.", 40, top + 30);
-                g.drawString("Every strand it turns up lands here; your History keeps", 40, top + 52);
-                g.drawString("everything from every game, including the ones before this.",
-                        40, top + 74);
+                target.drawText("This game has not found anything yet.",
+                        40, top + 30, EMPTY_FONT, TEXT_DIM);
+                target.drawText("Every strand it turns up lands here; your History keeps",
+                        40, top + 52, EMPTY_FONT, TEXT_DIM);
+                target.drawText("everything from every game, including the ones before this.",
+                        40, top + 74, EMPTY_FONT, TEXT_DIM);
             }
             return;
         }
@@ -380,27 +381,25 @@ public class EvolutionCatalogScene extends AbstractScene {
         scroll = Math.max(0, Math.min(Math.max(0, list.size() - visible), scroll));
         if (selected >= scroll + visible) scroll = selected - visible + 1;
 
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         for (int i = 0; i < visible && scroll + i < list.size(); i++) {
             SpeciesRecord rec = list.get(scroll + i);
             Rectangle r = new Rectangle(28, top + i * rowH, listW - 16, rowH - 2);
             rowRects.add(r);
             boolean isSelected = scroll + i == selected;
             if (isSelected) {
-                g.setColor(new Color(46, 58, 80));
-                g.fillRoundRect(r.x, r.y, r.width, r.height, 6, 6);
+                target.fillRoundRect(r.x, r.y, r.width, r.height, 6, 6, ROW_SELECTED);
             }
-            drawStrand(g, rec.genome(), r.x + 8, r.y + 10, 120);
-            g.setColor(isSelected ? TEXT : new Color(186, 196, 214));
-            g.drawString(clip(g, rec.name, r.width - 260), r.x + 140, r.y + 22);
-            g.setColor(TEXT_DIM);
+            drawStrand(target, rec.genome(), r.x + 8, r.y + 10, 120);
+            target.drawText(clip(target, BODY_FONT, rec.name, r.width - 260),
+                    r.x + 140, r.y + 22, BODY_FONT, isSelected ? TEXT : ROW_NAME);
             String right = rec.sequence.length() + "nt · " + rec.phenotype().complexity() + "c";
-            g.drawString(right, r.x + r.width - g.getFontMetrics().stringWidth(right) - 10,
-                    r.y + 22);
+            target.drawText(right,
+                    r.x + r.width - target.textWidth(right, BODY_FONT) - 10, r.y + 22,
+                    BODY_FONT, TEXT_DIM);
         }
     }
 
-    private void drawDetail(Graphics2D g) {
+    private void drawDetail(DrawTarget target) {
         List<SpeciesRecord> list = visibleList();
         if (list.isEmpty()) return;
         SpeciesRecord rec = list.get(Math.max(0, Math.min(list.size() - 1, selectedIndex())));
@@ -410,22 +409,18 @@ public class EvolutionCatalogScene extends AbstractScene {
         int w = viewportWidth - x - 24;
         int y = listTop();
         int h = viewportHeight - y - 44;
-        g.setColor(PANEL);
-        g.fillRoundRect(x, y - 8, w, h, 10, 10);
-        g.setColor(PANEL_EDGE);
-        g.drawRoundRect(x, y - 8, w, h, 10, 10);
+        target.fillRoundRect(x, y - 8, w, h, 10, 10, PANEL);
+        target.drawRoundRect(x, y - 8, w, h, 10, 10, PANEL_EDGE);
 
         int ty = y + 24;
-        g.setFont(new Font("SansSerif", Font.BOLD, 20));
-        g.setColor(TEXT);
-        g.drawString(clip(g, rec.name, w - 36), x + 18, ty);
+        target.drawText(clip(target, DETAIL_TITLE_FONT, rec.name, w - 36), x + 18, ty,
+                DETAIL_TITLE_FONT, TEXT);
         ty += 24;
 
-        g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        g.setColor(TEXT_DIM);
-        g.drawString("first seen " + WHEN.format(new Date(rec.discoveredAt))
-                + (rec.dish.isEmpty() ? "" : " in " + rec.dish)
-                + " · generation " + rec.generation, x + 18, ty);
+        target.drawText("first seen " + WHEN.format(new Date(rec.discoveredAt))
+                        + (rec.dish.isEmpty() ? "" : " in " + rec.dish)
+                        + " · generation " + rec.generation,
+                x + 18, ty, SMALL_FONT, TEXT_DIM);
         ty += 18;
         // Whether this entry is also in the current game's book is worth saying:
         // the two sections deliberately hold different things.
@@ -433,32 +428,24 @@ public class EvolutionCatalogScene extends AbstractScene {
         for (SpeciesRecord r : thisGame) {
             if (r.sequence.equals(rec.sequence)) inGame = true;
         }
-        g.setColor(inGame ? GOOD : new Color(120, 128, 146));
-        g.drawString(inGame ? "found in the current game" : "not yet found in the current game",
-                x + 18, ty);
+        target.drawText(inGame ? "found in the current game"
+                        : "not yet found in the current game",
+                x + 18, ty, SMALL_FONT, inGame ? GOOD : MUTED);
         ty += 24;
 
-        drawStrand(g, rec.genome(), x + 18, ty - 12, w - 60);
+        drawStrand(target, rec.genome(), x + 18, ty - 12, w - 60);
         ty += 16;
-        g.setFont(new Font("Monospaced", Font.PLAIN, 13));
-        g.setColor(TEXT);
-        g.drawString(rec.sequence, x + 18, ty);
+        target.drawText(rec.sequence, x + 18, ty, SEQUENCE_FONT, TEXT);
         ty += 28;
 
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-        g.setColor(p.color());
-        g.fillRect(x + 18, ty - 12, 16, 16);
-        g.setColor(TEXT);
-        g.drawString(p.shape().displayName() + " body", x + 42, ty);
+        target.fillRect(x + 18, ty - 12, 16, 16, p.color());
+        target.drawText(p.shape().displayName() + " body", x + 42, ty, BODY_FONT, TEXT);
         ty += 20;
-        g.setColor(TEXT_DIM);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        g.drawString(clip(g, p.shape().description(), w - 36), x + 18, ty);
+        target.drawText(clip(target, TINY_FONT, p.shape().description(), w - 36),
+                x + 18, ty, TINY_FONT, TEXT_DIM);
         ty += 24;
 
-        g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        g.setColor(TEXT);
-        g.drawString("Traits", x + 18, ty);
+        target.drawText("Traits", x + 18, ty, SMALL_FONT, TEXT);
         ty += 6;
         double max = 1;
         for (Trait t : Trait.values()) max = Math.max(max, p.trait(t));
@@ -466,40 +453,34 @@ public class EvolutionCatalogScene extends AbstractScene {
             double v = p.trait(t);
             if (v <= 0) continue;
             ty += 18;
-            g.setColor(TEXT_DIM);
-            g.drawString(t.displayName(), x + 18, ty);
+            target.drawText(t.displayName(), x + 18, ty, SMALL_FONT, TEXT_DIM);
             int barX = x + 200;
             int barW = Math.max(40, w - 260);
-            g.setColor(new Color(40, 48, 64));
-            g.fillRect(barX, ty - 10, barW, 10);
-            g.setColor(GOOD);
-            g.fillRect(barX, ty - 10, (int) (barW * (v / max)), 10);
-            g.setColor(TEXT_DIM);
-            g.drawString(String.format("%.0f", v), barX + barW + 8, ty);
+            target.fillRect(barX, ty - 10, barW, 10, BAR_TRACK);
+            target.fillRect(barX, ty - 10, (int) (barW * (v / max)), 10, GOOD);
+            target.drawText(String.format("%.0f", v), barX + barW + 8, ty, SMALL_FONT, TEXT_DIM);
         }
 
         ty += 30;
-        g.setColor(TEXT);
-        g.drawString("Abilities", x + 18, ty);
+        target.drawText("Abilities", x + 18, ty, SMALL_FONT, TEXT);
         if (p.abilities().isEmpty()) {
             ty += 18;
-            g.setColor(TEXT_DIM);
-            g.drawString("none — a plain strand", x + 18, ty);
+            target.drawText("none — a plain strand", x + 18, ty, SMALL_FONT, TEXT_DIM);
         }
         for (Ability a : p.abilities()) {
             ty += 18;
             if (ty > y + h - 60) break;
-            g.setColor(a.color());
-            g.fillRect(x + 18, ty - 9, 8, 8);
-            g.setColor(TEXT_DIM);
-            g.drawString(clip(g, a.displayName() + "  (" + a.rule() + ")", w - 50), x + 32, ty);
+            target.fillRect(x + 18, ty - 9, 8, 8, a.color());
+            target.drawText(clip(target, SMALL_FONT,
+                            a.displayName() + "  (" + a.rule() + ")", w - 50),
+                    x + 32, ty, SMALL_FONT, TEXT_DIM);
         }
 
-        g.setColor(GOLD);
-        g.drawString("paid " + rec.credit + " credits on discovery", x + 18, y + h - 34);
+        target.drawText("paid " + rec.credit + " credits on discovery",
+                x + 18, y + h - 34, SMALL_FONT, GOLD);
     }
 
-    private void drawAchievements(Graphics2D g) {
+    private void drawAchievements(DrawTarget target) {
         Achievement[] all = Achievement.values();
         int cols = Math.max(1, (viewportWidth - 60) / 400);
         int cardW = (viewportWidth - 60 - (cols - 1) * 16) / cols;
@@ -509,9 +490,7 @@ public class EvolutionCatalogScene extends AbstractScene {
 
         int unlocked = 0;
         for (Achievement a : all) if (history.isUnlocked(a)) unlocked++;
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-        g.setColor(GOLD);
-        g.drawString(unlocked + " of " + all.length + " unlocked", 28, 86);
+        target.drawText(unlocked + " of " + all.length + " unlocked", 28, 86, BODY_FONT, GOLD);
 
         // Bound the scroll to the wall's real height, and clip so no card can
         // spill over the footer hint.
@@ -521,9 +500,7 @@ public class EvolutionCatalogScene extends AbstractScene {
         int maxScroll = Math.max(0, (contentH - viewH + 11) / 12);
         scroll = Math.min(scroll, maxScroll);
 
-        java.awt.Shape oldClip = g.getClip();
-        g.setClip(0, y0 - 6, viewportWidth, viewH + 6);
-        g.setStroke(new BasicStroke(1f));
+        target.pushClip(0, y0 - 6, viewportWidth, viewH + 6);
         for (int i = 0; i < all.length; i++) {
             Achievement a = all[i];
             int col = i % cols;
@@ -533,33 +510,29 @@ public class EvolutionCatalogScene extends AbstractScene {
             if (y + cardH < y0 || y > viewportHeight) continue;
             boolean got = history.isUnlocked(a);
 
-            g.setColor(got ? new Color(30, 40, 34) : PANEL);
-            g.fillRoundRect(x, y, cardW, cardH, 8, 8);
-            g.setColor(got ? new Color(110, 170, 120) : PANEL_EDGE);
-            g.drawRoundRect(x, y, cardW, cardH, 8, 8);
+            target.fillRoundRect(x, y, cardW, cardH, 8, 8, got ? UNLOCKED_FILL : PANEL);
+            target.drawRoundRect(x, y, cardW, cardH, 8, 8, got ? UNLOCKED_EDGE : PANEL_EDGE);
 
-            g.setFont(new Font("SansSerif", Font.BOLD, 14));
-            g.setColor(got ? GOOD : new Color(120, 128, 146));
-            g.drawString(clip(g, a.title(), cardW - 24), x + 12, y + 22);
+            target.drawText(clip(target, CARD_TITLE_FONT, a.title(), cardW - 24),
+                    x + 12, y + 22, CARD_TITLE_FONT, got ? GOOD : MUTED);
             // Descriptions and hints wrap rather than clip: a hint cut off
             // mid-sentence is worse than no hint at all.
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            g.setColor(TEXT_DIM);
-            int after = drawWrapped(g, a.description(), x + 12, y + 40, cardW - 24, 15, 2);
-            g.setColor(got ? new Color(96, 132, 104) : new Color(96, 102, 118));
-            drawWrapped(g, got ? "unlocked" : "hint: " + a.hint(),
+            int after = drawWrapped(target, TINY_FONT, TEXT_DIM,
+                    a.description(), x + 12, y + 40, cardW - 24, 15, 2);
+            drawWrapped(target, TINY_FONT, got ? UNLOCKED_HINT : LOCKED_HINT,
+                    got ? "unlocked" : "hint: " + a.hint(),
                     x + 12, after + 16, cardW - 24, 15, 2);
         }
-        g.setClip(oldClip);
+        target.popClip();
     }
 
     /** A strand drawn as its coloured nucleotides — the DNA itself, not a label. */
-    private void drawStrand(Graphics2D g, Genome genome, int x, int y, int maxWidth) {
+    private void drawStrand(DrawTarget target, Genome genome, int x, int y, int maxWidth) {
         int n = genome.length();
         int cell = Math.max(2, Math.min(10, maxWidth / Math.max(1, n)));
         for (int i = 1; i <= n; i++) {
-            g.setColor(genome.at(i).color());
-            g.fillRect(x + (i - 1) * cell, y, Math.max(1, cell - 1), 12);
+            target.fillRect(x + (i - 1) * cell, y, Math.max(1, cell - 1), 12,
+                    genome.at(i).color());
         }
     }
 
@@ -568,16 +541,15 @@ public class EvolutionCatalogScene extends AbstractScene {
      * returning the baseline of the last line drawn so the caller can stack
      * something under it.
      */
-    private static int drawWrapped(Graphics2D g, String text, int x, int y, int width,
-                                   int lineHeight, int maxLines) {
-        FontMetrics fm = g.getFontMetrics();
+    private static int drawWrapped(DrawTarget target, Font font, Color color, String text,
+                                   int x, int y, int width, int lineHeight, int maxLines) {
         String[] words = text.split(" ");
         StringBuilder line = new StringBuilder();
         int lines = 0;
         int lastY = y;
         for (int i = 0; i < words.length; i++) {
             String candidate = line.length() == 0 ? words[i] : line + " " + words[i];
-            if (fm.stringWidth(candidate) > width && line.length() > 0) {
+            if (target.textWidth(candidate, font) > width && line.length() > 0) {
                 lastY = y + lines * lineHeight;
                 if (lines + 1 >= maxLines) {
                     // No room to wrap again: everything left goes on this line,
@@ -585,10 +557,11 @@ public class EvolutionCatalogScene extends AbstractScene {
                     // simply stopping mid-word.
                     StringBuilder tail = new StringBuilder(line);
                     for (int k = i; k < words.length; k++) tail.append(' ').append(words[k]);
-                    g.drawString(clip(g, tail.toString(), width), x, lastY);
+                    target.drawText(clip(target, font, tail.toString(), width),
+                            x, lastY, font, color);
                     return lastY;
                 }
-                g.drawString(line.toString(), x, lastY);
+                target.drawText(line.toString(), x, lastY, font, color);
                 lines++;
                 line = new StringBuilder(words[i]);
             } else {
@@ -597,16 +570,17 @@ public class EvolutionCatalogScene extends AbstractScene {
         }
         if (line.length() > 0) {
             lastY = y + lines * lineHeight;
-            g.drawString(clip(g, line.toString(), width), x, lastY);
+            target.drawText(clip(target, font, line.toString(), width), x, lastY, font, color);
         }
         return lastY;
     }
 
-    private static String clip(Graphics2D g, String s, int width) {
-        FontMetrics fm = g.getFontMetrics();
-        if (fm.stringWidth(s) <= width) return s;
+    private static String clip(DrawTarget target, Font font, String s, int width) {
+        if (target.textWidth(s, font) <= width) return s;
         StringBuilder sb = new StringBuilder(s);
-        while (sb.length() > 3 && fm.stringWidth(sb + "…") > width) sb.deleteCharAt(sb.length() - 1);
+        while (sb.length() > 3 && target.textWidth(sb + "…", font) > width) {
+            sb.deleteCharAt(sb.length() - 1);
+        }
         return sb + "…";
     }
 }

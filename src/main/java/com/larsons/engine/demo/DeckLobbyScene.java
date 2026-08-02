@@ -13,16 +13,12 @@ import com.larsons.engine.input.InputManager;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.net.Protocol;
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.MenuTheme;
 
-import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.FontMetrics;
-import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import java.awt.event.KeyEvent;
 import java.util.ArrayList;
@@ -55,6 +51,36 @@ public class DeckLobbyScene extends AbstractScene {
     private final List<String> buttonLabels = new ArrayList<>();
     private final List<Runnable> buttonActions = new ArrayList<>();
     private final Rectangle[] leaderCards = new Rectangle[Leader.values().length];
+
+    private static final Font RESULT_FONT = new Font("SansSerif", Font.BOLD, 15);
+    private static final Font RESULT_FONT_PLAIN = new Font("SansSerif", Font.PLAIN, 15);
+    private static final Font TITLE_FONT = new Font("SansSerif", Font.BOLD, 38);
+    private static final Font SUBTITLE_FONT = new Font("SansSerif", Font.PLAIN, 16);
+    private static final Font LAN_FONT = new Font("SansSerif", Font.PLAIN, 14);
+    private static final Font PICK_FONT = new Font("SansSerif", Font.BOLD, 15);
+    private static final Font CARD_NAME_FONT = new Font("SansSerif", Font.BOLD, 15);
+    private static final Font CARD_BODY_FONT = new Font("SansSerif", Font.PLAIN, 12);
+    private static final Font CLAIM_FONT = new Font("SansSerif", Font.BOLD, 12);
+    private static final Font SEAT_FONT = new Font("SansSerif", Font.PLAIN, 16);
+    private static final Font COUNT_FONT = new Font("SansSerif", Font.PLAIN, 14);
+    private static final Font BUTTON_FONT = new Font("SansSerif", Font.BOLD, 18);
+    private static final Color CONNECTED = new Color(140, 200, 150);
+    private static final Color FAILED = new Color(235, 120, 110);
+    private static final Color LOBBY_BG = new Color(16, 18, 30);
+    private static final Color TITLE = new Color(245, 245, 255);
+    private static final Color SUBTITLE = new Color(150, 155, 175);
+    private static final Color PICK_LABEL = new Color(200, 205, 225);
+    private static final Color CARD_FILL = new Color(30, 33, 50);
+    private static final Color CARD_BODY = new Color(205, 210, 228);
+    private static final Color CARD_TAKEN_EDGE = new Color(70, 74, 95);
+    private static final Color CARD_FREE_EDGE = new Color(120, 126, 150);
+    private static final Color YOU = new Color(255, 210, 90);
+    private static final Color OTHER_PLAYER = new Color(210, 215, 230);
+    private static final Color COUNT = new Color(120, 125, 145);
+    private static final Color PRIMARY_FILL = new Color(70, 120, 70);
+    private static final Color PRIMARY_EDGE = new Color(150, 230, 150);
+    private static final Color BUTTON_FILL = new Color(45, 50, 70);
+    private static final Color BUTTON_EDGE = new Color(160, 170, 200);
 
     public DeckLobbyScene(GameContext ctx) {
         this.ctx = ctx;
@@ -227,58 +253,46 @@ public class DeckLobbyScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
-        Graphics2D g = Java2DTarget.graphicsOf(target);
         if (session == null) {
             form.render(target, viewportWidth, viewportHeight);
             String s = status;
             if (!s.isEmpty()) {
-                g.setColor(s.startsWith("Could not") || s.startsWith("Disconnected")
-                        ? new Color(235, 120, 110) : new Color(140, 200, 150));
-                g.setFont(new Font("SansSerif", Font.BOLD, 15));
-                g.drawString(s, 24, viewportHeight - 52);
+                target.drawText(s, 24, viewportHeight - 52, RESULT_FONT,
+                        s.startsWith("Could not") || s.startsWith("Disconnected")
+                                ? FAILED : CONNECTED);
             }
-            g.setColor(new Color(120, 120, 140));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-            g.drawString("A deckbuilding board game for 2-6 players, fully online. "
-                    + "Host a game, or join a friend's IP and port.", 24, viewportHeight - 24);
+            SceneChrome.hint(target, viewportHeight,
+                    "A deckbuilding board game for 2-6 players, fully online. "
+                            + "Host a game, or join a friend's IP and port.");
         } else {
-            renderLobby(g);
+            renderLobby(target);
         }
-        if (showHelp) DeckGameScene.renderHelpOverlay(g, viewportWidth, viewportHeight);
+        if (showHelp) DeckGameScene.renderHelpOverlay(target, viewportWidth, viewportHeight);
     }
 
-    private void renderLobby(Graphics2D g) {
+    private void renderLobby(DrawTarget target) {
         DeckClient client = session.client();
-        g.setColor(new Color(16, 18, 30));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
+        target.fillRect(0, 0, viewportWidth, viewportHeight, LOBBY_BG);
 
-        g.setColor(new Color(245, 245, 255));
-        g.setFont(new Font("SansSerif", Font.BOLD, 38));
-        drawCentered(g, "Council of Six", viewportWidth / 2, 68);
+        drawCentered(target, "Council of Six", viewportWidth / 2, 68, TITLE_FONT, TITLE);
 
-        g.setFont(new Font("SansSerif", Font.PLAIN, 16));
-        g.setColor(new Color(150, 155, 175));
         String where = session.isHost()
                 ? "Hosting on port " + session.hostedServer().getPort()
                         + " — friends join your IP:port"
                 : "Connected to " + address;
-        drawCentered(g, where, viewportWidth / 2, 96);
+        drawCentered(target, where, viewportWidth / 2, 96, SUBTITLE_FONT, SUBTITLE);
         if (session.isHost()) {
             String lan = com.larsons.engine.net.Lan.siteLocalAddress();
-            g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-            g.setColor(new Color(140, 200, 150));
-            drawCentered(g, lan != null
+            drawCentered(target, lan != null
                             ? "Same network? They join:  " + lan + ":"
                                     + session.hostedServer().getPort()
                             : "Find your LAN IP (ipconfig / ifconfig) for same-network friends",
-                    viewportWidth / 2, 118);
+                    viewportWidth / 2, 118, LAN_FONT, CONNECTED);
         }
 
         // Leader cards: click to claim your seat at the table.
-        g.setFont(new Font("SansSerif", Font.BOLD, 15));
-        g.setColor(new Color(200, 205, 225));
-        drawCentered(g, "Pick your leader", viewportWidth / 2, 152);
+        drawCentered(target, "Pick your leader", viewportWidth / 2, 152,
+                PICK_FONT, PICK_LABEL);
         List<DeckClient.LobbyPlayer> players = client.lobby().players();
         Leader mine = null;
         for (DeckClient.LobbyPlayer p : players) {
@@ -306,55 +320,50 @@ public class DeckLobbyScene extends AbstractScene {
                 }
             }
 
-            g.setColor(new Color(30, 33, 50));
-            g.fillRoundRect(cx, cy, cardW, cardH, 12, 12);
-            g.setColor(l.color);
-            g.fillRoundRect(cx, cy, cardW, 26, 12, 12);
-            g.fillRect(cx, cy + 14, cardW, 12);
-            g.setColor(Color.BLACK);
-            g.setFont(new Font("SansSerif", Font.BOLD, 15));
-            g.drawString(l.friendName + " — " + l.title, cx + 10, cy + 18);
+            target.fillRoundRect(cx, cy, cardW, cardH, 12, 12, CARD_FILL);
+            target.fillRoundRect(cx, cy, cardW, 26, 12, 12, l.color);
+            target.fillRect(cx, cy + 14, cardW, 12, l.color);
+            target.drawText(l.friendName + " — " + l.title, cx + 10, cy + 18,
+                    CARD_NAME_FONT, Color.BLACK);
 
-            g.setColor(new Color(205, 210, 228));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            drawWrapped(g, l.passive, cx + 10, cy + 44, cardW - 20, 15);
+            drawWrapped(target, l.passive, cx + 10, cy + 44, cardW - 20, 15,
+                    CARD_BODY_FONT, CARD_BODY);
 
             if (takenBy != null) {
-                g.setColor(takenByMe ? new Color(255, 210, 90) : new Color(150, 155, 175));
-                g.setFont(new Font("SansSerif", Font.BOLD, 12));
-                g.drawString(takenByMe ? "YOURS" : "taken by " + takenBy,
-                        cx + 10, cy + cardH - 10);
+                target.drawText(takenByMe ? "YOURS" : "taken by " + takenBy,
+                        cx + 10, cy + cardH - 10, CLAIM_FONT,
+                        takenByMe ? YOU : SUBTITLE);
             }
-            g.setColor(takenByMe ? new Color(255, 210, 90)
-                    : takenBy != null ? new Color(70, 74, 95) : new Color(120, 126, 150));
-            g.setStroke(new BasicStroke(takenByMe ? 2.5f : 1.2f));
-            g.drawRoundRect(cx, cy, cardW, cardH, 12, 12);
-            g.setStroke(new BasicStroke(1f));
+            // The claimed card is ringed at 2.5px and the rest at 1.2px, which
+            // used to depend on the stroke being set back to 1f afterwards —
+            // stated per call now that thickness travels with the draw.
+            target.drawRoundRect(cx, cy, cardW, cardH, 12, 12,
+                    (takenByMe ? YOU : takenBy != null ? CARD_TAKEN_EDGE : CARD_FREE_EDGE)
+                            .getRGB(),
+                    takenByMe ? 2.5f : 1.2f);
         }
 
         // Seated players, compactly (leader claims already show on the cards).
         int listY = y0 + 2 * (cardH + 12) + 24;
         int maxListY = viewportHeight - 152; // stay clear of the button row
-        g.setFont(new Font("SansSerif", Font.PLAIN, 16));
         for (DeckClient.LobbyPlayer p : players) {
             if (listY > maxListY) break;
             boolean me = p.id() == client.localId();
             boolean host = p.id() == client.lobby().hostId();
-            g.setColor(me ? new Color(255, 210, 90) : new Color(210, 215, 230));
             String leader = p.leader() != null ? "  ·  " + p.leader().friendName
                     + " " + p.leader().title : "  ·  picking...";
             String tags = (host ? "  [HOST]" : "") + (p.bot() ? "  [BOT]" : "")
                     + (me ? "  (you)" : "");
-            drawCentered(g, p.name() + leader + tags, viewportWidth / 2, listY);
+            drawCentered(target, p.name() + leader + tags, viewportWidth / 2, listY,
+                    SEAT_FONT, me ? YOU : OTHER_PLAYER);
             listY += 21;
         }
-        g.setColor(new Color(120, 125, 145));
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         String count = players.size() + " / " + DeckGame.MAX_PLAYERS + " players"
                 + (players.size() < DeckGame.MIN_PLAYERS
                 ? "  (need " + DeckGame.MIN_PLAYERS + "+ to start)" : "")
                 + (client.isHost() ? "" : "  —  waiting for the host to start...");
-        drawCentered(g, count, viewportWidth / 2, Math.min(listY + 4, maxListY + 18));
+        drawCentered(target, count, viewportWidth / 2, Math.min(listY + 4, maxListY + 18),
+                COUNT_FONT, COUNT);
 
         // Buttons.
         buttons.clear();
@@ -371,15 +380,14 @@ public class DeckLobbyScene extends AbstractScene {
             session = null;
             status = "";
         });
-        layoutAndDrawButtons(g);
+        layoutAndDrawButtons(target);
 
         for (String toast : client.pollToasts()) {
             status = toast;
         }
         if (!status.isEmpty()) {
-            g.setColor(new Color(140, 200, 150));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 15));
-            drawCentered(g, status, viewportWidth / 2, viewportHeight - 28);
+            drawCentered(target, status, viewportWidth / 2, viewportHeight - 28,
+                    RESULT_FONT_PLAIN, CONNECTED);
         }
     }
 
@@ -389,14 +397,12 @@ public class DeckLobbyScene extends AbstractScene {
         buttons.add(new Rectangle()); // laid out in layoutAndDrawButtons
     }
 
-    private void layoutAndDrawButtons(Graphics2D g) {
-        g.setFont(new Font("SansSerif", Font.BOLD, 18));
-        FontMetrics fm = g.getFontMetrics();
+    private void layoutAndDrawButtons(DrawTarget target) {
         int gap = 16;
         int totalW = 0;
         int[] widths = new int[buttonLabels.size()];
         for (int i = 0; i < buttonLabels.size(); i++) {
-            widths[i] = fm.stringWidth(buttonLabels.get(i)) + 40;
+            widths[i] = target.textWidth(buttonLabels.get(i), BUTTON_FONT) + 40;
             totalW += widths[i] + (i > 0 ? gap : 0);
         }
         int x = viewportWidth / 2 - totalW / 2;
@@ -405,37 +411,35 @@ public class DeckLobbyScene extends AbstractScene {
             Rectangle r = buttons.get(i);
             r.setBounds(x, y, widths[i], 44);
             boolean primary = i == 0 && buttonLabels.get(0).startsWith("Start");
-            g.setColor(primary ? new Color(70, 120, 70) : new Color(45, 50, 70));
-            g.fillRoundRect(r.x, r.y, r.width, r.height, 12, 12);
-            g.setColor(primary ? new Color(150, 230, 150) : new Color(160, 170, 200));
-            g.drawRoundRect(r.x, r.y, r.width, r.height, 12, 12);
-            g.setColor(Color.WHITE);
-            g.drawString(buttonLabels.get(i),
-                    r.x + (r.width - fm.stringWidth(buttonLabels.get(i))) / 2,
-                    r.y + 29);
+            target.fillRoundRect(r.x, r.y, r.width, r.height, 12, 12,
+                    primary ? PRIMARY_FILL : BUTTON_FILL);
+            target.drawRoundRect(r.x, r.y, r.width, r.height, 12, 12,
+                    primary ? PRIMARY_EDGE : BUTTON_EDGE);
+            target.drawText(buttonLabels.get(i),
+                    r.x + (r.width - target.textWidth(buttonLabels.get(i), BUTTON_FONT)) / 2,
+                    r.y + 29, BUTTON_FONT, Color.WHITE);
             x += widths[i] + gap;
         }
     }
 
-    private void drawCentered(Graphics2D g, String s, int cx, int y) {
-        FontMetrics fm = g.getFontMetrics();
-        g.drawString(s, cx - fm.stringWidth(s) / 2, y);
+    private void drawCentered(DrawTarget target, String s, int cx, int y,
+                              Font font, Color color) {
+        target.drawText(s, cx - target.textWidth(s, font) / 2, y, font, color);
     }
 
-    private void drawWrapped(Graphics2D g, String text, int x, int y, int width,
-                             int lineHeight) {
-        FontMetrics fm = g.getFontMetrics();
+    private void drawWrapped(DrawTarget target, String text, int x, int y, int width,
+                             int lineHeight, Font font, Color color) {
         StringBuilder line = new StringBuilder();
         for (String word : text.split(" ")) {
             String candidate = line.isEmpty() ? word : line + " " + word;
-            if (fm.stringWidth(candidate) > width && !line.isEmpty()) {
-                g.drawString(line.toString(), x, y);
+            if (target.textWidth(candidate, font) > width && !line.isEmpty()) {
+                target.drawText(line.toString(), x, y, font, color);
                 y += lineHeight;
                 line = new StringBuilder(word);
             } else {
                 line = new StringBuilder(candidate);
             }
         }
-        if (!line.isEmpty()) g.drawString(line.toString(), x, y);
+        if (!line.isEmpty()) target.drawText(line.toString(), x, y, font, color);
     }
 }

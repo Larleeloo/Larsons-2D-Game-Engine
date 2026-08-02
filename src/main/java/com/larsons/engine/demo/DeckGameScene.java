@@ -72,6 +72,17 @@ public class DeckGameScene extends AbstractScene {
     private static final Color VP_COLOR = new Color(255, 215, 120);
     private static final Color HIGHLIGHT = new Color(140, 220, 150);
 
+    // The rules card, shared with DeckLobbyScene's How to Play.
+    private static final Font HELP_TITLE_FONT = new Font("SansSerif", Font.BOLD, 24);
+    private static final Font HELP_BODY_FONT = new Font("SansSerif", Font.PLAIN, 15);
+    private static final Color HELP_SCRIM = new Color(0, 0, 0, 200);
+    private static final Color HELP_PANEL = new Color(26, 29, 46);
+    private static final Color HELP_EDGE = new Color(90, 96, 122);
+    private static final Color HELP_TITLE = new Color(245, 245, 255);
+    private static final Color HELP_BULLET = new Color(200, 205, 224);
+    private static final Color HELP_BODY = new Color(225, 228, 240);
+    private static final Color HELP_FOOTER = new Color(150, 155, 175);
+
     private final GameContext ctx;
     private DeckSession session;
     private DeckClient client;
@@ -603,7 +614,7 @@ public class DeckGameScene extends AbstractScene {
         if (paused) renderPause(g);
         if (client.gameOver() != null) renderGameOver(g);
         else if (!client.isConnected()) renderDisconnected(g);
-        if (showHelp) renderHelpOverlay(g, viewportWidth, viewportHeight);
+        if (showHelp) renderHelpOverlay(target, viewportWidth, viewportHeight);
     }
 
     private void renderTopBar(Graphics2D g, DeckClient.Table table) {
@@ -1164,20 +1175,15 @@ public class DeckGameScene extends AbstractScene {
     }
 
     /** The rules card; shared with the lobby scene's How to Play. */
-    static void renderHelpOverlay(Graphics2D g, int viewportWidth, int viewportHeight) {
-        g.setColor(new Color(0, 0, 0, 200));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
+    static void renderHelpOverlay(DrawTarget target, int viewportWidth, int viewportHeight) {
+        target.fillRect(0, 0, viewportWidth, viewportHeight, HELP_SCRIM);
         int w = Math.min(760, viewportWidth - 60);
         int x = viewportWidth / 2 - w / 2;
         int y = Math.max(24, viewportHeight / 2 - 280);
-        g.setColor(new Color(26, 29, 46));
-        g.fillRoundRect(x, y, w, 560, 16, 16);
-        g.setColor(new Color(90, 96, 122));
-        g.drawRoundRect(x, y, w, 560, 16, 16);
+        target.fillRoundRect(x, y, w, 560, 16, 16, HELP_PANEL);
+        target.drawRoundRect(x, y, w, 560, 16, 16, HELP_EDGE);
 
-        g.setColor(new Color(245, 245, 255));
-        g.setFont(new Font("SansSerif", Font.BOLD, 24));
-        g.drawString("How to play Council of Six", x + 28, y + 40);
+        target.drawText("How to play Council of Six", x + 28, y + 40, HELP_TITLE_FONT, HELP_TITLE);
 
         String[] lines = {
                 "First to 10 victory points at the end of a round wins (8 rounds max).",
@@ -1199,16 +1205,13 @@ public class DeckGameScene extends AbstractScene {
                 "Every leader has one passive — read the cards in the lobby. That's",
                 "the whole rulebook: no stack, no instants, no priority. Sorry, Dustin.",
         };
-        g.setFont(new Font("SansSerif", Font.PLAIN, 15));
         int ly = y + 74;
         for (String line : lines) {
-            g.setColor(line.startsWith("  ·") ? new Color(200, 205, 224)
-                    : new Color(225, 228, 240));
-            g.drawString(line, x + 28, ly);
+            target.drawText(line, x + 28, ly, HELP_BODY_FONT,
+                    line.startsWith("  ·") ? HELP_BULLET : HELP_BODY);
             ly += 24;
         }
-        g.setColor(new Color(150, 155, 175));
-        g.drawString("H or Esc closes this.", x + 28, y + 536);
+        target.drawText("H or Esc closes this.", x + 28, y + 536, HELP_BODY_FONT, HELP_FOOTER);
     }
 
     private void drawCentered(Graphics2D g, String s, int cx, int y) {
