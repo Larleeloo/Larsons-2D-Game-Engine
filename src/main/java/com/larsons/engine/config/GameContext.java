@@ -14,6 +14,7 @@ import com.larsons.engine.graphics.shader.Shaders;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.net.NetSession;
 import com.larsons.engine.profile.DisplayCap;
+import com.larsons.engine.profile.FrameProfiler;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -54,6 +55,21 @@ public class GameContext {
     }
 
     public GameTypeStore store() { return store; }
+
+    /**
+     * A profiler with nothing attached, for headless use — tests and the
+     * dedicated server build a context with no engine, and a scene should not
+     * have to check before timing itself.
+     */
+    private static final FrameProfiler NO_PROFILER = new FrameProfiler();
+
+    /**
+     * Frame instrumentation, so a scene can name the phases of its own drawing.
+     * Disabled (and therefore free) unless someone has turned profiling on.
+     */
+    public FrameProfiler profiler() {
+        return engine == null ? NO_PROFILER : engine.profiler();
+    }
 
     /** The shared lighting pass; scenes set darkness + screen-space lights on it. */
     public LightingPass lighting() { return lighting; }

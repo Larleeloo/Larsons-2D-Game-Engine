@@ -4,6 +4,7 @@ import com.larsons.engine.graphics.Java2DRenderer;
 import com.larsons.engine.graphics.shader.ShaderChain;
 import com.larsons.engine.graphics.shader.Shaders;
 import com.larsons.engine.graphics.draw.RecordingTarget;
+import com.larsons.engine.profile.BuildInfo;
 import com.larsons.engine.profile.DeviceProfile;
 import com.larsons.engine.profile.FrameProfiler;
 import com.larsons.engine.profile.FrameProfiler.Snapshot;
@@ -531,6 +532,81 @@ class FrameProfilerTest {
     private static java.awt.image.BufferedImage image(int w, int h) {
         return new java.awt.image.BufferedImage(w, h,
                 java.awt.image.BufferedImage.TYPE_INT_ARGB);
+    }
+
+    @Test
+    void sceneSectionsAreTimedIndependentlyOfTheStage() {
+        // "scene: 19 ms" is the same half-answer a frame counter gives. The
+        // sections say which drawing, and they nest inside the stage rather
+        // than beside it, so they need not add up to it.
+        FrameProfiler profiler = enabled();
+
+        profiler.record(Stage.SCENE, agoMs(10));
+        profiler.recordSection("terrain", agoMs(6));
+        profiler.recordSection("entities", agoMs(3));
+        profiler.endFrame();
+
+        List<Stats> sections = profiler.snapshot().sections();
+        assertEquals(2, sections.size());
+        assertEquals("terrain", sections.get(0).name(), "sections keep draw order");
+        assertAbout(6, sections.get(0).meanMs(), "terrain");
+        assertAbout(3, sections.get(1).meanMs(), "entities");
+    }
+
+    @Test
+    void aSectionRepeatedInOneFrameSums() {
+        // Scenery is drawn twice — behind the actors and in front of them.
+        FrameProfiler profiler = enabled();
+        profiler.recordSection("decor", agoMs(2));
+        profiler.recordSection("decor", agoMs(3));
+        profiler.endFrame();
+
+        assertAbout(5, profiler.snapshot().sections().get(0).meanMs(), "summed decor");
+    }
+
+    @Test
+    void aSectionThatStopsRunningStopsCosting() {
+        FrameProfiler profiler = enabled();
+        profiler.recordSection("particles", agoMs(8));
+        profiler.endFrame();
+        for (int i = 0; i < 9; i++) profiler.endFrame();
+
+        Stats particles = profiler.snapshot().sections().get(0);
+        assertEquals(0.0, particles.p50Ms(), 1e-9,
+                "the median frame no longer draws particles");
+    }
+
+    @Test
+    void theReportShowsTheSceneBreakdownWhenThereIsOne() {
+        FrameProfiler profiler = enabled();
+        for (int i = 0; i < 5; i++) {
+            profiler.record(Stage.SCENE, agoMs(10));
+            profiler.recordSection("terrain", agoMs(6));
+            profiler.endFrame();
+        }
+
+        String text = FrameReport.render(profiler.snapshot(), DeviceProfile.detect(), null);
+        assertTrue(text.contains("Scene breakdown"), text);
+        assertTrue(text.contains("terrain"), text);
+    }
+
+    @Test
+    void aReportWithNoSectionsOmitsTheBreakdown() {
+        FrameProfiler profiler = enabled();
+        profiler.record(Stage.SCENE, agoMs(4));
+        profiler.endFrame();
+
+        String text = FrameReport.render(profiler.snapshot(), DeviceProfile.detect(), null);
+        assertFalse(text.contains("Scene breakdown"), text);
+    }
+
+    @Test
+    void everyReportNamesTheBuildItCameFrom() {
+        // Three profiles once arrived that could not be interpreted without
+        // knowing whether the build predated the work they were measuring.
+        String text = FrameReport.render(Snapshot.EMPTY, DeviceProfile.detect(), null);
+        assertTrue(text.contains("build    :"), text);
+        assertFalse(BuildInfo.describe().isBlank(), "the build line must say something");
     }
 
     @Test

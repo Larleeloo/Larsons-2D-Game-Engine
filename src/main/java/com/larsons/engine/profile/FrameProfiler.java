@@ -99,6 +99,20 @@ public final class FrameProfiler {
     private final Map<String, long[]> passSamples = new LinkedHashMap<>();
     private final Map<String, Long> passPending = new LinkedHashMap<>();
 
+    /**
+     * Named phases <em>inside</em> {@link Stage#SCENE}, in the order a scene
+     * draws them.
+     *
+     * <p>Knowing the scene costs 19 ms is the same kind of half-answer a frame
+     * counter gives: it says the drawing is slow, not which drawing. A profile
+     * from an M1 Air showed scene at 83% of the frame with no way to tell
+     * terrain from sprites from HUD — and those have completely different
+     * fixes. So a scene names its phases and they are timed like the shader
+     * passes are.
+     */
+    private final Map<String, long[]> sectionSamples = new LinkedHashMap<>();
+    private final Map<String, Long> sectionPending = new LinkedHashMap<>();
+
     // Per-frame draw-call counts, in the same ring slot as that frame's timings.
     private final int[] drawOps = new int[WINDOW];
     private final int[] drawBatches = new int[WINDOW];
@@ -140,6 +154,8 @@ public final class FrameProfiler {
         Arrays.fill(drawGlyphs, 0);
         passSamples.clear();
         passPending.clear();
+        sectionSamples.clear();
+        sectionPending.clear();
         cursor = 0;
         recorded = 0;
         totalFrames = 0;
@@ -196,6 +212,21 @@ public final class FrameProfiler {
     }
 
     /**
+     * Add the elapsed time since {@code startNanos} to one named phase of the
+     * scene's drawing — terrain, entities, HUD.
+     *
+     * <p>Sections are nested inside {@link Stage#SCENE} rather than beside it,
+     * so they do not have to add up to it: a scene can name the phases worth
+     * naming and leave the rest as the remainder.
+     */
+    public void recordSection(String sectionName, long startNanos) {
+        if (!enabled || startNanos == 0L || sectionName == null) return;
+        long elapsed = System.nanoTime() - startNanos;
+        if (elapsed <= 0) return;
+        sectionPending.merge(sectionName, elapsed, Long::sum);
+    }
+
+    /**
      * Close out the frame: roll every pending stage into the window and, twice
      * a second, publish a fresh {@link Snapshot} for outside readers.
      */
@@ -206,15 +237,8 @@ public final class FrameProfiler {
             samples[i][cursor] = pending[i];
             pending[i] = 0L;
         }
-        for (Map.Entry<String, Long> e : passPending.entrySet()) {
-            passSamples.computeIfAbsent(e.getKey(), k -> new long[WINDOW])[cursor] = e.getValue();
-        }
-        // A pass that ran previously but not this frame must record a zero, or
-        // its old samples would drift forward and overstate a disabled effect.
-        for (Map.Entry<String, long[]> e : passSamples.entrySet()) {
-            if (!passPending.containsKey(e.getKey())) e.getValue()[cursor] = 0L;
-        }
-        passPending.clear();
+        rollNamed(passSamples, passPending);
+        rollNamed(sectionSamples, sectionPending);
 
         cursor = (cursor + 1) % WINDOW;
         // The next slot is cleared as it is reached, so a frame that records
@@ -231,6 +255,22 @@ public final class FrameProfiler {
             lastPublish = now;
             latest = buildSnapshot();
         }
+    }
+
+    /**
+     * Roll one frame of named timings into their rings. A name that ran
+     * previously but not this frame records a zero, or its old samples would
+     * drift forward and overstate work that has stopped happening — an effect
+     * switched off in a menu, or a scene phase that no longer runs.
+     */
+    private void rollNamed(Map<String, long[]> rings, Map<String, Long> pending) {
+        for (Map.Entry<String, Long> e : pending.entrySet()) {
+            rings.computeIfAbsent(e.getKey(), k -> new long[WINDOW])[cursor] = e.getValue();
+        }
+        for (Map.Entry<String, long[]> e : rings.entrySet()) {
+            if (!pending.containsKey(e.getKey())) e.getValue()[cursor] = 0L;
+        }
+        pending.clear();
     }
 
     /**
@@ -259,10 +299,15 @@ public final class FrameProfiler {
         for (Map.Entry<String, long[]> e : passSamples.entrySet()) {
             passStats.add(statsOf(e.getKey(), e.getValue()));
         }
+        List<Stats> sectionStats = new ArrayList<>(sectionSamples.size());
+        for (Map.Entry<String, long[]> e : sectionSamples.entrySet()) {
+            sectionStats.add(statsOf(e.getKey(), e.getValue()));
+        }
 
         double budgetMs = 1000.0 / targetFps;
         return new Snapshot(recorded, totalFrames, targetFps, budgetMs,
                 List.copyOf(stageStats), List.copyOf(passStats),
+                List.copyOf(sectionStats),
                 new Draws(mean(drawOps), mean(drawBatches),
                         mean(drawImages), mean(drawGlyphs)));
     }
@@ -344,10 +389,10 @@ public final class FrameProfiler {
      */
     public record Snapshot(int windowFrames, long totalFrames, int targetFps,
                            double budgetMs, List<Stats> stages, List<Stats> passes,
-                           Draws draws) {
+                           List<Stats> sections, Draws draws) {
 
-        public static final Snapshot EMPTY =
-                new Snapshot(0, 0, 120, 1000.0 / 120, List.of(), List.of(), Draws.NONE);
+        public static final Snapshot EMPTY = new Snapshot(0, 0, 120, 1000.0 / 120,
+                List.of(), List.of(), List.of(), Draws.NONE);
 
         public boolean isEmpty() { return windowFrames == 0; }
 
