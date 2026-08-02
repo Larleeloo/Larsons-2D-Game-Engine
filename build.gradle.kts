@@ -115,6 +115,13 @@ tasks.register<JavaExec>("runServer") {
 val buildInfo = tasks.register("buildInfo") {
     val out = layout.buildDirectory.file("generated/build-info.properties")
     outputs.file(out)
+    // Always re-run. With only an output declared, Gradle called this
+    // UP-TO-DATE after the first build and never ran it again, so the stamp
+    // froze — every report for hours claimed a commit that had long since been
+    // superseded, and the reports were read as stale builds when only the
+    // stamp was stale. A task whose whole purpose is to record "now" cannot be
+    // allowed to skip itself.
+    outputs.upToDateWhen { false }
     doLast {
         val commit = try {
             providers.exec {
