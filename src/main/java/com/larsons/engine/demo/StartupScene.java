@@ -4,14 +4,10 @@ import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.Menu;
 import com.larsons.engine.ui.MenuTheme;
 
-import java.awt.Color;
-import java.awt.Font;
-import java.awt.Graphics2D;
 import java.util.List;
 
 /**
@@ -65,12 +61,8 @@ public class StartupScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
-        Graphics2D g = Java2DTarget.graphicsOf(target);
         menu.render(target, viewportWidth, viewportHeight);
-        g.setColor(new Color(120, 120, 140));
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-        g.drawString("Game types are saved as JSON under resources/gametypes/",
-                24, viewportHeight - 24);
+        SceneChrome.hint(target, viewportHeight,
+                "Game types are saved as JSON under resources/gametypes/");
     }
 }

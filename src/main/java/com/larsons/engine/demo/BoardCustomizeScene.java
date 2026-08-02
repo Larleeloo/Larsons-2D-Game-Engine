@@ -8,7 +8,6 @@ import com.larsons.engine.graphics.AssetLoader;
 import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
@@ -18,11 +17,7 @@ import javax.swing.JFileChooser;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.GradientPaint;
-import java.awt.Graphics2D;
-import java.awt.Polygon;
 import java.awt.Rectangle;
-import java.awt.Shape;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -63,6 +58,22 @@ public class BoardCustomizeScene extends AbstractScene {
     private boolean draggingProp;
     private final Rectangle previewRect = new Rectangle();
     private double previewOx, previewOy, previewTw, previewTh;
+
+    private static final Font STATUS_FONT = new Font("SansSerif", Font.BOLD, 14);
+    private static final Font FOOTER_FONT = new Font("SansSerif", Font.PLAIN, 13);
+    private static final Font LABEL_FONT = new Font("SansSerif", Font.BOLD, 13);
+    private static final Color FOOTER = new Color(120, 125, 145);
+    private static final Color LABEL = new Color(160, 168, 190);
+    private static final Color BACKDROP_SCRIM = new Color(8, 9, 16, 150);
+    private static final Color TILE_EDGE = new Color(20, 22, 34);
+    private static final Color SELECTED_RING = new Color(255, 220, 110);
+    private static final Color EMPTY_SLOT_SELECTED = new Color(200, 206, 226, 160);
+    private static final Color EMPTY_SLOT = new Color(200, 206, 226, 70);
+    private static final Color PREVIEW_EDGE = new Color(90, 100, 140);
+
+    /** Corner scratch for {@link #miniTile}; see the note there. */
+    private final int[] tileXs = new int[4];
+    private final int[] tileYs = new int[4];
 
     public BoardCustomizeScene(GameContext ctx) {
         this.ctx = ctx;
@@ -297,23 +308,18 @@ public class BoardCustomizeScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
-        Graphics2D g = Java2DTarget.graphicsOf(target);
         form.render(target, viewportWidth, viewportHeight);
-        drawPreview(g);
+        drawPreview(target);
         if (!status.isEmpty()) {
-            g.setFont(new Font("SansSerif", Font.BOLD, 14));
-            g.setColor(statusColor);
-            g.drawString(status, 24, viewportHeight - 46);
+            target.drawText(status, 24, viewportHeight - 46, STATUS_FONT, statusColor);
         }
-        g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        g.setColor(new Color(120, 125, 145));
-        g.drawString("Cosmetic only — your opponents' boards and combat are unaffected. "
-                + "Saved to " + theme.file(), 24, viewportHeight - 22);
+        target.drawText("Cosmetic only — your opponents' boards and combat are unaffected. "
+                        + "Saved to " + theme.file(),
+                24, viewportHeight - 22, FOOTER_FONT, FOOTER);
     }
 
     /** A live miniature of the themed board: backdrop, tiles, and props. */
-    private void drawPreview(Graphics2D g) {
+    private void drawPreview(DrawTarget target) {
         BoardTheme.Scheme scheme = theme.scheme();
         int pw = 280, ph = 210;
         int px = viewportWidth - pw - 30;
@@ -321,14 +327,12 @@ public class BoardCustomizeScene extends AbstractScene {
         if (px < viewportWidth / 2 + 40) px = viewportWidth / 2 + 40;
         previewRect.setBounds(px, py, pw, ph);
 
-        g.setFont(new Font("SansSerif", Font.BOLD, 13));
-        g.setColor(new Color(160, 168, 190));
-        g.drawString("Preview  —  click & drag a decoration, arrows nudge", px, py - 6);
+        target.drawText("Preview  —  click & drag a decoration, arrows nudge",
+                px, py - 6, LABEL_FONT, LABEL);
 
-        Shape oldClip = g.getClip();
-        g.clip(new Rectangle(px, py, pw, ph));
-        g.setPaint(new GradientPaint(px, py, scheme.bgTop, px, py + ph, scheme.bgBottom));
-        g.fillRect(px, py, pw, ph);
+        target.pushClip(px, py, pw, ph);
+        target.fillLinearGradient(px, py, pw, ph,
+                px, py, scheme.bgTop.getRGB(), px, py + ph, scheme.bgBottom.getRGB());
         if (!theme.background().isEmpty()) {
             BufferedImage bg = AssetLoader.loadImageOrNull(theme.background());
             if (bg != null) {
@@ -336,9 +340,8 @@ public class BoardCustomizeScene extends AbstractScene {
                         ph / (double) bg.getHeight());
                 int bw = (int) (bg.getWidth() * scale);
                 int bh = (int) (bg.getHeight() * scale);
-                g.drawImage(bg, px + (pw - bw) / 2, py + (ph - bh) / 2, bw, bh, null);
-                g.setColor(new Color(8, 9, 16, 150));
-                g.fillRect(px, py, pw, ph);
+                target.drawImage(bg, px + (pw - bw) / 2, py + (ph - bh) / 2, bw, bh);
+                target.fillRect(px, py, pw, ph, BACKDROP_SCRIM);
             }
         }
 
@@ -355,10 +358,9 @@ public class BoardCustomizeScene extends AbstractScene {
                 Color base = (c + r) % 2 == 0
                         ? (own ? scheme.ownA : scheme.tileA)
                         : (own ? scheme.ownB : scheme.tileB);
-                g.setColor(base);
-                g.fillPolygon(miniTile(ox, oy, tw, th, c, r));
-                g.setColor(new Color(20, 22, 34));
-                g.drawPolygon(miniTile(ox, oy, tw, th, c, r));
+                miniTile(ox, oy, tw, th, c, r);
+                target.fillPolygon(tileXs, tileYs, 4, base);
+                target.drawPolygon(tileXs, tileYs, 4, TILE_EDGE);
             }
         }
 
@@ -368,36 +370,42 @@ public class BoardCustomizeScene extends AbstractScene {
             int[] p = slotScreen(i);
             int size = 22;
             if (i == selectedSlot) {
-                g.setColor(new Color(255, 220, 110));
-                g.drawOval(p[0] - size / 2 - 3, p[1] - size / 2 - 3, size + 6, size + 6);
+                target.drawOval(p[0] - size / 2 - 3, p[1] - size / 2 - 3,
+                        size + 6, size + 6, SELECTED_RING);
             }
             BufferedImage custom = theme.propImage(i).isEmpty() ? null
                     : AssetLoader.loadImageOrNull(theme.propImage(i));
             if (custom != null) {
-                g.drawImage(custom, p[0] - size / 2, p[1] - size + size / 4,
-                        size, size, null);
+                target.drawImage(custom, p[0] - size / 2, p[1] - size + size / 4,
+                        size, size);
             } else if (theme.prop(i) != BoardTheme.Prop.NONE) {
-                g.drawImage(AutoSprites.prop(theme.prop(i), size),
-                        p[0] - size / 2, p[1] - size + size / 4, size, size, null);
+                target.drawImage(AutoSprites.prop(theme.prop(i), size),
+                        p[0] - size / 2, p[1] - size + size / 4, size, size);
             } else {
                 // Empty slot: a faint marker so it stays clickable.
-                g.setColor(new Color(200, 206, 226, i == selectedSlot ? 160 : 70));
-                g.drawOval(p[0] - 4, p[1] - 4, 8, 8);
+                target.drawOval(p[0] - 4, p[1] - 4, 8, 8,
+                        i == selectedSlot ? EMPTY_SLOT_SELECTED : EMPTY_SLOT);
             }
         }
-        g.setClip(oldClip);
-        g.setColor(new Color(90, 100, 140));
-        g.drawRect(px, py, pw, ph);
+        target.popClip();
+        target.drawRect(px, py, pw, ph, PREVIEW_EDGE);
     }
 
-    private static Polygon miniTile(double ox, double oy, double tw, double th,
-                                    int c, int r) {
-        Polygon p = new Polygon();
+    /**
+     * The four screen corners of board cell {@code (c, r)}, written into
+     * {@link #tileXs}/{@link #tileYs}.
+     *
+     * <p>Scratch arrays rather than a returned {@code Polygon}: the preview
+     * draws sixty-four cells and needs the corners twice each — once filled,
+     * once outlined — so the old shape-per-call version allocated 128
+     * {@code Polygon}s, each with two more arrays inside it, every frame this
+     * screen was open.
+     */
+    private void miniTile(double ox, double oy, double tw, double th, int c, int r) {
         double[][] corners = {{c, r}, {c + 1, r}, {c + 1, r + 1}, {c, r + 1}};
-        for (double[] corner : corners) {
-            p.addPoint((int) (ox + (corner[0] - corner[1]) * tw / 2),
-                    (int) (oy + (corner[0] + corner[1]) * th / 2));
+        for (int i = 0; i < 4; i++) {
+            tileXs[i] = (int) (ox + (corners[i][0] - corners[i][1]) * tw / 2);
+            tileYs[i] = (int) (oy + (corners[i][0] + corners[i][1]) * th / 2);
         }
-        return p;
     }
 }

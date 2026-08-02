@@ -10,7 +10,6 @@ import com.larsons.engine.evolution.Phenotype;
 import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.Menu;
@@ -19,9 +18,6 @@ import com.larsons.engine.ui.MenuTheme;
 
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.FontMetrics;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
 import java.util.List;
 
 /**
@@ -47,6 +43,8 @@ public class EvolutionLobbyScene extends AbstractScene {
     private static final Color BG = new Color(10, 13, 19);
     private static final Color TEXT = new Color(226, 232, 240);
     private static final Color TEXT_DIM = new Color(140, 152, 174);
+    private static final Color STATUS = new Color(235, 150, 120);
+    private static final Font NOTE_FONT = new Font("SansSerif", Font.PLAIN, 13);
 
     private final GameContext ctx;
     private final EvolutionStore store;
@@ -177,31 +175,22 @@ public class EvolutionLobbyScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
-        Graphics2D g = Java2DTarget.graphicsOf(target);
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g.setColor(BG);
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
+        target.fillRect(0, 0, viewportWidth, viewportHeight, BG);
 
         if (choosingColor) {
             colorMenu.render(target, viewportWidth, viewportHeight);
-            drawColorSwatches(g);
-            g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-            g.setColor(TEXT_DIM);
-            g.drawString("Red hunts · blue cooperates · green is the wild card · Esc to go back",
-                    24, viewportHeight - 24);
+            drawColorSwatches(target);
+            target.drawText("Red hunts · blue cooperates · green is the wild card · Esc to go back",
+                    24, viewportHeight - 24, SceneChrome.BODY, TEXT_DIM);
             return;
         }
 
         menu.render(target, viewportWidth, viewportHeight);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         if (!status.isEmpty()) {
-            g.setColor(new Color(235, 150, 120));
-            g.drawString(status, 24, viewportHeight - 44);
+            SceneChrome.status(target, viewportHeight, status, STATUS);
         }
-        g.setColor(TEXT_DIM);
-        g.drawString("Saves and your discovery history live under " + store.directory(),
-                24, viewportHeight - 24);
+        target.drawText("Saves and your discovery history live under " + store.directory(),
+                24, viewportHeight - 24, SceneChrome.BODY, TEXT_DIM);
     }
 
     /**
@@ -214,7 +203,7 @@ public class EvolutionLobbyScene extends AbstractScene {
      * offsets, which is what used to leave them drifting out of line with the
      * text they annotate. Must therefore be called after the menu has rendered.
      */
-    private void drawColorSwatches(Graphics2D g) {
+    private void drawColorSwatches(DrawTarget target) {
         List<MenuItem> items = colorMenu.items();
         Nucleotide[] order = {Nucleotide.R, Nucleotide.G, Nucleotide.B};
         int lastBottom = 0;
@@ -227,8 +216,8 @@ public class EvolutionLobbyScene extends AbstractScene {
             int x = item.x - totalW - 16;
             int y = item.y + (item.height - 12) / 2;
             for (int slot = 1; slot <= starter.length(); slot++) {
-                g.setColor(starter.at(slot).color());
-                g.fillRect(x + (slot - 1) * cell, y, cell - 1, 12);
+                target.fillRect(x + (slot - 1) * cell, y, cell - 1, 12,
+                        starter.at(slot).color());
             }
             lastBottom = Math.max(lastBottom, item.y + item.height);
         }
@@ -237,11 +226,10 @@ public class EvolutionLobbyScene extends AbstractScene {
         // Parked above the control hint rather than under the last swatch: the
         // menu has a Cancel row below these three, and anchoring to the swatches
         // put this note straight through it.
-        g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        g.setColor(TEXT);
-        FontMetrics fm = g.getFontMetrics();
         String note = "Every strand starts four nucleotides long — body shapes appear at six";
-        g.drawString(note, viewportWidth / 2 - fm.stringWidth(note) / 2, viewportHeight - 58);
+        target.drawText(note,
+                viewportWidth / 2 - target.textWidth(note, NOTE_FONT) / 2,
+                viewportHeight - 58, NOTE_FONT, TEXT);
     }
 
     private static String capitalize(String s) {

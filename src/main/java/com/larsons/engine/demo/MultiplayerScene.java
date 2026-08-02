@@ -10,14 +10,12 @@ import com.larsons.engine.net.GameServer;
 import com.larsons.engine.net.NetSession;
 import com.larsons.engine.net.Protocol;
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.MenuTheme;
 
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.Graphics2D;
 
 /**
  * The Multiplayer screen (requirement #3), modelled on Minecraft Java
@@ -48,6 +46,16 @@ public class MultiplayerScene extends AbstractScene {
     private volatile String status = "";
     private volatile boolean connecting;
     private volatile NetSession pendingSession;
+
+    /**
+     * The connect result gets its own baseline and a heavier face than
+     * {@link SceneChrome}'s status line: it is the one thing on this screen a
+     * player is waiting for, and it has to be readable at a glance from across
+     * a desk.
+     */
+    private static final Font RESULT_FONT = new Font("SansSerif", Font.BOLD, 15);
+    private static final Color CONNECTED = new Color(140, 200, 150);
+    private static final Color FAILED = new Color(235, 120, 110);
 
     public MultiplayerScene(GameContext ctx, String levelPath) {
         this.ctx = ctx;
@@ -151,19 +159,14 @@ public class MultiplayerScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
-        Graphics2D g = Java2DTarget.graphicsOf(target);
         form.render(target, viewportWidth, viewportHeight);
 
         String s = status;
         if (!s.isEmpty()) {
-            g.setColor(s.startsWith("Could not") ? new Color(235, 120, 110) : new Color(140, 200, 150));
-            g.setFont(new Font("SansSerif", Font.BOLD, 15));
-            g.drawString(s, 24, viewportHeight - 52);
+            target.drawText(s, 24, viewportHeight - 52, RESULT_FONT,
+                    s.startsWith("Could not") ? FAILED : CONNECTED);
         }
-        g.setColor(new Color(120, 120, 140));
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-        g.drawString("Hosting uses your current game type + level; friends connect to your IP and port",
-                24, viewportHeight - 24);
+        SceneChrome.hint(target, viewportHeight,
+                "Hosting uses your current game type + level; friends connect to your IP and port");
     }
 }

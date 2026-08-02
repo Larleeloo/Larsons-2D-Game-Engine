@@ -10,7 +10,6 @@ import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelStore;
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.Menu;
@@ -18,8 +17,6 @@ import com.larsons.engine.ui.MenuTheme;
 
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.FontMetrics;
-import java.awt.Graphics2D;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -52,6 +49,11 @@ public class MainMenuScene extends AbstractScene {
     private boolean deleting;
     private Menu deleteMenu;
     private int deleteLevelCount;
+
+    /** The delete confirmation reads on a red-tinted backdrop, not the usual near-black. */
+    private static final Color DANGER_BACKDROP = new Color(28, 16, 16);
+    private static final Font WARNING_FONT = new Font("SansSerif", Font.BOLD, 16);
+    private static final Color WARNING = new Color(235, 120, 120);
 
     public MainMenuScene(GameContext ctx) { this.ctx = ctx; }
 
@@ -280,60 +282,45 @@ public class MainMenuScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
-        Graphics2D g = Java2DTarget.graphicsOf(target);
         if (renaming) {
-            g.setColor(new Color(18, 18, 28));
-            g.fillRect(0, 0, viewportWidth, viewportHeight);
+            SceneChrome.backdrop(target, viewportWidth, viewportHeight);
             renameForm.render(target, viewportWidth, viewportHeight);
-            g.setColor(new Color(120, 120, 140));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-            g.drawString("Type the new name · Enter/click Rename · Esc to cancel",
-                    24, viewportHeight - 24);
+            SceneChrome.hint(target, viewportHeight,
+                    "Type the new name · Enter/click Rename · Esc to cancel");
             return;
         }
         if (exporting) {
-            g.setColor(new Color(18, 18, 28));
-            g.fillRect(0, 0, viewportWidth, viewportHeight);
+            SceneChrome.backdrop(target, viewportWidth, viewportHeight);
             exportForm.render(target, viewportWidth, viewportHeight);
-            g.setColor(new Color(120, 120, 140));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-            g.drawString("Bundles this game type + all its levels into one .larsonsengine file · Esc to cancel",
-                    24, viewportHeight - 24);
+            SceneChrome.hint(target, viewportHeight,
+                    "Bundles this game type + all its levels into one .larsonsengine file · Esc to cancel");
             return;
         }
         if (deleting) {
-            g.setColor(new Color(28, 16, 16));
-            g.fillRect(0, 0, viewportWidth, viewportHeight);
+            target.fillRect(0, 0, viewportWidth, viewportHeight, DANGER_BACKDROP);
             deleteMenu.render(target, viewportWidth, viewportHeight);
             // Spell out exactly what will be lost, in a warning colour, in the
             // gap between the confirmation's subtitle and its choices.
-            g.setFont(new Font("SansSerif", Font.BOLD, 16));
-            g.setColor(new Color(235, 120, 120));
             int cx = viewportWidth / 2;
             int wy = viewportHeight / 4 + 96;
             String levels = deleteLevelCount == 1 ? "1 level" : deleteLevelCount + " levels";
-            drawCentered(g, "Deletes this game type and all " + levels + " inside it.", cx, wy);
-            drawCentered(g, "Its doors and custom content are removed too.", cx, wy + 24);
-            g.setColor(new Color(120, 120, 140));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-            g.drawString("Choose \"Delete permanently\" to confirm · Esc to cancel",
-                    24, viewportHeight - 24);
+            drawCentered(target, "Deletes this game type and all " + levels + " inside it.", cx, wy);
+            drawCentered(target, "Its doors and custom content are removed too.", cx, wy + 24);
+            SceneChrome.hint(target, viewportHeight,
+                    "Choose \"Delete permanently\" to confirm · Esc to cancel");
             return;
         }
         menu.render(target, viewportWidth, viewportHeight);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         if (!status.isEmpty()) {
-            g.setColor(new Color(140, 200, 140));
-            g.drawString(status, 24, viewportHeight - 44);
+            SceneChrome.status(target, viewportHeight, status, SceneChrome.OK);
         }
-        g.setColor(new Color(120, 120, 140));
-        g.drawString("Arrow keys / mouse to navigate, Enter to select",
-                24, viewportHeight - 24);
+        SceneChrome.hint(target, viewportHeight,
+                "Arrow keys / mouse to navigate, Enter to select");
     }
 
-    private static void drawCentered(Graphics2D g, String s, int cx, int cy) {
-        FontMetrics fm = g.getFontMetrics();
-        g.drawString(s, cx - fm.stringWidth(s) / 2, cy);
+    /** The two warning lines, centred on {@code cx}, in the delete confirmation. */
+    private static void drawCentered(DrawTarget target, String s, int cx, int cy) {
+        target.drawText(s, cx - target.textWidth(s, WARNING_FONT) / 2, cy,
+                WARNING_FONT, WARNING);
     }
 }
