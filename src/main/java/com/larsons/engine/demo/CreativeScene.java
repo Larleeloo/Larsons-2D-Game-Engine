@@ -7133,7 +7133,9 @@ public class CreativeScene extends AbstractScene {
         BufferedImage img = Skins.frame("item/" + def.key(), animClock);
         if (img == null) img = EntitySprites.item(def, 32);
         g.drawImage(img, x + 6, y + 6, slot - 12, slot - 12, null);
-        PlayScene.drawDurabilityBar(g, def, stack, x, y, slot);
+        // PlayScene's durability bar is ported; this scene is not yet, so it
+        // draws through the frame's own target. Removed when CreativeScene lands.
+        PlayScene.drawDurabilityBar(frameTarget, def, stack, x, y, slot);
         if (stack.count > 1) {
             g.setFont(SMALL_FONT);
             g.setColor(Color.BLACK);
