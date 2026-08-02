@@ -8,6 +8,7 @@ import com.larsons.engine.level.LevelStore;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.util.Json;
 import org.junit.jupiter.api.BeforeAll;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -371,7 +372,7 @@ class ConfigFeatureTest {
     private static void renderOnce(ConfigForm form) {
         BufferedImage img = new BufferedImage(960, 540, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
-        form.render(g, 960, 540);
+        form.render(new Java2DTarget(g, 960, 540), 960, 540);
         g.dispose();
     }
 }

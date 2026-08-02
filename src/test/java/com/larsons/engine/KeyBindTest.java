@@ -417,14 +417,14 @@ class KeyBindTest {
     private static void render(ConfigForm form) {
         BufferedImage img = new BufferedImage(W, H, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
-        form.render(g, W, H);
+        form.render(new Java2DTarget(g, W, H), W, H);
         g.dispose();
     }
 
     private static void render(Menu menu) {
         BufferedImage img = new BufferedImage(W, H, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
-        menu.render(g, W, H);
+        menu.render(new Java2DTarget(g, W, H), W, H);
         g.dispose();
     }
 

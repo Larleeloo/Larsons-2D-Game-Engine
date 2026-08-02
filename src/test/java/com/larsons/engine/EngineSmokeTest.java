@@ -151,7 +151,7 @@ class EngineSmokeTest {
 
         BufferedImage img = new BufferedImage(640, 360, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
-        menu.render(g, 640, 360); // computes item hit-boxes
+        menu.render(new Java2DTarget(g, 640, 360), 640, 360); // computes item hit-boxes
 
         // Move selection down to the second item, then press Enter.
         input.keyPressed(new KeyEvent(src, KeyEvent.KEY_PRESSED, 0L, 0, KeyEvent.VK_DOWN, (char) 0));
@@ -177,7 +177,7 @@ class EngineSmokeTest {
 
         BufferedImage img = new BufferedImage(640, 360, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
-        menu.render(g, 640, 360); // computes item hit-boxes
+        menu.render(new Java2DTarget(g, 640, 360), 640, 360); // computes item hit-boxes
 
         MenuItem item = menu.items().get(0);
         int cx = item.x + item.width / 2;

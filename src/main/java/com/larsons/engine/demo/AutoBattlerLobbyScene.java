@@ -202,7 +202,7 @@ public class AutoBattlerLobbyScene extends AbstractScene {
         // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
         Graphics2D g = Java2DTarget.graphicsOf(target);
         if (session == null) {
-            form.render(g, viewportWidth, viewportHeight);
+            form.render(target, viewportWidth, viewportHeight);
             String s = status;
             if (!s.isEmpty()) {
                 g.setColor(s.startsWith("Could not") || s.startsWith("Disconnected")

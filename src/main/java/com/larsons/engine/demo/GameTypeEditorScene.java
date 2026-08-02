@@ -83,7 +83,7 @@ public class GameTypeEditorScene extends AbstractScene {
         Graphics2D g = Java2DTarget.graphicsOf(target);
         g.setColor(new Color(18, 18, 28));
         g.fillRect(0, 0, viewportWidth, viewportHeight);
-        form.render(g, viewportWidth, viewportHeight);
+        form.render(target, viewportWidth, viewportHeight);
 
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         g.setColor(new Color(140, 200, 140));

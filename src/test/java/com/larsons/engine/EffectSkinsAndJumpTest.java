@@ -21,6 +21,7 @@ import com.larsons.engine.sim.PlayerState;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -152,7 +153,7 @@ class EffectSkinsAndJumpTest {
         camera.centerOn(32, 32);
         Particles particles = new Particles();
         particles.burst(32, 32, Color.GREEN, 40, Particles.Style.EMBERS);
-        particles.render(g, camera);
+        particles.render(new Java2DTarget(g, 64, 64), camera);
         g.dispose();
         assertTrue(hasColor(canvas, Color.MAGENTA),
                 "the skinned particle texture is what got drawn");
@@ -169,7 +170,7 @@ class EffectSkinsAndJumpTest {
         Particles particles = new Particles();
         particles.burst(32, 32, Color.GREEN, 60, Particles.Style.MOTES);
         assertTrue(particles.count() > 0);
-        particles.render(g, camera);
+        particles.render(new Java2DTarget(g, 64, 64), camera);
         g.dispose();
         assertTrue(hasColor(canvas, Color.GREEN), "the pre-generated fallback still draws");
     }

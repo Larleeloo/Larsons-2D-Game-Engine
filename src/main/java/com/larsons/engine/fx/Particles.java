@@ -2,12 +2,10 @@ package com.larsons.engine.fx;
 
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.Skins;
+import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.sim.PerspectiveSpace;
 
-import java.awt.AlphaComposite;
 import java.awt.Color;
-import java.awt.Composite;
-import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.util.Random;
 
@@ -135,7 +133,25 @@ public final class Particles {
      */
     private PerspectiveSpace space = PerspectiveSpace.SIDE_VIEW;
 
-    private final Random rng = new Random();
+    private final Random rng;
+
+    /** A system whose bursts differ every run, which is what play wants. */
+    public Particles() {
+        this.rng = new Random();
+    }
+
+    /**
+     * A system whose bursts are the same every run.
+     *
+     * <p>Not a tuning knob — the only caller is the golden-frame harness,
+     * which cannot store a reference picture of something that scatters
+     * differently each time it is drawn. Everything downstream of the seed is
+     * already deterministic, so this is the whole of what stood between
+     * particles and being pinned down.
+     */
+    public Particles(long seed) {
+        this.rng = new Random(seed);
+    }
 
     /**
      * Point new bursts at the space the scene is drawn in. Flecks already in
@@ -339,9 +355,15 @@ public final class Particles {
      * points at the viewer — as a fleck that grows a little as it rises
      * (see {@link PerspectiveSpace#heightScale}).
      */
-    public void render(Graphics2D g, Camera camera) {
+    public void render(DrawTarget target, Camera camera) {
         Style[] styles = Style.values();
-        Composite restore = null;
+        // A textured fleck scopes an alpha; the next one replaces it rather
+        // than nesting, which is what the Graphics2D version did by setting
+        // the composite outright. Untextured flecks drawn after a textured one
+        // therefore inherit that alpha on top of their own — long-standing
+        // behaviour, preserved here because a port that quietly fixed it would
+        // be a port that changed what the player sees.
+        boolean alphaPushed = false;
         double lift = space.screenLift();
         for (int p = 0; p < count; p++) {
             double fade = Math.max(0, Math.min(1, life[p] / maxLife[p]));
@@ -355,20 +377,20 @@ public final class Particles {
             // once across the fleck's life instead of flickering per frame.
             BufferedImage tex = Skins.frame(textureKey(style), maxLife[p] - life[p]);
             if (tex != null) {
-                if (restore == null) restore = g.getComposite();
-                g.setComposite(AlphaComposite.getInstance(
-                        AlphaComposite.SRC_OVER, (float) fade));
+                if (alphaPushed) target.popAlpha();
+                target.pushAlpha((float) fade);
+                alphaPushed = true;
                 // Textured flecks read better a little larger than the bare
                 // squares they replace, which are only a few pixels across.
                 int w = Math.max(2, s * 2);
-                g.drawImage(tex, sx - w / 2, sy - w / 2, w, w, null);
+                target.drawImage(tex, sx - w / 2, sy - w / 2, w, w);
             } else {
                 int alpha = (int) (255 * fade);
-                g.setColor(new Color(rgb[p] | (Math.max(0, Math.min(255, alpha)) << 24), true));
-                g.fillRect(sx - s / 2, sy - s / 2, s, s);
+                target.fillRect(sx - s / 2, sy - s / 2, s, s,
+                        rgb[p] | (Math.max(0, Math.min(255, alpha)) << 24));
             }
         }
-        if (restore != null) g.setComposite(restore);
+        if (alphaPushed) target.popAlpha();
     }
 
     public int count() {

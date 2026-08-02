@@ -8,6 +8,7 @@ import com.larsons.engine.level.CutsceneDirector;
 import com.larsons.engine.level.CutscenePlayer;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import org.junit.jupiter.api.Test;
 
 import java.awt.Graphics2D;
@@ -322,8 +323,9 @@ class CutsceneTest {
         Camera cam = new Camera(Perspective.SIDE_SCROLL, 320, 240);
         cam.tileSize = 32;
         cam.centerOn(100, 200); // the guide's anchor lands mid-screen
-        CutscenePainter.drawActors(g, cam, p);
-        CutscenePainter.drawOverlay(g, 320, 240, p);
+        Java2DTarget target = new Java2DTarget(g, 320, 240);
+        CutscenePainter.drawActors(target, cam, p);
+        CutscenePainter.drawOverlay(target, 320, 240, p);
         g.dispose();
 
         assertEquals(0xFF000000, img.getRGB(1, 1), "top letterbox bar is black");

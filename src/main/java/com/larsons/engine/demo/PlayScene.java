@@ -1950,7 +1950,7 @@ public class PlayScene extends AbstractScene {
             if (parallax == null) {
                 parallax = new ParallaxBackground(level.background, level.name.hashCode());
             }
-            parallax.render(g, camera.x, camera.y, viewportWidth, viewportHeight);
+            parallax.render(target, camera.x, camera.y, viewportWidth, viewportHeight);
         }
 
         // A side view's blocks are a wall the background layer hides behind; a
@@ -1971,10 +1971,10 @@ public class PlayScene extends AbstractScene {
         if (!sceneryBehind) phase("decor", () -> drawDecorLayer(g, false, standing));
         drawDoors(g);
         phase("entities", () -> drawWorldEntities(target, p, standing));
-        if (mgView != null) MiniGameHud.drawWorld(g, camera, level, mgView, animClock);
+        if (mgView != null) MiniGameHud.drawWorld(target, camera, level, mgView, animClock);
         if (net != null) drawRemotePlayers(g, standing);
         if (mgView != null) {
-            MiniGameHud.drawTeamRing(g, camera, me.x + ps() / 2, me.y + ps(),
+            MiniGameHud.drawTeamRing(target, camera, me.x + ps() / 2, me.y + ps(),
                     ps(), mgView.teamOf(me.id), camera.zoom);
         }
         // The local player, wearing whatever the object in their hands says
@@ -1996,10 +1996,10 @@ public class PlayScene extends AbstractScene {
             drawSwing(g);
         }
         if (cutscenes != null && cutscenes.active() != null) {
-            CutscenePainter.drawActors(g, camera, cutscenes.active());
+            CutscenePainter.drawActors(target, camera, cutscenes.active());
         }
         phase("decor", () -> drawDecorLayer(g, true)); // foreground covers players
-        if (p.particlesEnabled) phase("particles", () -> particles.render(g, camera));
+        if (p.particlesEnabled) phase("particles", () -> particles.render(target, camera));
         if (net == null) drawDoorHint(g, p);
         drawVehicleHint(g, p);
         // Everything from here down is screen-space overlay rather than world
@@ -2009,7 +2009,7 @@ public class PlayScene extends AbstractScene {
         phase("hud", () -> {
             if (p.hudVisible) drawHud(g);
             if (mgView != null) {
-                MiniGameHud.drawHud(g, viewportWidth, viewportHeight, mgView, me.id);
+                MiniGameHud.drawHud(target, viewportWidth, viewportHeight, mgView, me.id);
             }
             if (p.itemsEnabled) drawHotbar(g);
             if (p.combatEnabled || p.mobsEnabled) drawHealthBar(g);
@@ -2021,19 +2021,19 @@ public class PlayScene extends AbstractScene {
         });
         if (showInventory) drawInventory(g);
         if (craftingPanel != null) {
-            craftingPanel.render(g, viewportWidth, viewportHeight, inventory, animClock);
+            craftingPanel.render(target, viewportWidth, viewportHeight, inventory, animClock);
         }
         if (containerPanel != null) {
-            containerPanel.render(g, viewportWidth, viewportHeight, animClock);
+            containerPanel.render(target, viewportWidth, viewportHeight, animClock);
         }
         if (cutscenes != null && cutscenes.active() != null) {
-            CutscenePainter.drawOverlay(g, viewportWidth, viewportHeight, cutscenes.active());
+            CutscenePainter.drawOverlay(target, viewportWidth, viewportHeight, cutscenes.active());
         }
 
         if (paused) drawPauseOverlay(g);
         // The character choice sits over the built level, so a player sees the
         // world they are about to drop into behind the cards.
-        if (picker != null) picker.render(g, viewportWidth, viewportHeight);
+        if (picker != null) picker.render(target, viewportWidth, viewportHeight);
         if (net != null && !net.client().isConnected()) drawDisconnectOverlay(g);
     }
 
@@ -2299,7 +2299,7 @@ public class PlayScene extends AbstractScene {
         g.setComposite(old);
 
         if (bindsForm != null) {
-            bindsForm.render(g, viewportWidth, viewportHeight);
+            bindsForm.render(frameTarget, viewportWidth, viewportHeight);
             g.setFont(HUD_FONT);
             if (bindsForm.isCapturing()) {
                 g.setColor(new Color(255, 210, 90));
@@ -2310,7 +2310,7 @@ public class PlayScene extends AbstractScene {
             g.drawString(KeyBindForm.HINT, 24, viewportHeight - 24);
             return;
         }
-        pauseForm.render(g, viewportWidth, viewportHeight);
+        pauseForm.render(frameTarget, viewportWidth, viewportHeight);
         g.setColor(new Color(120, 120, 140));
         g.setFont(HUD_FONT);
         g.drawString(net == null
@@ -2970,7 +2970,7 @@ public class PlayScene extends AbstractScene {
             double x = old != null ? old.x + (ps.x - old.x) * t : ps.x;
             double y = old != null ? old.y + (ps.y - old.y) * t : ps.y;
             if (mgView != null) {
-                MiniGameHud.drawTeamRing(g, camera, x + size / 2, y + size,
+                MiniGameHud.drawTeamRing(frameTarget, camera, x + size / 2, y + size,
                         size, mgView.teamOf(ps.id), camera.zoom);
             }
             // Remote players wear their own character's skin, hold their own

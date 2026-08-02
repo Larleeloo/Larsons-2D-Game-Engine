@@ -24,6 +24,7 @@ import com.larsons.engine.sim.PlayerState;
 import com.larsons.engine.world.World;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -388,7 +389,7 @@ class PerspectiveSpaceTest {
         camera.centerOn(ORIGIN, ORIGIN);
         BufferedImage canvas = new BufferedImage(CANVAS, CANVAS, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = canvas.createGraphics();
-        particles.render(g, camera);
+        particles.render(new Java2DTarget(g, CANVAS, CANVAS), camera);
         g.dispose();
         return canvas;
     }

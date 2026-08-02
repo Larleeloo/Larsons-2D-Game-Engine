@@ -17,6 +17,7 @@ import com.larsons.engine.world.DecorRegistry;
 import com.larsons.engine.world.SurfaceDecor;
 import com.larsons.engine.world.SurfaceDecorRegistry;
 import org.junit.jupiter.api.BeforeAll;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
@@ -65,7 +66,7 @@ class TextLayoutTest {
     private static Graphics2D layout(ConfigForm form, int viewportW) {
         BufferedImage img = new BufferedImage(viewportW, 4000, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
-        form.render(g, viewportW, 4000);
+        form.render(new Java2DTarget(g, viewportW, 4000), viewportW, 4000);
         return g;
     }
 
@@ -168,7 +169,7 @@ class TextLayoutTest {
         Graphics2D g = img.createGraphics();
         g.setColor(Color.BLACK);
         g.fillRect(0, 0, W, H);
-        form.render(g, W, H);
+        form.render(new Java2DTarget(g, W, H), W, H);
         g.dispose();
 
         Rectangle row = form.options().get(1).rowBounds();
@@ -193,7 +194,7 @@ class TextLayoutTest {
         for (int viewportW : new int[]{W, 800}) {
             BufferedImage img = new BufferedImage(viewportW, H, BufferedImage.TYPE_INT_ARGB);
             Graphics2D g = img.createGraphics();
-            menu.render(g, viewportW, H);
+            menu.render(new Java2DTarget(g, viewportW, H), viewportW, H);
             g.dispose();
 
             assertInside(menu.titleBounds(), viewportW, "title");

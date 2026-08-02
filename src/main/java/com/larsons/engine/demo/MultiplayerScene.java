@@ -153,7 +153,7 @@ public class MultiplayerScene extends AbstractScene {
     public void render(DrawTarget target, float alpha) {
         // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
         Graphics2D g = Java2DTarget.graphicsOf(target);
-        form.render(g, viewportWidth, viewportHeight);
+        form.render(target, viewportWidth, viewportHeight);
 
         String s = status;
         if (!s.isEmpty()) {

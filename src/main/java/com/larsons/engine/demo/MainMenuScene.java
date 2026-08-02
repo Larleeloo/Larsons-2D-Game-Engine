@@ -285,7 +285,7 @@ public class MainMenuScene extends AbstractScene {
         if (renaming) {
             g.setColor(new Color(18, 18, 28));
             g.fillRect(0, 0, viewportWidth, viewportHeight);
-            renameForm.render(g, viewportWidth, viewportHeight);
+            renameForm.render(target, viewportWidth, viewportHeight);
             g.setColor(new Color(120, 120, 140));
             g.setFont(new Font("SansSerif", Font.PLAIN, 14));
             g.drawString("Type the new name · Enter/click Rename · Esc to cancel",
@@ -295,7 +295,7 @@ public class MainMenuScene extends AbstractScene {
         if (exporting) {
             g.setColor(new Color(18, 18, 28));
             g.fillRect(0, 0, viewportWidth, viewportHeight);
-            exportForm.render(g, viewportWidth, viewportHeight);
+            exportForm.render(target, viewportWidth, viewportHeight);
             g.setColor(new Color(120, 120, 140));
             g.setFont(new Font("SansSerif", Font.PLAIN, 14));
             g.drawString("Bundles this game type + all its levels into one .larsonsengine file · Esc to cancel",
@@ -305,7 +305,7 @@ public class MainMenuScene extends AbstractScene {
         if (deleting) {
             g.setColor(new Color(28, 16, 16));
             g.fillRect(0, 0, viewportWidth, viewportHeight);
-            deleteMenu.render(g, viewportWidth, viewportHeight);
+            deleteMenu.render(target, viewportWidth, viewportHeight);
             // Spell out exactly what will be lost, in a warning colour, in the
             // gap between the confirmation's subtitle and its choices.
             g.setFont(new Font("SansSerif", Font.BOLD, 16));
@@ -321,7 +321,7 @@ public class MainMenuScene extends AbstractScene {
                     24, viewportHeight - 24);
             return;
         }
-        menu.render(g, viewportWidth, viewportHeight);
+        menu.render(target, viewportWidth, viewportHeight);
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         if (!status.isEmpty()) {
             g.setColor(new Color(140, 200, 140));

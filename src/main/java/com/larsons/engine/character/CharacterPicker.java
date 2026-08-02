@@ -4,14 +4,13 @@ import com.larsons.engine.graphics.DirectionalSprites;
 import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.PlayerSprites;
 import com.larsons.engine.graphics.Skins;
+import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.input.KeyBinds;
 
-import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.FontMetrics;
 import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
@@ -40,6 +39,22 @@ public final class CharacterPicker {
     private static final int CARD_W = 176;
     private static final int CARD_H = 268;
     private static final int CARD_GAP = 16;
+
+    // Hoisted: every card drew the same dozen colours and allocated all of
+    // them again per card, per frame. See RENDER_PLAN's B2 note — this buys
+    // allocation, not batching.
+    private static final int SCRIM = new Color(12, 14, 22, 235).getRGB();
+    private static final int TITLE = Color.WHITE.getRGB();
+    private static final int SUBTITLE = new Color(150, 155, 175).getRGB();
+    private static final int HINT = new Color(160, 165, 185).getRGB();
+    private static final int CARD_PICKED = new Color(38, 44, 66).getRGB();
+    private static final int CARD_PLAIN = new Color(24, 27, 38).getRGB();
+    private static final int EDGE_PICKED = new Color(120, 190, 255).getRGB();
+    private static final int EDGE_PLAIN = new Color(60, 66, 86).getRGB();
+    private static final int STAT_LABEL = new Color(140, 146, 168).getRGB();
+    private static final int STAT_VALUE = new Color(226, 230, 244).getRGB();
+    private static final int RULE = new Color(255, 255, 255, 28).getRGB();
+    private static final int NO_ULTIMATE = new Color(110, 115, 135).getRGB();
 
     private final List<CharacterProfile> roster;
     private final String levelName;
@@ -114,21 +129,16 @@ public final class CharacterPicker {
         return false;
     }
 
-    public void render(Graphics2D g, int viewportW, int viewportH) {
-        g.setColor(new Color(12, 14, 22, 235));
-        g.fillRect(0, 0, viewportW, viewportH);
+    public void render(DrawTarget target, int viewportW, int viewportH) {
+        target.fillRect(0, 0, viewportW, viewportH, SCRIM);
 
-        g.setFont(TITLE_FONT);
-        FontMetrics tfm = g.getFontMetrics();
         String title = "Choose your character";
-        g.setColor(Color.WHITE);
-        g.drawString(title, (viewportW - tfm.stringWidth(title)) / 2, viewportH / 2 - 170);
+        target.drawText(title, (viewportW - target.textWidth(title, TITLE_FONT)) / 2,
+                viewportH / 2 - 170, TITLE_FONT, TITLE);
         if (!levelName.isEmpty()) {
-            g.setFont(HINT_FONT);
-            FontMetrics sfm = g.getFontMetrics();
-            g.setColor(new Color(150, 155, 175));
-            g.drawString(levelName, (viewportW - sfm.stringWidth(levelName)) / 2,
-                    viewportH / 2 - 146);
+            target.drawText(levelName,
+                    (viewportW - target.textWidth(levelName, HINT_FONT)) / 2,
+                    viewportH / 2 - 146, HINT_FONT, SUBTITLE);
         }
 
         // The whole row is centred; a roster wider than the window scrolls so
@@ -142,22 +152,19 @@ public final class CharacterPicker {
         for (int i = 0; i < roster.size(); i++) {
             int x = startX + i * (CARD_W + CARD_GAP);
             cards[i].setBounds(x, top, CARD_W, CARD_H);
-            drawCard(g, roster.get(i), x, top, i == index);
+            drawCard(target, roster.get(i), x, top, i == index);
         }
 
-        g.setFont(HINT_FONT);
-        FontMetrics hfm = g.getFontMetrics();
         String hint = "← → or click to choose · Enter to start";
-        g.setColor(new Color(160, 165, 185));
-        g.drawString(hint, (viewportW - hfm.stringWidth(hint)) / 2, top + CARD_H + 44);
+        target.drawText(hint, (viewportW - target.textWidth(hint, HINT_FONT)) / 2,
+                top + CARD_H + 44, HINT_FONT, HINT);
     }
 
-    private void drawCard(Graphics2D g, CharacterProfile p, int x, int y, boolean picked) {
-        g.setColor(picked ? new Color(38, 44, 66) : new Color(24, 27, 38));
-        g.fillRoundRect(x, y, CARD_W, CARD_H, 14, 14);
-        g.setColor(picked ? new Color(120, 190, 255) : new Color(60, 66, 86));
-        g.setStroke(new BasicStroke(picked ? 2.5f : 1.2f));
-        g.drawRoundRect(x, y, CARD_W, CARD_H, 14, 14);
+    private void drawCard(DrawTarget target, CharacterProfile p, int x, int y, boolean picked) {
+        target.fillRoundRect(x, y, CARD_W, CARD_H, 14, 14,
+                picked ? CARD_PICKED : CARD_PLAIN);
+        target.drawRoundRect(x, y, CARD_W, CARD_H, 14, 14,
+                picked ? EDGE_PICKED : EDGE_PLAIN, picked ? 2.5f : 1.2f);
 
         // The character as they will actually look in-game: their assigned
         // sheet if they have one, else the pre-generated directional art —
@@ -169,46 +176,46 @@ public final class CharacterPicker {
         BufferedImage img = frame.image();
         int ix = x + (CARD_W - art) / 2, iy = y + 14;
         if (frame.mirrored()) {
-            g.drawImage(img, ix + art, iy, -art, art, null);
+            target.drawImage(img, ix + art, iy, -art, art);
         } else {
-            g.drawImage(img, ix, iy, art, art, null);
+            target.drawImage(img, ix, iy, art, art);
         }
 
-        g.setFont(NAME_FONT);
-        FontMetrics nfm = g.getFontMetrics();
-        g.setColor(Color.WHITE);
-        g.drawString(p.name, x + (CARD_W - nfm.stringWidth(p.name)) / 2, y + art + 34);
+        target.drawText(p.name, x + (CARD_W - target.textWidth(p.name, NAME_FONT)) / 2,
+                y + art + 34, NAME_FONT, TITLE);
 
-        g.setFont(BODY_FONT);
         int line = y + art + 56;
-        line = statLine(g, x, line, "Speed", (int) Math.round(p.speed * 100) + "%");
-        line = statLine(g, x, line, "Health", String.valueOf((int) Math.round(p.maxHealth)));
-        line = statLine(g, x, line, "Mana", String.valueOf((int) Math.round(p.maxMana)));
-        line = statLine(g, x, line, "Stamina",
+        line = statLine(target, x, line, "Speed", (int) Math.round(p.speed * 100) + "%");
+        line = statLine(target, x, line, "Health", String.valueOf((int) Math.round(p.maxHealth)));
+        line = statLine(target, x, line, "Mana", String.valueOf((int) Math.round(p.maxMana)));
+        line = statLine(target, x, line, "Stamina",
                 String.valueOf((int) Math.round(p.maxStamina)));
-        line = statLine(g, x, line, "Jumps",
+        line = statLine(target, x, line, "Jumps",
                 p.airJumps == 0 ? "ground only"
                         : p.airJumps == 1 ? "double" : (p.airJumps + 1) + "×");
-        line = statLine(g, x, line, "Sprint", p.sprintEnabled ? "yes" : "no");
+        line = statLine(target, x, line, "Sprint", p.sprintEnabled ? "yes" : "no");
 
         // The ultimate closes the card, centred and set off by a rule.
         Ultimate u = p.ultimate();
         int ultY = y + CARD_H - 14;
-        g.setColor(new Color(255, 255, 255, 28));
-        g.drawLine(x + 14, ultY - 18, x + CARD_W - 14, ultY - 18);
+        // The card's own stroke width, not 1: Graphics2D keeps the last stroke
+        // set, so this rule was always drawn with the width the card border
+        // above it chose. Passing 1f here would be "obviously right" and would
+        // thin the rule under the selected card.
+        target.drawLine(x + 14, ultY - 18, x + CARD_W - 14, ultY - 18,
+                RULE, picked ? 2.5f : 1.2f);
         String ultName = u != null ? u.name() : "no ultimate";
-        g.setColor(u != null ? u.color() : new Color(110, 115, 135));
-        g.drawString(ultName, x + (CARD_W - g.getFontMetrics().stringWidth(ultName)) / 2,
-                ultY);
+        target.drawText(ultName,
+                x + (CARD_W - target.textWidth(ultName, BODY_FONT)) / 2, ultY,
+                BODY_FONT, u != null ? u.color().getRGB() : NO_ULTIMATE);
     }
 
     /** One "label   value" row; returns the next row's baseline. */
-    private static int statLine(Graphics2D g, int x, int baseline, String label, String value) {
-        FontMetrics fm = g.getFontMetrics();
-        g.setColor(new Color(140, 146, 168));
-        g.drawString(label, x + 14, baseline);
-        g.setColor(new Color(226, 230, 244));
-        g.drawString(value, x + CARD_W - 14 - fm.stringWidth(value), baseline);
+    private static int statLine(DrawTarget target, int x, int baseline,
+                                String label, String value) {
+        target.drawText(label, x + 14, baseline, BODY_FONT, STAT_LABEL);
+        target.drawText(value, x + CARD_W - 14 - target.textWidth(value, BODY_FONT),
+                baseline, BODY_FONT, STAT_VALUE);
         return baseline + 16;
     }
 

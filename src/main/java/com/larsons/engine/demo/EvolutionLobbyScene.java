@@ -184,7 +184,7 @@ public class EvolutionLobbyScene extends AbstractScene {
         g.fillRect(0, 0, viewportWidth, viewportHeight);
 
         if (choosingColor) {
-            colorMenu.render(g, viewportWidth, viewportHeight);
+            colorMenu.render(target, viewportWidth, viewportHeight);
             drawColorSwatches(g);
             g.setFont(new Font("SansSerif", Font.PLAIN, 14));
             g.setColor(TEXT_DIM);
@@ -193,7 +193,7 @@ public class EvolutionLobbyScene extends AbstractScene {
             return;
         }
 
-        menu.render(g, viewportWidth, viewportHeight);
+        menu.render(target, viewportWidth, viewportHeight);
         g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         if (!status.isEmpty()) {
             g.setColor(new Color(235, 150, 120));

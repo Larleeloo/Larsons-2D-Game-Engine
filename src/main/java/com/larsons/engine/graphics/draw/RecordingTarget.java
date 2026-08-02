@@ -36,6 +36,18 @@ public final class RecordingTarget implements DrawTarget {
         /** Solid-colour geometry. */
         record Shape(String op, int[] coords, int argb, float thickness) implements Cmd {}
 
+        /**
+         * A gradient fill: the region in {@code coords}, and the ramp as
+         * parallel {@code fractions}/{@code argbStops} arrays.
+         *
+         * <p>Its own record rather than a {@link Shape} with extra fields,
+         * because a gradient has no single {@code argb} and pretending it does
+         * would force every assertion about one to reach past the field that
+         * looks like the answer.
+         */
+        record Gradient(String op, int[] coords, float[] fractions,
+                        int[] argbStops) implements Cmd {}
+
         /** A textured draw; {@code transform} is set only for the warped form. */
         record Image(String op, BufferedImage image, int[] coords,
                      AffineTransform transform) implements Cmd {}
@@ -120,9 +132,23 @@ public final class RecordingTarget implements DrawTarget {
     }
 
     @Override
+    public void fillRoundRect(int x, int y, int w, int h, int arcW, int arcH, int argb) {
+        stats.record(DrawStats.Kind.SHAPE, null);
+        commands.add(new Cmd.Shape("fillRoundRect",
+                new int[]{x, y, w, h, arcW, arcH}, argb, 0f));
+    }
+
+    @Override
     public void fillOval(int x, int y, int w, int h, int argb) {
         stats.record(DrawStats.Kind.SHAPE, null);
         commands.add(new Cmd.Shape("fillOval", new int[]{x, y, w, h}, argb, 0f));
+    }
+
+    @Override
+    public void fillArc(int x, int y, int w, int h, int startDeg, int arcDeg, int argb) {
+        stats.record(DrawStats.Kind.SHAPE, null);
+        commands.add(new Cmd.Shape("fillArc",
+                new int[]{x, y, w, h, startDeg, arcDeg}, argb, 0f));
     }
 
     @Override
@@ -147,9 +173,25 @@ public final class RecordingTarget implements DrawTarget {
     }
 
     @Override
+    public void drawRoundRect(int x, int y, int w, int h, int arcW, int arcH,
+                              int argb, float thickness) {
+        stats.record(DrawStats.Kind.SHAPE, null);
+        commands.add(new Cmd.Shape("drawRoundRect",
+                new int[]{x, y, w, h, arcW, arcH}, argb, thickness));
+    }
+
+    @Override
     public void drawOval(int x, int y, int w, int h, int argb, float thickness) {
         stats.record(DrawStats.Kind.SHAPE, null);
         commands.add(new Cmd.Shape("drawOval", new int[]{x, y, w, h}, argb, thickness));
+    }
+
+    @Override
+    public void drawArc(int x, int y, int w, int h, int startDeg, int arcDeg,
+                        int argb, float thickness) {
+        stats.record(DrawStats.Kind.SHAPE, null);
+        commands.add(new Cmd.Shape("drawArc",
+                new int[]{x, y, w, h, startDeg, arcDeg}, argb, thickness));
     }
 
     @Override
@@ -162,6 +204,42 @@ public final class RecordingTarget implements DrawTarget {
     public void drawLine(int x1, int y1, int x2, int y2, int argb, float thickness) {
         stats.record(DrawStats.Kind.SHAPE, null);
         commands.add(new Cmd.Shape("drawLine", new int[]{x1, y1, x2, y2}, argb, thickness));
+    }
+
+    @Override
+    public void drawDashedLine(int x1, int y1, int x2, int y2, int argb,
+                               float thickness, float dash, float gap) {
+        stats.record(DrawStats.Kind.SHAPE, null);
+        // The dash pattern rides in the coords array rather than in new record
+        // fields: it is two numbers, on the one verb that has them, and
+        // widening Cmd.Shape for it would put two always-zero fields on every
+        // other shape in every recording.
+        commands.add(new Cmd.Shape("drawDashedLine",
+                new int[]{x1, y1, x2, y2, Math.round(dash), Math.round(gap)},
+                argb, thickness));
+    }
+
+    // --- gradients -------------------------------------------------------------
+
+    @Override
+    public void fillLinearGradient(int x, int y, int w, int h,
+                                   int x0, int y0, int argb0,
+                                   int x1, int y1, int argb1) {
+        stats.record(DrawStats.Kind.GRADIENT, null);
+        commands.add(new Cmd.Gradient("fillLinearGradient",
+                new int[]{x, y, w, h, x0, y0, x1, y1},
+                new float[]{0f, 1f}, new int[]{argb0, argb1}));
+    }
+
+    @Override
+    public void fillRadialGradient(int cx, int cy, int radius,
+                                   float[] fractions, int[] argbStops) {
+        if (radius < 1 || fractions.length == 0
+                || fractions.length != argbStops.length) return;
+        stats.record(DrawStats.Kind.GRADIENT, null);
+        commands.add(new Cmd.Gradient("fillRadialGradient",
+                new int[]{cx, cy, radius},
+                fractions.clone(), argbStops.clone()));
     }
 
     // --- images ----------------------------------------------------------------

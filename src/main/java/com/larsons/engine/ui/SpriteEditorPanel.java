@@ -1,19 +1,12 @@
 package com.larsons.engine.ui;
 
 import com.larsons.engine.graphics.SpriteCanvas;
+import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.input.InputManager;
 
-import java.awt.AlphaComposite;
-import java.awt.BasicStroke;
 import java.awt.Color;
-import java.awt.Composite;
 import java.awt.Font;
-import java.awt.FontMetrics;
-import java.awt.Graphics2D;
 import java.awt.Rectangle;
-import java.awt.RenderingHints;
-import java.awt.Shape;
-import java.awt.Stroke;
 import java.awt.event.KeyEvent;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
@@ -54,6 +47,21 @@ public final class SpriteEditorPanel {
     private static final Color TEXT = new Color(214, 218, 232);
     private static final Color TEXT_DIM = new Color(132, 138, 160);
     private static final Color ACCENT = new Color(255, 210, 90);
+
+    // Hoisted out of the draw calls. The checkerboard alone is hundreds of
+    // cells a frame and allocated a Color for every one of them; the palette
+    // is 48 more.
+    private static final int SCRIM = new Color(6, 6, 12).getRGB();
+    private static final int CHECK_LIGHT = new Color(58, 60, 72).getRGB();
+    private static final int CHECK_DARK = new Color(44, 46, 58).getRGB();
+    private static final int GRID_FINE = new Color(255, 255, 255, 34).getRGB();
+    private static final int GRID_COARSE = new Color(255, 255, 255, 20).getRGB();
+    private static final int ERASE_PREVIEW = new Color(255, 255, 255, 120).getRGB();
+    private static final int BAR_TRACK = new Color(58, 60, 76).getRGB();
+    private static final int BUTTON_ACTIVE = new Color(70, 62, 30).getRGB();
+    private static final int BUTTON_BG = new Color(44, 46, 60).getRGB();
+    private static final int BUTTON_OFF_EDGE = new Color(70, 72, 86).getRGB();
+    private static final int BUTTON_OFF_TEXT = new Color(96, 98, 112).getRGB();
 
     /** Column widths either side of the canvas. */
     private static final int TOOL_W = 104, PALETTE_W = 168;
@@ -510,95 +518,80 @@ public final class SpriteEditorPanel {
 
     // --- rendering ------------------------------------------------------------------
 
-    public void render(Graphics2D g, int viewportW, int viewportH) {
+    public void render(DrawTarget target, int viewportW, int viewportH) {
         layout(viewportW, viewportH);
 
-        Composite oldComposite = g.getComposite();
-        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.72f));
-        g.setColor(new Color(6, 6, 12));
-        g.fillRect(0, 0, viewportW, viewportH);
-        g.setComposite(oldComposite);
+        target.pushAlpha(0.72f);
+        target.fillRect(0, 0, viewportW, viewportH, SCRIM);
+        target.popAlpha();
 
-        g.setColor(WINDOW_BG);
-        g.fillRoundRect(window.x, window.y, window.width, window.height, 14, 14);
-        g.setColor(WINDOW_EDGE);
-        g.drawRoundRect(window.x, window.y, window.width, window.height, 14, 14);
+        target.fillRoundRect(window.x, window.y, window.width, window.height,
+                14, 14, WINDOW_BG);
+        target.drawRoundRect(window.x, window.y, window.width, window.height,
+                14, 14, WINDOW_EDGE);
 
-        drawTitleBar(g);
-        drawCanvas(g);
-        drawToolColumn(g);
-        drawPalette(g);
-        drawFrameStrip(g);
-        drawButtons(g);
-        drawFooter(g);
+        drawTitleBar(target);
+        drawCanvas(target);
+        drawToolColumn(target);
+        drawPalette(target);
+        drawFrameStrip(target);
+        drawButtons(target);
+        drawFooter(target);
     }
 
-    private void drawTitleBar(Graphics2D g) {
-        g.setFont(TITLE_FONT);
-        FontMetrics fm = g.getFontMetrics();
-        g.setColor(TEXT);
+    private void drawTitleBar(DrawTarget target) {
         int titleRight = window.x + window.width - 16;
         String head = title + (canvas.modified() ? " *" : "");
-        g.drawString(UiText.fit(fm, head, window.width - 340),
-                window.x + 16, window.y + 27);
-        g.setFont(SMALL_FONT);
-        FontMetrics sfm = g.getFontMetrics();
+        target.drawText(UiText.fit(target, TITLE_FONT, head, window.width - 340),
+                window.x + 16, window.y + 27, TITLE_FONT, TEXT);
         // The file this becomes is the whole point of the window, so it is on
         // screen the entire time rather than only in the save message.
         String file = "saves as  " + targetFile;
-        g.setColor(TEXT_DIM);
-        String shown = UiText.fitTail(sfm, file, 320);
-        g.drawString(shown, titleRight - sfm.stringWidth(shown), window.y + 26);
-        g.setColor(WINDOW_EDGE);
-        g.drawLine(window.x + 8, window.y + TITLE_H - 4,
-                window.x + window.width - 8, window.y + TITLE_H - 4);
+        String shown = UiText.fitTail(target, SMALL_FONT, file, 320);
+        target.drawText(shown, titleRight - target.textWidth(shown, SMALL_FONT),
+                window.y + 26, SMALL_FONT, TEXT_DIM);
+        target.drawLine(window.x + 8, window.y + TITLE_H - 4,
+                window.x + window.width - 8, window.y + TITLE_H - 4, WINDOW_EDGE);
     }
 
-    private void drawCanvas(Graphics2D g) {
-        g.setColor(PANEL_BG);
-        g.fillRect(canvasArea.x, canvasArea.y, canvasArea.width, canvasArea.height);
+    private void drawCanvas(DrawTarget target) {
+        target.fillRect(canvasArea.x, canvasArea.y, canvasArea.width, canvasArea.height,
+                PANEL_BG);
 
-        Shape oldClip = g.getClip();
-        g.clipRect(canvasArea.x, canvasArea.y, canvasArea.width, canvasArea.height);
-        drawTransparencyChecks(g, canvasBox, 8);
-
-        Object oldInterp = g.getRenderingHint(RenderingHints.KEY_INTERPOLATION);
-        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
-                RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+        target.pushClip(canvasArea.x, canvasArea.y, canvasArea.width, canvasArea.height);
+        drawTransparencyChecks(target, canvasBox, 8);
 
         // The previous frame shows through underneath, which is what makes
         // frame-by-frame animation possible: you draw the next pose over the
         // last one instead of from memory.
         if (onion && canvas.frame() > 0) {
-            Composite old = g.getComposite();
-            g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.3f));
-            g.drawImage(canvas.frameImage(canvas.frame() - 1), canvasBox.x, canvasBox.y,
-                    canvasBox.width, canvasBox.height, null);
-            g.setComposite(old);
+            target.pushAlpha(0.3f);
+            target.drawImage(canvas.frameImage(canvas.frame() - 1), canvasBox.x, canvasBox.y,
+                    canvasBox.width, canvasBox.height);
+            target.popAlpha();
         }
-        g.drawImage(canvas.frameImage(canvas.frame()), canvasBox.x, canvasBox.y,
-                canvasBox.width, canvasBox.height, null);
-        if (oldInterp != null) g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, oldInterp);
+        target.drawImage(canvas.frameImage(canvas.frame()), canvasBox.x, canvasBox.y,
+                canvasBox.width, canvasBox.height);
 
-        drawShapePreview(g);
-        drawPixelGrid(g);
+        drawShapePreview(target);
+        drawPixelGrid(target);
 
-        g.setColor(WINDOW_EDGE);
-        g.drawRect(canvasBox.x, canvasBox.y, canvasBox.width, canvasBox.height);
-        g.setClip(oldClip);
+        target.drawRect(canvasBox.x, canvasBox.y, canvasBox.width, canvasBox.height,
+                WINDOW_EDGE);
+        target.popClip();
     }
 
     /** The line/rectangle being dragged, before the button comes up. */
-    private void drawShapePreview(Graphics2D g) {
+    private void drawShapePreview(DrawTarget target) {
         if (!drawing || anchorX < 0 || lastX < 0) return;
         if (tool != SpriteCanvas.Tool.LINE && tool != SpriteCanvas.Tool.RECT) return;
         int z = effectiveZoom();
         // An erase preview has no colour of its own, so it is shown as the
         // hole it is about to make.
-        g.setColor(erasingStroke ? new Color(255, 255, 255, 120) : new Color(color, true));
+        int argb = erasingStroke ? ERASE_PREVIEW : color;
         SpriteCanvas.PixelSink sink = (x, y) -> {
             if (canvas.inBounds(x, y)) {
-                g.fillRect(canvasBox.x + x * z, canvasBox.y + y * z, z, z);
+                target.fillRect(canvasBox.x + x * z, canvasBox.y + y * z, z, z, argb);
             }
         };
         if (tool == SpriteCanvas.Tool.LINE) {
@@ -608,149 +601,130 @@ public final class SpriteEditorPanel {
         }
     }
 
-    private void drawPixelGrid(Graphics2D g) {
+    private void drawPixelGrid(DrawTarget target) {
         int z = effectiveZoom();
         if (z < 6) return;
-        g.setColor(new Color(255, 255, 255, z >= 12 ? 34 : 20));
+        int line = z >= 12 ? GRID_FINE : GRID_COARSE;
         for (int x = 0; x <= canvas.width(); x++) {
-            g.drawLine(canvasBox.x + x * z, canvasBox.y,
-                    canvasBox.x + x * z, canvasBox.y + canvasBox.height);
+            target.drawLine(canvasBox.x + x * z, canvasBox.y,
+                    canvasBox.x + x * z, canvasBox.y + canvasBox.height, line, 1f);
         }
         for (int y = 0; y <= canvas.height(); y++) {
-            g.drawLine(canvasBox.x, canvasBox.y + y * z,
-                    canvasBox.x + canvasBox.width, canvasBox.y + y * z);
+            target.drawLine(canvasBox.x, canvasBox.y + y * z,
+                    canvasBox.x + canvasBox.width, canvasBox.y + y * z, line, 1f);
         }
     }
 
-    private void drawToolColumn(Graphics2D g) {
-        g.setFont(SMALL_FONT);
-        g.setColor(TEXT_DIM);
-        g.drawString("brush " + brush + " px", brushLabel.x + 2,
-                brushLabel.y + brushLabel.height);
+    private void drawToolColumn(DrawTarget target) {
+        target.drawText("brush " + brush + " px", brushLabel.x + 2,
+                brushLabel.y + brushLabel.height, SMALL_FONT, TEXT_DIM);
     }
 
-    private void drawPalette(Graphics2D g) {
-        drawTransparencyChecks(g, colorBox, 6);
-        g.setColor(new Color(color, true));
-        g.fillRect(colorBox.x, colorBox.y, colorBox.width, colorBox.height);
-        g.setColor(WINDOW_EDGE);
-        g.drawRect(colorBox.x, colorBox.y, colorBox.width, colorBox.height);
+    private void drawPalette(DrawTarget target) {
+        drawTransparencyChecks(target, colorBox, 6);
+        target.fillRect(colorBox.x, colorBox.y, colorBox.width, colorBox.height, color);
+        target.drawRect(colorBox.x, colorBox.y, colorBox.width, colorBox.height, WINDOW_EDGE);
 
         for (int i = 0; i < swatchBoxes.size(); i++) {
             Rectangle box = swatchBoxes.get(i);
-            g.setColor(new Color(PALETTE[i], true));
-            g.fillRect(box.x, box.y, box.width, box.height);
+            target.fillRect(box.x, box.y, box.width, box.height, PALETTE[i]);
             if (PALETTE[i] == color) {
-                g.setColor(ACCENT);
-                g.drawRect(box.x - 1, box.y - 1, box.width + 1, box.height + 1);
+                target.drawRect(box.x - 1, box.y - 1, box.width + 1, box.height + 1, ACCENT);
             }
         }
 
-        g.setFont(SMALL_FONT);
         String[] names = {"R", "G", "B"};
         for (int c = 0; c < channelBars.length; c++) {
             Rectangle bar = channelBars[c];
             int value = channel(c);
-            g.setColor(TEXT_DIM);
-            g.drawString(names[c], bar.x - 14, bar.y + 10);
-            g.setColor(new Color(58, 60, 76));
-            g.fillRoundRect(bar.x, bar.y, bar.width, bar.height, 6, 6);
-            g.setColor(new Color(c == 0 ? 220 : 90, c == 1 ? 220 : 90, c == 2 ? 220 : 90));
-            g.fillRoundRect(bar.x, bar.y, bar.width * value / 255, bar.height, 6, 6);
-            g.setColor(TEXT);
-            g.fillOval(bar.x + bar.width * value / 255 - 4, bar.y - 2, 9, 14);
+            target.drawText(names[c], bar.x - 14, bar.y + 10, SMALL_FONT, TEXT_DIM);
+            target.fillRoundRect(bar.x, bar.y, bar.width, bar.height, 6, 6, BAR_TRACK);
+            target.fillRoundRect(bar.x, bar.y, bar.width * value / 255, bar.height, 6, 6,
+                    new Color(c == 0 ? 220 : 90, c == 1 ? 220 : 90, c == 2 ? 220 : 90));
+            target.fillOval(bar.x + bar.width * value / 255 - 4, bar.y - 2, 9, 14, TEXT);
         }
     }
 
-    private void drawFrameStrip(Graphics2D g) {
+    private void drawFrameStrip(DrawTarget target) {
         for (int i = 0; i < frameBoxes.size(); i++) {
             Rectangle box = frameBoxes.get(i);
-            drawTransparencyChecks(g, box, 6);
-            Object old = g.getRenderingHint(RenderingHints.KEY_INTERPOLATION);
-            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
-                    RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-            g.drawImage(canvas.frameImage(i), box.x, box.y, box.width, box.height, null);
-            if (old != null) g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, old);
+            drawTransparencyChecks(target, box, 6);
+            target.drawImage(canvas.frameImage(i), box.x, box.y, box.width, box.height);
             boolean here = i == canvas.frame();
-            g.setColor(here ? ACCENT : WINDOW_EDGE);
-            Stroke oldStroke = g.getStroke();
-            g.setStroke(new BasicStroke(here ? 2f : 1f));
-            g.drawRect(box.x, box.y, box.width, box.height);
-            g.setStroke(oldStroke);
-            g.setFont(SMALL_FONT);
-            g.setColor(here ? ACCENT : TEXT_DIM);
-            g.drawString(String.valueOf(i + 1), box.x + 2, box.y + box.height - 2);
+            target.drawRect(box.x, box.y, box.width, box.height,
+                    (here ? ACCENT : WINDOW_EDGE).getRGB(), here ? 2f : 1f);
+            target.drawText(String.valueOf(i + 1), box.x + 2, box.y + box.height - 2,
+                    SMALL_FONT, here ? ACCENT : TEXT_DIM);
         }
 
         // The animation as it will actually play, at the rate being set.
-        drawTransparencyChecks(g, previewBox, 6);
+        drawTransparencyChecks(target, previewBox, 6);
         int frame = canvas.fps() > 0 && playing
                 ? (int) Math.floor(previewClock * canvas.fps()) % canvas.frameCount()
                 : canvas.frame();
-        Object old = g.getRenderingHint(RenderingHints.KEY_INTERPOLATION);
-        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
-                RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
-        g.drawImage(canvas.frameImage(frame), previewBox.x, previewBox.y,
-                previewBox.width, previewBox.height, null);
-        if (old != null) g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, old);
-        g.setColor(WINDOW_EDGE);
-        g.drawRect(previewBox.x, previewBox.y, previewBox.width, previewBox.height);
+        target.drawImage(canvas.frameImage(frame), previewBox.x, previewBox.y,
+                previewBox.width, previewBox.height);
+        // 1px: the loop above restored the previous stroke after each box, so
+        // this border was always drawn at the ambient width, which for this
+        // panel is the default. Stating it is the point of the port — there is
+        // no ambient stroke to inherit any more.
+        target.drawRect(previewBox.x, previewBox.y, previewBox.width, previewBox.height,
+                WINDOW_EDGE);
     }
 
-    private void drawButtons(Graphics2D g) {
-        g.setFont(LABEL_FONT);
-        FontMetrics fm = g.getFontMetrics();
+    private void drawButtons(DrawTarget target) {
         for (Button b : buttons) {
             Rectangle box = b.box();
-            g.setColor(b.active() ? new Color(70, 62, 30) : new Color(44, 46, 60));
-            g.fillRoundRect(box.x, box.y, box.width, box.height, 8, 8);
-            g.setColor(!b.enabled() ? new Color(70, 72, 86)
-                    : b.active() ? ACCENT : WINDOW_EDGE);
-            g.drawRoundRect(box.x, box.y, box.width, box.height, 8, 8);
-            String label = UiText.fit(fm, b.label(), box.width - 10);
-            g.setColor(!b.enabled() ? new Color(96, 98, 112) : b.active() ? ACCENT : TEXT);
-            g.drawString(label, box.x + (box.width - fm.stringWidth(label)) / 2,
-                    box.y + (box.height + fm.getAscent()) / 2 - 2);
+            target.fillRoundRect(box.x, box.y, box.width, box.height, 8, 8,
+                    b.active() ? BUTTON_ACTIVE : BUTTON_BG);
+            target.drawRoundRect(box.x, box.y, box.width, box.height, 8, 8,
+                    !b.enabled() ? BUTTON_OFF_EDGE
+                            : (b.active() ? ACCENT : WINDOW_EDGE).getRGB(), 1f);
+            String label = UiText.fit(target, LABEL_FONT, b.label(), box.width - 10);
+            target.drawText(label,
+                    box.x + (box.width - target.textWidth(label, LABEL_FONT)) / 2,
+                    box.y + (box.height + target.textAscent(LABEL_FONT)) / 2 - 2,
+                    LABEL_FONT, !b.enabled() ? BUTTON_OFF_TEXT
+                            : (b.active() ? ACCENT : TEXT).getRGB());
         }
         // The frame rate reads between its steppers, where the number belongs.
         String fps = trim(canvas.fps()) + " fps";
-        g.setColor(canvas.fps() > 0 ? TEXT : TEXT_DIM);
-        g.drawString(fps, fpsLabel.x + (fpsLabel.width - fm.stringWidth(fps)) / 2,
-                fpsLabel.y + (fpsLabel.height + fm.getAscent()) / 2 - 2);
+        target.drawText(fps,
+                fpsLabel.x + (fpsLabel.width - target.textWidth(fps, LABEL_FONT)) / 2,
+                fpsLabel.y + (fpsLabel.height + target.textAscent(LABEL_FONT)) / 2 - 2,
+                LABEL_FONT, canvas.fps() > 0 ? TEXT : TEXT_DIM);
     }
 
-    private void drawFooter(Graphics2D g) {
-        g.setFont(SMALL_FONT);
-        FontMetrics fm = g.getFontMetrics();
+    private void drawFooter(DrawTarget target) {
         int y = window.y + window.height - 12;
-        g.setColor(TEXT_DIM);
         String hint = "left-click paints · right-click erases · wheel zooms · "
                 + "[ ] brush size · , . step frame · N new frame · O onion skin · "
                 + "Ctrl+Z undo · Ctrl+S save · Esc close";
-        g.drawString(UiText.fit(fm, hint, window.width - 32), window.x + 16, y);
+        target.drawText(UiText.fit(target, SMALL_FONT, hint, window.width - 32),
+                window.x + 16, y, SMALL_FONT, TEXT_DIM);
         if (!status.isEmpty()) {
-            g.setColor(ACCENT);
-            g.drawString(UiText.fit(fm, status, window.width - 32), window.x + 16, y - 16);
+            target.drawText(UiText.fit(target, SMALL_FONT, status, window.width - 32),
+                    window.x + 16, y - 16, SMALL_FONT, ACCENT);
         }
-        g.setColor(TEXT_DIM);
         String spec = canvas.width() + "×" + canvas.height() + " px · "
                 + canvas.frameCount() + " frame" + (canvas.frameCount() == 1 ? "" : "s")
                 + " · frame " + (canvas.frame() + 1) + " · zoom " + effectiveZoom() + "×";
-        g.drawString(spec, window.x + window.width - 16 - fm.stringWidth(spec), y - 16);
+        target.drawText(spec,
+                window.x + window.width - 16 - target.textWidth(spec, SMALL_FONT),
+                y - 16, SMALL_FONT, TEXT_DIM);
     }
 
     /** A checkerboard under a box, so transparent pixels read as empty. */
-    private static void drawTransparencyChecks(Graphics2D g, Rectangle box, int cell) {
-        Shape oldClip = g.getClip();
-        g.clipRect(box.x, box.y, box.width, box.height);
+    private static void drawTransparencyChecks(DrawTarget target, Rectangle box, int cell) {
+        target.pushClip(box.x, box.y, box.width, box.height);
         for (int y = 0; y < box.height; y += cell) {
             for (int x = 0; x < box.width; x += cell) {
                 boolean even = ((x / cell) + (y / cell)) % 2 == 0;
-                g.setColor(even ? new Color(58, 60, 72) : new Color(44, 46, 58));
-                g.fillRect(box.x + x, box.y + y, cell, cell);
+                target.fillRect(box.x + x, box.y + y, cell, cell,
+                        even ? CHECK_LIGHT : CHECK_DARK);
             }
         }
-        g.setClip(oldClip);
+        target.popClip();
     }
 
     // --- helpers --------------------------------------------------------------------

@@ -4,6 +4,7 @@ import com.larsons.engine.input.InputManager;
 import com.larsons.engine.ui.Menu;
 import com.larsons.engine.ui.MenuTheme;
 import org.junit.jupiter.api.BeforeAll;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import org.junit.jupiter.api.Test;
 
 import java.awt.Canvas;
@@ -45,7 +46,7 @@ class MenuTest {
     private static void renderOnce(Menu menu, int w, int h) {
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
-        menu.render(g, w, h);
+        menu.render(new Java2DTarget(g, w, h), w, h);
         g.dispose();
     }
 

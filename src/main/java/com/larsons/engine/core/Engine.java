@@ -253,13 +253,18 @@ public class Engine {
                 profiler.recordDraws(target.stats());
             }
             if (overlayVisible) {
-                // Drawn straight at the Graphics2D, deliberately: the readout
-                // is not part of the game, and routing it through the frame's
-                // target would fold its own draw calls into the count it is
-                // reporting.
+                // Its own target over the same surface, deliberately: the
+                // readout is not part of the game, and sharing the frame's
+                // target would fold the overlay's own draw calls into the
+                // count it is reporting. A second Java2DTarget draws the same
+                // pixels and keeps a separate DrawStats, which is exactly the
+                // separation the old "draw straight at the Graphics2D" got by
+                // bypassing the seam altogether.
                 long overlayStart = profiler.begin();
                 try {
-                    ProfileOverlay.draw(g, profiler.latest(), device, loop.getFps());
+                    ProfileOverlay.draw(
+                            new Java2DTarget(g, renderer.getWidth(), renderer.getHeight()),
+                            profiler.latest(), device, loop.getFps());
                 } finally {
                     profiler.record(FrameProfiler.Stage.OVERLAY, overlayStart);
                 }

@@ -92,9 +92,11 @@ much faster it makes things.
    the Java2D path working and tested.
 3. **Pixel parity is the contract.** "Looks fine" is not a result. Every port
    step compares rendered output against a reference and states the error.
-4. **The suite stays green.** Last full run: **810 tests, 0 failures, 3 skipped**
-   (the skips are display-dependent and skip rather than fail by design). A step
-   ends with that or better.
+4. **The suite stays green.** Last full run: **840 tests, 0 failures, 10 skipped**
+   (was 810/0/3 when this was written; B0 and B1 added the rest). The skips are
+   environment-dependent and skip rather than fail by design — three need a
+   display, seven need a GL driver this container has not got. A step ends with
+   that or better.
 5. **Nothing merges that cannot be measured.** If a change is supposed to make
    the frame faster, the profiler says so before it lands. This rule exists
    because it has already caught three things in this work that felt right and
@@ -138,6 +140,44 @@ boundary.
 deliberately change one colour constant and confirm the test fails.
 
 **Done when.** Golden comparison is in the suite and green.
+
+#### B0 — done
+
+`GoldenFrames` / `GoldenFramesTest` / `FrameError`, fifteen references under
+`src/test/resources/golden/`. Three world frames (one per level format, each
+with terrain, a liquid pool, a hole, a stacked wall and its shadow, background
+and foreground decor, surface decor and a mob) and twelve widget frames, one
+per class B2 ports.
+
+What it cost, and what it caught:
+
+| Thing | Outcome |
+|-------|---------|
+| The metric | Extracted to `FrameError`; `ShaderParityTest` now calls it rather than keeping its own copy, so there is one definition of "the same picture" as this step required |
+| `Particles` | Seeded its `Random` from the system clock. Gained `Particles(long seed)`; the no-arg constructor is unchanged and is still what play uses |
+| `ProfileOverlay` | **Caught by the determinism check**, not by eye: driving a real `FrameProfiler` measures `System.nanoTime()`, so the frame differed from itself by 1.21/255 every run. The golden now feeds the overlay a literal `Snapshot` and a literal `DeviceProfile` — the latter because the overlay prints the machine's core count, which would otherwise golden the build agent |
+| `-Dlarsons.golden.rewrite` | Did not reach the test JVM; Gradle forks and inherits no `-D`. `tasks.test` now forwards everything under `larsons.` |
+| Suite | 827 tests, 0 failures, 10 skipped |
+
+**On the skip count.** The baseline in this document says 3 skipped. It is 10
+here because this container has no GL driver, so `ShaderCompileTest` (4) and
+`ShaderParityTest` (3) stand aside on top of the three display-dependent ones.
+That is the environment, not a regression: no golden test skipped.
+
+**The one thing that could not be pinned down: fonts.** Glyph rasterisation
+belongs to the JDK and the host's font configuration, so a reference generated
+on one machine will not match to 0.00 on another. Loosening the bar to a
+tolerance that absorbs that would also absorb a real one-pixel shift, which is
+precisely the failure this step exists to catch. Instead the goldens carry a
+fingerprint of the fonts that drew them (`font-fingerprint.txt`), and the
+comparison **skips, loudly, naming both fingerprints** when it does not match —
+the same "skip by design rather than fail by accident" convention the suite
+already uses. On a matching machine the bar is exact equality, not a tolerance.
+
+Two tests guard the guard: `theComparisonCanActuallyFail` perturbs one channel
+of one pixel and insists the metric notices, and `everyFrameRendersIdenticallyTwice`
+renders the whole catalogue twice and demands 0.00 — the test that found the
+`ProfileOverlay` flap before it could be committed as a reference.
 
 ---
 
@@ -195,6 +235,79 @@ resulting pixels. Suite green.
 
 **Done when.** No planned UI port needs a Java2D call `DrawTarget` cannot express.
 
+#### B1 — done
+
+Seven members added, in `DrawTarget`, `Java2DTarget` and `RecordingTarget`:
+
+| Member | Serves |
+|--------|--------|
+| `fillRoundRect(x, y, w, h, arcW, arcH, argb)` | 161 sites |
+| `drawRoundRect(..., thickness)` | 82 sites |
+| `fillArc(x, y, w, h, startDeg, arcDeg, argb)` | 15 sites |
+| `drawArc(..., thickness)` | 17 sites |
+| `fillLinearGradient(x, y, w, h, x0, y0, argb0, x1, y1, argb1)` | 3 render-time sites |
+| `fillRadialGradient(cx, cy, radius, float[] fractions, int[] argbStops)` | 3 sites |
+| `drawDashedLine(x1, y1, x2, y2, argb, thickness, dash, gap)` | the stroke audit's finding, below |
+
+Member count is **26 → 33** abstract methods, plus 16 `Color` convenience
+overloads. (This document previously said 22 → 29; that count treated the four
+`drawImage` overloads as one verb. Either basis, seven were added.)
+
+`DrawStats.Kind` gained **`GRADIENT`**, and a gradient breaks the batch on both
+sides like a state change does. Counting gradients as `SHAPE` would have been
+the comfortable choice and the wrong one: a gradient is a distinct paint, and
+on GL either its own shader or its own generated texture, so folding it in
+would let a screen of gradients report a merge ratio it can never achieve.
+The merge ratio is the number the whole GPU case rests on (B5) and an
+instrument that flatters what it measures is worse than none.
+
+**The composite audit — all 28 `setComposite` sites.**
+
+| Composite | Sites | Decision |
+|-----------|-------|----------|
+| `AlphaComposite.SRC_OVER` with an alpha | 24 (12 set / 12 restore) | Already covered by `pushAlpha`/`popAlpha`. No change. |
+| `AlphaComposite.Clear` | 2 — `TerrainCache:396`, `EntitySprites:185` | **Not supported, and correctly so.** Both punch transparent holes in an image being *baked* through `createGraphics()`, not drawn to a frame. Baking is Java2D by definition (Appendix A) and stays that way. |
+| The `Java2DTarget` implementation itself | 2 | n/a |
+
+No `SRC`, no `DST_OUT`, no destination-modifying blend of any kind reaches a
+frame. This is a better result than the step expected and it matters for B8:
+`pushAlpha` becomes a multiply into the vertex colour, which costs nothing and
+does not break the batch, where `CLEAR` would have meant a blend-state change
+and a flush per push.
+
+**The stroke audit — all 135 `setStroke` / 164 `BasicStroke` sites.**
+
+Every site is one of exactly two things: a plain width, or a dash pattern.
+
+- *Plain widths* — already covered by the `thickness` argument the outline
+  verbs take. No change.
+- *Dashes* — three sites: `MiniGameHud:128` and `CreativeScene:5992` (both the
+  escort waypoint path, `{8, 8}`) and `CreativeScene:7403` (`{5, 5}`, inside
+  `waypointIcon()`, which bakes a `BufferedImage` and so stays Java2D). Two
+  render-time sites, hence `drawDashedLine`.
+- *Caps and joins* — **deliberately given no member.** Every render-time site
+  that sets `CAP_ROUND`/`JOIN_ROUND` also sets a dash pattern, because a dash
+  with butt caps reads as a different decoration; there is no site anywhere
+  that varies caps independently of dashing. Round ends are therefore part of
+  what `drawDashedLine` *is*, not a default. Every remaining `CAP_`/`JOIN_`
+  use — `AutoSprites`, `EntitySprites`, `CreativeScene:7403` — is inside a
+  `createGraphics()` bake. A knob nothing turns is a knob both backends must
+  implement and test for nobody.
+
+**Verified.** Seven new `DrawTargetTest` tests, each asserting the recorded
+command *and* the resulting pixels — the recording half catches a painter
+calling the wrong verb, the pixel half catches a backend implementing it
+wrongly, and neither catches the other's failure. Two are shaped by what
+actually goes wrong rather than by the happy path: the arc test asserts the
+left half of a 90°–270° sweep is lit and the right half is not (which is what
+catches an implementation measuring angles clockwise), and
+`aDashedLineDoesNotLeaveTheNextPlainLineDashed` covers a real bug the stroke
+cache would otherwise have had — it keys on width alone, so a dashed and a
+plain stroke of the same width collided.
+
+Suite: **834 tests, 0 failures, 10 skipped**. Goldens unchanged at 0.00, as a
+step that adds members and ports nothing must leave them.
+
 ---
 
 ### B2 — Port the shared painters and UI widgets
@@ -244,6 +357,118 @@ that legitimately should: `Java2DTarget`, `Java2DRenderer`, `Renderer`,
 `AssetLoader`, `Skins`, and the sprite factories that call
 `BufferedImage.createGraphics()` to bake an image (which is Java2D by
 definition and stays that way — see B5).
+
+#### B2 — done
+
+All twelve ported, in the order above. Every one verified against B0's goldens
+at **0.00** — these are pure translations, so any nonzero error would have been
+a bug, and the bar was held rather than relaxed.
+
+Where `Graphics2D` survives in the twelve, it is a `createGraphics()` bake and
+stays: `ParallaxBackground` (layer art), `CutscenePainter` (the placeholder
+figure), `CharacterPicker.icon`, `AutoSprites.cached`. `CraftingPanel`,
+`Menu`, `ContainerPanel`, `SpriteEditorPanel`, `ConfigForm` and `MiniGameHud`
+no longer name it at all.
+
+**Two hidden-state dependencies the port surfaced.** Both are the class of bug
+this step exists to find, and neither is visible by reading the diff:
+
+1. `CharacterPicker`'s ultimate rule was drawn with whatever stroke width the
+   *card border above it* had last set — 2.5px under the selected card, 1.2px
+   elsewhere. Passing the obvious `1f` would have thinned it. The port states
+   the width explicitly and the golden confirms it.
+2. `SpriteEditorPanel`'s preview-box border ran at the ambient stroke width,
+   which its frame-strip loop carefully restored after every box. Here the
+   inherited value happened to be the default; the port states it.
+
+Removing the seven per-painter `setRenderingHint(ANTIALIASING, ON)` calls was a
+no-op, as expected: `Java2DRenderer` sets it for the whole frame already, and
+B0's harness sets the same two hints for the same reason. The goldens are what
+turned "expected" into "checked".
+
+**Supporting changes, each forced by the port rather than chosen:**
+
+- `UiText` gained a `Measure` abstraction so `fit`/`fitTail`/`wrap` serve both a
+  `FontMetrics` and a `(DrawTarget, Font)` without a second copy of each
+  bisection. Not a compatibility shim of the kind this step forbids — `UiText`
+  draws nothing, so it has no backend to be tied to, and the `DrawTarget`
+  overload is what will keep layout identical when B6 changes rasterisation.
+- `AutoBattlerScene` and `AutoBattlerGuideScene` gained the `frameTarget` field
+  `PlayScene` and `CreativeScene` already had, so their `AutoSprites` overlays
+  reach the frame's target. Their draws were previously uncounted.
+- `Engine` draws `ProfileOverlay` through a **second** `Java2DTarget` over the
+  same surface. The old code bypassed the seam deliberately, so the readout's
+  own draw calls would not be folded into the count it reports; a separate
+  target keeps that separation while still going through `DrawTarget`.
+
+**Verified.** Goldens 0.00 on all fifteen frames, plus six new
+`RecordingTarget` sequence tests (`PortedPainterTest`) for the properties a
+golden is blind to — that `ContainerPanel`'s open animation pushes transform
+then alpha and unwinds both, that a settled panel issues *no* state changes at
+all, that `Menu` draws its scroll bar after the rows it scrolls over, and that
+the escort path emits two `drawDashedLine` calls rather than thirty short
+solid ones. §7 says these two instruments answer different questions; they do.
+
+Suite: **840 tests, 0 failures, 10 skipped**.
+
+#### A correction to this document, found while doing B2
+
+B2 says to hoist `new Color(...)` into constants because "`DrawStats` keys
+batches on the colour object, so a fresh `Color` per call breaks every merge."
+**That is not true of the code as written**, and it was worth checking rather
+than repeating. `Java2DTarget` records every flat shape as
+`stats.record(Kind.SHAPE, null)` — the batch key is `null`, so colour does not
+break a shape batch at all. Only `IMAGE` (keyed by source image) and `TEXT`
+(keyed by font) carry keys.
+
+`DrawStats` is right and the guidance was wrong. A GL backend folds colour into
+the vertex, exactly as `pushAlpha` will (see B1's composite audit), so
+consecutive differently-coloured flat shapes genuinely *do* collapse into one
+draw — which is what `null` models.
+
+Hoisting is still worth doing, for the reason that survives the correction: it
+removes an allocation per call on a path that runs every frame. The
+checkerboard in `SpriteEditorPanel` alone was allocating a `Color` per cell,
+hundreds a frame. The comments in the ported classes now say that rather than
+the batching claim.
+
+#### Draw-call baseline, per golden frame
+
+Recorded through `GoldenFrames.record()` — the same fixed scenes as the pixel
+comparison, so B5 and B6 can publish before-and-after numbers that cannot drift
+between measurements.
+
+| frame | ops | batches | merge | shape | image | text | state |
+|-------|----:|--------:|------:|------:|------:|-----:|------:|
+| world-side-scroll | 145 | 5 | **29.00×** | 142 | 3 | 0 | 0 |
+| world-top-down | 149 | 5 | **29.80×** | 146 | 3 | 0 | 0 |
+| world-isometric | 153 | 5 | **30.60×** | 150 | 3 | 0 | 0 |
+| particles | 62 | 1 | **62.00×** | 62 | 0 | 0 | 0 |
+| sprite-editor | 1545 | 86 | 17.97× | 1495 | 3 | 35 | 12 |
+| container-panel | 35 | 12 | 2.92× | 26 | 3 | 6 | 0 |
+| character-picker | 58 | 22 | 2.64× | 10 | 3 | 45 | 0 |
+| auto-sprites | 17 | 7 | 2.43× | 11 | 6 | 0 | 0 |
+| parallax-background | 9 | 5 | 1.80× | 1 | 8 | 0 | 0 |
+| profile-overlay | 28 | 16 | 1.75× | 15 | 0 | 13 | 0 |
+| main-menu | 8 | 5 | 1.60× | 3 | 0 | 5 | 0 |
+| config-form | 21 | 14 | 1.50× | 8 | 0 | 13 | 0 |
+| minigame-hud | 12 | 8 | 1.50× | 8 | 0 | 4 | 0 |
+| cutscene | 10 | 7 | 1.43× | 4 | 2 | 4 | 0 |
+| crafting-panel | 36 | 33 | **1.09×** | 9 | 12 | 15 | 0 |
+
+**What this says, before B5 and B6 touch anything.** The world already batches
+30× — flat terrain quads collapse almost completely, and a GL backend will
+serve them from one draw call. The UI does not, and the reason is legible in
+the columns: `crafting-panel` at 1.09× is twelve images and fifteen text runs
+*interleaved* (icon, name, icon, count, icon, count…), so nearly every
+operation changes the batch key. That is precisely the case B5's sprite atlas
+and B6's glyph atlas exist for — with both in place those two columns collapse
+to one texture and one atlas, and the interleaving stops mattering.
+
+It is also a warning about where to look. `crafting-panel` and
+`character-picker` (45 text runs) are the frames whose numbers should move in
+B5/B6; `world-*` are already near the ceiling and will not, so an atlas
+measured only against a world scene would look like it did nothing.
 
 ---
 
@@ -888,12 +1113,12 @@ Counts from `src/main/java`, 2026-08-02, commit `85196b9`.
 | Measure | Count |
 |---------|-------|
 | `Java2DTarget.graphicsOf` call sites | 39 (+1 definition) |
-| Files naming `Graphics2D` | 48 (19 in `demo/`, 29 elsewhere) |
+| Files naming `Graphics2D` | 48 before B2; **44 after** (19 in `demo/`, 25 elsewhere), and of the 25 all but `Engine`, `Java2DTarget`, `Java2DRenderer`, `Renderer` and `Scene`/`SceneManager` are `createGraphics()` bakes or comments |
 | `drawString` sites | 350 |
 | `drawImage` sites | 95 |
 | Files naming `BufferedImage` | 34 |
-| `DrawTarget` members today | 22 |
-| `DrawTarget` members after B1 | 29 |
+| `DrawTarget` members today | 26 abstract (22 verbs, counting `drawImage`'s four overloads as one) |
+| `DrawTarget` members after B1 | 33 abstract (26 before), + 16 `Color` overloads |
 
 Of the 29 non-demo files naming `Graphics2D`, these should still name it after
 B4 and are **not** migration targets: `Java2DTarget`, `Java2DRenderer`,

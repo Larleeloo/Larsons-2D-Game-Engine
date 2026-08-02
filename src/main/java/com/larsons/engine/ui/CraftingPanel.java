@@ -7,12 +7,11 @@ import com.larsons.engine.entity.ItemDef;
 import com.larsons.engine.entity.ItemRegistry;
 import com.larsons.engine.graphics.EntitySprites;
 import com.larsons.engine.graphics.Skins;
+import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.input.InputManager;
 
-import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.util.List;
 
@@ -31,6 +30,27 @@ public final class CraftingPanel {
 
     private static final int ROW_H = 40;
     private static final int PANEL_W = 480;
+
+    // Hoisted from the draw calls: a list of twenty recipes allocated some
+    // sixty Colors a frame to say the same six things. See RENDER_PLAN's B2
+    // note on why this is about allocation and not, as previously assumed,
+    // about batching.
+    private static final int PANEL_BG = new Color(10, 10, 16, 235).getRGB();
+    private static final int ALCHEMY_EDGE = new Color(190, 150, 255).getRGB();
+    private static final int CRAFTING_EDGE = new Color(255, 210, 130).getRGB();
+    private static final int HINT = new Color(170, 170, 190).getRGB();
+    private static final int SCROLL_COUNT = new Color(255, 255, 255, 90).getRGB();
+    private static final int ROW_LIT = new Color(255, 255, 255, 34).getRGB();
+    private static final int ROW_DIM = new Color(255, 255, 255, 12).getRGB();
+    private static final int ROW_EDGE = new Color(150, 220, 150, 120).getRGB();
+    private static final int NAME_LIT = Color.WHITE.getRGB();
+    private static final int NAME_DIM = new Color(150, 150, 165).getRGB();
+    private static final int HAVE_ENOUGH = new Color(150, 220, 150).getRGB();
+    private static final int HAVE_SHORT = new Color(230, 120, 120).getRGB();
+    private static final int TIP_BG = new Color(6, 6, 12, 235).getRGB();
+    private static final int TIP_EDGE = new Color(255, 255, 255, 60).getRGB();
+    private static final int TIP_TEXT = Color.WHITE.getRGB();
+    private static final int TIP_CANNOT = new Color(230, 130, 130).getRGB();
 
     /** A completed craft: what was made and how many didn't fit the bag. */
     public record Crafted(Recipe recipe, int leftover) {}
@@ -122,26 +142,21 @@ public final class CraftingPanel {
         return Math.max(0, recipes.size() - visibleRows(vh));
     }
 
-    public void render(Graphics2D g, int vw, int vh, Inventory inv, double animClock) {
+    public void render(DrawTarget target, int vw, int vh, Inventory inv, double animClock) {
         int x0 = (vw - PANEL_W) / 2;
         int y0 = panelTop(vh);
         int ph = panelHeight(vh);
         boolean alchemy = Recipe.STATION_ALCHEMY.equals(station);
+        int edge = alchemy ? ALCHEMY_EDGE : CRAFTING_EDGE;
 
-        g.setColor(new Color(10, 10, 16, 235));
-        g.fillRoundRect(x0 - 14, y0 - 14, PANEL_W + 28, ph + 28, 14, 14);
-        g.setColor(alchemy ? new Color(190, 150, 255) : new Color(255, 210, 130));
-        g.setStroke(new BasicStroke(2f));
-        g.drawRoundRect(x0 - 14, y0 - 14, PANEL_W + 28, ph + 28, 14, 14);
+        target.fillRoundRect(x0 - 14, y0 - 14, PANEL_W + 28, ph + 28, 14, 14, PANEL_BG);
+        target.drawRoundRect(x0 - 14, y0 - 14, PANEL_W + 28, ph + 28, 14, 14, edge, 2f);
 
-        g.setFont(TITLE_FONT);
-        g.drawString(title(), x0, y0 + 14);
-        g.setFont(SMALL_FONT);
-        g.setColor(new Color(170, 170, 190));
+        target.drawText(title(), x0, y0 + 14, TITLE_FONT, edge);
         // Crafting consumes the ingredients, which the have/need counts on each
         // row already show — the hint stays inside the panel instead.
-        g.drawString("Click a lit recipe to craft it · scroll for more · [E]/[Esc] close",
-                x0, y0 + 34);
+        target.drawText("Click a lit recipe to craft it · scroll for more · [E]/[Esc] close",
+                x0, y0 + 34, SMALL_FONT, HINT);
 
         int listTop = listTop(vh);
         int rows = visibleRows(vh);
@@ -149,48 +164,42 @@ public final class CraftingPanel {
         for (int i = 0; i < rows; i++) {
             int idx = scroll + i;
             if (idx >= recipes.size()) break;
-            drawRow(g, recipes.get(idx), inv, x0, listTop + i * ROW_H, animClock);
+            drawRow(target, recipes.get(idx), inv, x0, listTop + i * ROW_H, animClock);
         }
         if (maxScroll(vh) > 0) {
-            g.setColor(new Color(255, 255, 255, 90));
-            g.setFont(SMALL_FONT);
-            g.drawString((scroll + 1) + "-" + Math.min(recipes.size(), scroll + rows)
-                    + " / " + recipes.size(), x0 + PANEL_W - 60, y0 + 14);
+            target.drawText((scroll + 1) + "-" + Math.min(recipes.size(), scroll + rows)
+                            + " / " + recipes.size(),
+                    x0 + PANEL_W - 60, y0 + 14, SMALL_FONT, SCROLL_COUNT);
         }
-        drawHoverTooltip(g, vw, inv);
+        drawHoverTooltip(target, vw, inv);
     }
 
     /** The plain-text recipe of the hovered row, in a tooltip by the cursor. */
-    private void drawHoverTooltip(Graphics2D g, int vw, Inventory inv) {
+    private void drawHoverTooltip(DrawTarget target, int vw, Inventory inv) {
         if (hoverIdx < 0 || hoverIdx >= recipes.size()) return;
         Recipe r = recipes.get(hoverIdx);
-        g.setFont(ROW_FONT);
         // A many-ingredient recipe of long-named items can read wider than the
         // window; cut it to what the window holds rather than paint past it.
-        String text = UiText.fit(g.getFontMetrics(), recipeText(r), vw - 48);
+        String text = UiText.fit(target, ROW_FONT, recipeText(r), vw - 48);
         String status = r.canCraft(inv) ? "Click to craft" : "Missing ingredients";
-        int tw = Math.max(g.getFontMetrics().stringWidth(text),
-                g.getFontMetrics().stringWidth(status));
+        int tw = Math.max(target.textWidth(text, ROW_FONT),
+                target.textWidth(status, ROW_FONT));
         int tx = Math.max(8, Math.min(vw - tw - 24, hoverX + 16));
         int ty = hoverY - 44;
-        g.setColor(new Color(6, 6, 12, 235));
-        g.fillRoundRect(tx - 8, ty - 16, tw + 16, 42, 8, 8);
-        g.setColor(new Color(255, 255, 255, 60));
-        g.drawRoundRect(tx - 8, ty - 16, tw + 16, 42, 8, 8);
-        g.setColor(Color.WHITE);
-        g.drawString(text, tx, ty);
-        g.setColor(r.canCraft(inv) ? new Color(150, 220, 150) : new Color(230, 130, 130));
-        g.drawString(status, tx, ty + 18);
+        target.fillRoundRect(tx - 8, ty - 16, tw + 16, 42, 8, 8, TIP_BG);
+        target.drawRoundRect(tx - 8, ty - 16, tw + 16, 42, 8, 8, TIP_EDGE, 1f);
+        target.drawText(text, tx, ty, ROW_FONT, TIP_TEXT);
+        target.drawText(status, tx, ty + 18, ROW_FONT,
+                r.canCraft(inv) ? HAVE_ENOUGH : TIP_CANNOT);
     }
 
-    private void drawRow(Graphics2D g, Recipe r, Inventory inv, int x, int y, double animClock) {
+    private void drawRow(DrawTarget target, Recipe r, Inventory inv,
+                         int x, int y, double animClock) {
         boolean can = r.canCraft(inv);
-        g.setColor(new Color(255, 255, 255, can ? 34 : 12));
-        g.fillRoundRect(x - 6, y, PANEL_W + 12, ROW_H - 6, 8, 8);
+        target.fillRoundRect(x - 6, y, PANEL_W + 12, ROW_H - 6, 8, 8,
+                can ? ROW_LIT : ROW_DIM);
         if (can) {
-            g.setColor(new Color(150, 220, 150, 120));
-            g.setStroke(new BasicStroke(1.5f));
-            g.drawRoundRect(x - 6, y, PANEL_W + 12, ROW_H - 6, 8, 8);
+            target.drawRoundRect(x - 6, y, PANEL_W + 12, ROW_H - 6, 8, 8, ROW_EDGE, 1.5f);
         }
 
         // Ingredients are right-aligned, so the output name gets whatever the
@@ -199,29 +208,28 @@ public final class CraftingPanel {
 
         // Output icon + name.
         ItemDef out = items.get(r.output());
-        drawIcon(g, out, x + 2, y + 4, 26, animClock);
-        g.setFont(ROW_FONT);
-        g.setColor(can ? Color.WHITE : new Color(150, 150, 165));
+        drawIcon(target, out, x + 2, y + 4, 26, animClock);
         String name = (out != null ? out.name() : r.output())
                 + (r.outputCount() > 1 ? " ×" + r.outputCount() : "");
-        g.drawString(UiText.fit(g.getFontMetrics(), name, ix - (x + 34) - 8), x + 34, y + 21);
+        target.drawText(UiText.fit(target, ROW_FONT, name, ix - (x + 34) - 8),
+                x + 34, y + 21, ROW_FONT, can ? NAME_LIT : NAME_DIM);
 
         // Ingredients: icon + have/need per stack.
         for (Recipe.Ingredient in : r.inputs()) {
             ItemDef def = items.get(in.key());
-            drawIcon(g, def, ix, y + 6, 20, animClock);
+            drawIcon(target, def, ix, y + 6, 20, animClock);
             int have = inv.totalOf(in.key());
-            g.setFont(SMALL_FONT);
-            g.setColor(have >= in.count() ? new Color(150, 220, 150) : new Color(230, 120, 120));
-            g.drawString(have + "/" + in.count(), ix + 23, y + 20);
+            target.drawText(have + "/" + in.count(), ix + 23, y + 20, SMALL_FONT,
+                    have >= in.count() ? HAVE_ENOUGH : HAVE_SHORT);
             ix += 74;
         }
     }
 
-    private void drawIcon(Graphics2D g, ItemDef def, int x, int y, int size, double animClock) {
+    private void drawIcon(DrawTarget target, ItemDef def, int x, int y,
+                          int size, double animClock) {
         if (def == null) return;
         BufferedImage img = Skins.frame("item/" + def.key(), animClock);
         if (img == null) img = EntitySprites.item(def, size);
-        g.drawImage(img, x, y, size, size, null);
+        target.drawImage(img, x, y, size, size);
     }
 }

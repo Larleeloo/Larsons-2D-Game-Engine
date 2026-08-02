@@ -2,6 +2,7 @@ package com.larsons.engine;
 
 import com.larsons.engine.graphics.shader.ShaderContext;
 import com.larsons.engine.graphics.shader.ShaderPass;
+import com.larsons.engine.render.FrameError;
 import com.larsons.engine.graphics.shader.Shaders;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -74,15 +75,17 @@ class ShaderParityTest {
         return px;
     }
 
-    /** Mean absolute difference per colour channel between two frames. */
+    /**
+     * Mean absolute difference per colour channel between two frames.
+     *
+     * <p>Lives in {@link FrameError} now rather than here. This metric started
+     * as this test's private business, but the golden frames need the same
+     * question answered about a painter before and after a port, and B8 will
+     * need it a third time for Java2D against GL. Three copies would be three
+     * quietly diverging definitions of "the same picture".
+     */
     private static double meanChannelError(int[] a, int[] b) {
-        long total = 0;
-        for (int i = 0; i < a.length; i++) {
-            total += Math.abs(((a[i] >> 16) & 0xFF) - ((b[i] >> 16) & 0xFF));
-            total += Math.abs(((a[i] >> 8) & 0xFF) - ((b[i] >> 8) & 0xFF));
-            total += Math.abs((a[i] & 0xFF) - (b[i] & 0xFF));
-        }
-        return total / (double) (a.length * 3);
+        return FrameError.meanChannelError(a, b);
     }
 
     /** Run one pass on the CPU, exactly as the renderer would. */

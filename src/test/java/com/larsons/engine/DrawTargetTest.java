@@ -375,6 +375,184 @@ class DrawTargetTest {
                 "the compatibility overload must draw the same pixels");
     }
 
+    // --- B1: the members the UI needs -------------------------------------------
+    //
+    // Each one twice: what command it records, and what pixels it produces.
+    // The recording half catches a painter calling the wrong verb or passing
+    // arguments in the wrong order; the pixel half catches a backend
+    // implementing that verb wrongly. Neither catches the other's failure.
+
+    @Test
+    void aRoundRectRecordsItsCornerRadiiAndRoundsItsCorners() {
+        RecordingTarget recorder = new RecordingTarget(64, 64);
+        recorder.fillRoundRect(4, 6, 40, 20, 8, 12, 0xFF203040);
+        recorder.drawRoundRect(4, 6, 40, 20, 8, 12, 0xFF8090A0, 2f);
+
+        List<RecordingTarget.Cmd.Shape> shapes =
+                recorder.ofType(RecordingTarget.Cmd.Shape.class);
+        assertEquals(List.of("fillRoundRect", "drawRoundRect"), recorder.ops());
+        assertArrayEqualsInt(new int[]{4, 6, 40, 20, 8, 12}, shapes.get(0).coords());
+        assertEquals(0xFF203040, shapes.get(0).argb());
+        assertEquals(2f, shapes.get(1).thickness(), 0.0001f, "outline thickness");
+
+        // The point of a round rect is that the corner is not filled. A radius
+        // of 16 on a 32-wide box leaves the very corner pixel outside the shape
+        // while the centre of the edge is inside it.
+        BufferedImage surface = new BufferedImage(32, 32, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = offscreen(surface);
+        DrawTarget target = new Java2DTarget(g, 32, 32);
+        target.clear(0xFF000000);
+        target.fillRoundRect(0, 0, 32, 32, 16, 16, 0xFFFF0000);
+        g.dispose();
+
+        assertEquals(0xFF000000, surface.getRGB(0, 0), "the corner must be cut away");
+        assertEquals(0xFFFF0000, surface.getRGB(16, 1), "the edge midpoint must be filled");
+    }
+
+    @Test
+    void anArcRecordsItsAnglesAndFillsOnlyItsSweep() {
+        RecordingTarget recorder = new RecordingTarget(64, 64);
+        recorder.fillArc(2, 3, 40, 40, 90, 180, 0xFF112233);
+        recorder.drawArc(2, 3, 40, 40, 90, 180, 0xFF445566, 3f);
+
+        List<RecordingTarget.Cmd.Shape> shapes =
+                recorder.ofType(RecordingTarget.Cmd.Shape.class);
+        assertEquals(List.of("fillArc", "drawArc"), recorder.ops());
+        assertArrayEqualsInt(new int[]{2, 3, 40, 40, 90, 180}, shapes.get(0).coords());
+        assertEquals(3f, shapes.get(1).thickness(), 0.0001f);
+
+        // 90°..270° is the left half of the disc, so the left of centre is in
+        // and the right of centre is out. This is the assertion that would
+        // catch an implementation measuring angles clockwise.
+        BufferedImage surface = new BufferedImage(32, 32, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = offscreen(surface);
+        DrawTarget target = new Java2DTarget(g, 32, 32);
+        target.clear(0xFF000000);
+        target.fillArc(0, 0, 32, 32, 90, 180, 0xFF00FF00);
+        g.dispose();
+
+        assertEquals(0xFF00FF00, surface.getRGB(6, 16), "left half is inside the sweep");
+        assertEquals(0xFF000000, surface.getRGB(26, 16), "right half is outside it");
+    }
+
+    @Test
+    void aLinearGradientRampsBetweenItsTwoColours() {
+        RecordingTarget recorder = new RecordingTarget(64, 64);
+        recorder.fillLinearGradient(0, 0, 64, 64, 0, 0, 0xFF000000, 0, 64, 0xFFFFFFFF);
+
+        RecordingTarget.Cmd.Gradient cmd =
+                recorder.ofType(RecordingTarget.Cmd.Gradient.class).get(0);
+        assertEquals("fillLinearGradient", cmd.op());
+        assertArrayEqualsInt(new int[]{0, 0, 64, 64, 0, 0, 0, 64}, cmd.coords());
+        assertArrayEqualsInt(new int[]{0xFF000000, 0xFFFFFFFF}, cmd.argbStops());
+
+        BufferedImage surface = new BufferedImage(16, 64, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = offscreen(surface);
+        DrawTarget target = new Java2DTarget(g, 16, 64);
+        target.fillLinearGradient(0, 0, 16, 64, 0, 0, 0xFF000000, 0, 63, 0xFFFFFFFF);
+        g.dispose();
+
+        int top = surface.getRGB(8, 0) & 0xFF;
+        int middle = surface.getRGB(8, 32) & 0xFF;
+        int bottom = surface.getRGB(8, 63) & 0xFF;
+        assertTrue(top < 8, "the ramp should start black, was " + top);
+        assertTrue(bottom > 247, "the ramp should end white, was " + bottom);
+        assertTrue(middle > top + 80 && middle < bottom - 80,
+                "the middle should be halfway, was " + middle);
+    }
+
+    @Test
+    void aRadialGradientFadesOutwardAndLeavesTheCornersAlone() {
+        RecordingTarget recorder = new RecordingTarget(64, 64);
+        recorder.fillRadialGradient(32, 32, 16,
+                new float[]{0f, 1f}, new int[]{0xFFFF0000, 0x00FF0000});
+
+        RecordingTarget.Cmd.Gradient cmd =
+                recorder.ofType(RecordingTarget.Cmd.Gradient.class).get(0);
+        assertEquals("fillRadialGradient", cmd.op());
+        assertArrayEqualsInt(new int[]{32, 32, 16}, cmd.coords());
+        assertEquals(2, cmd.fractions().length);
+
+        BufferedImage surface = new BufferedImage(64, 64, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = offscreen(surface);
+        DrawTarget target = new Java2DTarget(g, 64, 64);
+        target.clear(0xFF000000);
+        target.fillRadialGradient(32, 32, 16,
+                new float[]{0f, 1f}, new int[]{0xFFFF0000, 0x00FF0000});
+        g.dispose();
+
+        assertEquals(0xFFFF0000, surface.getRGB(32, 32), "opaque at the centre");
+        int mid = (surface.getRGB(32, 24) >> 16) & 0xFF;
+        assertTrue(mid > 32 && mid < 224, "half way out should be part-faded, was " + mid);
+        assertEquals(0xFF000000, surface.getRGB(2, 2),
+                "outside the disc must be untouched, not a faded square");
+    }
+
+    @Test
+    void aDashedLineLeavesGapsWhereAPlainOneWouldNot() {
+        RecordingTarget recorder = new RecordingTarget(64, 64);
+        recorder.drawDashedLine(0, 5, 60, 5, 0xFFFFFFFF, 2f, 8f, 8f);
+
+        RecordingTarget.Cmd.Shape cmd =
+                recorder.ofType(RecordingTarget.Cmd.Shape.class).get(0);
+        assertEquals("drawDashedLine", cmd.op());
+        assertArrayEqualsInt(new int[]{0, 5, 60, 5, 8, 8}, cmd.coords());
+
+        BufferedImage surface = new BufferedImage(64, 16, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = offscreen(surface);
+        DrawTarget target = new Java2DTarget(g, 64, 16);
+        target.clear(0xFF000000);
+        target.drawDashedLine(0, 8, 64, 8, 0xFFFFFFFF, 1f, 8f, 8f);
+        g.dispose();
+
+        int lit = 0;
+        for (int x = 0; x < 64; x++) {
+            if ((surface.getRGB(x, 8) & 0xFF) > 128) lit++;
+        }
+        assertTrue(lit > 8 && lit < 56,
+                "a dashed line should light roughly half the row, lit " + lit + " of 64");
+    }
+
+    @Test
+    void aDashedLineDoesNotLeaveTheNextPlainLineDashed() {
+        // The stroke cache keys on width alone, so a dashed stroke of width 1
+        // and a plain stroke of width 1 would collide. Drawing one after the
+        // other is the case that catches it, and it looks like a painter bug
+        // rather than a cache bug when it happens.
+        BufferedImage surface = new BufferedImage(64, 16, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = offscreen(surface);
+        DrawTarget target = new Java2DTarget(g, 64, 16);
+        target.clear(0xFF000000);
+        target.drawLine(0, 4, 64, 4, 0xFFFFFFFF, 1f);       // primes the cache at width 1
+        target.drawDashedLine(0, 8, 64, 8, 0xFFFFFFFF, 1f, 8f, 8f);
+        target.drawLine(0, 12, 64, 12, 0xFFFFFFFF, 1f);     // must be solid again
+        g.dispose();
+
+        int lit = 0;
+        for (int x = 0; x < 64; x++) {
+            if ((surface.getRGB(x, 12) & 0xFF) > 128) lit++;
+        }
+        assertEquals(64, lit, "the plain line after a dashed one must be solid");
+    }
+
+    @Test
+    void gradientsAreCountedApartFromShapesAndNeverBatchWithThem() {
+        // The merge ratio is the number the GPU case rests on, and a gradient
+        // that batched with the flat shapes around it would inflate it.
+        RecordingTarget target = new RecordingTarget(64, 64);
+        target.fillRect(0, 0, 8, 8, 0xFF000000);
+        target.fillRect(8, 0, 8, 8, 0xFF000000);
+        target.fillLinearGradient(0, 0, 64, 64, 0, 0, 0xFF000000, 0, 64, 0xFFFFFFFF);
+        target.fillRect(16, 0, 8, 8, 0xFF000000);
+
+        DrawStats stats = target.stats();
+        assertEquals(4, stats.operations());
+        assertEquals(3, stats.shapes(), "the gradient is not a shape");
+        assertEquals(1, stats.gradients());
+        assertEquals(3, stats.batches(),
+                "two rects merge, the gradient stands alone, the last rect starts anew");
+    }
+
     private static void assertCorner(AffineTransform tx, double sx, double sy,
                                      int expectedX, int expectedY) {
         double[] point = {sx, sy};
