@@ -11,6 +11,11 @@ work; it is the point of a plan. The engine is ~61k lines built in about a
 month, and the parts that are done are genuinely done. What follows is the
 distance between "impressive codebase" and "thing a stranger pays for."
 
+**Companion document:** [`RENDER_PLAN.md`](RENDER_PLAN.md) is the plan of record
+for GPU acceleration — the ordered steps for GPU post-processing (Job A), GPU
+scene rendering (Job B) and eight-point camera rotation (Job C). It supersedes
+§5.4 and Appendix A of this document on anything to do with the renderer.
+
 ---
 
 ## 1. Where the project actually stands
