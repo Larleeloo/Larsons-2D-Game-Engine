@@ -68,6 +68,17 @@ tasks.named<JavaExec>("run") {
 
 tasks.test {
     useJUnitPlatform()
+
+    // Gradle forks a JVM for the tests, and that fork inherits none of the
+    // -D flags on the gradle command line. The golden frames are regenerated
+    // with one (-Dlarsons.golden.rewrite=true), so without this the flag is
+    // silently ignored and the run looks like sixteen inexplicable failures.
+    // Forwarded by prefix rather than by name so a new switch does not need a
+    // build change to work.
+    System.getProperties().forEach { key, value ->
+        val name = key.toString()
+        if (name.startsWith("larsons.")) systemProperty(name, value.toString())
+    }
 }
 
 // Launch the game with the frame profiler armed but not yet running:

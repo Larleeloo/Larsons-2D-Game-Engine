@@ -135,7 +135,25 @@ public final class Particles {
      */
     private PerspectiveSpace space = PerspectiveSpace.SIDE_VIEW;
 
-    private final Random rng = new Random();
+    private final Random rng;
+
+    /** A system whose bursts differ every run, which is what play wants. */
+    public Particles() {
+        this.rng = new Random();
+    }
+
+    /**
+     * A system whose bursts are the same every run.
+     *
+     * <p>Not a tuning knob — the only caller is the golden-frame harness,
+     * which cannot store a reference picture of something that scatters
+     * differently each time it is drawn. Everything downstream of the seed is
+     * already deterministic, so this is the whole of what stood between
+     * particles and being pinned down.
+     */
+    public Particles(long seed) {
+        this.rng = new Random(seed);
+    }
 
     /**
      * Point new bursts at the space the scene is drawn in. Flecks already in

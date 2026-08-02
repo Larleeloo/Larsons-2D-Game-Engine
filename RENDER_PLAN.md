@@ -139,6 +139,44 @@ deliberately change one colour constant and confirm the test fails.
 
 **Done when.** Golden comparison is in the suite and green.
 
+#### B0 — done
+
+`GoldenFrames` / `GoldenFramesTest` / `FrameError`, fifteen references under
+`src/test/resources/golden/`. Three world frames (one per level format, each
+with terrain, a liquid pool, a hole, a stacked wall and its shadow, background
+and foreground decor, surface decor and a mob) and twelve widget frames, one
+per class B2 ports.
+
+What it cost, and what it caught:
+
+| Thing | Outcome |
+|-------|---------|
+| The metric | Extracted to `FrameError`; `ShaderParityTest` now calls it rather than keeping its own copy, so there is one definition of "the same picture" as this step required |
+| `Particles` | Seeded its `Random` from the system clock. Gained `Particles(long seed)`; the no-arg constructor is unchanged and is still what play uses |
+| `ProfileOverlay` | **Caught by the determinism check**, not by eye: driving a real `FrameProfiler` measures `System.nanoTime()`, so the frame differed from itself by 1.21/255 every run. The golden now feeds the overlay a literal `Snapshot` and a literal `DeviceProfile` — the latter because the overlay prints the machine's core count, which would otherwise golden the build agent |
+| `-Dlarsons.golden.rewrite` | Did not reach the test JVM; Gradle forks and inherits no `-D`. `tasks.test` now forwards everything under `larsons.` |
+| Suite | 827 tests, 0 failures, 10 skipped |
+
+**On the skip count.** The baseline in this document says 3 skipped. It is 10
+here because this container has no GL driver, so `ShaderCompileTest` (4) and
+`ShaderParityTest` (3) stand aside on top of the three display-dependent ones.
+That is the environment, not a regression: no golden test skipped.
+
+**The one thing that could not be pinned down: fonts.** Glyph rasterisation
+belongs to the JDK and the host's font configuration, so a reference generated
+on one machine will not match to 0.00 on another. Loosening the bar to a
+tolerance that absorbs that would also absorb a real one-pixel shift, which is
+precisely the failure this step exists to catch. Instead the goldens carry a
+fingerprint of the fonts that drew them (`font-fingerprint.txt`), and the
+comparison **skips, loudly, naming both fingerprints** when it does not match —
+the same "skip by design rather than fail by accident" convention the suite
+already uses. On a matching machine the bar is exact equality, not a tolerance.
+
+Two tests guard the guard: `theComparisonCanActuallyFail` perturbs one channel
+of one pixel and insists the metric notices, and `everyFrameRendersIdenticallyTwice`
+renders the whole catalogue twice and demands 0.00 — the test that found the
+`ProfileOverlay` flap before it could be committed as a reference.
+
 ---
 
 ### B1 — Widen `DrawTarget` to the vocabulary the UI actually uses
