@@ -5858,8 +5858,8 @@ public class CreativeScene extends AbstractScene {
 
     /** One scenery layer, queued into a pass it shares with something else. */
     private void drawDecorLayer(Graphics2D g, boolean foreground, DepthPass into) {
-        DecorPainter.draw(g, level, camera, foreground, animClock, into);
-        SurfaceDecorPainter.draw(g, level, camera, visibleTileBounds(), foreground,
+        DecorPainter.draw(frameTarget, level, camera, foreground, animClock, into);
+        SurfaceDecorPainter.draw(frameTarget, level, camera, visibleTileBounds(), foreground,
                 animClock, into);
     }
 

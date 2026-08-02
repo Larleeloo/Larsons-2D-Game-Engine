@@ -1,5 +1,7 @@
 package com.larsons.engine;
 
+import com.larsons.engine.graphics.draw.DrawTarget;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.DecorPainter;
 import com.larsons.engine.graphics.DepthPass;
@@ -585,9 +587,10 @@ class PerspectiveDecorTest {
 
     private static void scenery(Graphics2D g, Level lvl, Camera cam, boolean foreground,
                                 DepthPass into) {
-        DecorPainter.draw(g, lvl, cam, foreground, 0.5, into);
-        SurfaceDecorPainter.draw(g, lvl, cam, new int[]{0, 0, lvl.width - 1, lvl.height - 1},
-                foreground, 0.5, into);
+        DrawTarget target = Java2DTarget.unsized(g);
+        DecorPainter.draw(target, lvl, cam, foreground, 0.5, into);
+        SurfaceDecorPainter.draw(target, lvl, cam,
+                new int[]{0, 0, lvl.width - 1, lvl.height - 1}, foreground, 0.5, into);
     }
 
     /** Opaque tiles, like the scenes' {@code drawTiles} without the trimmings. */

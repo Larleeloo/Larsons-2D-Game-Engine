@@ -1,5 +1,6 @@
 package com.larsons.engine.graphics;
 
+import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.world.Decor;
 import com.larsons.engine.world.DecorRegistry;
@@ -68,13 +69,14 @@ public final class DecorPainter {
      * @param foreground which layer to draw this pass
      * @param animClock  seconds, for animated (sprite-sheet) decoration skins
      */
-    public static void draw(Graphics2D g, Level level, Camera camera,
+    public static void draw(DrawTarget target, Level level, Camera camera,
                             boolean foreground, double animClock, DepthPass into) {
         for (Placed p : collect(level, camera, foreground, animClock)) {
             into.at(p.depth(), () ->
-                    g.drawImage(p.sprite(), p.x(), p.y(), p.size(), p.size(), null));
+                    target.drawImage(p.sprite(), p.x(), p.y(), p.size(), p.size()));
         }
     }
+
 
     /** The visible decorations of one layer, projected and ready to draw. */
     private static List<Placed> collect(Level level, Camera camera,

@@ -1,5 +1,7 @@
 package com.larsons.engine.graphics;
 
+import com.larsons.engine.graphics.draw.DrawTarget;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.sim.PerspectiveSpace;
 import com.larsons.engine.world.SurfaceDecor;
@@ -50,6 +52,9 @@ public final class SurfaceDecorPainter {
 
     private SurfaceDecorPainter() {}
 
+    /** The green a flower's stem is drawn in, regardless of its petals. */
+    private static final Color STEM_GREEN = new Color(70, 130, 60);
+
     /**
      * Draw one layer of a level's surface decor into {@code into} — its own
      * pass when the layer stands on its own, or the pass the level's actors
@@ -58,7 +63,7 @@ public final class SurfaceDecorPainter {
      * @param bounds visible tile bounds as {col0, row0, col1, row1}
      * @param foreground which layer to draw this pass
      */
-    public static void draw(Graphics2D g, Level level, Camera camera, int[] bounds,
+    public static void draw(DrawTarget target, Level level, Camera camera, int[] bounds,
                             boolean foreground, double animClock, DepthPass into) {
         if (level.surfaceDecor.isEmpty()) return;
         SurfaceDecorRegistry registry = SurfaceDecorRegistry.standard();
@@ -72,7 +77,7 @@ public final class SurfaceDecorPainter {
             if (def == null) continue;
             FaceFrame frame = FaceFrame.of(level, camera, space, p);
             if (frame == null) continue; // sub-pixel at extreme zoom-out
-            into.at(frame.py, () -> drawOne(g, frame, p, def, animClock));
+            into.at(frame.py, () -> drawOne(target, frame, p, def, animClock));
         }
     }
 
@@ -87,7 +92,7 @@ public final class SurfaceDecorPainter {
         };
     }
 
-    private static void drawOne(Graphics2D g, FaceFrame f, SurfaceDecor.Placement p,
+    private static void drawOne(DrawTarget target, FaceFrame f, SurfaceDecor.Placement p,
                                 SurfaceDecor def, double animClock) {
         double tile = f.tile;
 
@@ -99,7 +104,7 @@ public final class SurfaceDecorPainter {
         if (skin != null) {
             int size = Math.max(2, (int) Math.round(tile));
             int cx = f.xRise(0, 0.5), cy = f.yRise(0, 0.5);
-            g.drawImage(skin, cx - size / 2, cy - size / 2, size, size, null);
+            target.drawImage(skin, cx - size / 2, cy - size / 2, size, size);
             return;
         }
 
@@ -109,58 +114,63 @@ public final class SurfaceDecorPainter {
 
         switch (def.style()) {
             case GRASS_TUFT -> {
-                g.setStroke(new BasicStroke(Math.max(1f, (float) (tile / 16))));
+                float stroke = Math.max(1f, (float) (tile / 16));
                 int blades = 5;
                 for (int i = 0; i < blades; i++) {
                     double u = (i - blades / 2.0 + 0.5) / (blades + 1);
                     double h = 0.28 + 0.14 * ((i * 7 + p.col()) % 3);
                     double lean = sway * 0.06 + (i - blades / 2.0) * 0.02;
-                    g.setColor(i % 2 == 0 ? def.primary() : def.secondary());
-                    g.drawLine(f.xRise(u, 0), f.yRise(u, 0),
-                            f.xRise(u + lean, h), f.yRise(u + lean, h));
+                    target.drawLine(f.xRise(u, 0), f.yRise(u, 0),
+                            f.xRise(u + lean, h), f.yRise(u + lean, h),
+                            (i % 2 == 0 ? def.primary() : def.secondary()).getRGB(), stroke);
                 }
             }
             case FLOWERS -> {
+                // Explicit, where it used to inherit. This style set no stroke
+                // of its own, so a flower stem was drawn at whatever width the
+                // previous decoration happened to leave on the Graphics2D —
+                // order-dependent, and not a width anyone chose. It matches the
+                // grass blade it grows beside.
+                float stroke = Math.max(1f, (float) (tile / 16));
                 for (int i = 0; i < 3; i++) {
                     double u = (i - 1) * 0.24;
                     double h = 0.2 + 0.1 * i;
                     int tipX = f.xRise(u + sway * 0.04, h), tipY = f.yRise(u + sway * 0.04, h);
-                    g.setColor(new Color(70, 130, 60));
-                    g.drawLine(f.xRise(u, 0), f.yRise(u, 0), tipX, tipY);
-                    g.setColor(i == 1 ? def.secondary() : def.primary());
+                    target.drawLine(f.xRise(u, 0), f.yRise(u, 0), tipX, tipY,
+                            STEM_GREEN.getRGB(), stroke);
                     int fs = Math.max(2, (int) (tile * 0.14));
-                    g.fillOval(tipX - fs / 2, tipY - fs / 2, fs, fs);
+                    target.fillOval(tipX - fs / 2, tipY - fs / 2, fs, fs,
+                            i == 1 ? def.secondary() : def.primary());
                 }
             }
             case HANGING_MOSS -> {
-                g.setStroke(new BasicStroke(Math.max(1f, (float) (tile / 14))));
+                float stroke = Math.max(1f, (float) (tile / 14));
                 for (int i = 0; i < 4; i++) {
                     double u = (i - 1.5) * 0.22;
                     double len = 0.3 + 0.18 * ((i + p.col()) % 3);
-                    g.setColor(i % 2 == 0 ? def.primary() : def.secondary());
-                    g.drawLine(f.xHang(u, 0), f.yHang(u, 0),
-                            f.xHang(u + sway * 0.08, len), f.yHang(u + sway * 0.08, len));
+                    target.drawLine(f.xHang(u, 0), f.yHang(u, 0),
+                            f.xHang(u + sway * 0.08, len), f.yHang(u + sway * 0.08, len),
+                            (i % 2 == 0 ? def.primary() : def.secondary()).getRGB(), stroke);
                 }
             }
             case ICICLES -> {
-                g.setColor(def.primary());
                 for (int i = 0; i < 3; i++) {
                     double u = (i - 1) * 0.26;
                     double len = 0.2 + 0.16 * ((i + p.row()) % 3);
-                    fillSpike(g, f, f.xHang(u, 0), f.yHang(u, 0),
+                    fillSpike(target, def.primary(), f, f.xHang(u, 0), f.yHang(u, 0),
                             f.hangX, f.hangY, thin, len);
                 }
-                g.setColor(def.secondary());
-                fillBand(g, f, f.hangX, f.hangY, 0.4, Math.max(0.06, thin));
+                fillBand(target, def.secondary(), f, f.hangX, f.hangY,
+                        0.4, Math.max(0.06, thin));
             }
             case TWIGS -> {
-                g.setStroke(new BasicStroke(Math.max(1f, (float) (tile / 14))));
+                float stroke = Math.max(1f, (float) (tile / 14));
                 for (int i = 0; i < 3; i++) {
                     double u = (i - 1) * 0.22;
                     double len = 0.2 + 0.12 * ((i + p.row()) % 3);
-                    g.setColor(i % 2 == 0 ? def.primary() : def.secondary());
-                    g.drawLine(f.xRise(u, 0), f.yRise(u, 0),
-                            f.xRise(u - len * 0.4, len), f.yRise(u - len * 0.4, len));
+                    target.drawLine(f.xRise(u, 0), f.yRise(u, 0),
+                            f.xRise(u - len * 0.4, len), f.yRise(u - len * 0.4, len),
+                            (i % 2 == 0 ? def.primary() : def.secondary()).getRGB(), stroke);
                 }
             }
             case MUSHROOMS -> {
@@ -174,16 +184,13 @@ public final class SurfaceDecorPainter {
                     double u = (i - 1) * 0.22;
                     int bx = f.xRise(u, stand), by = f.yRise(u, stand);
                     double cap = Math.max(3.0 / tile, 0.14 + 0.05 * (i % 2));
-                    g.setColor(def.primary());
-                    fillDome(g, f, bx, by, cap);
-                    g.setColor(def.secondary());
-                    fillStem(g, f, bx, by, cap);
+                    fillDome(target, def.primary(), f, bx, by, cap);
+                    fillStem(target, def.secondary(), f, bx, by, cap);
                 }
             }
             case COBWEB -> {
-                g.setColor(new Color(def.primary().getRed(), def.primary().getGreen(),
-                        def.primary().getBlue(), 170));
-                g.setStroke(new BasicStroke(1f));
+                int webArgb = new Color(def.primary().getRed(), def.primary().getGreen(),
+                        def.primary().getBlue(), 170).getRGB();
                 // Strands fan across the face and bulge into the open, so the
                 // web spans the corner it is spun in instead of straddling the
                 // block it clings to.
@@ -194,26 +201,26 @@ public final class SurfaceDecorPainter {
                     double t = Math.PI * (i + 0.5) / strands;
                     su[i] = Math.cos(t) * reach;
                     sv[i] = Math.sin(t) * reach;
-                    g.drawLine(f.xLay(0, 0), f.yLay(0, 0),
-                            f.xLay(su[i], sv[i]), f.yLay(su[i], sv[i]));
+                    target.drawLine(f.xLay(0, 0), f.yLay(0, 0),
+                            f.xLay(su[i], sv[i]), f.yLay(su[i], sv[i]), webArgb, 1f);
                 }
                 for (double ring : new double[]{0.55, 1.0}) {
                     for (int i = 0; i + 1 < strands; i++) {
-                        g.drawLine(f.xLay(su[i] * ring, sv[i] * ring),
+                        target.drawLine(f.xLay(su[i] * ring, sv[i] * ring),
                                 f.yLay(su[i] * ring, sv[i] * ring),
                                 f.xLay(su[i + 1] * ring, sv[i + 1] * ring),
-                                f.yLay(su[i + 1] * ring, sv[i + 1] * ring));
+                                f.yLay(su[i + 1] * ring, sv[i + 1] * ring), webArgb, 1f);
                     }
                 }
             }
             case ROOTS -> {
-                g.setStroke(new BasicStroke(Math.max(1f, (float) (tile / 12))));
+                float stroke = Math.max(1f, (float) (tile / 12));
                 for (int i = 0; i < 3; i++) {
                     double u = (i - 1) * 0.24;
                     double len = 0.24 + 0.1 * ((i + p.col()) % 2);
-                    g.setColor(i % 2 == 0 ? def.primary() : def.secondary());
-                    g.drawLine(f.xLay(u, 0), f.yLay(u, 0),
-                            f.xLay(u + (i - 1) * 0.1, len), f.yLay(u + (i - 1) * 0.1, len));
+                    target.drawLine(f.xLay(u, 0), f.yLay(u, 0),
+                            f.xLay(u + (i - 1) * 0.1, len), f.yLay(u + (i - 1) * 0.1, len),
+                            (i % 2 == 0 ? def.primary() : def.secondary()).getRGB(), stroke);
                 }
             }
             case CRYSTALS -> {
@@ -221,45 +228,45 @@ public final class SurfaceDecorPainter {
                 for (int i = 0; i < 3; i++) {
                     double u = (i - 1) * 0.22;
                     double len = 0.18 + 0.12 * ((i + p.row()) % 3);
-                    g.setColor(i == 1 ? def.secondary() : def.primary());
                     // Crystals grow away from the face they sprouted on.
-                    fillSpike(g, f, f.xRise(u, 0), f.yRise(u, 0),
+                    fillSpike(target, i == 1 ? def.secondary() : def.primary(), f,
+                            f.xRise(u, 0), f.yRise(u, 0),
                             f.riseX, f.riseY, half, len * f.riseScale);
                 }
             }
             case DRIP -> {
-                g.setColor(def.secondary());
-                fillBand(g, f, f.hangX, f.hangY, 0.3, Math.max(0.05, thin));
+                fillBand(target, def.secondary(), f, f.hangX, f.hangY,
+                        0.3, Math.max(0.05, thin));
                 // The falling droplet loops on the anim clock.
                 double t = (animClock * 0.7 + p.col() * 0.37 + p.row() * 0.11) % 1.0;
-                g.setColor(def.primary());
                 int ds = Math.max(2, (int) (tile * 0.08));
-                g.fillOval(f.xHang(0, t * 0.9) - ds / 2, f.yHang(0, t * 0.9) - ds / 2, ds, ds);
+                target.fillOval(f.xHang(0, t * 0.9) - ds / 2, f.yHang(0, t * 0.9) - ds / 2,
+                        ds, ds, def.primary());
             }
         }
     }
 
     /** A band lying along the face, {@code half} tiles either side of centre. */
-    private static void fillBand(Graphics2D g, FaceFrame f, double vx, double vy,
-                                 double half, double thickness) {
-        g.fillPolygon(
+    private static void fillBand(DrawTarget target, Color color, FaceFrame f,
+                                 double vx, double vy, double half, double thickness) {
+        target.fillPolygon(
                 new int[]{f.x(-half, 0, vx, vy), f.x(half, 0, vx, vy),
                         f.x(half, thickness, vx, vy), f.x(-half, thickness, vx, vy)},
                 new int[]{f.y(-half, 0, vx, vy), f.y(half, 0, vx, vy),
-                        f.y(half, thickness, vx, vy), f.y(-half, thickness, vx, vy)}, 4);
+                        f.y(half, thickness, vx, vy), f.y(-half, thickness, vx, vy)}, 4, color);
     }
 
     /**
      * A tapering spike rooted at {@code (bx, by)}: {@code len} tiles long
      * along {@code (ax, ay)}, {@code half} tiles wide square to it.
      */
-    private static void fillSpike(Graphics2D g, FaceFrame f, int bx, int by,
+    private static void fillSpike(DrawTarget target, Color color, FaceFrame f, int bx, int by,
                                   double ax, double ay, double half, double len) {
-        g.fillPolygon(
+        target.fillPolygon(
                 new int[]{bx + f.alongX(0, -half, ax, ay), bx + f.alongX(0, half, ax, ay),
                         bx + f.alongX(len, 0, ax, ay)},
                 new int[]{by + f.alongY(0, -half, ax, ay), by + f.alongY(0, half, ax, ay),
-                        by + f.alongY(len, 0, ax, ay)}, 3);
+                        by + f.alongY(len, 0, ax, ay)}, 3, color);
     }
 
     /**
@@ -268,7 +275,8 @@ public final class SurfaceDecorPainter {
      * gravity is what gives a cap its shape, so it is drawn in the plane
      * gravity reads in, which is the screen in every perspective.
      */
-    private static void fillDome(Graphics2D g, FaceFrame f, int bx, int by, double cap) {
+    private static void fillDome(DrawTarget target, Color color, FaceFrame f,
+                                 int bx, int by, double cap) {
         int steps = 8;
         int[] xs = new int[steps + 1], ys = new int[steps + 1];
         for (int k = 0; k <= steps; k++) {
@@ -276,14 +284,15 @@ public final class SurfaceDecorPainter {
             xs[k] = bx + f.capX(Math.cos(a) * cap);
             ys[k] = by + f.capY(Math.sin(a) * cap / 2);
         }
-        g.fillPolygon(xs, ys, steps + 1);
+        target.fillPolygon(xs, ys, steps + 1, color);
     }
 
     /** The stalk under a cap: a short bar hanging back from the cap's centre. */
-    private static void fillStem(Graphics2D g, FaceFrame f, int bx, int by, double cap) {
+    private static void fillStem(DrawTarget target, Color color, FaceFrame f,
+                                 int bx, int by, double cap) {
         double w = cap / 6, len = cap / 2;
-        g.fillRect(bx + f.capX(-w), by, Math.max(1, f.capX(w) - f.capX(-w)),
-                Math.max(1, -f.capY(-len)));
+        target.fillRect(bx + f.capX(-w), by, Math.max(1, f.capX(w) - f.capX(-w)),
+                Math.max(1, -f.capY(-len)), color);
     }
 
     /**
