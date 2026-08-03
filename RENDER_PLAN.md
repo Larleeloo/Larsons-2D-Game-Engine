@@ -1,15 +1,20 @@
 # Render Plan — GPU Acceleration, End to End
 
 **Status:** Living document. Written 2026-08-02 against commit `85196b9` on
-`claude/gpu-acceleration-shaders-oqbx54`. B0–B8 are done and recorded in place;
-B9 is the next step. **The GL backend exists and draws the same picture** — all
-32 golden frames within the 3.58 bar, worst 2.59, and 3,356 operations
-collapsing into 68 draw calls. Two of the plan's own instructions have now been
-measured to be incomplete rather than wrong-headed: B6's "route `drawText`
-through it" (Java2D already has a glyph cache and beats any per-character blit)
-and B8's "against a 1×1 white texture" (which shares a shader but not a batch —
-the white texel has to be *on the atlas page*). Both findings are recorded
-inside their steps.
+`claude/gpu-acceleration-shaders-oqbx54`. B0–B9 are done and recorded in place;
+B10 is the next step. **The GL backend exists, draws the same picture, and is
+now chosen** — all 32 golden frames within the 3.58 bar, worst 2.59, 3,356
+operations collapsing into 68 draw calls, and as of B9 the engine probes for a
+context at startup, falls back to Java2D when there is none, and names the
+backend in every frame report. What is left of Job B is measuring it on real
+hardware. Two of the plan's own instructions have now been measured to be
+incomplete rather than wrong-headed: B6's "route `drawText` through it" (Java2D
+already has a glyph cache and beats any per-character blit) and B8's "against a
+1×1 white texture" (which shares a shader but not a batch — the white texel has
+to be *on the atlas page*). A third — B9's "if `:gl` is on the classpath" —
+turned out to be forbidden as written, because the core may not find out; it
+became a `ServiceLoader` service instead. All three findings are recorded inside
+their steps.
 **Companion to:** [`STEAM_PLAN.md`](STEAM_PLAN.md), which covers the product.
 This one covers the renderer, and is the plan of record for Jobs A, B and C.
 
@@ -84,6 +89,9 @@ Everything in this table has been measured or executed, not assumed.
 | The core still ships with nothing on its runtime classpath | B7 — `:verifyNoRuntimeDependencies` resolves it and fails the `jar` task on any external artefact; `ModuleBoundaryTest` reads the sources and fails on `org.lwjgl` or `com.larsons.engine.gl` appearing in one. The plain jar has 517 engine entries and 0 LWJGL entries |
 | A GL backend draws the same picture as Java2D | B8 — `GlParityTest` renders all 32 of B0's frames through both and subtracts: worst **2.59 / 255** against a bar of 3.58, six frames at exactly 0.00 |
 | The batching the atlases were built for is real, not modelled | B8 — the catalogue's 3,356 operations become **68** `glDrawArrays` calls, 49.35×, measured on the backend rather than predicted by a counter |
+| The engine picks a backend and never strands a player | B9 — `Backends` probes for a GL 3.3 context over `ServiceLoader` and falls back to Java2D with a reason; `BackendSelectionTest` runs every route on a machine with no GPU, `GlBackendTest` provokes the failure on one that has |
+| A profile says which renderer produced it | B9 — `DeviceProfile.backend()` / `gpu()`, printed by `FrameReport`. The build stamp taught this lesson once already |
+| Both backends run the whole game, not a test harness | B9 — `-Dlarsons.run.seconds` launches the real game on each and exits; both wrote a report under `xvfb-run`, `gl` at 0.631 ms scene against `java2d` at 1.591 ms on a software rasteriser |
 
 **The honest summary:** Job A's *unknowns* are gone; only its plumbing remains,
 and the plumbing has a working prototype. Job B's migration is done and, as of
@@ -94,8 +102,10 @@ texture page. Text batches onto that same page as of B6, which took the
 interleaved icon-and-label frames from 1.09× to 2.57× and the whole catalogue
 from 5.80× to 6.77×. **The backend exists as of B8** and turns those 6.77×
 predicted batches into a measured 49.35× — one draw call for most frames in the
-catalogue — at a worst-case pixel difference of 2.59 out of 255. What remains of
-B is choosing it at startup and proving it on the two target machines (B9, B10).
+catalogue — at a worst-case pixel difference of 2.59 out of 255. **The engine
+chooses it as of B9**, over a `ServiceLoader` service so the core still cannot
+name it, with a probe, an honest fallback and the backend recorded in every
+report. What remains of B is proving it on the two target machines (B10).
 
 ---
 
@@ -114,11 +124,11 @@ much faster it makes things.
    the Java2D path working and tested.
 3. **Pixel parity is the contract.** "Looks fine" is not a result. Every port
    step compares rendered output against a reference and states the error.
-4. **The suite stays green.** Last full run: **933 tests, 0 failures, 16 skipped**
-   (was 810/0/3 when this was written; B0–B8 added the rest). The skips are
+4. **The suite stays green.** Last full run: **959 tests, 0 failures, 17 skipped**
+   (was 810/0/3 when this was written; B0–B9 added the rest). The skips are
    environment-dependent and skip rather than fail by design — three need a
-   display, thirteen need a GL driver (seven in core, six in `:gl`). Under
-   `xvfb-run` the same suite is **933/0/3**: the GL tests all run on a software
+   display, fourteen need a GL driver (seven in core, seven in `:gl`). Under
+   `xvfb-run` the same suite is **959/0/3**: the GL tests all run on a software
    driver, and the three that do not are display tests losing a race with the
    eleven classes that set `java.awt.headless=true` in the shared JVM (see B4).
    A step ends with that or better.
@@ -1766,6 +1776,231 @@ says so.
 **Done when.** `auto` picks GL where available, Java2D everywhere else, and the
 report always names the backend.
 
+#### B9 — done
+
+Five classes in the core, four in `:gl`, and one file with one line in it that
+is the entire coupling between them. **Both backends launch the real game,
+render, profile and exit; `auto` picks GL where a driver answers and Java2D
+everywhere else; and every report says which one drew it.**
+
+The step's own instruction — "if `:gl` is on the classpath" — was the part that
+needed a design rather than an implementation, because the core is forbidden
+from finding out. `ModuleBoundaryTest.noCoreSourceNamesTheGlModule` reads every
+file under `src/main/java` and fails the build on the *string*
+`com.larsons.engine.gl`, comments included. So the core cannot import the
+backend, cannot reflect on it by name, and cannot mention it. What it can do is
+declare the shape of one:
+
+| New in the core | What it is |
+|---|---|
+| [`RendererFactory`](src/main/java/com/larsons/engine/graphics/RendererFactory.java) | The `ServiceLoader` service a backend registers as, plus the `Request` (size, title, background) it is built from |
+| [`Backend`](src/main/java/com/larsons/engine/graphics/Backend.java) | What a factory returns: a renderer and its window, or the reason there is neither |
+| [`BackendWindow`](src/main/java/com/larsons/engine/graphics/BackendWindow.java) | A window a backend brings with it — show, size, pump, close, and where input goes |
+| [`BackendChoice`](src/main/java/com/larsons/engine/graphics/BackendChoice.java) | The decision and its one-sentence reason, which goes into `DeviceProfile` rather than only into a log |
+| [`Backends`](src/main/java/com/larsons/engine/graphics/Backends.java) | The selection itself, and the classpath scan |
+
+and look for implementations on the classpath it was launched with. The plain
+jar finds nothing; `:gl:glDist` contains
+`META-INF/services/com.larsons.engine.graphics.RendererFactory` with one line in
+it and is found. Both jars hold the same engine classes. **Reflection on a class
+name would have worked too and would have put the module's name back in the core
+as a string literal — the same mistake with an extra step, and one the boundary
+test would have caught anyway.**
+
+#### The decision the step said was a decision: two windowing systems
+
+The plan flagged this rather than smuggling it in, so here it is stated:
+**whichever backend is chosen owns the only window.** When GL is selected, no
+`JFrame` is constructed at all; when it is not, no GLFW window is. They are
+never both alive, so there is no second event queue, no second focus owner and
+no question about which window a keystroke belongs to.
+
+That forced three follow-on choices, each of which is a correctness requirement
+rather than a preference:
+
+- **Events on the engine's thread, GL on the loop's.** GLFW requires its window
+  and event functions on the thread that created the window — on macOS a
+  platform rule, not a convention. The game loop has always had a thread of its
+  own. So `Engine.start()` now blocks, pumping `glfwPollEvents` on the caller's
+  thread while the loop renders on its own; `GlContext` gained
+  `makeCurrent`/`detachCurrent` that bind and release LWJGL's per-thread
+  function pointers along with the context, and the creating thread hands the
+  context over once it has read the driver strings.
+- **`GlTarget` is built on the first frame, not in the constructor.** It
+  allocates a program, a vertex buffer and textures, and the constructor runs on
+  the wrong thread for that. Objects created against a context that is current
+  somewhere else belong to nothing — and, being GL, say nothing about it.
+- **The renderer never asks the window its size.** `GlWindow` pushes logical
+  size and device scale into volatile fields from GLFW's own resize callbacks,
+  and `GlRenderer` reads those. A renderer calling `glfwGetFramebufferSize` each
+  frame would be correct on Linux, mostly correct on Windows, and wrong on the
+  machine B10 profiles on.
+
+#### Input, and why `InputManager` grew seven methods
+
+A GL window that renders and cannot be played is not a backend, it is a
+screenshot. GLFW events had to reach the same `InputManager` the AWT canvas
+feeds, and the obvious route — synthesise `java.awt.event.KeyEvent`s — needs an
+AWT `Component` to name as their source, which is the one thing a backend with
+no AWT window does not have.
+
+So the manager gained `pressKey`, `releaseKey`, `typeChar`, `pressMouse`,
+`releaseMouse`, `moveMouse` and `scroll`, and **its AWT listeners now call
+exactly those**. One latching implementation — the part that is genuinely easy
+to get wrong, and that carries three paragraphs of javadoc explaining why —
+serves both window systems, and a scene cannot tell which it is being played in.
+
+[`GlKeys`](gl/src/main/java/com/larsons/engine/gl/GlKeys.java) is the
+translation. Two notes worth keeping:
+
+- **AWT key codes are the target, deliberately.** Every key bind the engine has
+  ever saved to disk is a `KeyEvent` constant. A neutral enum would have been
+  the tidier design in 2024 and is a migration of every saved bind today, for a
+  backend that has to agree with the other one regardless. Binds saved before
+  this backend existed work on it.
+- **The ASCII coincidence is not relied on.** GLFW numbers printable keys by
+  their unshifted ASCII value and so does AWT, so `GLFW_KEY_A` and `VK_A` are
+  both 65 — but apostrophe, backquote, backspace and enter are not, and the
+  middle and right mouse buttons are swapped between the two. A table that
+  passed through anything it did not recognise would map those to nothing. Every
+  mapping is written out; anything unlisted reports `VK_UNDEFINED` rather than a
+  guess.
+
+#### The negative control, and a flag that had to exist for it
+
+"Simulate failure by requesting an impossible context version" is now
+`-Dlarsons.render.gl.version=<major>.<minor>`, read by `GlRendererFactory`.
+Asking for 9.9 takes the same path a laptop with no GPU takes — context creation
+returns nothing, the factory reports the driver's own words, the engine picks
+Java2D — but takes it **on a machine where GL otherwise works**, which is the
+only place "fell back" and "was never offered anything" can be told apart. It is
+also a real field knob: a player whose driver misbehaves at 3.3 can be asked to
+try something else without a new build.
+
+`-Dlarsons.run.seconds=<n>` is the other new flag, and it is what makes "confirm
+both run" a command rather than a person watching a window. It quits the game
+after *n* seconds whatever else is happening — distinct from
+`larsons.profile.seconds`, which stops measuring and leaves the game up.
+
+#### Verified
+
+**From the shipping jars, not from a Gradle task.** Both artefacts, launched the
+way a player launches them, under `xvfb-run` on a software rasteriser. The two
+jars hold the same engine classes; only the classpath differs.
+
+| Launch | What it printed |
+|---|---|
+| `java -jar Larsons-2D-Game-Engine-0.1.0.jar` | `backend: java2d — no GPU backend on the classpath` |
+| `java -jar larsons-engine-gl.jar` | `backend: gl (Mesa / llvmpipe … / 4.5 (Core Profile) …) — probed and selected automatically` |
+| plain jar, `-Dlarsons.render.backend=gl` | `backend: java2d — -Dlarsons.render.backend=gl names a backend that is not on the classpath (none is)` |
+| GL jar, `-Dlarsons.render.gl.version=9.9` | `backend: java2d — no usable GPU context — gl: no GL 9.9 core context` |
+
+That is the "Done when" clause, line by line: `auto` picks GL where available
+and Java2D everywhere else, a flag that cannot be honoured says so instead of
+being ignored, and the provoked failure falls back carrying the driver's own
+words. All four runs then played the startup scene and exited on
+`-Dlarsons.run.seconds`.
+
+Same thing through the Gradle tasks, with the profiler armed, so the two
+renderers can be compared on one machine:
+
+```
+./gradlew run       -Dlarsons.render.backend=java2d -Dlarsons.run.seconds=8 …
+./gradlew :gl:runGl                                 -Dlarsons.run.seconds=8 …
+```
+
+| | Java2D | GL |
+|---|---:|---:|
+| backend line in the report | `java2d` | `gl` |
+| gpu line | *(absent, correctly)* | `Mesa / llvmpipe (LLVM 20.1.2, 256 bits) / 4.5 (Core Profile) Mesa 25.2.8` |
+| frames in a 5 s window | 550 | 548 |
+| scene | 1.591 ms | **0.631 ms** |
+| present | 4.438 ms | 6.690 ms |
+| exit | clean | clean |
+
+**These are not B10's numbers and must not be read as any.** It is a menu scene
+at 1280×720 on `llvmpipe`, a CPU rasteriser pretending to be a GPU: the scene
+stage falling to 40% is the batching doing something real, and the present stage
+rising is llvmpipe's swap, which on hardware is a different number entirely.
+What this table proves is the only thing B9 claims — both backends run the whole
+game, and each report says which one it was.
+
+The suite went **933 / 0 / 3 → 959 / 0 / 3** under `xvfb-run` and
+**933 / 0 / 16 → 959 / 0 / 17** with no display at all. The one new skip is the
+frame that needs a driver; the other eight GL-side tests — discovery, the
+provoked failure, the key and button translation — run everywhere.
+
+Tests: [`BackendSelectionTest`](src/test/java/com/larsons/engine/render/BackendSelectionTest.java)
+takes the factories as an argument, so every route through the decision —
+including the ones that only happen on a machine whose GPU is broken — runs on a
+build agent with no GPU at all. [`GlBackendTest`](gl/src/test/java/com/larsons/engine/gl/GlBackendTest.java)
+covers what stubs cannot: that the services file really is found, that the
+impossible-version fallback really engages, and that the backend the engine
+selected really puts red pixels in the window it brought — read back out of the
+default framebuffer, two samples, one inside the rectangle and one outside it,
+because a readback of a uniformly red screen would pass just as well if the
+clear had been red and nothing else had happened.
+
+#### Two bugs the verification caught, both invisible to the tests
+
+Neither would have been found by anything short of launching the game, which is
+why B9's "Verify" says to launch it.
+
+1. **The window was closed twice.** `GlRenderer.dispose()` closed its window and
+   `Engine.shutdown()` closed it again. GLFW's `init`/`terminate` is
+   process-wide and reference-counted, so the second close tore the library down
+   under whatever was still holding it and printed five `GLFW_NOT_INITIALIZED`
+   stack traces on every exit. Fixed by ownership rather than by a guard: the
+   window owns the context, the renderer owns the vertex buffers and textures,
+   and `dispose()` releases only the second. `GlRenderer.create()` — a static
+   helper that made both and left each believing it owned the window — was
+   deleted rather than repaired. The idempotence guard went in as well, because
+   the failure mode of getting this wrong again is a segfault rather than an
+   exception.
+2. **`-P` defaults silently beat `-D` flags.** Gradle applies
+   `tasks.withType<JavaExec>().configureEach` *before* a task's own
+   configuration block, so `runProfiled` and `runGl` setting
+   `larsons.profile.seconds` from their `-Pprofile.seconds` default of 30
+   overwrote the `-Dlarsons.profile.seconds=5` on the command line. The symptom
+   was a profiling run that produced no report and looked like the profiler was
+   broken. Both tasks now read the `-P`, then the `-D`, then their default.
+
+#### What the README may now say, and what it still may not
+
+The step's last instruction was to stop overstating "CPU fallback" and to fix
+the wording **in the commit that makes it true, not before**. Half of it is now
+true and half is not, and the README says so in those terms:
+
+- **True as of this step:** there is a real probe, and a real fallback, for
+  *scene rendering*. `Backends` asks for a GL 3.3 core context and uses Java2D
+  when it does not get one, saying which and why.
+- **Still not true:** *post-processing* does not run on the GPU. `GlRenderer`
+  prints to stderr, once, that an attached `ShaderChain` is not being executed,
+  and the CPU chain remains the only implementation. That is Job A, and the
+  README now describes the shader system as what it is — a multithreaded CPU
+  pipeline that ships hand-written GLSL alongside each effect as a verified port
+  target.
+
+`STEAM_PLAN.md`'s Appendix B flagged both. The renderer half of its objection is
+now answered in the document; the shader half is left standing, because it is
+still correct.
+
+#### What is not here
+
+- **macOS is reasoned about, not measured.** `:gl:runGl` passes
+  `-XstartOnFirstThread` when the host is a Mac, because the JVM's main thread is
+  not thread 0 without it and a GLFW window created off thread 0 does not fail
+  there — it hangs. The thread split above exists precisely so that rule can be
+  honoured. Whether AWT and GLFW coexist quietly enough in one process on macOS
+  for the game's font and image loading is a question only the M1 Air answers,
+  and it answers it in B10.
+- **The GL backend still does not run the shader chain.** Job A. It says so once
+  on stderr rather than dropping the passes quietly.
+- **No pixel comparison of the two *windows*.** `GlParityTest` compares the two
+  targets over 32 frames and B9 adds a framebuffer readback through the selected
+  backend; nobody has photographed both windows side by side. The parity metric
+  is the stronger instrument and it already exists.
+
 ---
 
 ### B10 — Re-profile and decide
@@ -1775,8 +2010,21 @@ report always names the backend.
 **Do.**
 - Run the 30-second profile on both target machines: the Ryzen 7 / RTX 4080
   Super and the M1 Air. Same level, same activity, both backends, all four runs.
+  B9 made this one command with one variable in it — same jar, same flags, same
+  report format:
+
+  ```bash
+  ./gradlew :gl:runGl -Prender.backend=gl     -Pprofile.out=air-gl.txt
+  ./gradlew :gl:runGl -Prender.backend=java2d -Pprofile.out=air-java2d.txt
+  ```
+
+  Walk into the level, press F3, play for 30 seconds. Each report names its own
+  backend and driver at the head, so the four cannot be mixed up afterwards.
 - Compare against Appendix C.
-- Publish the table here, including any stage that got *worse*.
+- Publish the table here, including any stage that got *worse*. `present` on a
+  software rasteriser rose under GL in B9's launch check; whether that is
+  llvmpipe or the backend is a question only hardware answers, and it is this
+  step's to answer.
 
 **The bar.** On the M1 Air, the scene stage is 11.49 ms of a 16.67 ms budget. If
 GL does not cut that substantially, something in B5/B6/B8 is not batching and
@@ -2106,6 +2354,7 @@ declared finished while broken.
 | **`ShaderParityTest` metric** | Do two implementations of the same effect agree? | `ShaderParityTest`, reused by A2 and B8 |
 | **`GlParityTest`** | Does the GPU backend draw the same picture, and how many draw calls does it really issue? | `gl/…/GlParityTest.java`, B8 — writes `build/reports/gl-parity.md`, and PNGs for any frame over the bar |
 | **`ModuleBoundaryTest` + `:verifyNoRuntimeDependencies`** | Can the core quietly acquire a runtime dependency? | `render/ModuleBoundaryTest.java` and the root build, B7 |
+| **`BackendSelectionTest` + `GlBackendTest`** | Does the right renderer get picked, and does the wrong answer still leave a playable game? | `render/BackendSelectionTest.java` (every route, no GPU needed) and `gl/…/GlBackendTest.java` (the classpath, the driver, the provoked failure), B9 |
 
 **`DrawStats` and `GlParityTest` answer different questions and B8 measured the
 gap.** `DrawStats` models what a batching backend *could* merge given the draw
@@ -2135,8 +2384,9 @@ B5  sprite atlas                       ← done
 B6  glyph atlas                        ← done
 B7  :gl Gradle module                  ← done
 B8  GlTarget + GlRenderer              ← done (2.59/255 worst, 3356 ops → 68 draws)
-B9  backend selection + fallback       ← start here
-B10 re-profile on both machines, decide
+B9  backend selection + fallback       ← done (ServiceLoader SPI; GLFW owns the
+                                              window when GL wins; both launch)
+B10 re-profile on both machines, decide  ← start here
       │
       ├─ A1  scene renders to an FBO
       │  A2  GlShaderChain ping-pong
@@ -2236,6 +2486,8 @@ shader.
 | bloom | 3.58 |
 
 **Suite:** 810 tests, 0 failures, 3 skipped (display-dependent; skip by design).
+As of B9: **959 / 0 / 17** with no display at all, **959 / 0 / 3** under
+`xvfb-run`.
 
 ---
 
@@ -2251,3 +2503,7 @@ shader.
 | Raise the block stack above two layers | **No, not in Job C** | Touches liquids, pathfinding, editor and save format. Separate job. |
 | Networked camera yaw | **No** | Per-client view state. Players seeing the world from different angles is correct. |
 | Rotation in `SIDE_SCROLL` | **No** | The screen is the vertical plane; there is no axis to rotate around. |
+| Core finds the GL backend by reflecting on a class name | **No** | Puts the module's name back in the core as a string literal, which `ModuleBoundaryTest` forbids and rightly. A `ServiceLoader` service moves the name into the module that owns it (B9). |
+| An AWT window and a GLFW window coexist | **No** | Two event queues, two focus owners, two ideas of where the mouse is. Whichever backend is chosen owns the only window (B9). |
+| Synthesise AWT events for GLFW input | **No** | Needs a `Component` to name as their source, which is exactly what a non-AWT backend lacks. `InputManager` took an injection API instead and its AWT listeners now call it too (B9). |
+| Neutral key codes instead of AWT's `VK_` constants | **No** | Every bind ever saved to disk is a `KeyEvent` constant. Translating GLFW at the edge costs one table; migrating the save format costs every player's controls (B9). |

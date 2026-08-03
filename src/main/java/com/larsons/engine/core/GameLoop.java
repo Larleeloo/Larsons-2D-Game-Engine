@@ -79,6 +79,29 @@ public final class GameLoop implements Runnable {
 
     public void stop() { running = false; }
 
+    /** Whether the loop is still ticking. */
+    public boolean isRunning() { return running; }
+
+    /**
+     * Wait for the loop thread to finish, up to {@code millis} (0 for no
+     * limit). Returns whether it did.
+     *
+     * <p>Shutdown needs this rather than a flag: a GPU backend's resources
+     * belong to a context the loop thread was using, so freeing them while it
+     * is still inside a frame is a segfault, not a leak. The bound is there so
+     * a wedged frame delays the exit rather than preventing it.
+     */
+    public boolean awaitStop(long millis) {
+        Thread t = thread;
+        if (t == null) return true;
+        try {
+            t.join(Math.max(0, millis));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return !t.isAlive();
+    }
+
     public double getFps() { return fps; }
 
     public int getTargetFps() { return targetFps; }

@@ -85,6 +85,39 @@ tasks.named<JavaExec>("run") {
     if (launchedFromIdea) systemProperty("idea.active", "true")
 }
 
+// Every launched JVM sees the `-Dlarsons.*` flags on the Gradle command line,
+// by the same rule and for the same reason as `tasks.test` below: Gradle forks
+// and the fork inherits none of them, so without this
+//
+//   ./gradlew run -Dlarsons.render.backend=java2d -Dlarsons.run.seconds=20
+//
+// launches a default game and looks like the flags did nothing. Forwarded by
+// prefix so a new switch needs no build change.
+//
+// These actions run *before* a task's own configuration block, so a task that
+// sets one of these properties itself still wins. That is why `runProfiled`
+// and `:gl:runGl` consult the system property themselves through
+// `launchOption` rather than assuming their -P default is only a default —
+// which it was not, and which silently ignored a -D on the command line.
+tasks.withType<JavaExec>().configureEach {
+    System.getProperties().forEach { key, value ->
+        val name = key.toString()
+        if (name.startsWith("larsons.")) systemProperty(name, value.toString())
+    }
+}
+
+/**
+ * A launch setting, from `-P<gradleProperty>`, else `-D<systemProperty>`, else
+ * the default. Both spellings reach these tasks — the -P one because it is
+ * shorter to type, the -D one because it is what the game itself reads and
+ * what a bug report quotes — and one of them silently losing to the other's
+ * default is the kind of thing that wastes an afternoon.
+ */
+fun launchOption(gradleProperty: String, systemProperty: String, fallback: String): String =
+        (findProperty(gradleProperty) as String?)?.takeIf { it.isNotBlank() }
+                ?: System.getProperty(systemProperty)?.takeIf { it.isNotBlank() }
+                ?: fallback
+
 tasks.test {
     useJUnitPlatform()
 
@@ -123,10 +156,9 @@ tasks.register<JavaExec>("runProfiled") {
     // them, rather than wherever a terminal happened to be.
     workingDir = projectDir
 
-    val seconds = (findProperty("profile.seconds") as String?)?.takeIf { it.isNotBlank() } ?: "30"
-    val hud = (findProperty("profile.hud") as String?)?.takeIf { it.isNotBlank() } ?: "false"
-    val out = (findProperty("profile.out") as String?)?.takeIf { it.isNotBlank() }
-            ?: "frame-profile.txt"
+    val seconds = launchOption("profile.seconds", "larsons.profile.seconds", "30")
+    val hud = launchOption("profile.hud", "larsons.profile.overlay", "false")
+    val out = launchOption("profile.out", "larsons.profile.out", "frame-profile.txt")
 
     systemProperty("larsons.profile.seconds", seconds)
     systemProperty("larsons.profile.overlay", hud)

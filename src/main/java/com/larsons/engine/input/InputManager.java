@@ -37,6 +37,16 @@ import java.util.Set;
  * therefore land on anything the hardware actually sends — see
  * {@link KeyBinds}.
  *
+ * <p><b>Two window systems, one latch.</b> This class implements AWT's listener
+ * interfaces because the default backend draws into an AWT {@code Canvas}, but
+ * the edge detection above is not AWT's and does not depend on it. A backend
+ * that brings its own window — B9's GL one, whose events come from GLFW —
+ * reports through {@link #pressKey}, {@link #releaseKey}, {@link #typeChar},
+ * {@link #pressMouse}, {@link #releaseMouse}, {@link #moveMouse} and
+ * {@link #scroll}, which is precisely what the AWT listeners call. Scenes
+ * cannot tell the difference, and there is only one implementation of the part
+ * that is easy to get wrong.
+ *
  * <p>Typed characters ({@link #consumeTypedChars()}) work the same way as
  * presses: they belong to the tick they were typed in and expire at the next
  * one. A buffer that instead held every keystroke until something read it would
@@ -173,43 +183,87 @@ public class InputManager
         return s;
     }
 
-    // --- KeyListener ---
-    @Override public synchronized void keyPressed(KeyEvent e) {
-        int c = e.getKeyCode();
-        if (c == KeyEvent.VK_UNDEFINED) return;
-        if (down.add(c)) { // record only the rising edge (key repeat is not one)
-            pressedLatch.add(c);
-            recordPress(InputBinding.key(c, modifiersOf(e, c)));
+    // --- input, whatever the window system ------------------------------------
+    //
+    // The seven methods below are the whole of what a window has to tell this
+    // class. AWT's listeners unwrap their events into them and a non-AWT
+    // backend (B9's GLFW window) calls them directly, so the latching above —
+    // which is the part that is easy to get subtly wrong — exists once and both
+    // window systems share it. Synthesising AWT events for the second caller
+    // was the alternative, and it needs a `Component` to name as their source,
+    // which is exactly what a backend with no AWT window does not have.
+
+    /**
+     * A key went down. {@code modifiers} is a mask of {@link InputBinding#CTRL},
+     * {@link InputBinding#SHIFT} and {@link InputBinding#ALT}, excluding the key
+     * being pressed — see {@link #modifiersOf}.
+     */
+    public synchronized void pressKey(int keyCode, int modifiers) {
+        if (keyCode == KeyEvent.VK_UNDEFINED) return;
+        if (down.add(keyCode)) { // record only the rising edge (key repeat is not one)
+            pressedLatch.add(keyCode);
+            recordPress(InputBinding.key(keyCode, modifiers));
         }
     }
 
-    @Override public synchronized void keyReleased(KeyEvent e) {
-        down.remove(e.getKeyCode());
+    /** A key came back up. */
+    public synchronized void releaseKey(int keyCode) {
+        down.remove(keyCode);
     }
 
-    @Override public synchronized void keyTyped(KeyEvent e) {
-        char c = e.getKeyChar();
-        // Keep only printable characters; drop control chars (Enter/Backspace/etc).
+    /** A character was typed, for text fields. Control characters are dropped. */
+    public synchronized void typeChar(char c) {
         if (c >= 0x20 && c != 0x7f && typedLatch.length() < MAX_TYPED_BUFFER) {
             typedLatch.append(c);
         }
     }
 
-    // --- MouseListener ---
-    @Override public synchronized void mousePressed(MouseEvent e) {
-        int button = buttonOf(e);
+    /** A mouse button went down at the current pointer position. */
+    public synchronized void pressMouse(int button, int modifiers) {
         if (buttonsDown.add(button)) {
             buttonPressedLatch.add(button);
-            recordPress(InputBinding.mouse(button, modifiersOf(e, KeyEvent.VK_UNDEFINED)));
+            recordPress(InputBinding.mouse(button, modifiers));
         }
-        mouseX = e.getX();
-        mouseY = e.getY();
+    }
+
+    /** A mouse button came back up. */
+    public synchronized void releaseMouse(int button) {
+        buttonsDown.remove(button);
+    }
+
+    /** The pointer moved, in the same coordinates the frame is drawn in. */
+    public void moveMouse(int x, int y) {
+        mouseX = x;
+        mouseY = y;
+    }
+
+    /** The wheel turned, positive away from the user — AWT's sign convention. */
+    public synchronized void scroll(int notches) {
+        wheelLatch += notches;
+    }
+
+    // --- KeyListener ---
+    @Override public synchronized void keyPressed(KeyEvent e) {
+        pressKey(e.getKeyCode(), modifiersOf(e, e.getKeyCode()));
+    }
+
+    @Override public synchronized void keyReleased(KeyEvent e) {
+        releaseKey(e.getKeyCode());
+    }
+
+    @Override public synchronized void keyTyped(KeyEvent e) {
+        typeChar(e.getKeyChar());
+    }
+
+    // --- MouseListener ---
+    @Override public synchronized void mousePressed(MouseEvent e) {
+        moveMouse(e.getX(), e.getY());
+        pressMouse(buttonOf(e), modifiersOf(e, KeyEvent.VK_UNDEFINED));
     }
 
     @Override public synchronized void mouseReleased(MouseEvent e) {
-        buttonsDown.remove(buttonOf(e));
-        mouseX = e.getX();
-        mouseY = e.getY();
+        moveMouse(e.getX(), e.getY());
+        releaseMouse(buttonOf(e));
     }
 
     /**
@@ -230,18 +284,16 @@ public class InputManager
 
     // --- MouseMotionListener ---
     @Override public void mouseMoved(MouseEvent e) {
-        mouseX = e.getX();
-        mouseY = e.getY();
+        moveMouse(e.getX(), e.getY());
     }
 
     @Override public void mouseDragged(MouseEvent e) {
-        mouseX = e.getX();
-        mouseY = e.getY();
+        moveMouse(e.getX(), e.getY());
     }
 
     // --- MouseWheelListener ---
     @Override public synchronized void mouseWheelMoved(MouseWheelEvent e) {
-        wheelLatch += e.getWheelRotation();
+        scroll(e.getWheelRotation());
     }
 
     private void recordPress(InputBinding binding) {

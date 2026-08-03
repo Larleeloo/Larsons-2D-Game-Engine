@@ -440,6 +440,23 @@ The per-frame path is
 `beginFrame()` branches on `shaders.hasPasses()` — whether passes are configured
 — not on hardware availability. The CPU path is unconditional.
 
+> **Half-answered 2026-08-03 (RENDER_PLAN B9).** There is now a real GPU probe
+> and a real fallback — *for scene rendering*. `Backends` asks for an OpenGL 3.3
+> core context at startup, uses the GL backend when it gets one, and uses Java2D
+> with a stated reason when it does not; `-Dlarsons.render.backend` overrides,
+> and every frame report names the backend and the driver.
+>
+> **The objection above still stands for post-processing, which is what it was
+> about.** The shader chain runs on the CPU unconditionally, and the GL backend
+> prints to stderr, once, that an attached chain is not being executed rather
+> than dropping the passes quietly. GPU shader execution is Job A in
+> `RENDER_PLAN.md`, and it is scheduled after the scene backend on purpose: with
+> the scene already drawn by GL the frame is a GPU texture and the ping-pong is
+> nearly free, whereas doing it first costs two full-frame transfers per frame.
+> The README was corrected in the same commit as B9 and says exactly this — a
+> multithreaded CPU post-processing pipeline that ships verified GLSL as a port
+> target, and two rendering backends with a probe between them.
+
 **Consequences for this plan:**
 
 1. **~~The GLSL is unverified text.~~ Verified 2026-08-02 — and it is fine.**
@@ -498,18 +515,26 @@ documentation suggests.
 
 Fixing these now builds the discipline that keeps store-page copy honest.
 
-| Location | Claim | Reality |
-|----------|-------|---------|
-| Requirement #5 table row | "✅ Implemented … **GLSL-first** … so effects run everywhere today and on a GPU backend without porting" | The CPU path is implemented and works. The GLSL is uncompiled source with no execution path. "Without porting" is untested. |
-| Same row | "a semantically identical multithreaded CPU fallback" | `BloomPass`'s own javadoc says the GLSL is an approximation, not identical. And it isn't a *fallback* — it's the only path. |
-| Intro paragraph | "a **shader system** (GLSL-first post-processing with a CPU fallback that runs anywhere)" | Reads as though GPU shading happens. Accurate framing: a multithreaded CPU post-processing pipeline that ships hand-written GLSL alongside each effect as a port target. |
-| Requirement #4 row | "shader execution … all in-engine" | Accurate as written — worth keeping, since it's the honest one. |
+| Location | Claim | Reality | Status |
+|----------|-------|---------|--------|
+| Requirement #5 table row | "✅ Implemented … **GLSL-first** … so effects run everywhere today and on a GPU backend without porting" | The CPU path is implemented and works. The GLSL is uncompiled source with no execution path. "Without porting" is untested. | **Corrected 2026-08-03.** The row now cites `ShaderCompileTest` and `ShaderParityTest` by their numbers and says plainly that post-processing executes on the CPU today. |
+| Same row | "a semantically identical multithreaded CPU fallback" | `BloomPass`'s own javadoc says the GLSL is an approximation, not identical. And it isn't a *fallback* — it's the only path. | **Corrected 2026-08-03.** "Semantically identical" and "fallback" are both gone; the row states the measured error instead of asserting equivalence. |
+| Intro paragraph | "a **shader system** (GLSL-first post-processing with a CPU fallback that runs anywhere)" | Reads as though GPU shading happens. Accurate framing: a multithreaded CPU post-processing pipeline that ships hand-written GLSL alongside each effect as a port target. | **Corrected 2026-08-03**, in that wording. The paragraph now also names the two *rendering* backends, which is the claim that did become true (RENDER_PLAN B9). |
+| Requirement #4 row | "shader execution … all in-engine" | Accurate as written — worth keeping, since it's the honest one. | Kept, and extended to say why the optional GL jar does not weaken it. |
+| Roadmap preamble | "the per-pass GLSL has never been compiled by anything" | Was true when written; `ShaderCompileTest` compiled all ten on a real driver on 2026-08-02. | **Removed 2026-08-03.** A stale warning is worse than none — it argues against work that has already been done. |
 
 The javadoc in
 [`ShaderPass`](src/main/java/com/larsons/engine/graphics/shader/ShaderPass.java)
-and [`Renderer`](src/main/java/com/larsons/engine/graphics/Renderer.java) is
+and [`Renderer`](src/main/java/com/larsons/engine/graphics/Renderer.java) was
 already accurate ("the engine's default backend executes the CPU side"). Only
-the README's summary framing overstates.
+the README's summary framing overstated, and it no longer does.
+
+**The rule this table is really for.** Every row above was fixed in the commit
+that made it fixable, not before — B9's step in `RENDER_PLAN.md` says so in as
+many words, and the one claim that is *still* an overstatement (GPU
+post-processing) is still described as future work rather than quietly upgraded
+along with its neighbours. That is the discipline this appendix exists to
+build, and it costs something to keep exactly once per release.
 
 ---
 

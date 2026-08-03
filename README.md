@@ -4,8 +4,11 @@ A **generic** 2D game engine in pure Java. It provides a clean game loop
 and the building blocks for any 2D game — sprite sheets, level loading,
 cameras with multiple perspectives, scenes, input, a customizable menu
 system, **online multiplayer** (host a server, friends join by IP + port,
-Minecraft-style), and a **shader system** (GLSL-first post-processing with a
-CPU fallback that runs anywhere) — without committing to a single genre.
+Minecraft-style), a **shader system** (a multithreaded CPU post-processing
+pipeline that ships hand-written GLSL alongside every effect, compiled and
+diffed against its CPU twin on a real driver) and **two rendering backends**
+(Java2D everywhere, OpenGL 3.3 where a driver answers — probed at startup, with
+a real fallback) — without committing to a single genre.
 
 The engine is built to be **a giant custom level loader**: you group levels
 under a **game type** (a folder), and each **level** carries its own **format**
@@ -234,8 +237,9 @@ This engine was built against six explicit requirements:
 | 1 | **120 FPS** | A fixed-timestep [`GameLoop`](src/main/java/com/larsons/engine/core/GameLoop.java) renders with a configurable cap (default **120**). The limiter schedules frames on an absolute timeline and uses a hybrid coarse-sleep / fine-park wait, so the cap is hit precisely without pegging a CPU. |
 | 2 | **Multiple 2D perspectives** | Three **distinct level formats** ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)) — side-scroller, top-down, isometric — each with its own creative mode, movement model and **number of block layers**, all loading and playing through the same code. [`Camera`](src/main/java/com/larsons/engine/graphics/Camera.java) + [`Perspective`](src/main/java/com/larsons/engine/graphics/Perspective.java) supply the projections (`SIDE_SCROLL`, `TOP_DOWN`, `ISOMETRIC`). A level's format is fixed for its lifetime — the three are different worlds, not three views of one — and a door into a level of another format is how a game changes perspective. |
 | 3 | **Online play** | ✅ Implemented — see [Online play](#online-play). An authoritative [`GameServer`](src/main/java/com/larsons/engine/net/GameServer.java) ticks the same deterministic [`PlayerPhysics`](src/main/java/com/larsons/engine/sim/PlayerPhysics.java) clients predict with; host in-game or run a headless dedicated server; friends join by IP + port like Minecraft Java edition. |
-| 4 | **Out of the box on any Java machine** | The engine uses **only the JDK** (Java2D / AWT / Swing / sockets). No third-party runtime dependencies — JSON parsing, networking, and shader execution are all in-engine. |
-| 5 | **Shader support** | ✅ Implemented — see [Shaders](#shaders). Every [`ShaderPass`](src/main/java/com/larsons/engine/graphics/shader/ShaderPass.java) is defined **GLSL-first** (real GPU fragment-shader source, exportable as `.frag` files) with a semantically identical multithreaded CPU fallback, so effects run everywhere today and on a GPU backend without porting. |
+| 4 | **Out of the box on any Java machine** | The engine uses **only the JDK** (Java2D / AWT / Swing / sockets). No third-party runtime dependencies — JSON parsing, networking, and shader execution are all in-engine. The optional GL backend lives in a separate Gradle project and a separate jar, so this stays true of the one a player double-clicks — checked on every build by `:verifyNoRuntimeDependencies`, which fails the `jar` task if anything external reaches the runtime classpath. |
+| 5 | **Shader support** | ✅ Implemented — see [Shaders](#shaders). Every [`ShaderPass`](src/main/java/com/larsons/engine/graphics/shader/ShaderPass.java) is defined **GLSL-first** (real GPU fragment-shader source, exportable as `.frag` files) beside a multithreaded CPU implementation, and every pass is compiled on a real driver and diffed against its CPU twin (`ShaderCompileTest`, `ShaderParityTest`: five passes at 0.00 mean channel error out of 255, worst 3.58). **Post-processing executes on the CPU today** — running the GLSL on the GPU is Job A in [`RENDER_PLAN.md`](RENDER_PLAN.md), and the GL backend says so on stderr rather than dropping the passes quietly. |
+| ★ | **Rendering backend** | Two, chosen at startup by a real probe. Java2D is the floor and runs anywhere; the OpenGL 3.3 backend is used when a driver gives a context, and the engine falls back to Java2D with a stated reason when it does not. `-Dlarsons.render.backend=auto\|java2d\|gl` overrides, and every frame report names the backend and the driver. See [Rendering backends](#rendering-backends-java2d-and-opengl). |
 | 6 | **Editing outline of game essentials** | Working, minimal implementations of sprite sheets, level loading, and menu customization, wired together by the demo scenes. |
 | ★ | **Feature toggles + game types** | Clickable toggles enable/disable features. Toggles are stored **per level** ([`Level.settings`](src/main/java/com/larsons/engine/level/Level.java)) so one game type can group diverse levels; the game type ([`GameProfile`](src/main/java/com/larsons/engine/config/GameProfile.java) under `resources/gametypes/`) is just the folder, with its own feature values pinned to the defaults so there is exactly one place — the level — where a feature is decided. **Load Level** picks an individual level and either plays it or edits its settings. |
 
@@ -266,21 +270,56 @@ rather than intended (`:verifyNoRuntimeDependencies` fails the `jar` task if
 anything lands on the runtime classpath), so Java 21 really is the only
 requirement.
 
-### The GL backend (optional)
+### Rendering backends (Java2D and OpenGL)
 
-The OpenGL scene renderer lives in its own Gradle project, `:gl`, so the engine
-above stays JDK-only. It is built and distributed separately:
+The engine has two renderers and picks one at startup. **Java2D is the floor:**
+it needs nothing but a JRE, and it is what a machine with no driver, a headless
+CI agent, or anyone who passes `-Dlarsons.render.backend=java2d` gets. The
+OpenGL 3.3 backend is used when a driver actually hands over a context.
+
+The OpenGL renderer lives in its own Gradle project, `:gl`, so the plain jar
+stays JDK-only. It is built and distributed separately:
 
 ```bash
 ./gradlew :gl:build    # compile and test the GL backend
 ./gradlew :gl:glDist   # gl/build/libs/larsons-engine-gl.jar — engine + GL + LWJGL
+./gradlew :gl:runGl    # run the game on it, with the profiler armed
 ```
 
-The backend draws every scene in the golden catalogue to within 2.59/255 of the
-Java2D renderer and collapses the catalogue's 3,356 drawing operations into 68
-draw calls. **It is not selected automatically yet** — choosing a backend at
-startup, and falling back honestly when there is no driver, is the next step in
-[`RENDER_PLAN.md`](RENDER_PLAN.md) (B9).
+Both jars contain the same engine. The GL one also contains the backend and a
+`META-INF/services` entry naming it, and that entry is the whole of the coupling
+— the core discovers backends with `ServiceLoader` and does not know this one
+exists. So `java -jar Larsons-2D-Game-Engine-0.1.0.jar` finds nothing and runs
+Java2D, and the GL distribution finds one and probes it.
+
+**Choosing, at the command line:**
+
+```bash
+-Dlarsons.render.backend=auto     # default: GL if a driver answers, else Java2D
+-Dlarsons.render.backend=java2d   # Java2D, without probing for anything
+-Dlarsons.render.backend=gl       # GL only; still runs on Java2D if it cannot start,
+                                  #   and says on stderr that the flag was not honoured
+-Dlarsons.render.gl.version=4.1   # ask for a different core profile (debugging)
+-Dlarsons.run.seconds=30          # quit after 30 s — how a launch is checked unattended
+```
+
+The engine prints one line at startup saying which backend it is on and why, and
+**every frame profile carries the same two facts at its head** — the backend and
+the GL vendor/renderer/version string. A profile that does not say what drew it
+cannot be acted on.
+
+**Which window you get follows from which backend.** Java2D draws into the AWT
+`JFrame` the engine has always opened; the GL backend arrives with a GLFW window
+of its own, and then no `JFrame` is created at all. They are never both alive.
+Input is identical either way — GLFW events are translated into the same
+`InputManager` the AWT canvas feeds, so key binds saved under one backend work
+under the other.
+
+The GL backend draws every scene in the golden catalogue to within **2.59/255**
+of the Java2D renderer and collapses the catalogue's 3,356 drawing operations
+into **68** draw calls. What has not been done yet is measuring it on real
+hardware and deciding whether it delivered — B10 in
+[`RENDER_PLAN.md`](RENDER_PLAN.md).
 
 ### With just the JDK (no Gradle, no downloads)
 
@@ -348,8 +387,11 @@ com.larsons.engine
 ├── core
 │   ├── Main.java          Entry point; wires up the scenes + game context
 │   ├── EngineConfig.java  Title, size, target FPS, update rate, perspective
-│   ├── Engine.java        Wires window + renderer + shaders + input + scenes + loop
-│   ├── GameWindow.java    JFrame hosting an AWT Canvas (BufferStrategy)
+│   ├── Engine.java        Picks a backend, then wires window + renderer + shaders
+│   │                       + input + scenes + loop. The one place that knows
+│   │                       there is more than one renderer or more than one window
+│   ├── GameWindow.java    JFrame hosting an AWT Canvas (BufferStrategy) — the
+│   │                       Java2D backend's window, not created when GL wins
 │   ├── GameLoop.java      Fixed-timestep loop, precise drift-free frame pacing
 │   └── ShareJar.java      Auto-builds the shareable runnable jar + scripts on launch
 ├── config
@@ -359,6 +401,11 @@ com.larsons.engine
 ├── graphics
 │   ├── Renderer.java      Backend abstraction (honours a ShaderChain)
 │   ├── Java2DRenderer.java Default backend (double-buffered Canvas + post-FX)
+│   ├── Backends.java      Picks a backend at startup; Java2D is the floor
+│   ├── RendererFactory.java How a backend outside the core offers itself (ServiceLoader)
+│   ├── Backend.java       What a factory returns: renderer + window, or why not
+│   ├── BackendWindow.java A window a backend brings with it (the GL one does)
+│   ├── BackendChoice.java Which backend, and the sentence explaining it
 │   ├── Camera.java        World→screen, per-perspective projection (+inverse)
 │   ├── Perspective.java   SIDE_SCROLL | TOP_DOWN | ISOMETRIC
 │   ├── TerrainPainter.java Terrain in as many layers as the format has: floor,
@@ -988,13 +1035,18 @@ snapshots, so night falls for everyone together.
 Press **F3** in any scene for a live breakdown of the frame; **F4** writes a
 report next to the game.
 
-The engine's next large rendering decision is whether to move work onto the
-GPU, and there are two separable jobs behind that question — shading the
-finished frame on the GPU, and drawing the scene itself on the GPU. They cost
-very different amounts to build, and **which one is worth doing depends
-entirely on which one dominates a real frame.** An FPS counter cannot answer
-that; 45 FPS tells you the frame is slow, not which part of it is. So the
-profiler splits a frame along exactly the lines the decision runs on:
+Every report names **the backend and the driver that produced it** at the head,
+beside the machine and the build commit. A frame time without those is a number
+nobody can act on — the same scene stage means very different things from the
+Java2D renderer and the GL one, and this project has already lost hours of
+reports to a build stamp that stopped saying which code produced them.
+
+The engine's remaining large rendering decision is whether to move
+post-processing onto the GPU as well, and the profiler is what decides it —
+**which stage is worth rewriting depends entirely on which one dominates a real
+frame.** An FPS counter cannot answer that; 45 FPS tells you the frame is slow,
+not which part of it is. So the profiler splits a frame along exactly the lines
+the decision runs on:
 
 | Stage | What it is | What it means for the GPU question |
 |-------|-----------|-----------------------------------|
@@ -3109,24 +3161,25 @@ engine.scenes().setScene("mine"); // or transitionTo for a fade
 
 The items below are *engine* roadmap items. For the **product** roadmap — the
 path to a Steam release, phased with blockers, costs and risks — see
-**[`STEAM_PLAN.md`](STEAM_PLAN.md)**. Note that the GPU backend below is a
-larger job than it looks: the per-pass GLSL has never been compiled by
-anything, so it is an untested port target rather than ready source
-(see [Appendix A](STEAM_PLAN.md#appendix-a--the-shader-system-precisely)).
+**[`STEAM_PLAN.md`](STEAM_PLAN.md)**. The renderer work has its own plan of
+record, [`RENDER_PLAN.md`](RENDER_PLAN.md), where each step states what must be
+true before it starts and the instrument that proves it worked.
 
-- **GPU renderer backend:** GPU *scene* rendering is written and pixel-verified.
-  The `:gl` project holds an OpenGL 3.3 `Renderer` and a `DrawTarget` over
-  batched vertex buffers; every scene in the golden catalogue renders through it
-  within 2.59/255 of Java2D, and the catalogue's 3,356 drawing operations become
-  68 draw calls. It is kept out of the core so the engine itself stays JDK-only
-  (requirement #4) — enforced, not assumed. What remains is **backend selection**
-  (picking GL where it works, falling back to Java2D and saying so where it does
-  not) and re-profiling on real hardware to decide whether it delivered; both are
-  specified in [`RENDER_PLAN.md`](RENDER_PLAN.md) as B9 and B10.
-  **Measure before starting.** The
+- **GPU renderer backend:** GPU *scene* rendering is written, pixel-verified and
+  selected. The `:gl` project holds an OpenGL 3.3 `Renderer` and a `DrawTarget`
+  over batched vertex buffers; every scene in the golden catalogue renders
+  through it within 2.59/255 of Java2D, and the catalogue's 3,356 drawing
+  operations become 68 draw calls. It is kept out of the core so the engine
+  itself stays JDK-only (requirement #4) — enforced, not assumed — and the
+  engine finds it over `ServiceLoader`, probes it, and falls back to Java2D with
+  a stated reason when there is no context. See
+  [Rendering backends](#rendering-backends-java2d-and-opengl). What remains is
+  **re-profiling on real hardware** to decide whether it delivered
+  ([`RENDER_PLAN.md`](RENDER_PLAN.md), B10).
+  **Measure before continuing.** The
   [frame profiler](#frame-profiler-where-the-time-actually-goes) exists to
-  decide this: it reports `scene` and `shaders` separately, and a frame with
-  headroom to spare justifies neither.
+  decide this: it reports `scene` and `shaders` separately, names the backend it
+  measured, and a frame with headroom to spare justifies neither GPU job.
 - **GPU post-processing:** running each `ShaderPass.glsl()` as real GLSL in an
   FBO ping-pong — the shader library (including `LightingPass`) needs no
   changes, by design, and every pass is already compiled and diffed against its

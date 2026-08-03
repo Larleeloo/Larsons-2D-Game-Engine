@@ -1,7 +1,11 @@
 package com.larsons.engine.core;
 
+import com.larsons.engine.graphics.BackendChoice;
+import com.larsons.engine.graphics.BackendWindow;
+import com.larsons.engine.graphics.Backends;
 import com.larsons.engine.graphics.Java2DRenderer;
 import com.larsons.engine.graphics.Renderer;
+import com.larsons.engine.graphics.RendererFactory;
 import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.graphics.shader.ShaderChain;
 import com.larsons.engine.input.InputManager;
@@ -35,22 +39,63 @@ import java.nio.file.Path;
  *   -Dlarsons.profile.overlay=false     measure, but draw no HUD
  *   -Dlarsons.profile.seconds=30        auto-write a report after 30 s and stop
  *   -Dlarsons.profile.out=frames.txt    where that report goes
+ *   -Dlarsons.run.seconds=45            quit the game after 45 s, whatever else
  * </pre>
  * See {@link FrameProfiler} for what the stages mean and {@link FrameReport}
  * for how a result is read.
+ *
+ * <p><b>Which renderer, and which window.</b> This class is the one place that
+ * knows there is more than one of either. {@link Backends} picks a backend at
+ * startup — a GPU one if the classpath has a working one and
+ * {@code -Dlarsons.render.backend} allows it, Java2D otherwise — and the choice
+ * decides the window with it:
+ *
+ * <ul>
+ *   <li><b>Java2D</b> opens the AWT {@link GameWindow} this engine has always
+ *       opened, and AWT's event-dispatch thread delivers input as it always
+ *       has. {@link #start()} shows the window and waits.</li>
+ *   <li><b>A GPU backend</b> arrives with a {@link BackendWindow} of its own,
+ *       and <b>no {@code JFrame} is constructed at all</b>. Two windowing
+ *       systems in one process is a category of bug nobody needs — two event
+ *       queues, two focus owners, two ideas of where the mouse is — so they
+ *       are never both alive. {@link #start()} then pumps that window's events
+ *       on the caller's thread while the game loop renders on its own, which
+ *       is the arrangement GLFW-style libraries require: events on the thread
+ *       that created the window, GL on the thread that draws.</li>
+ * </ul>
+ *
+ * <p>Either way the loop, the scenes and the profiler see one
+ * {@link Renderer} and one {@link InputManager} and cannot tell which is
+ * behind them. The chosen backend is recorded in {@link #device()} so every
+ * frame report says what drew it.
  */
 public class Engine {
     private final EngineConfig config;
+
+    /** The AWT window, or {@code null} when a backend brought one of its own. */
     private final GameWindow window;
+
+    /** The backend's own window, or {@code null} on the Java2D path. */
+    private final BackendWindow backendWindow;
+
     private final InputManager input;
     private final Renderer renderer;
+    private final BackendChoice backend;
     private final ShaderChain shaders;
     private final SceneManager scenes;
     private final GameLoop loop;
 
     private final FrameProfiler profiler = new FrameProfiler();
-    private final DeviceProfile device = DeviceProfile.detect();
+    private final DeviceProfile device;
     private boolean overlayVisible;
+
+    /** How often the backend's window is pumped for events while running. */
+    private static final long PUMP_INTERVAL_NS = 2_000_000L;
+
+    /** Seconds to run before quitting, or 0 to run until the player closes it. */
+    private final double runSeconds;
+    private double ranSeconds;
+    private volatile boolean stopping;
 
     /** Seconds of measurement after which a report is written, or 0 for never. */
     private final double autoReportSeconds;
@@ -63,11 +108,28 @@ public class Engine {
 
     public Engine(EngineConfig config) {
         this.config = config;
-        this.window = new GameWindow(config);
         this.input = new InputManager();
-        window.attachInput(input);
 
-        this.renderer = new Java2DRenderer(window.getCanvas(), config.backgroundColor);
+        this.backend = Backends.select(new RendererFactory.Request(
+                config.width, config.height, config.title, config.backgroundColor));
+        // A player who asked for a backend and quietly got another one has been
+        // misled; one who asked for nothing and got the renderer their jar
+        // ships has not. Only the first is worth stderr.
+        (backend.fellBack() ? System.err : System.out).println(backend.describe());
+
+        if (backend.isJava2D()) {
+            this.window = new GameWindow(config);
+            this.backendWindow = null;
+            this.renderer = new Java2DRenderer(window.getCanvas(), config.backgroundColor);
+            window.attachInput(input);
+        } else {
+            this.window = null;
+            this.backendWindow = backend.backend().window();
+            this.renderer = backend.backend().renderer();
+            backendWindow.attachInput(input);
+        }
+        this.device = DeviceProfile.detect().withRenderer(backend.chosen(), backend.driver());
+
         this.shaders = new ShaderChain();
         this.renderer.setShaderChain(shaders);
         this.scenes = new SceneManager();
@@ -83,6 +145,7 @@ public class Engine {
         this.profiler.setTargetFps(config.targetFps);
 
         this.autoReportSeconds = numberProperty("larsons.profile.seconds", 0);
+        this.runSeconds = numberProperty("larsons.run.seconds", 0);
         this.reportPath = Path.of(System.getProperty("larsons.profile.out", "frame-profile.txt"));
         if (booleanProperty("larsons.profile", false)) {
             setProfilingEnabled(true);
@@ -123,8 +186,11 @@ public class Engine {
     /** Per-stage frame timings. See {@link FrameProfiler} for what they mean. */
     public FrameProfiler profiler() { return profiler; }
 
-    /** The machine these measurements were taken on. */
+    /** The machine these measurements were taken on, and the backend that drew them. */
     public DeviceProfile device() { return device; }
+
+    /** Which renderer is drawing, and why that one. */
+    public BackendChoice backend() { return backend; }
 
     /**
      * Turn measurement on or off; enabling always starts a fresh window.
@@ -169,17 +235,77 @@ public class Engine {
         return written;
     }
 
+    /**
+     * Show the window, start the loop, and stay until the game ends.
+     *
+     * <p><b>This blocks now, and it did not before.</b> The AWT path used to
+     * return immediately and leave the loop thread holding the JVM open, which
+     * worked because Swing has an event thread of its own. A backend window
+     * does not: its events have to be pumped from the thread that created it,
+     * and that is this one. Rather than have two different lifecycles depending
+     * on which renderer was picked, both wait here — for the pump on one path
+     * and for the loop on the other — and both tear down through
+     * {@link #shutdown()} when it ends. {@code Main} did nothing after this
+     * call anyway.
+     */
     public void start() {
-        window.show();
+        if (backendWindow != null) backendWindow.show(); else window.show();
         loop.start();
+        if (backendWindow != null) pumpUntilStopped(); else loop.awaitStop(0);
+        shutdown();
     }
 
-    public void stop() { loop.stop(); }
+    public void stop() {
+        stopping = true;
+        loop.stop();
+    }
+
+    /**
+     * Drain the backend window's event queue until the game ends.
+     *
+     * <p>Runs on the caller's thread — the one that created the window — while
+     * the loop renders on its own. Polling rather than blocking on the queue
+     * keeps the exit condition (the loop stopping, {@code larsons.run.seconds}
+     * elapsing) checkable, and 2 ms is far below anything a player can feel at
+     * a 120 FPS cap. The wait parks rather than spins.
+     */
+    private void pumpUntilStopped() {
+        while (loop.isRunning() && !backendWindow.closeRequested()) {
+            backendWindow.pumpEvents();
+            GameLoop.waitUntil(System.nanoTime() + PUMP_INTERVAL_NS);
+        }
+    }
+
+    /**
+     * Stop the loop, let the frame in flight finish, and release the backend.
+     *
+     * <p>Order matters. The renderer is disposed only after the loop thread has
+     * actually stopped, because a GPU backend's resources belong to a context
+     * that thread was using and freeing them underneath it is a crash rather
+     * than a leak.
+     *
+     * <p>The exit is deliberate. The AWT path normally never reaches here — the
+     * frame's {@code EXIT_ON_CLOSE} ends the process first — so this covers
+     * every other way a run can end, including {@code larsons.run.seconds},
+     * and it is the only way a run on a backend window ends at all.
+     */
+    private void shutdown() {
+        stopping = true;
+        loop.stop();
+        loop.awaitStop(2000);
+        try {
+            renderer.dispose();
+        } catch (Throwable t) {
+            System.err.println("[render] backend did not shut down cleanly: " + t);
+        }
+        if (backendWindow != null) backendWindow.close();
+        System.exit(0);
+    }
 
     private void tick(double dt) {
         // Keep the scene viewport in sync with a (possibly) resizable window.
-        int w = window.getWidth();
-        int h = window.getHeight();
+        int w = backendWindow != null ? backendWindow.width() : window.getWidth();
+        int h = backendWindow != null ? backendWindow.height() : window.getHeight();
         if (w > 0 && h > 0 && (w != lastWidth || h != lastHeight)) {
             lastWidth = w;
             lastHeight = h;
@@ -190,6 +316,26 @@ public class Engine {
         handleProfilerKeys();
         scenes.update(dt, input);
         advanceAutoReport(dt);
+        advanceRunLimit(dt);
+    }
+
+    /**
+     * Drive {@code -Dlarsons.run.seconds}: play for a fixed span and quit.
+     *
+     * <p>Separate from {@code larsons.profile.seconds}, which stops
+     * <em>measuring</em> and leaves the game up. This one is how a launch is
+     * checked without a person at the keyboard — B9's "force each backend and
+     * confirm both run" is exactly this flag twice — and how a headless CI run
+     * of the real game ends rather than hanging.
+     */
+    private void advanceRunLimit(double dt) {
+        if (runSeconds <= 0 || stopping) return;
+        ranSeconds += dt;
+        if (ranSeconds >= runSeconds) {
+            System.out.println("[engine] larsons.run.seconds=%.0f elapsed on the %s backend — quitting"
+                    .formatted(runSeconds, backend.chosen()));
+            stop();
+        }
     }
 
     /**
