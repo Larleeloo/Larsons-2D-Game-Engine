@@ -29,12 +29,16 @@ import java.util.Deque;
  * afterwards. A GL backend can then replace this class rather than the
  * hundreds of call sites behind it.
  *
- * <p><b>{@link #graphics()} is the migration seam.</b> Painters that have not
- * been ported yet still need the raw Graphics2D, and a half-ported frame has
- * to interleave the two correctly. Reaching for it is not a failure — it is
- * how a large migration proceeds without a flag day — but every use is a call
- * site the GPU backend will not be able to serve, so the count of them is the
- * work remaining.
+ * <p><b>The migration seam is closed.</b> This class used to publish a static
+ * {@code graphicsOf(DrawTarget)} that any painter could call to unwrap the
+ * frame's target back into a Graphics2D, and counting those calls was how the
+ * port was tracked. B3 took the count to zero and B4 deleted the method, so
+ * there is no longer a supported way to reach Java2D from code that was handed
+ * a {@link DrawTarget}. {@link #graphics()} survives because it is
+ * <em>Java2D-local</em>: you need a concrete {@code Java2DTarget} in hand to
+ * call it, which backend-neutral code by definition does not have, and
+ * {@code SealedSeamTest} fails the build if a scene, widget or effect names
+ * this class at all.
  *
  * <p><b>State stacks.</b> Clip, alpha and transform are pushed and popped
  * rather than set, because a batching backend cannot honour "set and leave
@@ -79,30 +83,17 @@ public final class Java2DTarget implements DrawTarget {
     }
 
     /**
-     * The underlying Graphics2D, for painters not yet ported. See the class
-     * note: legitimate during the migration, and the thing that has to reach
-     * zero before a GPU backend can draw a whole frame.
+     * The Graphics2D this target draws through — for Java2D-side code that has
+     * one of these already, not a way back out of {@link DrawTarget}.
+     *
+     * <p>The distinction is the whole of B4. A caller reaches this only by
+     * holding a {@code Java2DTarget}, so it is unreachable from anything
+     * written against the interface, and no amount of it makes a scene
+     * un-portable. What made {@code graphicsOf} dangerous was that it was
+     * static and took any {@code DrawTarget}: one line at the top of a render
+     * method and the whole body below it belonged to Java2D again.
      */
     public Graphics2D graphics() { return g; }
-
-    /**
-     * The Graphics2D behind a target that has one — the line a scene not yet
-     * ported puts at the top of its {@code render} so the body below it can
-     * stay exactly as it was.
-     *
-     * <p><b>Counting the calls to this is how the migration is tracked.</b>
-     * Each one is a scene a GPU backend cannot draw, and the port is finished
-     * when there are none. It throws rather than returning null on a target
-     * with no Graphics2D, because the alternative is a scene that silently
-     * renders nothing on the backend it was supposed to be checked against.
-     */
-    public static Graphics2D graphicsOf(DrawTarget target) {
-        if (target instanceof Java2DTarget java2d) return java2d.graphics();
-        throw new UnsupportedOperationException(
-                "this drawing code still needs a Graphics2D, and "
-                        + (target == null ? "null" : target.getClass().getSimpleName())
-                        + " has none — port it to DrawTarget first");
-    }
 
     @Override public int width() { return width; }
 

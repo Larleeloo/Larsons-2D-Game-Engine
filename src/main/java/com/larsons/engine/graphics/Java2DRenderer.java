@@ -1,5 +1,7 @@
 package com.larsons.engine.graphics;
 
+import com.larsons.engine.graphics.draw.DrawTarget;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.graphics.shader.ShaderChain;
 import com.larsons.engine.profile.FrameProfiler;
 
@@ -108,7 +110,7 @@ public class Java2DRenderer implements Renderer {
     }
 
     @Override
-    public Graphics2D beginFrame() {
+    public DrawTarget beginFrame() {
         long started = profiler == null ? 0L : profiler.begin();
         try {
             return acquireFrame();
@@ -117,8 +119,16 @@ public class Java2DRenderer implements Renderer {
         }
     }
 
-    /** Acquire and clear this frame's surface. Timed as presentation overhead. */
-    private Graphics2D acquireFrame() {
+    /**
+     * Acquire and clear this frame's surface. Timed as presentation overhead.
+     *
+     * <p>The {@link Java2DTarget} is built here rather than by the caller, and
+     * it is the only one built for the frame. That is what makes its
+     * {@link com.larsons.engine.graphics.draw.DrawStats} the frame's own tally
+     * — a second target over the same Graphics2D would keep a second, partial
+     * count, and the caller has no way to know which of the two is the answer.
+     */
+    private DrawTarget acquireFrame() {
         ensureStrategy();
         offscreenFrame = !directToSurface;
         if (offscreenFrame) {
@@ -137,7 +147,7 @@ public class Java2DRenderer implements Renderer {
                 RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
         currentGraphics.setColor(clearColor);
         currentGraphics.fillRect(0, 0, getWidth(), getHeight());
-        return currentGraphics;
+        return new Java2DTarget(currentGraphics, getWidth(), getHeight());
     }
 
     @Override

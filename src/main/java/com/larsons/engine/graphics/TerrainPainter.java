@@ -2,13 +2,11 @@ package com.larsons.engine.graphics;
 
 import com.larsons.engine.level.Level;
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.sim.PerspectiveSpace;
 import com.larsons.engine.world.Block;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
-import java.awt.Graphics2D;
 import java.awt.geom.Path2D;
 import java.awt.image.BufferedImage;
 import java.util.HashMap;
@@ -92,12 +90,6 @@ public final class TerrainPainter {
      * its own floor tile, so the cracks rise with it rather than appearing on
      * the floor beside the wall being mined.
      */
-    public static void drawMiningCracks(Graphics2D g, Camera camera, Level level,
-                                        int col, int row, double progress) {
-        drawMiningCracks(Java2DTarget.unsized(g), camera, level, col, row, progress);
-    }
-
-    /** {@link #drawMiningCracks(Graphics2D, Camera, Level, int, int, double)}. */
     public static void drawMiningCracks(DrawTarget target, Camera camera, Level level,
                                         int col, int row, double progress) {
         if (progress <= 0.01) return;
@@ -175,12 +167,6 @@ public final class TerrainPainter {
         draw(target, level, camera, bounds, animClock, raised, decor, null);
     }
 
-    /** {@link #draw(DrawTarget, Level, Camera, int[], double, DepthPass, CellDecorator)}. */
-    public static void draw(Graphics2D g, Level level, Camera camera, int[] bounds,
-                            double animClock, DepthPass raised, CellDecorator decor) {
-        draw(Java2DTarget.unsized(g), level, camera, bounds, animClock, raised, decor, null);
-    }
-
     /**
      * Paint the terrain, with the crack overlay of a hold-to-mine stroke.
      *
@@ -214,13 +200,6 @@ public final class TerrainPainter {
                             Mining mining, TerrainCache cache) {
         new Pass(target, level, camera, animClock, decor)
                 .run(bounds, raised, mining, decor == null ? cache : null);
-    }
-
-    /** {@link #draw(DrawTarget, Level, Camera, int[], double, DepthPass, CellDecorator, Mining)}. */
-    public static void draw(Graphics2D g, Level level, Camera camera, int[] bounds,
-                            double animClock, DepthPass raised, CellDecorator decor,
-                            Mining mining) {
-        draw(Java2DTarget.unsized(g), level, camera, bounds, animClock, raised, decor, mining);
     }
 
     /** One frame's terrain, with the scratch state a sweep over the cells needs. */

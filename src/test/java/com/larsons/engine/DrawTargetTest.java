@@ -151,8 +151,11 @@ class DrawTargetTest {
     }
 
     @Test
-    void theGraphicsSeamIsTheOneStillHandedOut() {
-        // Unported painters need it; the count of uses is the work remaining.
+    void aWrappedTargetKeepsTheGraphicsItWasHanded() {
+        // Java2D-local, and only that: you need a Java2DTarget in hand to ask,
+        // which is precisely what backend-neutral code never has. The static
+        // graphicsOf that any painter could call is gone as of B4, and
+        // SealedSeamTest fails the build if a scene names this class at all.
         Graphics2D g = offscreen(image(4, 4));
         assertSame(g, Java2DTarget.unsized(g).graphics());
         g.dispose();
@@ -358,8 +361,14 @@ class DrawTargetTest {
         assertTrue(target.commands().isEmpty());
     }
 
+    /**
+     * The unsized wrapper is what a caller holding a Graphics2D uses now that
+     * B4 has deleted the compatibility overload — a bake, or a test. It has to
+     * put down the same pixels as a sized target, which is the only reason the
+     * overload was safe to remove rather than port.
+     */
     @Test
-    void theGraphics2DOverloadStillWorksForUnportedCallers() {
+    void anUnsizedWrapperDrawsTheSamePixelsAsASizedTarget() {
         BufferedImage surface = new BufferedImage(64, 64, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = offscreen(surface);
         BufferedImage tile = new BufferedImage(4, 4, BufferedImage.TYPE_INT_RGB);
@@ -368,11 +377,12 @@ class DrawTargetTest {
         tg.fillRect(0, 0, 4, 4);
         tg.dispose();
 
-        TilePainter.drawTexture(g, tile, new int[]{0, 8, 8, 0}, new int[]{0, 0, 8, 8}, true);
+        TilePainter.drawTexture(Java2DTarget.unsized(g), tile,
+                new int[]{0, 8, 8, 0}, new int[]{0, 0, 8, 8}, true);
         g.dispose();
 
         assertEquals(0xFFFF0000, surface.getRGB(2, 2),
-                "the compatibility overload must draw the same pixels");
+                "an unsized wrapper must draw what a sized one draws");
     }
 
     // --- B1: the members the UI needs -------------------------------------------

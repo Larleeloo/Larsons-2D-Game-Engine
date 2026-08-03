@@ -1,8 +1,8 @@
 # Render Plan — GPU Acceleration, End to End
 
 **Status:** Living document. Written 2026-08-02 against commit `85196b9` on
-`claude/gpu-acceleration-shaders-oqbx54`. B0–B3 are done and recorded in place;
-B4 is the next step.
+`claude/gpu-acceleration-shaders-oqbx54`. B0–B4 are done and recorded in place;
+B5 is the next step.
 **Companion to:** [`STEAM_PLAN.md`](STEAM_PLAN.md), which covers the product.
 This one covers the renderer, and is the plan of record for Jobs A, B and C.
 
@@ -67,16 +67,18 @@ Everything in this table has been measured or executed, not assumed.
 | `uStrength` reaches every shader | `ShaderParityTest.strengthZeroLeavesTheFrameAloneOnBothSides` |
 | The compile check can actually fail | `ShaderCompileTest.aDeliberatelyBrokenShaderIsRejected` (negative control) |
 | The GPU plumbing a backend needs is already written | [`GlShaderHarness`](src/test/java/com/larsons/engine/GlShaderHarness.java) — context, FBO, upload, uniform binding, readback, in ~200 lines |
-| The whole engine renders through `DrawTarget`, not `Graphics2D` | Every painter, widget and scene takes a `DrawTarget`; `graphicsOf` has zero call sites after B3, and `SceneFramesTest.noSceneReachesPastTheDrawTarget` records every scene through a target with no Graphics2D behind it |
+| The whole engine renders through `DrawTarget`, not `Graphics2D` | Every painter, widget and scene takes a `DrawTarget`; `Renderer.beginFrame()` returns one; `SceneFramesTest.noSceneReachesPastTheDrawTarget` records every scene through a target with no Graphics2D behind it |
+| It cannot quietly stop being true | `SealedSeamTest` — B4. Java2D is named in code by 13 of 236 main sources, 10 of them in `com.larsons.engine.graphics` and 3 bakes outside it; the scan fails the build on a fourth, and carries its own negative control |
 | Scenes are pixel-compared, not just the painters | `SceneFrames` — 16 of the 18 scenes goldened at 800×480 from fixed inputs; the two excluded draw nothing without a live network session |
 | Frames are always composed offscreen | `Java2DRenderer` composes to a backing image unconditionally (`-Dlarsons.render.direct=true` is the escape hatch). Scene stage on Linux fell 1.071 → 0.374 ms from this alone |
 | Static terrain is cached | `TerrainCache` — 7.8× on still ground, parity under churn, one global pixel lattice so the floor does not shake |
 | The frame cost is known per stage | `FrameProfiler` / `FrameReport` — see Appendix C |
 
 **The honest summary:** Job A's *unknowns* are gone; only its plumbing remains,
-and the plumbing has a working prototype. Job B's migration is done — world,
-UI and scenes all draw through the seam — and what remains of B is the
-batching work (B5, B6) and the backend itself (B7–B10).
+and the plumbing has a working prototype. Job B's migration is done and, as of
+B4, sealed — world, UI and scenes all draw through the seam, and a build fails
+if anything reaches back through it. What remains of B is the batching work
+(B5, B6) and the backend itself (B7–B10).
 
 ---
 
@@ -95,11 +97,14 @@ much faster it makes things.
    the Java2D path working and tested.
 3. **Pixel parity is the contract.** "Looks fine" is not a result. Every port
    step compares rendered output against a reference and states the error.
-4. **The suite stays green.** Last full run: **860 tests, 0 failures, 10 skipped**
-   (was 810/0/3 when this was written; B0–B3 added the rest). The skips are
+4. **The suite stays green.** Last full run: **865 tests, 0 failures, 10 skipped**
+   (was 810/0/3 when this was written; B0–B4 added the rest). The skips are
    environment-dependent and skip rather than fail by design — three need a
-   display, seven need a GL driver this container has not got. A step ends with
-   that or better.
+   display, seven need a GL driver. Under `xvfb-run` the same suite is
+   **865/0/3**: the seven GL tests do run on a software driver, and the three
+   that do not are display tests losing a race with the eleven classes that set
+   `java.awt.headless=true` in the shared JVM (see B4). A step ends with that or
+   better.
 5. **Nothing merges that cannot be measured.** If a change is supposed to make
    the frame faster, the profiler says so before it lands. This rule exists
    because it has already caught three things in this work that felt right and
@@ -733,6 +738,127 @@ to any listed package. Confirm by adding one temporarily.
 
 **Done when.** The seam holds mechanically, not by discipline.
 
+#### B4 — done
+
+Everything above, and the seal came out wider than the step asked for.
+
+**`graphicsOf` is gone**, along with `TilePainter.drawTexture(Graphics2D, …)`,
+`TerrainPainter.draw(Graphics2D, …)` (both arities) and
+`TerrainPainter.drawMiningCracks(Graphics2D, …)` — the compatibility overloads
+B2 promised to remove here. All four had zero callers in `src/main`; the four
+test callers now wrap with `Java2DTarget.unsized(g)`, which is the one honest
+thing a caller holding a Graphics2D should do, and
+`anUnsizedWrapperDrawsTheSamePixelsAsASizedTarget` keeps that path pixel-checked
+rather than merely compiled.
+
+**`Renderer.beginFrame()` returns `DrawTarget`.** Nothing in the `Renderer`
+interface names Java2D any more, so a frame is backend-neutral verbs from
+acquisition to presentation. The stale javadoc paragraph is rewritten rather
+than deleted: it now says why the seam is closed, which is the fact the next
+reader needs.
+
+Two consequences worth stating, because both look like losses and are not:
+
+- **The backend builds the frame's target, not `Engine`.** That is what makes
+  its `DrawStats` the frame's own tally — `Engine` can no longer make a second
+  target over the same surface, because a caller holding a `DrawTarget` has
+  nothing to make one from.
+- **The profile overlay now shares the frame's target.** It used to get its own
+  `Java2DTarget` so its draw calls would not inflate the count it was
+  reporting. Re-reading `FrameProfiler.recordDraws` showed that is not what
+  made the numbers right: it copies the counters out on the spot, and it is
+  called when the scene finishes and before the overlay draws. The second
+  target was belt-and-braces over a guarantee that already held. `Engine.draw`
+  now says so where the reason lives.
+
+**The architecture test seals more than five packages.** The step named
+`demo`, `ui`, `fx`, `character` and `autobattler`. Measuring first showed the
+honest boundary is one package wider in the other direction: **Java2D is named
+in code by thirteen files, ten of them in `com.larsons.engine.graphics` and
+three bakes outside it.** So
+[`SealedSeamTest`](src/test/java/com/larsons/engine/render/SealedSeamTest.java)
+scans the whole engine minus `graphics/**` — 219 of 236 main sources — and the
+rule it states is the one worth stating: *Java2D lives in
+`com.larsons.engine.graphics` and nowhere else.*
+
+Four names are banned, each for a different reason: `graphicsOf` (the deleted
+unwrap, banned by name so it cannot come back under it), `Java2DTarget` (naming
+a concrete backend, whether by import, cast or parameter), `.graphics()` (what
+a caster calls next), and `Graphics2D` itself — the **token**, not the import,
+so a fully-qualified `java.awt.Graphics2D` does not walk past a test that only
+reads import lines. Comments and string literals are stripped before scanning,
+so prose explaining the migration stays legal; the alternative is a test whose
+only remedy is deleting the explanation.
+
+Three files are excused, and only for baking — `CreativeScene` (24 palette
+icons), `CharacterPicker`, `AutoSprites`. An excuse is not a trust: an excused
+file must actually call `createGraphics()`, and no `public` or `protected`
+member of it may mention `Graphics2D`. A bake that keeps its Graphics2D to
+itself is fine; one that hands it out is a seam under another name.
+`everyBakeExcuseIsStillEarned` deletes the excuse the moment the file stops
+needing it, which is the rule `SceneFramesTest` already applies to its own
+exclusions.
+
+**The negative control runs on every build, not once by hand.** The step said
+to confirm the test fails by adding an import temporarily. Doing that once
+proves the test worked on the day it was written. The checker is therefore a
+pure function of `(path, source)`, and `theCheckerRejectsEveryFormItClaimsTo`
+feeds it all four banned forms — plus the fully-qualified variant — every time
+the suite runs; `commentsAndStringsMayStillSayTheWords` checks the other
+direction, and `theScanCoversTheEngine` checks the scan is pointed at
+something. The one-time confirmation was done as well, on a real file:
+
+```
+com/larsons/engine/demo/PlayScene.java:89 names `Graphics2D`
+    — draw through DrawTarget; bake through BufferedImage.createGraphics()
+com/larsons/engine/demo/PlayScene.java:88 names `Java2DTarget`
+    — backend-neutral code must not name a concrete backend
+```
+
+**The README said the opposite of the truth in four places**, and the step's own
+instruction — rewrite the stale paragraph, do not leave it to rot — applies to
+the documentation of record as much as to a javadoc comment. Three said the
+remaining work for GPU scene rendering is "a backend-neutral draw API, since
+scenes draw with `Graphics2D`", which stopped being true at B3 and is now
+enforced false. The fourth was worse than stale: the "A new scene" sample
+declared `render(Graphics2D g, float alpha)`, a signature that has not compiled
+against `Scene` since B1. All four corrected. (This does not overlap A6, which
+is about the shader and GPU-backend rows.)
+
+**Also cleared: seven dead imports** — `Graphics2D` in `SceneManager`,
+`DecorPainter` and `SurfaceDecorPainter`, and `Java2DTarget` in
+`SurfaceDecorPainter`, `PlayScene`, `AutoBattlerScene`, `AutoBattlerGuideScene`
+and `CreativeScene`. All unused since B3, and every one of them a reference a
+grep-based instrument would have to explain away for ever.
+
+**Verified.** Suite **865 tests, 0 failures, 10 skipped** (was 860/0/10; the
+five new ones are `SealedSeamTest`). Goldens unchanged — 33 `GoldenFramesTest`
+and 4 `SceneFramesTest` green, as a step that deletes dead code and changes one
+return type must leave them.
+
+**The three display-dependent skips are exactly the code this step changed** —
+the `FrameProfilerTest` cases that drive a real `BufferStrategy` through
+`beginFrame()`, skipped in the container that is supposed to verify it. Left
+there, "suite green" would have meant "the changed line compiles". So they were
+run: `xvfb-run -a ./gradlew test --tests '…FrameProfilerTest'` gives **40/40, 0
+skipped, 0 failures**, and the new return type is exercised against a real
+surface and a real buffer flip.
+
+Two things fell out of doing that, both worth having in writing:
+
+- **Those three skip under `xvfb-run` in a *full* run, and it is not the
+  display's fault.** Eleven test classes set `java.awt.headless=true` in a
+  `@BeforeAll`, Gradle forks one JVM for the suite, and AWT latches that on
+  first use — so whether these three run depends on class order, not on
+  `DISPLAY`. Running the class alone is the reliable way to reach them, which
+  is what B10 will want for any before/after on a real surface. Not B4's to
+  fix, but B4's to stop mistaking for an environment limit.
+- **Under `xvfb-run` the seven GL skips disappear.** The full suite goes
+  **865 tests, 0 failures, 3 skipped**, with `ShaderCompileTest` 5/5 and
+  `ShaderParityTest` 3/3 executed on a software GL driver — bloom reporting
+  mean channel error **3.58**, the exact number in Appendix B. B7–B9 can be
+  checked in this container after all, rather than only on hardware.
+
 ---
 
 ### B5 — Sprite atlas
@@ -1240,21 +1366,23 @@ world state stays identical.
 
 ## 7. What each instrument proves
 
-Four tools, four distinct questions. Using the wrong one is how a step gets
+Six instruments, six distinct questions. Using the wrong one is how a step gets
 declared finished while broken.
 
 | Instrument | Question it answers | Where it lives |
 |-----------|---------------------|----------------|
 | **Golden frames** | Does the player see the same picture? | B0, new |
+| **`SealedSeamTest`** | Can the migration silently un-happen? | `render/SealedSeamTest.java`, B4 |
 | **`RecordingTarget`** | Did the code issue the draw calls it was supposed to, in order? | `graphics/draw/RecordingTarget.java` |
 | **`DrawStats.mergeRatio()`** | Will a GPU backend help, or is every operation its own batch? | `graphics/draw/DrawStats.java` |
 | **`FrameProfiler` / `FrameReport`** | Where does the frame actually go? | `profile/` |
 | **`ShaderParityTest` metric** | Do two implementations of the same effect agree? | `ShaderParityTest`, reused by A2 and B8 |
 
-`RecordingTarget` deserves particular use during B2 and B3: it asserts the
-*sequence* of commands, which catches a reordering that goldens would miss when
-the reordered draws do not happen to overlap in the test scene — and then break
-in a real level where they do.
+`RecordingTarget` earned its keep through B2 and B3 and is the instrument B5
+will need next: it asserts the *sequence* of commands, which catches a
+reordering that goldens would miss when the reordered draws do not happen to
+overlap in the test scene — and then break in a real level where they do. An
+atlas that changes draw order without meaning to is exactly that failure.
 
 ---
 
@@ -1265,8 +1393,8 @@ B0  golden frames                      ← done
 B1  widen DrawTarget (7 new members + 2 audits)  ← done
 B2  port 12 shared painters/widgets    ← done
 B3  port 18 scenes, graphicsOf 39 → 0  ← done
-B4  seal the seam (delete graphicsOf, Renderer returns DrawTarget)  ← start here
-B5  sprite atlas
+B4  seal the seam (delete graphicsOf, Renderer returns DrawTarget)  ← done
+B5  sprite atlas                       ← start here
 B6  glyph atlas
 B7  :gl Gradle module
 B8  GlTarget + GlRenderer
@@ -1301,31 +1429,44 @@ order.
 ## Appendix A — Migration surface, measured
 
 Originally counted from `src/main/java` on 2026-08-02 at commit `85196b9`; the
-right-hand column is the same measurement re-taken after B3.
+middle column was re-taken after B3, the right-hand one after B4.
 
-| Measure | Before B2 | After B3 |
-|---------|----------:|---------:|
-| `Java2DTarget.graphicsOf` call sites | 39 (+1 definition) | **0** (+1 definition) |
-| Files naming `Graphics2D` | 48 | **26** (2 in `demo/`) |
-| `drawString` sites | 350 | **1** |
-| `DrawTarget` abstract members | 26 | **29** |
-| `DrawTarget` `Color`/convenience overloads | 0 | **23** |
+| Measure | Before B2 | After B3 | After B4 |
+|---------|----------:|---------:|---------:|
+| `Java2DTarget.graphicsOf` call sites | 39 (+1 definition) | 0 (+1 definition) | **0** (no definition) |
+| Files naming `Graphics2D` **in code** | 48 | 26 | **13** |
+| — of those, outside `graphics/` | — | 3 | **3** (all bakes) |
+| `Graphics2D` compatibility overloads | — | 4 | **0** |
+| `drawString` sites | 350 | 1 | **1** |
+| `DrawTarget` abstract members | 26 | 29 | **29** |
+| `DrawTarget` `Color`/convenience overloads | 0 | 23 | **23** |
 
-The two `demo/` files left are `CreativeScene`, which bakes 24 palette icons
-with `createGraphics()`, and one comment in `DeckGameScene`. The remaining 24
-are the ones that should still name it: `Java2DTarget`, `Java2DRenderer`,
-`Renderer` (until B4 changes its return type), `Engine`, `AssetLoader`,
-`Skins`, `PlayerSprites`, `DirectionalSprites`, `EntitySprites`, `AutoSprites`,
-`CharacterPicker`, `ParallaxBackground`, `CutscenePainter`, `Particles`,
-`TerrainCache` — bakes, all of them — plus javadoc and comments in `UiText`,
-`Scene`, `FrameProfiler`, `DecorPainter` and `SurfaceDecorPainter`.
+**"In code" is doing real work in that table and did not before.** The B3
+figure of 26 counted any file containing the string, which folds together a
+file that draws with Graphics2D and a file whose javadoc explains that it no
+longer does. Once the second kind is the majority, the number stops measuring
+anything: `Engine`, `UiText`, `Scene`, `FrameProfiler`, `Particles`,
+`DeckGameScene` and `SurfaceDecorPainter` name it only in prose. Stripping
+comments and string literals — which is what `SealedSeamTest` does before it
+scans — gives **13**, and the drop from 26 is mostly the change in
+instrument, not in code. Comparing them as if they were the same measurement
+would be flattering the work.
 
-**Three things for B4 to clear, measured rather than assumed.** `SceneManager`,
-`DecorPainter` and `SurfaceDecorPainter` name `Graphics2D` only in an import
-that nothing uses. `TilePainter.drawTexture(Graphics2D, …)` and
-`TerrainPainter.draw(Graphics2D, …)` / `drawMiningCracks(Graphics2D, …)` now
-have **no callers in `src/main`** — only four in tests — so B4 deletes an
-overload nobody depends on rather than a migration path someone might.
+The 13 are ten in `com.larsons.engine.graphics` (`Java2DTarget`,
+`Java2DRenderer`, `AssetLoader`, `Skins`, `PlayerSprites`,
+`DirectionalSprites`, `EntitySprites`, `ParallaxBackground`, `CutscenePainter`,
+`TerrainCache`) and the three bakes outside it (`CreativeScene`,
+`CharacterPicker`, `AutoSprites`). `Renderer` and `TilePainter` left the list
+in B4; `DrawTarget`, `TerrainPainter`, `SceneManager` and `DecorPainter` never
+belonged on it, and now the instrument agrees.
+
+**All three of B4's stated clean-ups were measured first and held.** The dead
+imports in `SceneManager`, `DecorPainter` and `SurfaceDecorPainter` were
+unused, and four more dead `Java2DTarget` imports turned up beside them.
+`TilePainter.drawTexture(Graphics2D, …)`, `TerrainPainter.draw(Graphics2D, …)`
+and `drawMiningCracks(Graphics2D, …)` had no `src/main` callers and four in
+tests, so B4 deleted an overload nobody depended on rather than a migration
+path someone might.
 
 ---
 

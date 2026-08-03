@@ -3,6 +3,7 @@ package com.larsons.engine;
 import com.larsons.engine.graphics.Java2DRenderer;
 import com.larsons.engine.graphics.shader.ShaderChain;
 import com.larsons.engine.graphics.shader.Shaders;
+import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.graphics.draw.RecordingTarget;
 import com.larsons.engine.profile.BuildInfo;
 import com.larsons.engine.profile.DeviceProfile;
@@ -17,7 +18,6 @@ import org.junit.jupiter.api.io.TempDir;
 import java.awt.Canvas;
 import java.awt.Color;
 import java.awt.Frame;
-import java.awt.Graphics2D;
 import java.awt.GraphicsEnvironment;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -646,9 +646,8 @@ class FrameProfilerTest {
             renderer.setShaderChain(chain);
             renderer.setProfiler(profiler);
 
-            Graphics2D g = renderer.beginFrame();
-            g.setColor(Color.RED);
-            g.fillRect(0, 0, 200, 150);
+            DrawTarget target = renderer.beginFrame();
+            target.fillRect(0, 0, 200, 150, Color.RED);
             renderer.present();
             profiler.endFrame();
 
@@ -698,9 +697,8 @@ class FrameProfilerTest {
 
             assertTrue(renderer.isOffscreen(), "the default path should be offscreen");
 
-            Graphics2D g = renderer.beginFrame();
-            g.setColor(Color.RED);
-            g.fillRect(0, 0, 200, 150);
+            DrawTarget target = renderer.beginFrame();
+            target.fillRect(0, 0, 200, 150, Color.RED);
             renderer.present();
             profiler.endFrame();
 
@@ -734,9 +732,8 @@ class FrameProfilerTest {
             assumeFalse(!canvas.isDisplayable(), "canvas never became displayable");
 
             Java2DRenderer renderer = new Java2DRenderer(canvas, Color.BLACK);
-            Graphics2D g = renderer.beginFrame();
-            g.setColor(Color.BLUE);
-            g.fillRect(0, 0, 80, 60);
+            DrawTarget target = renderer.beginFrame();
+            target.fillRect(0, 0, 80, 60, Color.BLUE);
             renderer.present();   // must not throw with shaders == null
         } finally {
             window.dispose();

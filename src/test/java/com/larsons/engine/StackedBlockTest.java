@@ -4,6 +4,7 @@ import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.DepthPass;
 import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.TerrainPainter;
+import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelGenerator;
@@ -472,7 +473,8 @@ class StackedBlockTest {
         BufferedImage canvas = new BufferedImage(CANVAS, CANVAS, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = canvas.createGraphics();
         DepthPass standing = DepthPass.of(lvl.perspective);
-        TerrainPainter.draw(g, lvl, cam, new int[]{0, 0, lvl.width - 1, lvl.height - 1},
+        TerrainPainter.draw(Java2DTarget.unsized(g), lvl, cam,
+                new int[]{0, 0, lvl.width - 1, lvl.height - 1},
                 0.5, standing, null, mining);
         standing.flush();
         g.dispose();
@@ -523,13 +525,12 @@ class StackedBlockTest {
                                                int depth) {
         BufferedImage canvas = new BufferedImage(CANVAS, CANVAS, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = canvas.createGraphics();
+        Java2DTarget target = Java2DTarget.unsized(g);
         DepthPass standing = DepthPass.of(lvl.perspective);
-        TerrainPainter.draw(g, lvl, cam, new int[]{0, 0, lvl.width - 1, lvl.height - 1},
+        TerrainPainter.draw(target, lvl, cam, new int[]{0, 0, lvl.width - 1, lvl.height - 1},
                 0.5, standing, null);
-        standing.at(depth, () -> {
-            g.setColor(ACTOR);
-            g.fillRect(feet[0] - 14, feet[1] - 28, 28, 28);
-        });
+        standing.at(depth, () ->
+                target.fillRect(feet[0] - 14, feet[1] - 28, 28, 28, ACTOR));
         standing.flush();
         g.dispose();
         int seen = 0;

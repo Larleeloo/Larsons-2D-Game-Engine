@@ -5,7 +5,6 @@ import com.larsons.engine.level.Level;
 import com.larsons.engine.world.Decor;
 import com.larsons.engine.world.DecorRegistry;
 
-import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.List;

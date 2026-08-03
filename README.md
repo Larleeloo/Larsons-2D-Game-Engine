@@ -842,9 +842,14 @@ All drawing goes through the `Renderer` interface. The default `Java2DRenderer`
 uses a double-buffered AWT `Canvas`, which is why the engine runs anywhere a JRE
 does (requirement #4). Every backend honours a `ShaderChain` of post-processing
 passes — see [Shaders](#shaders) for how that satisfies requirement #5 today on
-the CPU, and how the same passes run unmodified on a GPU backend. For full GPU
-*scene* rendering the remaining porting work is a backend-neutral draw API,
-since scenes currently draw with `Graphics2D`.
+the CPU, and how the same passes run unmodified on a GPU backend.
+
+The backend-neutral draw API that full GPU *scene* rendering needs now exists:
+`Renderer.beginFrame()` returns a `DrawTarget`, every painter, widget and scene
+draws through it, and `SealedSeamTest` fails the build if anything outside
+`com.larsons.engine.graphics` names `Graphics2D` at all. What remains is
+batching (sprite and glyph atlases) and the GL backend itself — see
+[`RENDER_PLAN.md`](RENDER_PLAN.md).
 
 Both of those are large jobs, and which (if either) is worth doing is a
 question about measurements rather than architecture. The
@@ -942,7 +947,7 @@ profiler splits a frame along exactly the lines the decision runs on:
 | Stage | What it is | What it means for the GPU question |
 |-------|-----------|-----------------------------------|
 | `update` | Fixed-step simulation | Not a rendering cost. A GPU backend would not move it. |
-| `scene` | Every `Graphics2D` call the scene issues | **The budget a GPU scene renderer competes for.** |
+| `scene` | Every `DrawTarget` call the scene issues | **The budget a GPU scene renderer competes for.** |
 | `shaders` | The post-processing chain, split per pass | **The budget a GPU shader backend competes for.** |
 | `present` | Acquiring, blitting and flipping the frame | Largely fixed platform cost — the floor any backend must beat. |
 | `overlay` | The readout itself | Measured so it can be subtracted, not silently added. |
@@ -3039,7 +3044,7 @@ a name the creator typed.
 public class MyScene extends AbstractScene {
     @Override public void onEnter() { /* load */ }
     @Override public void update(double dt, InputManager input) { /* logic */ }
-    @Override public void render(Graphics2D g, float alpha) { /* draw */ }
+    @Override public void render(DrawTarget target, float alpha) { /* draw */ }
 }
 // register + show:
 engine.scenes().register("mine", new MyScene());
@@ -3060,9 +3065,9 @@ anything, so it is an untested port target rather than ready source
 - **GPU renderer backend:** an OpenGL (LWJGL) `Renderer` that compiles each
   `ShaderPass.glsl()` into FBO ping-pong passes — the shader library
   (including `LightingPass`) needs no changes, by design. Kept out of the
-  core so the engine itself stays JDK-only (requirement #4); the remaining
-  work for GPU *scene* rendering is a backend-neutral draw API, since scenes
-  draw with `Graphics2D`.
+  core so the engine itself stays JDK-only (requirement #4). GPU *scene*
+  rendering has its draw API — scenes draw through `DrawTarget`, not
+  `Graphics2D` — and what is left is batching and the GL backend.
   **Measure before starting.** The
   [frame profiler](#frame-profiler-where-the-time-actually-goes) exists to
   decide this: it reports `scene` and `shaders` separately, and a frame with
