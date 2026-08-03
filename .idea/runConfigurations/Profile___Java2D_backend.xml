@@ -1,0 +1,39 @@
+<component name="ProjectRunConfigurationManager">
+  <!--
+    B10, run two of two. The same launch as "Profile - GL backend" — same jar,
+    same classpath, same 30-second sample, same report format — with the
+    renderer as the only difference. That is what makes the two files
+    comparable; running the Java2D one from the root project instead would
+    also change the classpath, and then a difference between the reports
+    could be either thing.
+
+    It does NOT start recording at launch. Load the SAME level, play it the
+    SAME way, press F3, and play for 30 seconds; it writes profile-java2d.txt
+    into the project root by itself.
+  -->
+  <configuration default="false" name="Profile - Java2D backend" type="GradleRunConfiguration" factoryName="Gradle">
+    <ExternalSystemSettings>
+      <option name="env">
+        <map />
+      </option>
+      <option name="executionName" />
+      <option name="externalProjectPath" value="$PROJECT_DIR$" />
+      <option name="externalSystemIdString" value="GRADLE" />
+      <option name="scriptParameters" value="" />
+      <option name="taskDescriptions">
+        <list />
+      </option>
+      <option name="taskNames">
+        <list>
+          <option value=":gl:profileJava2d" />
+        </list>
+      </option>
+      <option name="vmOptions" />
+    </ExternalSystemSettings>
+    <ExternalSystemDebugServerProcess>false</ExternalSystemDebugServerProcess>
+    <ExternalSystemReattachDebugProcess>true</ExternalSystemReattachDebugProcess>
+    <DebugAllEnabled>false</DebugAllEnabled>
+    <RunAsTest>false</RunAsTest>
+    <method v="2" />
+  </configuration>
+</component>

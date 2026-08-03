@@ -92,6 +92,21 @@ tasks.withType<JavaExec>().configureEach {
     }
 }
 
+/**
+ * Whether a run of this backend needs `-XstartOnFirstThread` on macOS.
+ *
+ * **Only the GL one, and getting this wrong breaks the other.** GLFW's window
+ * and event calls belong to the process's first thread, and on macOS that is
+ * enforced by the platform rather than by convention: the JVM's main thread is
+ * not thread 0 unless it is told to be, and a GL window created off it does not
+ * fail, it hangs. But AWT wants that same first thread for its own run loop, so
+ * passing the flag to a Java2D run on a Mac hangs the `JFrame` instead. The
+ * flag therefore follows the backend, not the OS — which is why it is a
+ * function and not two lines copied into three tasks.
+ */
+fun needsFirstThread(backend: String): Boolean =
+        backend != "java2d" && System.getProperty("os.name", "").lowercase().contains("mac")
+
 // Run the game with this backend on the classpath and the frame profiler armed,
 // mirroring the root's `runProfiled` so the two reports are directly
 // comparable — same instrument, same flags, same report format, one variable.
@@ -133,14 +148,7 @@ tasks.register<JavaExec>("runGl") {
     systemProperty("larsons.profile.out", out)
     systemProperty("larsons.render.backend", backend)
 
-    // GLFW's window and event calls belong to the process's first thread, and
-    // on macOS that is enforced by the platform rather than by convention: the
-    // JVM's main thread is not thread 0 unless it is told to be, and a GL
-    // window created off it does not fail — it hangs. Harmless elsewhere, so
-    // it is set by OS rather than by a flag someone has to remember.
-    if (System.getProperty("os.name", "").lowercase().contains("mac")) {
-        jvmArgs("-XstartOnFirstThread")
-    }
+    if (needsFirstThread(backend)) jvmArgs("-XstartOnFirstThread")
 
     doFirst {
         println(
@@ -159,6 +167,73 @@ tasks.register<JavaExec>("runGl") {
         )
     }
 }
+
+// B10's two runs, as two tasks that take no arguments.
+//
+//   ./gradlew :gl:profileGl        →  profile-gl.txt
+//   ./gradlew :gl:profileJava2d    →  profile-java2d.txt
+//
+// or, in IntelliJ, the run configurations "Profile — GL backend" and
+// "Profile — Java2D backend" from the dropdown. `runGl` above still exists and
+// still takes -P overrides; these two exist because a measurement you have to
+// remember four flags to take is a measurement that gets taken wrong once and
+// then trusted.
+//
+// **Both run from this project on purpose.** The Java2D one could have gone in
+// the root build, where it would have had no LWJGL on its classpath at all —
+// and it would then have been a different program, so any difference between
+// the two reports could be the backend or could be the classpath. One jar, one
+// variable, two reports. That is the whole design of the comparison, and it is
+// the reason the task lives in the module it does not use.
+fun registerProfileRun(taskName: String, backend: String, report: String, what: String) =
+        tasks.register<JavaExec>(taskName) {
+            group = "verification"
+            description = "Profile the game on the $backend backend (30 s, press F3 in a level)"
+            mainClass = "com.larsons.engine.core.Main"
+            classpath = sourceSets["main"].runtimeClasspath
+            workingDir = rootProject.projectDir
+
+            systemProperty("larsons.render.backend", backend)
+            systemProperty("larsons.profile.seconds", "30")
+            systemProperty("larsons.profile.overlay", "false")
+            systemProperty("larsons.profile.out", report)
+
+            if (needsFirstThread(backend)) jvmArgs("-XstartOnFirstThread")
+
+            doFirst {
+                println(
+                    """
+                    |
+                    |  ┌──────────────────────────────────────────────────────────────┐
+                    |  │  Profiling the $what
+                    |  └──────────────────────────────────────────────────────────────┘
+                    |
+                    |  The profiler is armed but NOT recording yet. Recording the menu
+                    |  would measure a scene that draws no world, which is the easiest
+                    |  way to get a confident wrong answer out of this.
+                    |
+                    |    1. Load a level and play it — not the menu, not the editor.
+                    |    2. Press F3 there. Recording starts.
+                    |    3. Play normally for 30 seconds. It stops on its own.
+                    |    4. Close the window.
+                    |
+                    |  Report:  ${rootProject.projectDir}/$report
+                    |  Backend: $backend  (the report names it too, so the two
+                    |           runs cannot be mixed up afterwards)
+                    |
+                    |  Run the OTHER profile the same way, in the same level, doing the
+                    |  same things — then compare the two files. An existing report is
+                    |  never overwritten; a second run lands beside it as -2.
+                    |
+                    """.trimMargin()
+                )
+            }
+        }
+
+registerProfileRun("profileGl", "gl", "profile-gl.txt",
+        "GL backend — the GPU renderer")
+registerProfileRun("profileJava2d", "java2d", "profile-java2d.txt",
+        "Java2D backend — the CPU renderer this replaces")
 
 // The GL-enabled distribution: the engine, this backend, LWJGL and its natives
 // for this machine, in one runnable jar.

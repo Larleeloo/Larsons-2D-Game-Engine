@@ -1,0 +1,40 @@
+<component name="ProjectRunConfigurationManager">
+  <!--
+    B10, run one of two. Launches the game on the OpenGL backend with the frame
+    profiler armed, and needs no arguments — everything it sets is in the
+    :gl:profileGl task in gl/build.gradle.kts.
+
+    It does NOT start recording at launch. Load a level, play it, press F3
+    there, and play normally for 30 seconds; it stops and writes
+    profile-gl.txt into the project root by itself.
+
+    Then run "Profile - Java2D backend" in the SAME level doing the SAME
+    things, and compare the two files. Each report names its own backend and
+    driver at the head, so the two cannot be mixed up afterwards.
+  -->
+  <configuration default="false" name="Profile - GL backend" type="GradleRunConfiguration" factoryName="Gradle">
+    <ExternalSystemSettings>
+      <option name="env">
+        <map />
+      </option>
+      <option name="executionName" />
+      <option name="externalProjectPath" value="$PROJECT_DIR$" />
+      <option name="externalSystemIdString" value="GRADLE" />
+      <option name="scriptParameters" value="" />
+      <option name="taskDescriptions">
+        <list />
+      </option>
+      <option name="taskNames">
+        <list>
+          <option value=":gl:profileGl" />
+        </list>
+      </option>
+      <option name="vmOptions" />
+    </ExternalSystemSettings>
+    <ExternalSystemDebugServerProcess>false</ExternalSystemDebugServerProcess>
+    <ExternalSystemReattachDebugProcess>true</ExternalSystemReattachDebugProcess>
+    <DebugAllEnabled>false</DebugAllEnabled>
+    <RunAsTest>false</RunAsTest>
+    <method v="2" />
+  </configuration>
+</component>

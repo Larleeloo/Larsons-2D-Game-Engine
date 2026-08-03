@@ -1941,9 +1941,9 @@ default framebuffer, two samples, one inside the rectangle and one outside it,
 because a readback of a uniformly red screen would pass just as well if the
 clear had been red and nothing else had happened.
 
-#### Two bugs the verification caught, both invisible to the tests
+#### Three bugs the verification caught, all invisible to the tests
 
-Neither would have been found by anything short of launching the game, which is
+None would have been found by anything short of launching the game, which is
 why B9's "Verify" says to launch it.
 
 1. **The window was closed twice.** `GlRenderer.dispose()` closed its window and
@@ -1957,7 +1957,14 @@ why B9's "Verify" says to launch it.
    deleted rather than repaired. The idempotence guard went in as well, because
    the failure mode of getting this wrong again is a segfault rather than an
    exception.
-2. **`-P` defaults silently beat `-D` flags.** Gradle applies
+2. **`-XstartOnFirstThread` was applied by OS rather than by backend.**
+   `runGl` set it on any Mac, and the task can run either renderer. GLFW needs
+   thread 0 on macOS or a GL window hangs — but *AWT wants the same thread for
+   its own run loop*, so the flag on a Java2D run hangs the `JFrame` instead. It
+   now follows the backend, in one function the three launch tasks share. Found
+   while splitting B10's runs into two tasks, before it could waste an afternoon
+   on the one machine that has to be profiled.
+3. **`-P` defaults silently beat `-D` flags.** Gradle applies
    `tasks.withType<JavaExec>().configureEach` *before* a task's own
    configuration block, so `runProfiled` and `runGl` setting
    `larsons.profile.seconds` from their `-Pprofile.seconds` default of 30
@@ -2010,16 +2017,23 @@ still correct.
 **Do.**
 - Run the 30-second profile on both target machines: the Ryzen 7 / RTX 4080
   Super and the M1 Air. Same level, same activity, both backends, all four runs.
-  B9 made this one command with one variable in it — same jar, same flags, same
-  report format:
+  B9 made each run a task that takes no arguments — in IntelliJ, two entries in
+  the run dropdown:
 
   ```bash
-  ./gradlew :gl:runGl -Prender.backend=gl     -Pprofile.out=air-gl.txt
-  ./gradlew :gl:runGl -Prender.backend=java2d -Pprofile.out=air-java2d.txt
+  ./gradlew :gl:profileGl        # → profile-gl.txt
+  ./gradlew :gl:profileJava2d    # → profile-java2d.txt
   ```
 
   Walk into the level, press F3, play for 30 seconds. Each report names its own
   backend and driver at the head, so the four cannot be mixed up afterwards.
+
+  **Both tasks live in `:gl`, including the Java2D one.** Putting the Java2D run
+  in the root build would have given it a classpath with no LWJGL on it, making
+  it a different program — and then any difference between the two reports could
+  be the backend or could be the classpath. One jar, one variable, two reports.
+  The same reasoning applies to the level and the activity: profile the same
+  place doing the same things, or the comparison measures the play session.
 - Compare against Appendix C.
 - Publish the table here, including any stage that got *worse*. `present` on a
   software rasteriser rose under GL in B9's launch check; whether that is
