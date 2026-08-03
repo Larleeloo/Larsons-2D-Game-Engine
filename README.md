@@ -355,6 +355,13 @@ com.larsons.engine
 │   ├── TextureKeys.java   Every skinnable object → its pack folder and file name
 │   ├── EntitySprites.java Procedural mob/item/block sprites (no assets needed)
 │   ├── ParallaxBackground.java Procedural multi-layer parallax backdrop
+│   ├── draw
+│   │   ├── DrawTarget.java    The backend-neutral drawing verbs; the whole seam
+│   │   ├── Java2DTarget.java  DrawTarget over Graphics2D (the shipped backend)
+│   │   ├── RecordingTarget.java DrawTarget that writes down what it was asked to draw
+│   │   └── DrawStats.java     Operations vs batches — what a GPU backend would save
+│   ├── atlas
+│   │   └── SpriteAtlas.java   Packs baked sprites onto one page so runs of them batch
 │   └── shader
 │       ├── ShaderPass.java    One pass: GLSL 3.30 source + CPU implementation
 │       ├── ShaderChain.java   Ordered passes, ping-pong buffers, uTime/uStrength
@@ -847,9 +854,18 @@ the CPU, and how the same passes run unmodified on a GPU backend.
 The backend-neutral draw API that full GPU *scene* rendering needs now exists:
 `Renderer.beginFrame()` returns a `DrawTarget`, every painter, widget and scene
 draws through it, and `SealedSeamTest` fails the build if anything outside
-`com.larsons.engine.graphics` names `Graphics2D` at all. What remains is
-batching (sprite and glyph atlases) and the GL backend itself — see
-[`RENDER_PLAN.md`](RENDER_PLAN.md).
+`com.larsons.engine.graphics` names `Graphics2D` at all.
+
+Sprites are batched too. Every procedurally generated mob, item, block, decor
+and unit sprite is packed into one texture page by
+[`SpriteAtlas`](src/main/java/com/larsons/engine/graphics/atlas/SpriteAtlas.java)
+as it is baked, so a run of different sprites is one texture rather than one per
+sprite — a busy entity phase falls from 65 draw calls to 34, and the engine's
+whole generated art set fits on a single 2048×1024 page. Nothing at the call
+sites changed: the factories still hand back a plain `BufferedImage`, and the
+backend resolves it to its region on the way to the screen.
+`-Dlarsons.render.atlas=false` turns that off. What remains is text batching and
+the GL backend itself — see [`RENDER_PLAN.md`](RENDER_PLAN.md).
 
 Both of those are large jobs, and which (if either) is worth doing is a
 question about measurements rather than architecture. The

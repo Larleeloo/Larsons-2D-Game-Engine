@@ -1,5 +1,7 @@
 package com.larsons.engine.graphics;
 
+import com.larsons.engine.graphics.atlas.SpriteAtlas;
+
 import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Graphics2D;
@@ -39,6 +41,9 @@ public final class DirectionalSprites {
     public static final int FRAMES = 4;
 
     private static final Map<String, BufferedImage> CACHE = new HashMap<>();
+
+    /** Single frames sliced out of {@link #CACHE}'s sheets — see {@link #frame}. */
+    private static final Map<String, BufferedImage> FRAME_CACHE = new HashMap<>();
 
     private DirectionalSprites() {}
 
@@ -96,17 +101,38 @@ public final class DirectionalSprites {
                 .animation(PlayerSprites.WALK_FPS, true);
     }
 
-    /** One frame of {@link #sheet} on its own (palette icons, previews). */
-    public static BufferedImage frame(int size, Color body, Facing facing, int index) {
+    /**
+     * One frame of {@link #sheet} on its own (palette icons, previews).
+     *
+     * <p><b>Cached, and that is not a micro-optimisation.</b> This is the
+     * unskinned player's sprite, so it is called for every character on screen
+     * every frame, and {@code getSubimage} allocates a fresh {@code
+     * BufferedImage} each time. Two things followed from that. The obvious one
+     * is garbage: a few objects per character per frame, for ever. The
+     * expensive one is that a batching backend keys on the image, so every
+     * frame handed it a sprite it had never seen — a texture bind per character
+     * per frame that no atlas could have merged, because the thing being drawn
+     * was a different object each time. Caching makes the identity stable,
+     * which is what lets the frame be atlased at all.
+     */
+    public static synchronized BufferedImage frame(int size, Color body, Facing facing, int index) {
         int s = Math.max(8, size);
-        BufferedImage sheet = sheet(s, body, facing);
+        Facing dir = facing == null ? Facing.EAST : facing;
         int i = Math.floorMod(index, FRAMES);
-        return sheet.getSubimage(i * s, 0, s, s);
+        String key = s + ":" + body.getRGB() + ":" + dir.key() + ":" + i;
+        BufferedImage cached = FRAME_CACHE.get(key);
+        if (cached != null) return cached;
+
+        BufferedImage frame = sheet(s, body, dir).getSubimage(i * s, 0, s, s);
+        FRAME_CACHE.put(key, frame);
+        SpriteAtlas.shared().register("dir/" + key, frame);
+        return frame;
     }
 
     /** Drop the generated art (a character's colours changed). */
     public static synchronized void clearCache() {
         CACHE.clear();
+        FRAME_CACHE.clear();
     }
 
     // --- painting -------------------------------------------------------------------

@@ -1,5 +1,7 @@
 package com.larsons.engine.graphics.draw;
 
+import com.larsons.engine.graphics.atlas.SpriteAtlas;
+
 import java.awt.Font;
 import java.awt.Shape;
 import java.awt.geom.AffineTransform;
@@ -245,9 +247,36 @@ public final class RecordingTarget implements DrawTarget {
 
     // --- images ----------------------------------------------------------------
 
+    /**
+     * A sprite drawn out of an atlas page.
+     *
+     * <p>Recorded as a {@link Cmd.Image} like every other textured draw, so an
+     * assertion counting textured draws does not have to know whether a sprite
+     * happened to be atlased — but under its own {@code op} name and carrying
+     * the <em>page</em> as its image, because that is what a backend binds and
+     * therefore what the batch key has to be. A recording taken here is meant
+     * to be the same command stream the shipping backend sees; a version that
+     * quietly reported the loose sprite would make the merge ratio measure a
+     * frame nobody draws.
+     */
+    @Override
+    public void drawRegion(SpriteAtlas.Region region, int x, int y, int w, int h) {
+        if (region == null) return;
+        BufferedImage page = region.image();
+        stats.record(DrawStats.Kind.IMAGE, page);
+        commands.add(new Cmd.Image("drawRegion", page,
+                new int[]{x, y, w, h, region.x(), region.y(),
+                        region.width(), region.height()}, null));
+    }
+
     @Override
     public void drawImage(BufferedImage image, int x, int y) {
         if (image == null) return;
+        SpriteAtlas.Region region = SpriteAtlas.regionOf(image);
+        if (region != null) {
+            drawRegion(region, x, y, region.width(), region.height());
+            return;
+        }
         stats.record(DrawStats.Kind.IMAGE, image);
         commands.add(new Cmd.Image("drawImage", image, new int[]{x, y}, null));
     }
@@ -255,6 +284,11 @@ public final class RecordingTarget implements DrawTarget {
     @Override
     public void drawImage(BufferedImage image, int x, int y, int w, int h) {
         if (image == null) return;
+        SpriteAtlas.Region region = SpriteAtlas.regionOf(image);
+        if (region != null) {
+            drawRegion(region, x, y, w, h);
+            return;
+        }
         stats.record(DrawStats.Kind.IMAGE, image);
         commands.add(new Cmd.Image("drawImageScaled", image, new int[]{x, y, w, h}, null));
     }
@@ -263,6 +297,18 @@ public final class RecordingTarget implements DrawTarget {
     public void drawImage(BufferedImage image, int dx, int dy, int dw, int dh,
                           int sx, int sy, int sw, int sh) {
         if (image == null) return;
+        // Same rule as the Java2D backend: a sub-rectangle that stays inside
+        // the sprite is the same sub-rectangle of the page, shifted; one that
+        // reaches past it is not, and draws loose.
+        SpriteAtlas.Region region = SpriteAtlas.regionOf(image);
+        if (region != null && sx >= 0 && sy >= 0
+                && sx + sw <= region.width() && sy + sh <= region.height()) {
+            BufferedImage page = region.image();
+            stats.record(DrawStats.Kind.IMAGE, page);
+            commands.add(new Cmd.Image("drawRegion", page,
+                    new int[]{dx, dy, dw, dh, region.x() + sx, region.y() + sy, sw, sh}, null));
+            return;
+        }
         stats.record(DrawStats.Kind.IMAGE, image);
         commands.add(new Cmd.Image("drawImageRegion", image,
                 new int[]{dx, dy, dw, dh, sx, sy, sw, sh}, null));

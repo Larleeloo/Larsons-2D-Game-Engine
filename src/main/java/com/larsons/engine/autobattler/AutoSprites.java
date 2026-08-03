@@ -1,5 +1,6 @@
 package com.larsons.engine.autobattler;
 
+import com.larsons.engine.graphics.atlas.SpriteAtlas;
 import com.larsons.engine.graphics.draw.DrawTarget;
 
 import java.awt.BasicStroke;
@@ -320,6 +321,15 @@ public final class AutoSprites {
         void paint(Graphics2D g);
     }
 
+    /**
+     * Bake once, cache for ever, and register with the sprite atlas (B5).
+     *
+     * <p>A bench row is eight unit figures side by side and the shop is five
+     * more: runs of sprite draws with nothing between them, which is the exact
+     * shape atlasing collapses. Packed into a page, the row is one texture and
+     * one draw call to a backend that batches. The namespace on the key is
+     * because {@code item:…} means something different in {@code EntitySprites}.
+     */
     private static BufferedImage cached(String key, int size, Painter painter) {
         BufferedImage img = CACHE.get(key);
         if (img != null) return img;
@@ -330,6 +340,7 @@ public final class AutoSprites {
         painter.paint(g);
         g.dispose();
         CACHE.put(key, img);
+        SpriteAtlas.shared().register("auto/" + key, img);
         return img;
     }
 

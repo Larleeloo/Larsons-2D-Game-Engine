@@ -1,5 +1,7 @@
 package com.larsons.engine.graphics.draw;
 
+import com.larsons.engine.graphics.atlas.SpriteAtlas;
+
 import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -266,9 +268,35 @@ public final class Java2DTarget implements DrawTarget {
 
     // --- images ----------------------------------------------------------------
 
+    /**
+     * A sprite draw out of an atlas page: the source-rectangle
+     * {@code drawImage} this class already had, keyed for batching on the
+     * <em>page</em> rather than the sprite.
+     *
+     * <p>Java2D itself gains nothing here — it blits per call either way. What
+     * changes is what {@link DrawStats} reports, and it is not flattery: a
+     * batching backend really would keep one texture bound across the whole run
+     * of regions, so the run really is one draw call there. Recording it any
+     * other way would understate the only number B10 has to decide on.
+     */
+    @Override
+    public void drawRegion(SpriteAtlas.Region region, int x, int y, int w, int h) {
+        if (region == null) return;
+        BufferedImage page = region.image();
+        stats.record(DrawStats.Kind.IMAGE, page);
+        g.drawImage(page, x, y, x + w, y + h,
+                region.x(), region.y(),
+                region.x() + region.width(), region.y() + region.height(), null);
+    }
+
     @Override
     public void drawImage(BufferedImage image, int x, int y) {
         if (image == null) return;
+        SpriteAtlas.Region region = SpriteAtlas.regionOf(image);
+        if (region != null) {
+            drawRegion(region, x, y, region.width(), region.height());
+            return;
+        }
         stats.record(DrawStats.Kind.IMAGE, image);
         g.drawImage(image, x, y, null);
     }
@@ -276,6 +304,11 @@ public final class Java2DTarget implements DrawTarget {
     @Override
     public void drawImage(BufferedImage image, int x, int y, int w, int h) {
         if (image == null) return;
+        SpriteAtlas.Region region = SpriteAtlas.regionOf(image);
+        if (region != null) {
+            drawRegion(region, x, y, w, h);
+            return;
+        }
         stats.record(DrawStats.Kind.IMAGE, image);
         g.drawImage(image, x, y, w, h, null);
     }
@@ -284,6 +317,21 @@ public final class Java2DTarget implements DrawTarget {
     public void drawImage(BufferedImage image, int dx, int dy, int dw, int dh,
                           int sx, int sy, int sw, int sh) {
         if (image == null) return;
+        // A sub-rectangle of an atlased sprite is still a sub-rectangle of the
+        // page, just shifted — but only while it stays inside the sprite. A
+        // request that reaches past the sprite's own bounds would pull in the
+        // gutter or the neighbour, so it draws from the loose image instead,
+        // which is where those pixels honestly are.
+        SpriteAtlas.Region region = SpriteAtlas.regionOf(image);
+        if (region != null && sx >= 0 && sy >= 0
+                && sx + sw <= region.width() && sy + sh <= region.height()) {
+            BufferedImage page = region.image();
+            int px = region.x() + sx;
+            int py = region.y() + sy;
+            stats.record(DrawStats.Kind.IMAGE, page);
+            g.drawImage(page, dx, dy, dx + dw, dy + dh, px, py, px + sw, py + sh, null);
+            return;
+        }
         stats.record(DrawStats.Kind.IMAGE, image);
         g.drawImage(image, dx, dy, dx + dw, dy + dh, sx, sy, sx + sw, sy + sh, null);
     }
