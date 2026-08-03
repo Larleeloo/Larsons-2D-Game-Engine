@@ -286,6 +286,21 @@ stays JDK-only. It is built and distributed separately:
 ./gradlew :gl:runGl    # run the game on it, with the profiler armed
 ```
 
+**Comparing the two renderers on your own machine** is two tasks that take no
+arguments — or, in IntelliJ, two entries in the run dropdown, **Profile — GL
+backend** and **Profile — Java2D backend**:
+
+```bash
+./gradlew :gl:profileGl        # → profile-gl.txt
+./gradlew :gl:profileJava2d    # → profile-java2d.txt
+```
+
+Each arms the profiler without starting it: load a level, press **F3** there,
+play normally for 30 seconds, and it writes its report and stops. Run both in
+the same level doing the same things, then diff the two files. Both launch from
+the same project with the same classpath so the renderer is the only difference
+between them, and each report names its own backend and driver at the head.
+
 Both jars contain the same engine. The GL one also contains the backend and a
 `META-INF/services` entry naming it, and that entry is the whole of the coupling
 — the core discovers backends with `ServiceLoader` and does not know this one
@@ -1033,7 +1048,10 @@ snapshots, so night falls for everyone together.
 ## Frame profiler (where the time actually goes)
 
 Press **F3** in any scene for a live breakdown of the frame; **F4** writes a
-report next to the game.
+report next to the game. To take a comparable pair of measurements without
+typing anything, use the two profile runs described under
+[Rendering backends](#rendering-backends-java2d-and-opengl) — `:gl:profileGl`
+and `:gl:profileJava2d`, or the matching entries in IntelliJ's run dropdown.
 
 Every report names **the backend and the driver that produced it** at the head,
 beside the machine and the build commit. A frame time without those is a number
