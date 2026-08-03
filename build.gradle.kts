@@ -20,14 +20,13 @@ java {
     targetCompatibility = JavaVersion.VERSION_21
 }
 
-// The OS this build is running on, for LWJGL's native artifacts. Test-only —
-// see the dependencies block.
-val lwjglNatives = when {
-    org.gradle.internal.os.OperatingSystem.current().isMacOsX ->
-        if (System.getProperty("os.arch") == "aarch64") "natives-macos-arm64" else "natives-macos"
-    org.gradle.internal.os.OperatingSystem.current().isWindows -> "natives-windows"
-    else -> "natives-linux"
-}
+// The OS this build is running on, for LWJGL's native artifacts. Test-only
+// here — see the dependencies block — and the real runtime in `:gl`, which is
+// why the detection moved out to a script both apply rather than staying a
+// local `val` for one of them to copy.
+apply(from = "gradle/lwjgl-natives.gradle.kts")
+val lwjglNatives: String by extra
+val lwjglVersion: String by extra
 
 dependencies {
     // Test-only. Nothing here ships in the runtime classpath.
@@ -41,7 +40,7 @@ dependencies {
     // a real driver. Until this existed the GLSL had never been compiled by
     // anything, and STEAM_PLAN's Appendix A was right to call the exported
     // .frag files never-compiled drafts.
-    testImplementation(platform("org.lwjgl:lwjgl-bom:3.3.3"))
+    testImplementation(platform("org.lwjgl:lwjgl-bom:$lwjglVersion"))
     testImplementation("org.lwjgl:lwjgl")
     testImplementation("org.lwjgl:lwjgl-opengl")
     testImplementation("org.lwjgl:lwjgl-glfw")
@@ -49,6 +48,26 @@ dependencies {
     testRuntimeOnly("org.lwjgl:lwjgl-opengl::$lwjglNatives")
     testRuntimeOnly("org.lwjgl:lwjgl-glfw::$lwjglNatives")
 }
+
+// The core's test classes, published so `:gl` can drive the same golden
+// catalogue rather than a copy of it.
+//
+// B8 compares `GlTarget` against `Java2DTarget` over B0's frames. Those frames
+// live in `src/test/java` and are the *only* acceptable input to that
+// comparison: a second catalogue in `:gl` would be a set of scenes that could
+// drift from the ones B0, B3, B5 and B6 all published numbers against, and the
+// first thing anyone would do with a failing parity number is wonder whether
+// the two catalogues still agree. There is one catalogue, and both backends
+// render it.
+val coreTestClasses = configurations.consumable("coreTestClasses")
+
+val testJar = tasks.register<Jar>("testJar") {
+    description = "The core's test classes, for :gl's parity tests"
+    archiveClassifier = "tests"
+    from(sourceSets["test"].output)
+}
+
+artifacts.add(coreTestClasses.name, testJar)
 
 application {
     // Boots a window, the game loop, and the bundled demo scenes.
@@ -174,9 +193,61 @@ tasks.named<ProcessResources>("processResources") {
     from(buildInfo)
 }
 
+// Everything on the shipping runtime classpath that came from outside this
+// build. Resolved as a provider so the answer is computed once and the task
+// below stays configuration-cache clean.
+val externalRuntimeArtifacts = configurations.named("runtimeClasspath").flatMap { runtime ->
+    runtime.incoming.artifacts.resolvedArtifacts.map { artifacts ->
+        artifacts.map { it.id.componentIdentifier.displayName }
+                .filter { !it.startsWith("project ") }
+                .sorted()
+    }
+}
+
+/**
+ * Invariant 1, as a build failure rather than a note.
+ *
+ * The core ships with zero runtime dependencies, and `:gl` exists so that can
+ * stay true while a GL backend is written. What makes that hold is not the
+ * module boundary on its own — it is that nothing can add `implementation
+ * "org.lwjgl:..."` to *this* file and have the build still pass. `jar` depends
+ * on this, so the shipping artefact cannot be produced without the claim being
+ * checked; `check` depends on it too, so a broken boundary fails a plain
+ * `./gradlew build` rather than waiting for someone to package a release.
+ *
+ * `ModuleBoundaryTest` is the other half — this one sees what the build
+ * resolves, that one sees what the source imports, and neither sees the
+ * other's blind spot.
+ */
+val verifyNoRuntimeDependencies = tasks.register("verifyNoRuntimeDependencies") {
+    group = "verification"
+    description = "Fails if the core's runtime classpath gained an external dependency"
+    val external = externalRuntimeArtifacts
+    doLast {
+        val found = external.get()
+        if (found.isNotEmpty()) {
+            throw GradleException(
+                    "the core is supposed to ship with zero runtime dependencies, "
+                            + "and its runtime classpath now carries "
+                            + found.size + ":\n  " + found.joinToString("\n  ")
+                            + "\n\nGL code belongs in :gl. See invariant 1 in RENDER_PLAN.md.")
+        }
+    }
+}
+
+tasks.named("check") {
+    dependsOn(verifyNoRuntimeDependencies)
+}
+
 // Make `java -jar build/libs/<name>.jar` work directly (no external deps).
+//
+// **This task is deliberately unchanged by B7.** The GL-enabled distribution is
+// a separate artefact (`./gradlew :gl:glDist`); this one stays the single
+// self-contained jar a player double-clicks, and the check above is what keeps
+// that a fact rather than an intention.
 tasks.jar {
     manifest {
         attributes["Main-Class"] = "com.larsons.engine.core.Main"
     }
+    dependsOn(verifyNoRuntimeDependencies)
 }
