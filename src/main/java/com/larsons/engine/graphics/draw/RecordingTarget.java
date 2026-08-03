@@ -1,6 +1,7 @@
 package com.larsons.engine.graphics.draw;
 
 import java.awt.Font;
+import java.awt.Shape;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
@@ -299,6 +300,16 @@ public final class RecordingTarget implements DrawTarget {
     public void pushClip(int x, int y, int w, int h) {
         stats.record(DrawStats.Kind.STATE, null);
         commands.add(new Cmd.State("pushClip", new int[]{x, y, w, h}, 1f, null));
+    }
+
+    @Override
+    public void pushClip(Shape shape) {
+        stats.record(DrawStats.Kind.STATE, null);
+        // Recorded by its bounds: a sequence assertion cares that a clip was
+        // pushed and roughly where, and a Shape has no useful equals().
+        java.awt.Rectangle b = shape == null ? new java.awt.Rectangle() : shape.getBounds();
+        commands.add(new Cmd.State("pushClipShape",
+                new int[]{b.x, b.y, b.width, b.height}, 1f, null));
     }
 
     @Override

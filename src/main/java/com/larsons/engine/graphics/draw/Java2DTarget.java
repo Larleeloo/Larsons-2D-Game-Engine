@@ -348,6 +348,14 @@ public final class Java2DTarget implements DrawTarget {
     }
 
     @Override
+    public void pushClip(Shape shape) {
+        stats.record(DrawStats.Kind.STATE, null);
+        if (clips == null) clips = new ArrayDeque<>();
+        clips.push(g.getClip() == null ? NO_CLIP : g.getClip());
+        if (shape != null) g.clip(shape);
+    }
+
+    @Override
     public void popClip() {
         if (clips == null || clips.isEmpty()) return;
         stats.record(DrawStats.Kind.STATE, null);

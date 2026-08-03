@@ -362,6 +362,27 @@ public interface DrawTarget {
      */
     void pushClip(int x, int y, int w, int h);
 
+    /**
+     * Restrict drawing to the intersection of the current clip and an
+     * arbitrary shape, until the matching {@link #popClip()}.
+     *
+     * <p><b>A correction to B1's audit, found in B3.</b> The clip audit
+     * counted rectangles and concluded rectangles were all the engine used.
+     * It missed {@code AutoBattlerScene}'s skinned board, which clips to a
+     * tile's diamond and stretches the skin frame over the diamond's bounding
+     * box — the clip is what stops each tile's art spilling into its
+     * neighbours, so it is load-bearing and there is no rectangle that says
+     * it.
+     *
+     * <p>This is the expensive verb on this interface and the only one that
+     * is. The rectangular {@link #pushClip(int, int, int, int)} is a scissor
+     * test on any GPU; an arbitrary shape is a stencil pass, which means a
+     * clear, a draw into the stencil buffer, and a flush of whatever was
+     * batched. Prefer the rectangle wherever the shape happens to be one, and
+     * reach for this only when the shape is the point.
+     */
+    void pushClip(Shape shape);
+
     void popClip();
 
     /**
