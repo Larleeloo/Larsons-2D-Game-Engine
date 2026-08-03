@@ -39,11 +39,26 @@ import static org.lwjgl.opengl.GL33C.*;
  * library out from under the other. A test class that opens a context per
  * method would otherwise leave the second one drawing into a torn-down library,
  * which manifests as a segfault in the JVM rather than a test failure.
+ *
+ * <p><b>The context is created on one thread and drawn on from another, and
+ * that is deliberate.</b> B9 put the window on the thread that starts the
+ * engine — GLFW requires its window and event calls there, and macOS means it
+ * literally — while the game loop kept the thread it has always had. A GL
+ * context can be current on exactly one thread at a time, and LWJGL's function
+ * pointers are per-thread too, so {@link #makeCurrent()} binds both and
+ * {@link #detachCurrent()} releases both. The creating thread detaches once the
+ * driver has been interrogated; the render thread binds on its first frame and
+ * keeps it. Getting this wrong does not produce an error — it produces a
+ * window that never draws, which is the same symptom as everything else that
+ * can go wrong with a first GL backend.
  */
 public final class GlContext implements AutoCloseable {
 
     /** How many live contexts are holding GLFW open. Guarded by the class. */
     private static int liveContexts;
+
+    /** The core profile this backend is written against. */
+    public static final int MAJOR = 3, MINOR = 3;
 
     private final long window;
     private final int vao;
@@ -55,6 +70,12 @@ public final class GlContext implements AutoCloseable {
     private final int samples;
     private boolean closed;
 
+    /** Function pointers for this context, bound per thread by {@link #makeCurrent()}. */
+    private final GLCapabilities capabilities;
+
+    /** The thread the context is current on, or {@code null} when it is detached. */
+    private volatile Thread boundTo;
+
     /**
      * A hidden context for rendering that is never presented — the parity
      * tests, and anything that wants a GPU without a window on screen.
@@ -62,15 +83,34 @@ public final class GlContext implements AutoCloseable {
      * @param samples multisample coverage to request, or 0 for none
      */
     public static GlContext offscreen(int samples) {
-        return new GlContext(1, 1, "larsons-gl", false, samples);
+        return new GlContext(1, 1, "larsons-gl", false, samples, MAJOR, MINOR);
     }
 
-    /** A visible window of the given size, for {@link GlRenderer}. */
+    /**
+     * A window of the given size, for {@link GlRenderer}. Created hidden —
+     * {@link GlWindow} shows it once there is a frame to put in it, rather than
+     * flashing an empty one while the engine boots.
+     */
     public static GlContext window(int width, int height, String title, int samples) {
-        return new GlContext(width, height, title, true, samples);
+        return window(width, height, title, samples, MAJOR, MINOR);
     }
 
-    private GlContext(int width, int height, String title, boolean visible, int samples) {
+    /**
+     * The same, at a stated core-profile version.
+     *
+     * <p>Exists so failure can be provoked on a machine where GL works:
+     * asking for a version no driver has is the negative control B9's fallback
+     * is verified with, and {@code -Dlarsons.render.gl.version} exposes it to
+     * anyone debugging a driver in the field. A check that has never been seen
+     * to fail is a comment.
+     */
+    public static GlContext window(int width, int height, String title, int samples,
+                                   int major, int minor) {
+        return new GlContext(width, height, title, false, samples, major, minor);
+    }
+
+    private GlContext(int width, int height, String title, boolean visible, int samples,
+                      int major, int minor) {
         long created = MemoryUtil.NULL;
         int createdVao = 0;
         boolean ok = false;
@@ -78,6 +118,7 @@ public final class GlContext implements AutoCloseable {
         String gotVendor = "", gotRenderer = "", gotVersion = "";
         int gotSamples = 0;
         boolean initialised = false;
+        GLCapabilities caps = null;
         try {
             synchronized (GlContext.class) {
                 if (liveContexts > 0 || glfwInit()) {
@@ -91,18 +132,18 @@ public final class GlContext implements AutoCloseable {
                 GLFWErrorCallback.createPrint(System.err).set();
                 glfwDefaultWindowHints();
                 glfwWindowHint(GLFW_VISIBLE, visible ? GLFW_TRUE : GLFW_FALSE);
-                glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-                glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
+                glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, major);
+                glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, minor);
                 glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
                 glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
                 glfwWindowHint(GLFW_SAMPLES, Math.max(0, samples));
                 created = glfwCreateWindow(Math.max(1, width), Math.max(1, height),
                         title, MemoryUtil.NULL, MemoryUtil.NULL);
                 if (created == MemoryUtil.NULL) {
-                    why = "no GL 3.3 core context";
+                    why = "no GL " + major + "." + minor + " core context";
                 } else {
                     glfwMakeContextCurrent(created);
-                    GLCapabilities caps = GL.createCapabilities();
+                    caps = GL.createCapabilities();
                     if (!caps.OpenGL33) {
                         why = "driver reports a context below GL 3.3";
                     } else {
@@ -133,6 +174,8 @@ public final class GlContext implements AutoCloseable {
         this.renderer = gotRenderer;
         this.version = gotVersion;
         this.samples = gotSamples;
+        this.capabilities = ok ? caps : null;
+        this.boundTo = ok ? Thread.currentThread() : null;
         this.closed = !ok;
     }
 
@@ -157,9 +200,39 @@ public final class GlContext implements AutoCloseable {
     /** Multisample coverage actually granted, which can be less than asked. */
     public int samples() { return samples; }
 
-    /** Make this context current on the calling thread. */
+    /**
+     * Make this context current on the calling thread, with LWJGL's function
+     * pointers to match. A no-op when it already is, which is the case on
+     * every frame after the first.
+     */
     public void makeCurrent() {
-        if (ready) glfwMakeContextCurrent(window);
+        if (!ready) return;
+        Thread me = Thread.currentThread();
+        if (boundTo == me) return;
+        glfwMakeContextCurrent(window);
+        GL.setCapabilities(capabilities);
+        boundTo = me;
+    }
+
+    /**
+     * Release the context from the calling thread, so another may take it.
+     *
+     * <p>Called once by the thread that created the window, after it has read
+     * the driver strings and before the render thread starts. Without it the
+     * render thread's {@code glfwMakeContextCurrent} is a context already
+     * current elsewhere, which GLFW reports as a platform error and the driver
+     * answers with a window that never draws.
+     */
+    public void detachCurrent() {
+        if (!ready || boundTo != Thread.currentThread()) return;
+        glfwMakeContextCurrent(MemoryUtil.NULL);
+        GL.setCapabilities(null);
+        boundTo = null;
+    }
+
+    /** Whether GL calls made on this thread right now would reach this context. */
+    public boolean currentOnThisThread() {
+        return ready && boundTo == Thread.currentThread();
     }
 
     /** Present the back buffer. */
@@ -173,16 +246,28 @@ public final class GlContext implements AutoCloseable {
                 : "unavailable (" + unavailable + ")";
     }
 
+    /**
+     * Destroy the window and, with it, the context and everything allocated in
+     * it.
+     *
+     * <p>The VAO is deleted only when this thread still holds the context —
+     * on the engine's shutdown path it does not, because the render thread had
+     * it and has since stopped. That is not a leak: destroying a context frees
+     * every object in it, and a {@code glDeleteVertexArrays} aimed at no
+     * current context is a crash where a no-op was wanted.
+     */
     @Override
     public void close() {
         if (closed) return;
         closed = true;
         try {
-            if (vao != 0) glDeleteVertexArrays(vao);
+            if (vao != 0 && currentOnThisThread()) glDeleteVertexArrays(vao);
+            detachCurrent();
             if (window != MemoryUtil.NULL) glfwDestroyWindow(window);
         } catch (Throwable ignored) {
             // Tearing down a context that may already be half gone.
         }
+        boundTo = null;
         releaseGlfw();
     }
 

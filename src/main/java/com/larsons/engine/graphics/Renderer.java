@@ -10,6 +10,15 @@ import com.larsons.engine.graphics.shader.ShaderChain;
  * pipeline. That is what lets the engine run out of the box on any machine with
  * a JRE (requirement #4) — no native libraries, no GPU bindings.
  *
+ * <p><b>A second implementation is chosen at startup when one is available.</b>
+ * {@link Backends} probes the classpath for a {@link RendererFactory} and uses
+ * what it finds, falling back here with a stated reason when there is nothing to
+ * find or nothing that works. The engine cannot name a backend outside its own
+ * jar and does not try to: see {@link RendererFactory} for why that indirection
+ * is structural. A backend from outside also brings its own
+ * {@link BackendWindow}, because the engine's is an AWT canvas that only
+ * {@link Java2DRenderer} can draw into.
+ *
  * <p><b>Nothing about this interface names Java2D.</b> {@link #beginFrame()}
  * hands back a {@link DrawTarget}, so a frame is a sequence of backend-neutral
  * drawing verbs from the moment it is acquired to the moment it is presented.

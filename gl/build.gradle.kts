@@ -83,6 +83,15 @@ tasks.test {
     systemProperty("larsons.reports.dir", rootProject.layout.buildDirectory.dir("reports").get().asFile.path)
 }
 
+// Same forwarding rule as the root build: a `-Dlarsons.*` on the command line
+// has to reach the forked JVM or it is silently ignored.
+tasks.withType<JavaExec>().configureEach {
+    System.getProperties().forEach { key, value ->
+        val name = key.toString()
+        if (name.startsWith("larsons.")) systemProperty(name, value.toString())
+    }
+}
+
 // Run the game with this backend on the classpath and the frame profiler armed,
 // mirroring the root's `runProfiled` so the two reports are directly
 // comparable — same instrument, same flags, same report format, one variable.
@@ -90,11 +99,15 @@ tasks.test {
 //   ./gradlew :gl:runGl
 //   ./gradlew :gl:runGl -Pprofile.seconds=60 -Pprofile.out=air-gl.txt
 //
-// `larsons.render.backend` is read by B9's backend selection. Until that lands
-// this task is the GL classpath and nothing more: it launches, and it launches
-// Java2D. That is deliberate rather than an oversight — the task exists now so
-// B8's backend has somewhere to be run from, and so B9 changes one file instead
-// of two.
+// `larsons.render.backend` is read by B9's backend selection, which has landed:
+// this task now really does launch the GL backend, because the classpath it
+// builds contains the `META-INF/services` entry the core's ServiceLoader scan
+// finds. Override it to compare the two renderers on one machine:
+//
+//   ./gradlew :gl:runGl -Prender.backend=java2d
+//
+// which is the same jar, the same flags and the same report format with one
+// variable changed — the arrangement B10's four runs need.
 tasks.register<JavaExec>("runGl") {
     group = "application"
     description = "Run the game with the GL backend available and the profiler armed"
@@ -102,16 +115,32 @@ tasks.register<JavaExec>("runGl") {
     classpath = sourceSets["main"].runtimeClasspath
     workingDir = rootProject.projectDir
 
-    val seconds = (findProperty("profile.seconds") as String?)?.takeIf { it.isNotBlank() } ?: "30"
-    val hud = (findProperty("profile.hud") as String?)?.takeIf { it.isNotBlank() } ?: "false"
-    val out = (findProperty("profile.out") as String?)?.takeIf { it.isNotBlank() }
-            ?: "frame-profile-gl.txt"
-    val backend = (findProperty("render.backend") as String?)?.takeIf { it.isNotBlank() } ?: "gl"
+    // -P if given, else the -D the game itself reads, else the default. See
+    // `launchOption` in the root build for why both spellings have to be
+    // consulted rather than one shadowing the other.
+    fun option(gradleProperty: String, systemProperty: String, fallback: String): String =
+            (findProperty(gradleProperty) as String?)?.takeIf { it.isNotBlank() }
+                    ?: System.getProperty(systemProperty)?.takeIf { it.isNotBlank() }
+                    ?: fallback
+
+    val seconds = option("profile.seconds", "larsons.profile.seconds", "30")
+    val hud = option("profile.hud", "larsons.profile.overlay", "false")
+    val out = option("profile.out", "larsons.profile.out", "frame-profile-gl.txt")
+    val backend = option("render.backend", "larsons.render.backend", "gl")
 
     systemProperty("larsons.profile.seconds", seconds)
     systemProperty("larsons.profile.overlay", hud)
     systemProperty("larsons.profile.out", out)
     systemProperty("larsons.render.backend", backend)
+
+    // GLFW's window and event calls belong to the process's first thread, and
+    // on macOS that is enforced by the platform rather than by convention: the
+    // JVM's main thread is not thread 0 unless it is told to be, and a GL
+    // window created off it does not fail — it hangs. Harmless elsewhere, so
+    // it is set by OS rather than by a flag someone has to remember.
+    if (System.getProperty("os.name", "").lowercase().contains("mac")) {
+        jvmArgs("-XstartOnFirstThread")
+    }
 
     doFirst {
         println(

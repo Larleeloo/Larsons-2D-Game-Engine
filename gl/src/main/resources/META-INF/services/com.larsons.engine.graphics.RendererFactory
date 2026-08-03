@@ -1,0 +1,7 @@
+# The GL backend, offered to any engine that looks for one.
+#
+# This file is the whole of the coupling between :gl and the core. The core
+# calls ServiceLoader.load(RendererFactory.class) and gets whatever the
+# classpath it was launched with provides — this backend from the GL
+# distribution, nothing at all from the plain jar. See RENDER_PLAN.md B9.
+com.larsons.engine.gl.GlRendererFactory

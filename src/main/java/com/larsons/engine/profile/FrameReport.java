@@ -54,6 +54,15 @@ public final class FrameReport {
         }
         out.append("build    : ").append(BuildInfo.describe()).append('\n');
         out.append("machine  : ").append(device.summary()).append('\n');
+        // The backend goes above the Java2D pipeline line, and both stay:
+        // Java2D still bakes sprites and lays text out whichever renderer
+        // presents the frame, so its pipeline is context even for a GL run.
+        // Which renderer drew the frame is not context — it is the first thing
+        // a reader needs, and B9 is where there started to be a choice.
+        out.append("backend  : ").append(device.backend()).append('\n');
+        if (!device.gpu().isBlank()) {
+            out.append("gpu      : ").append(device.gpu()).append('\n');
+        }
         out.append("java2d   : ").append(device.pipeline()).append('\n');
         out.append("display  : ").append(displayLine(device)).append('\n');
         out.append('\n');

@@ -32,6 +32,14 @@ import java.awt.geom.AffineTransform;
  *       difference between the renderer's fast and slow paths.</li>
  *   <li>{@link #refreshHz()} — a 120 FPS cap on a 60 Hz panel spends half its
  *       frames on images nobody sees.</li>
+ *   <li>{@link #backend()} and {@link #gpu()} — <b>which renderer drew the
+ *       frames, and on what.</b> Added by B9, when there was finally more than
+ *       one possible answer. A scene stage of 11.49 ms means one thing from the
+ *       Java2D renderer and something very different from the GL one, and a
+ *       report that does not say which is a number nobody can act on. This
+ *       project has already lost hours of profiles to a build stamp that froze
+ *       and stopped saying what produced them; the same mistake is not being
+ *       made twice with the renderer.</li>
  * </ul>
  *
  * <p>Every lookup is guarded: this must work under {@code java.awt.headless}
@@ -40,7 +48,37 @@ import java.awt.geom.AffineTransform;
 public record DeviceProfile(String os, String osVersion, String arch, int cores,
                             long maxHeapMb, String javaVersion, String javaVendor,
                             String pipeline, int displayWidth, int displayHeight,
-                            int refreshHz, double displayScale) {
+                            int refreshHz, double displayScale,
+                            String backend, String gpu) {
+
+    /** What {@link #backend()} says before a backend has been chosen. */
+    public static final String UNKNOWN_BACKEND = "unknown";
+
+    public DeviceProfile {
+        if (backend == null || backend.isBlank()) backend = UNKNOWN_BACKEND;
+        if (gpu == null) gpu = "";
+    }
+
+    /**
+     * A machine described without a renderer, for callers that describe
+     * hardware and nothing else. The golden frames pin one of these, and
+     * {@code Engine} fills the backend in through {@link #withRenderer} once it
+     * has chosen one.
+     */
+    public DeviceProfile(String os, String osVersion, String arch, int cores,
+                         long maxHeapMb, String javaVersion, String javaVendor,
+                         String pipeline, int displayWidth, int displayHeight,
+                         int refreshHz, double displayScale) {
+        this(os, osVersion, arch, cores, maxHeapMb, javaVersion, javaVendor, pipeline,
+                displayWidth, displayHeight, refreshHz, displayScale, UNKNOWN_BACKEND, "");
+    }
+
+    /** The same machine, now known to be drawing through this backend. */
+    public DeviceProfile withRenderer(String backend, String gpu) {
+        return new DeviceProfile(os, osVersion, arch, cores, maxHeapMb, javaVersion,
+                javaVendor, pipeline, displayWidth, displayHeight, refreshHz, displayScale,
+                backend, gpu);
+    }
 
     /** Inspect the current machine. Never throws; unknown fields degrade to defaults. */
     public static DeviceProfile detect() {
