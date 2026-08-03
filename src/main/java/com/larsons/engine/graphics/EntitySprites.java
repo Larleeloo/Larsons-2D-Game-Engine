@@ -5,6 +5,7 @@ import com.larsons.engine.entity.MobDef;
 import com.larsons.engine.entity.ProjectileDef;
 import com.larsons.engine.entity.VehicleDef;
 import com.larsons.engine.fx.Particles;
+import com.larsons.engine.graphics.atlas.SpriteAtlas;
 import com.larsons.engine.world.Block;
 import com.larsons.engine.world.Decor;
 
@@ -454,6 +455,22 @@ public final class EntitySprites {
         void paint(Graphics2D g);
     }
 
+    /**
+     * Bake once, cache for ever, and hand the result to the atlas on the way
+     * out.
+     *
+     * <p>The registration is what makes B5 work at all. Every sprite here is
+     * its own {@link BufferedImage}, so a panel drawing twelve item icons in a
+     * row was twelve textures and twelve draw calls to any backend that batches
+     * by texture. Packed into one page, that run of twelve becomes one call —
+     * and no call site had to change, because the loose image stays valid and
+     * the backend resolves it.
+     *
+     * <p>Keys are namespaced because they are not unique across factories:
+     * {@code item:wood:16} means one thing here and another in
+     * {@code AutoSprites}, and an atlas that let the two share a slot would let
+     * an inventory draw an auto-battler gem.
+     */
     private static BufferedImage cached(String key, int size, Painter painter) {
         BufferedImage img = CACHE.get(key);
         if (img != null) return img;
@@ -464,6 +481,7 @@ public final class EntitySprites {
         painter.paint(g);
         g.dispose();
         CACHE.put(key, img);
+        SpriteAtlas.shared().register("entity/" + key, img);
         return img;
     }
 

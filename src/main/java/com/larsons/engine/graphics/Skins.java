@@ -1,5 +1,7 @@
 package com.larsons.engine.graphics;
 
+import com.larsons.engine.graphics.atlas.SpriteAtlas;
+
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
@@ -37,6 +39,8 @@ public final class Skins {
     private static final Map<String, List<BufferedImage>> FRAMES = new HashMap<>();
     /** What actually renders each key, resolved once (a null value = nothing). */
     private static final Map<String, SkinDef> EFFECTIVE = new HashMap<>();
+    /** Menu swatches baked from a skin's first frame — see {@link #icon}. */
+    private static final Map<String, BufferedImage> ICONS = new HashMap<>();
 
     private Skins() {}
 
@@ -76,11 +80,13 @@ public final class Skins {
     public static synchronized void clearCache() {
         FRAMES.clear();
         EFFECTIVE.clear();
+        ICONS.clear();
     }
 
     private static void forget(String key) {
         FRAMES.remove(key);
         EFFECTIVE.remove(key);
+        ICONS.keySet().removeIf(k -> k.startsWith(key + "#"));
     }
 
     /**
@@ -149,9 +155,20 @@ public final class Skins {
      * is what keeps the creative palette's swatches honest — a reskinned block
      * looks reskinned in the sidebar too.
      */
-    public static BufferedImage icon(String key, BufferedImage fallback, int size) {
+    public static synchronized BufferedImage icon(String key, BufferedImage fallback, int size) {
         BufferedImage frame = frame(key, 0);
         if (frame == null || size <= 0) return fallback;
+
+        // Cached by (key, size) alone, deliberately: this line is only reached
+        // when the key has a skin, and then the caller's fallback is not part
+        // of the answer. Before the cache this baked a fresh image on every
+        // call — the creative palette calls it once per swatch per frame — so
+        // a reskinned sidebar allocated a few dozen images a frame and handed
+        // a batching backend a texture it had never seen for each of them.
+        String cacheKey = key + "#" + size;
+        BufferedImage cached = ICONS.get(cacheKey);
+        if (cached != null) return cached;
+
         BufferedImage out = new BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = out.createGraphics();
         // Pixel art stays crisp at icon size; smooth scaling would blur it.
@@ -163,6 +180,8 @@ public final class Skins {
         int h = Math.max(1, (int) Math.round(frame.getHeight() * scale));
         g.drawImage(frame, (size - w) / 2, (size - h) / 2, w, h, null);
         g.dispose();
+        ICONS.put(cacheKey, out);
+        SpriteAtlas.shared().register("skin-icon/" + cacheKey, out);
         return out;
     }
 
@@ -179,6 +198,16 @@ public final class Skins {
         return img;
     }
 
+    /**
+     * Slice a skin's sheet into its frames, once, and offer each to the sprite
+     * atlas.
+     *
+     * <p>Player-supplied art batches for the same reason generated art does: a
+     * row of skinned inventory icons is a run of sprite draws, and packed onto
+     * one page it is one texture. Sheets whose frames are larger than the atlas
+     * will take are simply not packed and draw exactly as they did before — a
+     * 512-pixel frame already amortises its own bind.
+     */
     private static List<BufferedImage> slice(SkinDef def) {
         BufferedImage sheet = AssetLoader.loadImageOrNull(def.sheet);
         if (sheet == null || sheet.getWidth() < def.frameWidth
@@ -188,6 +217,11 @@ public final class Skins {
         List<BufferedImage> all = SpriteSheet
                 .fromImage(sheet, def.frameWidth, def.frameHeight).frames();
         if (all.isEmpty()) return List.of();
-        return List.copyOf(all.subList(0, Math.min(def.frameCount, all.size())));
+        List<BufferedImage> frames =
+                List.copyOf(all.subList(0, Math.min(def.frameCount, all.size())));
+        for (int i = 0; i < frames.size(); i++) {
+            SpriteAtlas.shared().register("skin/" + def.key + "#" + i, frames.get(i));
+        }
+        return frames;
     }
 }

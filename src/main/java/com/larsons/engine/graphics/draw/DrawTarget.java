@@ -1,5 +1,7 @@
 package com.larsons.engine.graphics.draw;
 
+import com.larsons.engine.graphics.atlas.SpriteAtlas;
+
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.Shape;
@@ -326,8 +328,44 @@ public interface DrawTarget {
      * Draw {@code image} through an arbitrary transform: the isometric case,
      * where a square tile texture is warped onto a diamond. A GL backend gets
      * this for free by transforming the quad's four corners.
+     *
+     * <p>The one image verb that is never resolved through the sprite atlas.
+     * A warped blit out of a packed page would need the source rectangle
+     * carried through the transform and clipped to it, for a call site — the
+     * isometric tile — whose textures are chunk bakes far too large to atlas
+     * anyway. See {@link #drawRegion}.
      */
     void drawImage(BufferedImage image, AffineTransform transform);
+
+    /**
+     * Draw one sprite out of a packed atlas page into the given box.
+     *
+     * <p><b>Why this is a verb and not an implementation detail.</b> On Java2D
+     * it is the source-rectangle {@code drawImage} the engine was already
+     * making, so nothing changes. On a GPU backend it is the whole point of
+     * B5: the page is bound once and every region drawn from it appends to the
+     * open batch with <em>no bind at all</em>, which is what turns a screen of
+     * forty icons from forty draw calls into one.
+     *
+     * <p>A negative width or height mirrors the region, on the same terms as
+     * {@link #drawImage(BufferedImage, int, int, int, int)}.
+     *
+     * <p>Most call sites never name this: they keep passing the loose
+     * {@link BufferedImage} they always had, and the backend resolves it
+     * through {@link com.larsons.engine.graphics.atlas.SpriteAtlas#regionOf}.
+     * The verb is here for code that already holds a region — and for the GL
+     * backend, which needs somewhere to put the version that does not rebind.
+     */
+    default void drawRegion(SpriteAtlas.Region region, int x, int y, int w, int h) {
+        if (region == null) return;
+        drawImage(region.image(), x, y, w, h,
+                region.x(), region.y(), region.width(), region.height());
+    }
+
+    /** {@link #drawRegion} at the sprite's natural size. */
+    default void drawRegion(SpriteAtlas.Region region, int x, int y) {
+        if (region != null) drawRegion(region, x, y, region.width(), region.height());
+    }
 
     // --- text ------------------------------------------------------------------
 

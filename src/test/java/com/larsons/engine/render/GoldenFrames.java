@@ -8,9 +8,13 @@ import com.larsons.engine.character.CharacterProfile;
 import com.larsons.engine.crafting.RecipeRegistry;
 import com.larsons.engine.demo.MiniGameHudAccess;
 import com.larsons.engine.entity.Inventory;
+import com.larsons.engine.entity.ItemDef;
 import com.larsons.engine.entity.ItemRegistry;
 import com.larsons.engine.entity.ItemStack;
+import com.larsons.engine.entity.MobDef;
 import com.larsons.engine.entity.MobRegistry;
+import com.larsons.engine.entity.ProjectileDef;
+import com.larsons.engine.entity.ProjectileRegistry;
 import com.larsons.engine.fx.Particles;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.CutscenePainter;
@@ -174,6 +178,7 @@ public final class GoldenFrames {
                 t -> paintWorld(t, LevelFormat.TOP_DOWN)));
         frames.add(new Frame("world-isometric", 480, 320,
                 t -> paintWorld(t, LevelFormat.ISOMETRIC)));
+        frames.add(new Frame("world-crowd", 480, 320, GoldenFrames::paintCrowd));
 
         // B2, in the order B2 ports them.
         frames.add(new Frame("parallax-background", 800, 600, GoldenFrames::paintParallax));
@@ -265,6 +270,110 @@ public final class GoldenFrames {
         DecorPainter.draw(target, level, camera, true, CLOCK, raised);
         raised.flush();
     }
+
+    /**
+     * The entity phase at a density the shipped sample level never reaches:
+     * thirty mobs, eight dropped items and six projectiles over a top-down
+     * floor.
+     *
+     * <p><b>Why the catalogue needed this.</b> B5's verification asks for the
+     * merge ratio "on the same recorded frame from a busy level", and until now
+     * the busiest frame in the catalogue drew <em>one</em> mob. Entities are
+     * 3.85 ms of the M1 Air's 11.49 ms scene stage — the largest single thing
+     * B5 is aimed at — and a measurement taken on a frame with three sprites in
+     * it cannot say anything about them. This is the frame where the number
+     * means something.
+     *
+     * <p><b>And why it is not a benchmark written to flatter the atlas.</b> It
+     * draws each entity the way {@code PlayScene} draws one, interleaving
+     * included: a healthy mob is a single sprite, a hurt one is a sprite
+     * followed by a tint and two health-bar rectangles, and a dropped item is a
+     * shadow oval and a rarity gradient <em>before</em> its sprite. Those breaks
+     * are what a real crowd looks like to a batcher, and leaving them out would
+     * have produced a bigger number and a false one. Draws go through a
+     * {@link DepthPass} for the same reason: the engine sorts entity sprites by
+     * depth before it emits them, so the order measured here is the order the
+     * backend really sees.
+     */
+    private static void paintCrowd(DrawTarget target) {
+        Level level = Level.empty("crowd", 15, 10, 32);
+        level.setFormat(LevelFormat.TOP_DOWN);
+        level.background = new Color(30, 38, 54);
+        int grass = level.blocks.get("grass").id();
+        for (int row = 0; row < level.height; row++) {
+            for (int col = 0; col < level.width; col++) level.setTile(col, row, grass);
+        }
+
+        Camera camera = new Camera(level.perspective, target.width(), target.height());
+        camera.tileSize = level.tileSize;
+        camera.centerOn(level.width * 32 / 2.0, level.height * 32 / 2.0);
+
+        target.clear(level.background.getRGB());
+        int[] bounds = {0, 0, level.width - 1, level.height - 1};
+        DepthPass raised = DepthPass.of(level.perspective);
+        TerrainPainter.draw(target, level, camera, bounds, CLOCK, raised, null);
+
+        List<MobDef> mobs = MobRegistry.standard().all();
+        List<ItemDef> items = ItemRegistry.standard().all();
+        List<ProjectileDef> shots = ProjectileRegistry.standard().all();
+        Facing[] facings = Facing.values();
+        int[] at = new int[2];
+
+        // Thirty mobs on a lattice, cycling kind and facing so consecutive
+        // sprites are genuinely different textures — which is the case the
+        // atlas exists for, and the case a row of identical slimes would hide.
+        for (int i = 0; i < 30; i++) {
+            MobDef def = mobs.get(i % mobs.size());
+            Facing facing = facings[(i * 3) % facings.length];
+            BufferedImage sprite = EntitySprites.mob(def, 32, facing);
+            double wx = (1 + (i % 10) * 1.35) * 32;
+            double wy = (1.5 + (i / 10) * 2.4) * 32;
+            camera.worldToScreen(wx, wy, at);
+            int x = at[0], y = at[1];
+            boolean hurt = i % 7 == 3;      // a few, as in any real fight
+            raised.at(y, () -> {
+                target.drawImage(sprite, x - 14, y - 28, 28, 28);
+                if (hurt) {
+                    target.fillRect(x - 14, y - 28, 28, 28, 0x40FF3020);
+                    target.fillRect(x - 14, y - 35, 28, 4, 0xC0201820);
+                    target.fillRect(x - 14, y - 35, 17, 4, 0xC030C040);
+                }
+            });
+        }
+
+        // Drops, with the shadow and rarity halo the real one draws first.
+        for (int i = 0; i < 8; i++) {
+            // A wide stride through the registry rather than its first eight,
+            // which are all block swatches: eight near-identical grey squares
+            // would golden a picture in which a swapped sprite is invisible.
+            ItemDef def = items.get((i * 13) % items.size());
+            BufferedImage sprite = EntitySprites.item(def, 16);
+            camera.worldToScreen((2 + i * 1.6) * 32, 8.2 * 32, at);
+            int x = at[0], y = at[1];
+            Color rarity = def.rarity().color;
+            raised.at(y, () -> {
+                target.fillOval(x, y + 12, 16, 8, 0x50000000);
+                target.fillRadialGradient(x + 8, y + 8, 18, HALO_STOPS, new int[]{
+                        new Color(rarity.getRed(), rarity.getGreen(), rarity.getBlue(), 110).getRGB(),
+                        new Color(rarity.getRed(), rarity.getGreen(), rarity.getBlue(), 46).getRGB(),
+                        new Color(rarity.getRed(), rarity.getGreen(), rarity.getBlue(), 0).getRGB()});
+                target.drawImage(sprite, x, y, 16, 16);
+            });
+        }
+
+        // Projectiles in flight — sprites with nothing between them.
+        for (int i = 0; i < 6; i++) {
+            BufferedImage sprite = EntitySprites.projectile(shots.get(i % shots.size()), 12);
+            camera.worldToScreen((3 + i * 1.9) * 32, 3.1 * 32, at);
+            int x = at[0], y = at[1];
+            raised.at(y, () -> target.drawImage(sprite, x, y, 12, 12));
+        }
+
+        raised.flush();
+    }
+
+    /** The rarity halo's stops, matching {@code PlayScene.HALO_STOPS}. */
+    private static final float[] HALO_STOPS = {0f, 0.55f, 1f};
 
     // --- shared painters and widgets ------------------------------------------
 

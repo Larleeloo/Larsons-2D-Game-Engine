@@ -1,8 +1,9 @@
 # Render Plan — GPU Acceleration, End to End
 
 **Status:** Living document. Written 2026-08-02 against commit `85196b9` on
-`claude/gpu-acceleration-shaders-oqbx54`. B0–B4 are done and recorded in place;
-B5 is the next step.
+`claude/gpu-acceleration-shaders-oqbx54`. B0–B5 are done and recorded in place;
+B6 is the next step, and B5's measurement changed what B6 has to do — see the
+correction at the end of B5.
 **Companion to:** [`STEAM_PLAN.md`](STEAM_PLAN.md), which covers the product.
 This one covers the renderer, and is the plan of record for Jobs A, B and C.
 
@@ -77,8 +78,10 @@ Everything in this table has been measured or executed, not assumed.
 **The honest summary:** Job A's *unknowns* are gone; only its plumbing remains,
 and the plumbing has a working prototype. Job B's migration is done and, as of
 B4, sealed — world, UI and scenes all draw through the seam, and a build fails
-if anything reaches back through it. What remains of B is the batching work
-(B5, B6) and the backend itself (B7–B10).
+if anything reaches back through it. Sprites batch as of B5: a busy entity phase
+went from 65 draw calls to 34, and every sprite the engine generates sits on one
+texture page. What remains of B is the text half of the batching work (B6) and
+the backend itself (B7–B10).
 
 ---
 
@@ -97,11 +100,11 @@ much faster it makes things.
    the Java2D path working and tested.
 3. **Pixel parity is the contract.** "Looks fine" is not a result. Every port
    step compares rendered output against a reference and states the error.
-4. **The suite stays green.** Last full run: **865 tests, 0 failures, 10 skipped**
-   (was 810/0/3 when this was written; B0–B4 added the rest). The skips are
+4. **The suite stays green.** Last full run: **882 tests, 0 failures, 10 skipped**
+   (was 810/0/3 when this was written; B0–B5 added the rest). The skips are
    environment-dependent and skip rather than fail by design — three need a
    display, seven need a GL driver. Under `xvfb-run` the same suite is
-   **865/0/3**: the seven GL tests do run on a software driver, and the three
+   **882/0/3**: the seven GL tests do run on a software driver, and the three
    that do not are display tests losing a race with the eleven classes that set
    `java.awt.headless=true` in the shared JVM (see B4). A step ends with that or
    better.
@@ -478,6 +481,13 @@ It is also a warning about where to look. `crafting-panel` and
 B5/B6; `world-*` are already near the ceiling and will not, so an atlas
 measured only against a world scene would look like it did nothing.
 
+> **B5 measured this and both halves of the last paragraph were wrong.**
+> `crafting-panel` and `character-picker` did not move at all — their images are
+> never *consecutive*, and an atlas merges neighbours. `world-*` moved most
+> (29.00× → 36.25×), because their three sprite draws *are* adjacent. The place
+> to look was the entity phase, which had no frame in this catalogue until B5
+> added one. See B5's correction.
+
 ---
 
 ### B3 — Port the scenes and retire `graphicsOf`
@@ -711,6 +721,12 @@ frames in the table were three widget goldens. `scene-board-customize` at 6.52×
 is the counter-example worth keeping in view — 149 flat shapes in its board
 preview, already near the ceiling, and an atlas will do nothing for it.
 
+> **Half right, measured at B5.** `scene-board-customize` was indeed untouched,
+> and is now the control `AtlasBatchingTest` asserts on. But the interleaved
+> frames were not what a *sprite* atlas could reach: two atlases only rescue an
+> icon-then-text row if they are the same texture. That is now B6's first
+> design decision rather than an assumption — see B5's correction.
+
 ---
 
 ### B4 — Seal the Java2D seam
@@ -901,6 +917,153 @@ will not help. Record the before and after values in this document.
 **Done when.** Merge ratio for the entity phase improves measurably, and the
 goldens are unchanged.
 
+#### B5 — done
+
+[`SpriteAtlas`](src/main/java/com/larsons/engine/graphics/atlas/SpriteAtlas.java)
+packs with a skyline bottom-left heuristic, one transparent pixel of gutter per
+region, pages that start at 256 and double on demand to the 2048 cap.
+`DrawTarget` gained `drawRegion`. The five named factories — `EntitySprites`,
+`AutoSprites`, `DirectionalSprites`, `Skins` and, through `Skins`,
+`PlayerSprites` — register every sprite they bake. **Every sprite the whole test
+suite bakes, 892 of them, fits on one 2048×1024 page at 64% occupancy**, which
+means the entire engine's generated art is one texture bind.
+
+**Atlasing here is additive, and that is what made it a one-commit change.**
+Registering copies a sprite's pixels into a page; the loose `BufferedImage` stays
+valid and stays drawn by anything the atlas cannot serve — a warped
+`AffineTransform` blit, a sheet too large to be worth packing, a source
+rectangle that reaches past the sprite's own bounds. So no factory changed its
+return type and none of the ~2,000 call sites moved. The backend resolves the
+image it is handed (`SpriteAtlas.regionOf`) and draws the region instead, which
+is exactly what the GL backend has to do in B8 anyway.
+
+#### The numbers
+
+Measured by [`DrawCallReport`](src/test/java/com/larsons/engine/render/DrawCallReport.java)
+over `SceneFrames.allFrames()` — the same fixed frames as the pixel comparison,
+in one process, on one build. The two halves differ only by
+`SpriteAtlas.setRouting`, which is the whole reason routing is a switch separate
+from registration: gating registration instead would have made each measurement
+depend on which ran first, because the factories bake lazily and cache for ever.
+Only the frames that moved are listed; the other 27 are byte-for-byte the same
+command stream, and the report at `build/reports/draw-calls.md` has all 32.
+
+| frame | ops | batches before | batches after | merge before | merge after |
+|-------|----:|---------------:|-------------:|-------------:|------------:|
+| **world-crowd** | 374 | 65 | **34** | 5.75× | **11.00×** |
+| auto-sprites | 17 | 7 | **2** | 2.43× | **8.50×** |
+| world-top-down | 149 | 5 | **3** | 29.80× | **49.67×** |
+| world-isometric | 153 | 5 | **4** | 30.60× | **38.25×** |
+| world-side-scroll | 145 | 5 | **4** | 29.00× | **36.25×** |
+| *all 32 frames* | 3364 | 620 | 580 | 5.43× | 5.80× |
+
+**`world-crowd` is new, and the reason it had to be.** B5's verification asks
+for the merge ratio "on the same recorded frame from a busy level", and the
+busiest frame in the catalogue drew *one* mob. Entities are 3.85 ms of the M1
+Air's 11.49 ms scene stage — the largest single thing this step aims at — and a
+number taken from a frame with three sprites in it says nothing about them. The
+new frame draws thirty mobs, eight dropped items and six projectiles over a
+top-down floor, **each one the way `PlayScene` draws it, interleaving
+included**: a healthy mob is one sprite, a hurt one is a sprite followed by a
+tint and two health-bar rectangles, a dropped item is a shadow oval and a rarity
+gradient *before* its sprite, and the whole lot goes through a `DepthPass`
+because the engine sorts entity sprites by depth before emitting them. Leaving
+those breaks out would have produced a bigger number and a false one. It still
+halves the frame: 65 batches to 34, and since nothing but an image draw changed
+its batch key, all 31 of that difference is the 44 sprites in it.
+
+#### A correction to B3's reading of its own table
+
+B3 predicted that `crafting-panel` (1.09×, twelve images) and `character-picker`
+(2.64×, three) were "the frames whose numbers should move in B5/B6". **They did
+not move at all**, and the measurement says why in one line: their images are
+never *consecutive*. A crafting row is icon, name, count, icon, name, count —
+so every image draw is preceded and followed by a text run, and there is no run
+of sprites for an atlas to collapse. Atlasing merges neighbours; it cannot merge
+draws that are not neighbours, and nothing in this step was ever going to.
+
+**This is a real finding for B6, not a footnote.** The plan says that with both
+atlases in place "those two columns collapse to one texture and one atlas, and
+the interleaving stops mattering". That is only true if the glyph atlas and the
+sprite atlas are *the same texture*, or if the backend can address both from one
+batch — otherwise `IMAGE`-then-`TEXT`-then-`IMAGE` still flushes twice per row
+however well each side is packed, and `crafting-panel` stays at 1.09× with two
+atlases instead of none. So B6 should rasterise glyphs into a page of this same
+`SpriteAtlas` rather than building a parallel one, and `DrawStats` will need to
+stop treating `TEXT` and `IMAGE` as inherently unmergeable when they share a
+page. `SpriteAtlas.register` already takes any `BufferedImage`, so the packing
+side of that is free; the batch-key model is the part that needs deciding.
+
+#### Two allocations that had to go before anything could be atlased
+
+Neither was sought. Both are the same failure and it is worth naming, because it
+is invisible to every instrument except this one:
+
+- **`DirectionalSprites.frame`** returned `sheet.getSubimage(...)`, which
+  allocates a fresh `BufferedImage` on every call. This is the unskinned
+  player's sprite, so it ran per character per frame. The garbage was the small
+  half. The expensive half is that a batching backend keys on the image, so
+  every frame handed it a texture it had never seen — a bind per character per
+  frame that no atlas could ever have merged, because the thing being drawn was
+  a different object each time.
+- **`Skins.icon`** baked a fresh image per call, and the creative palette calls
+  it once per swatch per frame.
+
+Both are cached now, which is what makes their identity stable, which is what
+makes them atlasable at all. A sprite factory that returns a new object per call
+cannot be batched by anything.
+
+#### Verified
+
+- **Goldens byte-identical.** Regenerating the whole catalogue with the atlas
+  live rewrote exactly one file: the new `world-crowd.png`. All 31 pre-existing
+  references came back identical to the ones committed before this step, which
+  is the strongest available statement that routing a draw through a packed page
+  is a change of texture binding and not a change of picture.
+- **Pixel parity, directly.** `SpriteAtlasTest` renders the same icon four ways
+  a call site really draws one — natural size, scaled, mirrored, and a
+  sub-rectangle — with routing off and on, and subtracts. Also that a packed
+  sprite's pixels survive the copy (`AlphaComposite.Src`, not `SrcOver`, or
+  every translucent pixel in the engine would come back wrong through the atlas
+  and nowhere else), that no two regions overlap across 200 ragged sizes, that
+  every region is fenced by a transparent gutter, that a page that doubles
+  leaves every region where it was, and that a re-baked key reuses its slot
+  rather than walking the atlas out of space on repeated texture-pack rescans.
+- **The gutter is checked on the pixels, not on the picture.** Java2D clamps to
+  the source rectangle and would never show a bleed, so no golden frame can
+  catch the one bug this padding exists to prevent. B9's GL parity pass is what
+  proves it end to end; until then the assertion is on the page itself.
+- **Suite: 882 tests, 0 failures, 10 skipped** (was 865/0/10; the 17 new are 12
+  in `SpriteAtlasTest`, 4 in `AtlasBatchingTest`, and one more golden frame).
+  The same 10 environment-dependent skips.
+- **`AtlasBatchingTest` keeps the number honest on every build**, because this
+  is the kind of number that rots quietly: one factory that stops registering,
+  one painter that starts slicing a fresh sub-image per frame, and the ratio
+  returns to where it was while every other test stays green. It asserts no
+  frame got *worse*, that operation counts are unchanged (atlasing changes which
+  texture a draw comes from, never how many draws there are), that
+  `auto-sprites` is one bind, and — the control — that `scene-board-customize`,
+  149 flat shapes and no sprites, is untouched. An atlas that appeared to
+  improve *that* would be measuring itself.
+
+#### What it cost Java2D: nothing measurable
+
+Java2D blits per call either way, so this step is not supposed to make the
+shipping backend faster — the merge ratio is a statement about a backend that
+does not exist yet. Worth checking that it did not make it *slower*, since every
+sprite draw now goes through a hash lookup and a source-rectangle blit out of a
+2048-wide page. Over 300 renders per frame per configuration: `world-crowd`
+−3.5% then +0.2%, `sprite-editor` −0.6% then +1.0%, `world-top-down` −2.4% then
+−1.8% — noise. The one consistent mover is `crafting-panel` at −9.9% and −16.3%,
+which is plausible rather than surprising: one hot page image stays in Java2D's
+accelerated-image cache where a hundred small ones each need their own entry.
+The honest claim is *no regression*, and a hint that the icon-heavy screens
+prefer it.
+
+**`-Dlarsons.render.atlas=false`** turns region routing off entirely — the
+before-and-after switch above, and a one-flag workaround for a driver that
+dislikes the packed path, in the same spirit as `-Dlarsons.render.direct`.
+
 ---
 
 ### B6 — Glyph atlas
@@ -911,6 +1074,16 @@ Each one is currently a separate Java2D text-layout-and-rasterise.
 **Do.**
 - Add `com.larsons.engine.graphics.atlas.GlyphAtlas`: rasterises glyphs on
   demand per `(Font, char)` into an atlas page, caching the result.
+- **Rasterise into a page of B5's `SpriteAtlas`, not a parallel one**, and
+  decide what that means for `DrawStats`' batch key. B5 measured the reason:
+  `crafting-panel` is icon-text-icon-text and stayed at 1.09× with sprites fully
+  atlased, because an atlas merges *neighbours* and its neighbours are text. Two
+  separate atlases leave it at 1.09× — the flush moves from "different image" to
+  "different texture", which costs the same. One shared page is what makes the
+  interleaving stop mattering, and `SpriteAtlas.register` already takes any
+  `BufferedImage`, so the packing side is free. The part that needs deciding is
+  that `DrawStats` currently treats `TEXT` and `IMAGE` as inherently
+  unmergeable, which stops being true exactly when they share a page.
 - Route `Java2DTarget.drawText` through it when the font is one of the small
   set the UI actually uses; keep the direct `Graphics2D.drawString` path for
   anything unusual so no text can fail to render.
@@ -1375,6 +1548,7 @@ declared finished while broken.
 | **`SealedSeamTest`** | Can the migration silently un-happen? | `render/SealedSeamTest.java`, B4 |
 | **`RecordingTarget`** | Did the code issue the draw calls it was supposed to, in order? | `graphics/draw/RecordingTarget.java` |
 | **`DrawStats.mergeRatio()`** | Will a GPU backend help, or is every operation its own batch? | `graphics/draw/DrawStats.java` |
+| **`DrawCallReport`** | What did a batching change actually buy, frame by frame? | `render/DrawCallReport.java`, B5 — writes `build/reports/draw-calls.md` |
 | **`FrameProfiler` / `FrameReport`** | Where does the frame actually go? | `profile/` |
 | **`ShaderParityTest` metric** | Do two implementations of the same effect agree? | `ShaderParityTest`, reused by A2 and B8 |
 
@@ -1394,8 +1568,8 @@ B1  widen DrawTarget (7 new members + 2 audits)  ← done
 B2  port 12 shared painters/widgets    ← done
 B3  port 18 scenes, graphicsOf 39 → 0  ← done
 B4  seal the seam (delete graphicsOf, Renderer returns DrawTarget)  ← done
-B5  sprite atlas                       ← start here
-B6  glyph atlas
+B5  sprite atlas                       ← done
+B6  glyph atlas                        ← start here (read B5's correction first)
 B7  :gl Gradle module
 B8  GlTarget + GlRenderer
 B9  backend selection + fallback
