@@ -20,8 +20,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The golden comparison: every {@link GoldenFrames} scene, rendered now and
- * subtracted from the PNG that was stored when it was known good.
+ * The golden comparison: every frame in the catalogue — {@link GoldenFrames}'
+ * painters and {@link SceneFrames}' whole scenes — rendered now and subtracted
+ * from the PNG that was stored when it was known good.
  *
  * <p><b>The bar is 0.00.</b> Not "close enough" — these frames are produced by
  * the same rasteriser from the same inputs, so any difference at all is a
@@ -67,7 +68,7 @@ class GoldenFramesTest {
         String actualFingerprint = GoldenFrames.fontFingerprint();
 
         List<DynamicTest> tests = new ArrayList<>();
-        for (Frame frame : GoldenFrames.all()) {
+        for (Frame frame : SceneFrames.allFrames()) {
             tests.add(DynamicTest.dynamicTest(frame.name(), () -> {
                 Path png = dir.resolve(frame.name() + ".png");
                 assertTrue(Files.exists(png), () ->
@@ -127,7 +128,7 @@ class GoldenFramesTest {
     @Test
     void everyFrameRendersIdenticallyTwice() {
         StringBuilder unstable = new StringBuilder();
-        for (Frame frame : GoldenFrames.all()) {
+        for (Frame frame : SceneFrames.allFrames()) {
             double error = FrameError.meanChannelError(
                     GoldenFrames.render(frame), GoldenFrames.render(frame));
             if (error != 0.0) {
@@ -149,7 +150,7 @@ class GoldenFramesTest {
         System.out.println("  ##  REWRITING GOLDEN FRAMES — references are being replaced");
         System.out.println("  ##  Review the image diff before committing.");
         System.out.println("  ############################################################");
-        for (Frame frame : GoldenFrames.all()) {
+        for (Frame frame : SceneFrames.allFrames()) {
             Path png = dir.resolve(frame.name() + ".png");
             ImageIO.write(GoldenFrames.render(frame), "png", png.toFile());
             System.out.printf("  ##  wrote %s (%dx%d)%n",

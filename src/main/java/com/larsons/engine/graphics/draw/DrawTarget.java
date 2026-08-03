@@ -199,11 +199,23 @@ public interface DrawTarget {
     }
 
     // --- outlines --------------------------------------------------------------
+    //
+    // Each outline verb comes in three forms: packed argb with an explicit
+    // thickness, a Color at 1px, and a Color with an explicit thickness. The
+    // third was missing until B3 and its absence showed: every ported call
+    // site that stated a width — and after this migration that is every call
+    // site that used to lean on the ambient stroke — had to write
+    // `SOME_COLOUR.getRGB()` inline, which is noise at best and an invitation
+    // to drop the alpha at worst.
 
     void drawRect(int x, int y, int w, int h, int argb, float thickness);
 
     default void drawRect(int x, int y, int w, int h, Color color) {
         drawRect(x, y, w, h, color.getRGB(), 1f);
+    }
+
+    default void drawRect(int x, int y, int w, int h, Color color, float thickness) {
+        drawRect(x, y, w, h, color.getRGB(), thickness);
     }
 
     /** Outline of {@link #fillRoundRect}, with the same corner convention. */
@@ -214,10 +226,19 @@ public interface DrawTarget {
         drawRoundRect(x, y, w, h, arcW, arcH, color.getRGB(), 1f);
     }
 
+    default void drawRoundRect(int x, int y, int w, int h, int arcW, int arcH,
+                               Color color, float thickness) {
+        drawRoundRect(x, y, w, h, arcW, arcH, color.getRGB(), thickness);
+    }
+
     void drawOval(int x, int y, int w, int h, int argb, float thickness);
 
     default void drawOval(int x, int y, int w, int h, Color color) {
         drawOval(x, y, w, h, color.getRGB(), 1f);
+    }
+
+    default void drawOval(int x, int y, int w, int h, Color color, float thickness) {
+        drawOval(x, y, w, h, color.getRGB(), thickness);
     }
 
     /** Outline of {@link #fillArc} — the curve alone, not the two radii. */
@@ -228,16 +249,29 @@ public interface DrawTarget {
         drawArc(x, y, w, h, startDeg, arcDeg, color.getRGB(), 1f);
     }
 
+    default void drawArc(int x, int y, int w, int h, int startDeg, int arcDeg,
+                         Color color, float thickness) {
+        drawArc(x, y, w, h, startDeg, arcDeg, color.getRGB(), thickness);
+    }
+
     void drawPolygon(int[] xs, int[] ys, int count, int argb, float thickness);
 
     default void drawPolygon(int[] xs, int[] ys, int count, Color color) {
         drawPolygon(xs, ys, count, color.getRGB(), 1f);
     }
 
+    default void drawPolygon(int[] xs, int[] ys, int count, Color color, float thickness) {
+        drawPolygon(xs, ys, count, color.getRGB(), thickness);
+    }
+
     void drawLine(int x1, int y1, int x2, int y2, int argb, float thickness);
 
     default void drawLine(int x1, int y1, int x2, int y2, Color color) {
         drawLine(x1, y1, x2, y2, color.getRGB(), 1f);
+    }
+
+    default void drawLine(int x1, int y1, int x2, int y2, Color color, float thickness) {
+        drawLine(x1, y1, x2, y2, color.getRGB(), thickness);
     }
 
     /**
@@ -327,6 +361,27 @@ public interface DrawTarget {
      * rectangle, until the matching {@link #popClip()}.
      */
     void pushClip(int x, int y, int w, int h);
+
+    /**
+     * Restrict drawing to the intersection of the current clip and an
+     * arbitrary shape, until the matching {@link #popClip()}.
+     *
+     * <p><b>A correction to B1's audit, found in B3.</b> The clip audit
+     * counted rectangles and concluded rectangles were all the engine used.
+     * It missed {@code AutoBattlerScene}'s skinned board, which clips to a
+     * tile's diamond and stretches the skin frame over the diamond's bounding
+     * box — the clip is what stops each tile's art spilling into its
+     * neighbours, so it is load-bearing and there is no rectangle that says
+     * it.
+     *
+     * <p>This is the expensive verb on this interface and the only one that
+     * is. The rectangular {@link #pushClip(int, int, int, int)} is a scissor
+     * test on any GPU; an arbitrary shape is a stencil pass, which means a
+     * clear, a draw into the stencil buffer, and a flush of whatever was
+     * batched. Prefer the rectangle wherever the shape happens to be one, and
+     * reach for this only when the shape is the point.
+     */
+    void pushClip(Shape shape);
 
     void popClip();
 

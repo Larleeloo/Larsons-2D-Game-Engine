@@ -16,7 +16,6 @@ import com.larsons.engine.graphics.SpriteSheet;
 import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
@@ -27,7 +26,6 @@ import javax.swing.JFileChooser;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -53,6 +51,19 @@ import java.util.List;
 public class SkinEditorScene extends AbstractScene {
 
     private enum Category { UNIT, ITEM, PROJECTILE, BOARD }
+
+    private static final Font STATUS_FONT = new Font("SansSerif", Font.BOLD, 14);
+    private static final Font FOOTER_FONT = new Font("SansSerif", Font.PLAIN, 13);
+    private static final Font LABEL_FONT = new Font("SansSerif", Font.BOLD, 13);
+    private static final Font CAPTION_FONT = new Font("SansSerif", Font.PLAIN, 12);
+    private static final Color FOOTER = new Color(120, 125, 145);
+    private static final Color LABEL = new Color(160, 168, 190);
+    private static final Color CAPTION = new Color(150, 156, 178);
+    private static final Color PREVIEW_FILL = new Color(30, 34, 52);
+    private static final Color PREVIEW_EDGE = new Color(60, 66, 92);
+    private static final Color PROJECTILE_ART = new Color(200, 210, 235);
+    private static final Color BOARD_TILE_A = new Color(40, 46, 66);
+    private static final Color BOARD_TILE_B = new Color(46, 52, 74);
 
     private static final String[] PROJECTILE_KINDS = {"arrow", "orb", "bolt"};
     private static final String[] BOARD_PARTS = {"tile_a", "tile_b"};
@@ -307,36 +318,28 @@ public class SkinEditorScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
-        Graphics2D g = Java2DTarget.graphicsOf(target);
         form.render(target, viewportWidth, viewportHeight);
-        drawPreview(g);
+        drawPreview(target);
         if (!status.isEmpty()) {
-            g.setFont(new Font("SansSerif", Font.BOLD, 14));
-            g.setColor(statusColor);
-            g.drawString(trimTo(g, status, viewportWidth - 48), 24, viewportHeight - 46);
+            target.drawText(UiText.fit(target, STATUS_FONT, status, viewportWidth - 48),
+                    24, viewportHeight - 46, STATUS_FONT, statusColor);
         }
-        g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        g.setColor(new Color(120, 125, 145));
-        g.drawString("Sheets slice left-to-right, top-to-bottom. Saved to "
-                + store.file() + " — see resources/skins/README.md", 24, viewportHeight - 22);
+        target.drawText("Sheets slice left-to-right, top-to-bottom. Saved to "
+                        + store.file() + " — see resources/skins/README.md",
+                24, viewportHeight - 22, FOOTER_FONT, FOOTER);
     }
 
     /** The live preview: the sheet at current settings vs the default art. */
-    private void drawPreview(Graphics2D g) {
+    private void drawPreview(DrawTarget target) {
         int px = viewportWidth / 2 + 340;
         if (px + 150 > viewportWidth) px = viewportWidth - 160;
         int py = Math.max(viewportHeight / 8, 60);
 
-        g.setFont(new Font("SansSerif", Font.BOLD, 13));
-        g.setColor(new Color(160, 168, 190));
-        g.drawString("Preview", px, py);
+        target.drawText("Preview", px, py, LABEL_FONT, LABEL);
 
         int cell = 96;
-        g.setColor(new Color(30, 34, 52));
-        g.fillRoundRect(px, py + 8, cell, cell, 10, 10);
-        g.setColor(new Color(60, 66, 92));
-        g.drawRoundRect(px, py + 8, cell, cell, 10, 10);
+        target.fillRoundRect(px, py + 8, cell, cell, 10, 10, PREVIEW_FILL);
+        target.drawRoundRect(px, py + 8, cell, cell, 10, 10, PREVIEW_EDGE);
 
         List<BufferedImage> frames = previewFramesFor(sheetPath.trim(),
                 parseInt(frameW, 32), parseInt(frameH, 32), parseInt(frameCount, 1));
@@ -344,39 +347,34 @@ public class SkinEditorScene extends AbstractScene {
             double rate = SkinDef.clampFps(parseInt(fps, 0));
             int idx = rate <= 0 || frames.size() <= 1 ? 0
                     : (int) Math.floor(animClock * rate) % frames.size();
-            g.drawImage(frames.get(idx), px + 8, py + 16, cell - 16, cell - 16, null);
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            g.setColor(new Color(150, 156, 178));
-            g.drawString(frames.size() + " frame" + (frames.size() == 1 ? "" : "s")
-                    + " · " + (int) rate + " fps", px, py + cell + 24);
+            target.drawImage(frames.get(idx), px + 8, py + 16, cell - 16, cell - 16);
+            target.drawText(frames.size() + " frame" + (frames.size() == 1 ? "" : "s")
+                            + " · " + (int) rate + " fps",
+                    px, py + cell + 24, CAPTION_FONT, CAPTION);
         } else {
-            drawDefaultArt(g, px + 8, py + 16, cell - 16);
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            g.setColor(new Color(150, 156, 178));
-            g.drawString(sheetPath.isBlank() ? "default (procedural)" : "image not found",
-                    px, py + cell + 24);
+            drawDefaultArt(target, px + 8, py + 16, cell - 16);
+            target.drawText(sheetPath.isBlank() ? "default (procedural)" : "image not found",
+                    px, py + cell + 24, CAPTION_FONT, CAPTION);
         }
     }
 
     /** The built-in art the skin would replace, so users see what they override. */
-    private void drawDefaultArt(Graphics2D g, int x, int y, int size) {
+    private void drawDefaultArt(DrawTarget target, int x, int y, int size) {
         switch (category) {
             case UNIT -> {
                 UnitDef d = AutoUnits.get(targetKey());
-                if (d != null) g.drawImage(AutoSprites.unit(d, size, true), x, y, null);
+                if (d != null) target.drawImage(AutoSprites.unit(d, size, true), x, y);
             }
             case ITEM -> {
                 AutoItem i = AutoItems.get(targetKey());
-                if (i != null) g.drawImage(AutoSprites.item(i, size), x, y, null);
+                if (i != null) target.drawImage(AutoSprites.item(i, size), x, y);
             }
             case PROJECTILE -> {
-                g.setColor(new Color(200, 210, 235));
-                g.fillOval(x + size / 3, y + size / 3, size / 3, size / 3);
+                target.fillOval(x + size / 3, y + size / 3, size / 3, size / 3, PROJECTILE_ART);
             }
             case BOARD -> {
-                g.setColor("tile_a".equals(targetKey())
-                        ? new Color(40, 46, 66) : new Color(46, 52, 74));
-                g.fillRect(x, y, size, size);
+                target.fillRect(x, y, size, size, "tile_a".equals(targetKey())
+                        ? BOARD_TILE_A : BOARD_TILE_B);
             }
         }
     }
@@ -419,7 +417,4 @@ public class SkinEditorScene extends AbstractScene {
         }
     }
 
-    private static String trimTo(Graphics2D g, String s, int maxWidth) {
-        return UiText.fit(g.getFontMetrics(), s, maxWidth);
-    }
 }

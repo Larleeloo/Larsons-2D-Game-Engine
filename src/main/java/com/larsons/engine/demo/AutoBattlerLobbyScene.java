@@ -11,15 +11,12 @@ import com.larsons.engine.input.InputManager;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.net.Protocol;
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.MenuTheme;
 
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.FontMetrics;
-import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import java.util.ArrayList;
 import java.util.List;
@@ -48,6 +45,26 @@ public class AutoBattlerLobbyScene extends AbstractScene {
     private final List<Rectangle> buttons = new ArrayList<>();
     private final List<String> buttonLabels = new ArrayList<>();
     private final List<Runnable> buttonActions = new ArrayList<>();
+
+    private static final Font RESULT_FONT = new Font("SansSerif", Font.BOLD, 15);
+    private static final Font TITLE_FONT = new Font("SansSerif", Font.BOLD, 40);
+    private static final Font SUBTITLE_FONT = new Font("SansSerif", Font.PLAIN, 17);
+    private static final Font LAN_FONT = new Font("SansSerif", Font.PLAIN, 15);
+    private static final Font PLAYER_FONT = new Font("SansSerif", Font.PLAIN, 22);
+    private static final Font COUNT_FONT = new Font("SansSerif", Font.PLAIN, 16);
+    private static final Font BUTTON_FONT = new Font("SansSerif", Font.BOLD, 19);
+    private static final Color CONNECTED = new Color(140, 200, 150);
+    private static final Color FAILED = new Color(235, 120, 110);
+    private static final Color LOBBY_BG = new Color(16, 18, 30);
+    private static final Color TITLE = new Color(245, 245, 255);
+    private static final Color SUBTITLE = new Color(150, 155, 175);
+    private static final Color YOU = new Color(255, 210, 90);
+    private static final Color OTHER_PLAYER = new Color(210, 215, 230);
+    private static final Color COUNT = new Color(120, 125, 145);
+    private static final Color PRIMARY_FILL = new Color(70, 120, 70);
+    private static final Color PRIMARY_EDGE = new Color(150, 230, 150);
+    private static final Color BUTTON_FILL = new Color(45, 50, 70);
+    private static final Color BUTTON_EDGE = new Color(160, 170, 200);
 
     public AutoBattlerLobbyScene(GameContext ctx) {
         this.ctx = ctx;
@@ -199,75 +216,62 @@ public class AutoBattlerLobbyScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
-        Graphics2D g = Java2DTarget.graphicsOf(target);
         if (session == null) {
             form.render(target, viewportWidth, viewportHeight);
             String s = status;
             if (!s.isEmpty()) {
-                g.setColor(s.startsWith("Could not") || s.startsWith("Disconnected")
-                        ? new Color(235, 120, 110) : new Color(140, 200, 150));
-                g.setFont(new Font("SansSerif", Font.BOLD, 15));
-                g.drawString(s, 24, viewportHeight - 52);
+                target.drawText(s, 24, viewportHeight - 52, RESULT_FONT,
+                        s.startsWith("Could not") || s.startsWith("Disconnected")
+                                ? FAILED : CONNECTED);
             }
-            g.setColor(new Color(120, 120, 140));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-            g.drawString("An online auto-battler for 2-10 players. Host a game, "
-                    + "or join a friend's IP and port.", 24, viewportHeight - 24);
+            SceneChrome.hint(target, viewportHeight,
+                    "An online auto-battler for 2-10 players. Host a game, "
+                            + "or join a friend's IP and port.");
             return;
         }
 
-        renderLobby(g);
+        renderLobby(target);
     }
 
-    private void renderLobby(Graphics2D g) {
+    private void renderLobby(DrawTarget target) {
         AutoClient client = session.client();
-        g.setColor(new Color(16, 18, 30));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
+        target.fillRect(0, 0, viewportWidth, viewportHeight, LOBBY_BG);
 
-        g.setColor(new Color(245, 245, 255));
-        g.setFont(new Font("SansSerif", Font.BOLD, 40));
-        drawCentered(g, "Auto Battler Lobby", viewportWidth / 2, 90);
+        drawCentered(target, "Auto Battler Lobby", viewportWidth / 2, 90,
+                TITLE_FONT, TITLE);
 
-        g.setFont(new Font("SansSerif", Font.PLAIN, 17));
-        g.setColor(new Color(150, 155, 175));
         String where = session.isHost()
                 ? "Hosting on port " + session.hostedServer().getPort()
                         + " — friends join your IP:port"
                 : "Connected to " + address;
-        drawCentered(g, where, viewportWidth / 2, 124);
+        drawCentered(target, where, viewportWidth / 2, 124, SUBTITLE_FONT, SUBTITLE);
         if (session.isHost()) {
             // "localhost" only works on this machine; friends on the same
             // network need this machine's LAN address.
             String lan = com.larsons.engine.net.Lan.siteLocalAddress();
-            g.setFont(new Font("SansSerif", Font.PLAIN, 15));
-            g.setColor(new Color(140, 200, 150));
-            drawCentered(g, lan != null
+            drawCentered(target, lan != null
                             ? "Same network? They join:  " + lan + ":"
                                     + session.hostedServer().getPort()
                             : "Find your LAN IP (ipconfig / ifconfig) for same-network friends",
-                    viewportWidth / 2, 148);
+                    viewportWidth / 2, 148, LAN_FONT, CONNECTED);
         }
 
         // Player list.
         List<AutoClient.LobbyPlayer> players = client.lobby().players();
         int y = 180;
-        g.setFont(new Font("SansSerif", Font.PLAIN, 22));
         for (AutoClient.LobbyPlayer p : players) {
             boolean me = p.id() == client.localId();
             boolean host = p.id() == client.lobby().hostId();
-            g.setColor(me ? new Color(255, 210, 90) : new Color(210, 215, 230));
             String tags = (host ? "  [HOST]" : "") + (p.bot() ? "  [BOT]" : "")
                     + (me ? "  (you)" : "");
-            drawCentered(g, p.name() + tags, viewportWidth / 2, y);
+            drawCentered(target, p.name() + tags, viewportWidth / 2, y,
+                    PLAYER_FONT, me ? YOU : OTHER_PLAYER);
             y += 34;
         }
-        g.setColor(new Color(120, 125, 145));
-        g.setFont(new Font("SansSerif", Font.PLAIN, 16));
-        drawCentered(g, players.size() + " / " + AutoGame.MAX_PLAYERS + " players"
+        drawCentered(target, players.size() + " / " + AutoGame.MAX_PLAYERS + " players"
                         + (players.size() < AutoGame.MIN_PLAYERS
                         ? "  (need " + AutoGame.MIN_PLAYERS + "+ to start)" : ""),
-                viewportWidth / 2, y + 8);
+                viewportWidth / 2, y + 8, COUNT_FONT, COUNT);
 
         // Buttons.
         buttons.clear();
@@ -278,25 +282,22 @@ public class AutoBattlerLobbyScene extends AbstractScene {
             addButton("Add Bot", client::sendAddBot);
             addButton("Remove Bot", client::sendRemoveBot);
         } else {
-            g.setColor(new Color(150, 155, 175));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 17));
-            drawCentered(g, "Waiting for the host to start...",
-                    viewportWidth / 2, viewportHeight - 170);
+            drawCentered(target, "Waiting for the host to start...",
+                    viewportWidth / 2, viewportHeight - 170, SUBTITLE_FONT, SUBTITLE);
         }
         addButton("Leave (Esc)", () -> {
             session.close();
             session = null;
             status = "";
         });
-        layoutAndDrawButtons(g);
+        layoutAndDrawButtons(target);
 
         for (String toast : client.pollToasts()) {
             status = toast;
         }
         if (!status.isEmpty()) {
-            g.setColor(new Color(140, 200, 150));
-            g.setFont(new Font("SansSerif", Font.PLAIN, 15));
-            drawCentered(g, status, viewportWidth / 2, viewportHeight - 30);
+            drawCentered(target, status, viewportWidth / 2, viewportHeight - 30,
+                    LAN_FONT, CONNECTED);
         }
     }
 
@@ -306,14 +307,12 @@ public class AutoBattlerLobbyScene extends AbstractScene {
         buttons.add(new Rectangle()); // laid out in layoutAndDrawButtons
     }
 
-    private void layoutAndDrawButtons(Graphics2D g) {
-        g.setFont(new Font("SansSerif", Font.BOLD, 19));
-        FontMetrics fm = g.getFontMetrics();
+    private void layoutAndDrawButtons(DrawTarget target) {
         int gap = 18;
         int totalW = 0;
         int[] widths = new int[buttonLabels.size()];
         for (int i = 0; i < buttonLabels.size(); i++) {
-            widths[i] = fm.stringWidth(buttonLabels.get(i)) + 44;
+            widths[i] = target.textWidth(buttonLabels.get(i), BUTTON_FONT) + 44;
             totalW += widths[i] + (i > 0 ? gap : 0);
         }
         int x = viewportWidth / 2 - totalW / 2;
@@ -322,20 +321,19 @@ public class AutoBattlerLobbyScene extends AbstractScene {
             Rectangle r = buttons.get(i);
             r.setBounds(x, y, widths[i], 46);
             boolean primary = i == 0 && buttonLabels.get(0).startsWith("Start");
-            g.setColor(primary ? new Color(70, 120, 70) : new Color(45, 50, 70));
-            g.fillRoundRect(r.x, r.y, r.width, r.height, 12, 12);
-            g.setColor(primary ? new Color(150, 230, 150) : new Color(160, 170, 200));
-            g.drawRoundRect(r.x, r.y, r.width, r.height, 12, 12);
-            g.setColor(Color.WHITE);
-            g.drawString(buttonLabels.get(i),
-                    r.x + (r.width - fm.stringWidth(buttonLabels.get(i))) / 2,
-                    r.y + 30);
+            target.fillRoundRect(r.x, r.y, r.width, r.height, 12, 12,
+                    primary ? PRIMARY_FILL : BUTTON_FILL);
+            target.drawRoundRect(r.x, r.y, r.width, r.height, 12, 12,
+                    primary ? PRIMARY_EDGE : BUTTON_EDGE);
+            target.drawText(buttonLabels.get(i),
+                    r.x + (r.width - target.textWidth(buttonLabels.get(i), BUTTON_FONT)) / 2,
+                    r.y + 30, BUTTON_FONT, Color.WHITE);
             x += widths[i] + gap;
         }
     }
 
-    private void drawCentered(Graphics2D g, String s, int cx, int y) {
-        FontMetrics fm = g.getFontMetrics();
-        g.drawString(s, cx - fm.stringWidth(s) / 2, y);
+    private void drawCentered(DrawTarget target, String s, int cx, int y,
+                              Font font, Color color) {
+        target.drawText(s, cx - target.textWidth(s, font) / 2, y, font, color);
     }
 }

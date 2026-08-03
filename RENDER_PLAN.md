@@ -1,7 +1,8 @@
 # Render Plan — GPU Acceleration, End to End
 
 **Status:** Living document. Written 2026-08-02 against commit `85196b9` on
-`claude/gpu-acceleration-shaders-oqbx54`.
+`claude/gpu-acceleration-shaders-oqbx54`. B0–B3 are done and recorded in place;
+B4 is the next step.
 **Companion to:** [`STEAM_PLAN.md`](STEAM_PLAN.md), which covers the product.
 This one covers the renderer, and is the plan of record for Jobs A, B and C.
 
@@ -66,14 +67,16 @@ Everything in this table has been measured or executed, not assumed.
 | `uStrength` reaches every shader | `ShaderParityTest.strengthZeroLeavesTheFrameAloneOnBothSides` |
 | The compile check can actually fail | `ShaderCompileTest.aDeliberatelyBrokenShaderIsRejected` (negative control) |
 | The GPU plumbing a backend needs is already written | [`GlShaderHarness`](src/test/java/com/larsons/engine/GlShaderHarness.java) — context, FBO, upload, uniform binding, readback, in ~200 lines |
-| The world renders through `DrawTarget`, not `Graphics2D` | `TerrainPainter`, `TilePainter`, `DecorPainter`, `SurfaceDecorPainter`, `EntitySprites` all take a `DrawTarget`; `PlayScene`'s world phases are ported |
+| The whole engine renders through `DrawTarget`, not `Graphics2D` | Every painter, widget and scene takes a `DrawTarget`; `graphicsOf` has zero call sites after B3, and `SceneFramesTest.noSceneReachesPastTheDrawTarget` records every scene through a target with no Graphics2D behind it |
+| Scenes are pixel-compared, not just the painters | `SceneFrames` — 16 of the 18 scenes goldened at 800×480 from fixed inputs; the two excluded draw nothing without a live network session |
 | Frames are always composed offscreen | `Java2DRenderer` composes to a backing image unconditionally (`-Dlarsons.render.direct=true` is the escape hatch). Scene stage on Linux fell 1.071 → 0.374 ms from this alone |
 | Static terrain is cached | `TerrainCache` — 7.8× on still ground, parity under churn, one global pixel lattice so the floor does not shake |
 | The frame cost is known per stage | `FrameProfiler` / `FrameReport` — see Appendix C |
 
 **The honest summary:** Job A's *unknowns* are gone; only its plumbing remains,
-and the plumbing has a working prototype. Job B is roughly half done — the
-world is ported, the UI is not.
+and the plumbing has a working prototype. Job B's migration is done — world,
+UI and scenes all draw through the seam — and what remains of B is the
+batching work (B5, B6) and the backend itself (B7–B10).
 
 ---
 
@@ -92,8 +95,8 @@ much faster it makes things.
    the Java2D path working and tested.
 3. **Pixel parity is the contract.** "Looks fine" is not a result. Every port
    step compares rendered output against a reference and states the error.
-4. **The suite stays green.** Last full run: **840 tests, 0 failures, 10 skipped**
-   (was 810/0/3 when this was written; B0 and B1 added the rest). The skips are
+4. **The suite stays green.** Last full run: **860 tests, 0 failures, 10 skipped**
+   (was 810/0/3 when this was written; B0–B3 added the rest). The skips are
    environment-dependent and skip rather than fail by design — three need a
    display, seven need a GL driver this container has not got. A step ends with
    that or better.
@@ -513,6 +516,195 @@ goes last, when the pattern is completely established.
 `Java2DTarget`. Golden comparison green. Suite green.
 
 **Done when.** 39 → 0.
+
+#### B3 — done
+
+All eighteen ported, ascending by `Graphics2D` reference count as planned.
+`graphicsOf` is at **0 call sites**; only its definition survives, which B4
+deletes. `Scene`'s javadoc paragraph explaining how to unwrap the target — the
+progress bar — is gone with the last scene that needed it.
+
+**B3 built the instrument it needed first.** B0's goldens cover the shared
+painters, which is what B2 changed. They contain none of the ~2,000 drawing
+statements in the scenes, so they would have stayed green through a port that
+moved every HUD element in the game by a pixel. [`SceneFrames`](src/test/java/com/larsons/engine/render/SceneFrames.java)
+renders whole scenes the way the engine does — fixed inputs, fixed 800×480
+viewport, two fixed ticks, drawn once — with every store redirected to a
+scratch directory so the pictures do not depend on what a developer has saved.
+Sixteen of the eighteen are goldened. The two that are not, `AutoBattlerScene`
+and `DeckGameScene`, return immediately on a null client: without a live
+network session there is nothing on the screen to compare. They are named in
+`NOT_GOLDENABLE` with that reason, and `SceneFramesTest` asserts the list is
+exhaustive against the demo package on disk.
+
+Four scenes were *nearly* excluded on a guess. `PlayScene`, `EvolutionScene`,
+`AutoBattlerScene` and `DeckGameScene` all look like they roll from an unseeded
+RNG. Measuring instead of assuming showed `PlayScene` is deterministic once
+handed the level the engine ships, and `EvolutionScene` needed one seeded
+`EvolutionGame` passed to the public `adopt` it already had. The two that
+remain are excluded for a different reason than the one guessed, which is the
+whole argument for checking.
+
+**What the goldens caught.** Two real defects, both invisible in a diff and
+neither findable by eye:
+
+1. `AutoBattlerGuideScene`'s tab labels were ported at 14pt. The method sets
+   15pt; 14 was the ambient font a few lines up in the source. Mean channel
+   error 0.37, worst pixel named: expected white at (53, 81), got the tab fill.
+2. `CreativeScene`'s sidebar edge came out a pixel thin. It is drawn with no
+   stroke of its own and inherited the 2px width `drawSpawnMarker` left on the
+   Graphics2D three method calls earlier in the frame. Error 0.05, worst pixel
+   (191, 321).
+
+The second is the same class of bug B2 found twice, and it is now understood
+well enough to hunt rather than stumble over: after fixing it, the other four
+sites inheriting that same 2px — the slider divider, two cursor-preview spawn
+rings, the block preview outline — were traced through the original's
+execution order and stated explicitly, even though the goldens' default state
+does not reach them.
+
+#### Two corrections to B1's audits, found by porting
+
+Both are the same shape as B2's correction to this document: a count that was
+taken carefully and still missed something.
+
+- **The clip audit counted rectangles and concluded rectangles were all the
+  engine used.** `AutoBattlerScene`'s skinned board clips to a tile's diamond
+  and stretches the skin frame over the diamond's bounding box; the clip is
+  what keeps each tile's art off its neighbours, so it is load-bearing and no
+  rectangle expresses it. `DrawTarget` gains `pushClip(Shape)`, documented as
+  the one expensive verb on the interface — a scissor test becomes a stencil
+  pass, so the rectangular form stays the one to prefer.
+- **The stroke audit concluded every solid stroke wanted only a width, and
+  that round caps belonged to dashes alone.** The auto-battler's arrow trail
+  and slash arc are two solid strokes that ask for round caps explicitly. Two
+  sites do not justify a cap argument on every outline verb — every backend
+  would then implement and test a knob almost nothing turns — so the caps are
+  emitted as the geometry they are: a cap of width *w* is a disc of diameter
+  *w* on the endpoint. The slash had also silently lost its 3px width in the
+  mechanical pass; both are stated now.
+
+`DrawTarget` also gained the `(Color, float)` overload of every outline verb.
+Its absence showed the moment the port started stating widths: each call site
+had to write `SOME_COLOUR.getRGB()` inline, which is noise at best and an
+invitation to drop an alpha at worst.
+
+#### How 2,000 call sites were moved without trusting the mover
+
+The port was mechanical, so it was done mechanically — but the tool was built
+to fail loudly rather than to be clever. It tracks the ambient colour, font and
+stroke linearly and folds each into the draw that used it, and it *poisons*
+that state on leaving any nested block that changed it, because
+
+```java
+if (legal) { g.setColor(A); g.setStroke(2.5f); }
+else       { g.setColor(B); g.setStroke(1f);  }
+g.drawRoundRect(...);
+```
+
+cannot be resolved by a linear scan. Anything it could not resolve it left as a
+`g.` call — and since the `Graphics2D g` declaration is deleted in the same
+pass, the compiler then enumerates every one of them. That is the safety net:
+the tool cannot produce a wrong translation that compiles.
+
+It earned that design twice. A `g.setColor(...)` sitting under a comment line
+initially failed to match, which would have left the ambient colour stale and
+translated the *next* fill with the wrong one — a wrong translation that
+compiles, the one failure mode the tool must not have. And in `CreativeScene`
+it happily rewrote the 24 `createGraphics()` icon bakes to draw at the frame
+instead of the image; they have no `target` in scope, so that too was a compile
+error rather than a silent bug, and all 24 were restored verbatim. A bake is
+Java2D by definition and stays that way (B2), which is why `CreativeScene` is
+the one demo class that still imports `Graphics2D`.
+
+#### What the port removed besides `Graphics2D`
+
+None of this was sought; the port made it visible and it would have been
+perverse to leave it.
+
+- **~90 `Font` literals** were constructed inside render methods — a fresh
+  object per call per frame for values that never change. Making the font an
+  argument at each call site turned the duplication into something you could
+  see. `DeckGameScene` alone had twenty-one distinct literals.
+- **Per-frame `Polygon` allocation** in four scenes. `BoardCustomizeScene`'s
+  8×8 preview built 128 of them a frame (each cell filled, then outlined, each
+  `Polygon` holding two more arrays); `EvolutionScene` built two per organism
+  per frame in a dish that holds hundreds; `AutoBattlerScene`'s board built 64
+  plus the highlights. All now write into scratch arrays, or reuse one instance
+  where a `Shape` is genuinely needed.
+- **`RadialGradientPaint` and `GradientPaint` objects** built per light, per
+  dropped item, per frame — now the `DrawTarget` verbs over shared stop arrays.
+- **`frameTarget`**, the field B2 added to four scenes so a half-ported scene
+  could hand a `DrawTarget` to a ported painter. With `render` threading its
+  own parameter everywhere it was a redundant copy, and a reference outliving
+  the frame that set it.
+- **`SceneChrome`** collects the furniture nine scenes drew by hand: the same
+  near-black backdrop, the same 14pt SansSerif, the same 24px inset, the same
+  two baselines 24 and 44 pixels off the bottom, written out nine times. It is
+  constants and three one-line draws, deliberately not a widget framework —
+  two scenes keep drawing their own bold 15pt connect-result line rather than
+  grow a parameter here for two callers.
+
+**Verified.** Goldens 0.00 on all 31 frames (15 painters, 16 scenes). Suite:
+**860 tests, 0 failures, 10 skipped** — the same 10 environment-dependent skips
+as before. `SceneFramesTest` adds `noSceneReachesPastTheDrawTarget`, which
+records every scene through a `RecordingTarget` (no Graphics2D behind it) so a
+scene that still unwrapped would throw. Not hypothetical: the first run of that
+check, before any of this work, failed exactly that way on `StartupScene`.
+
+#### Draw-call baseline, per frame
+
+Recorded the same way as B2's table, now including the scenes. Sorted by merge
+ratio, which is the number that says what a batching backend would buy.
+
+| frame | ops | batches | merge | shape | image | text | gradient | state |
+|-------|----:|--------:|------:|------:|------:|-----:|---------:|------:|
+| particles | 62 | 1 | **62.00×** | 62 | 0 | 0 | 0 | 0 |
+| world-isometric | 153 | 5 | **30.60×** | 150 | 3 | 0 | 0 | 0 |
+| world-top-down | 149 | 5 | **29.80×** | 146 | 3 | 0 | 0 | 0 |
+| world-side-scroll | 145 | 5 | **29.00×** | 142 | 3 | 0 | 0 | 0 |
+| sprite-editor | 1545 | 86 | **17.97×** | 1495 | 3 | 35 | 0 | 12 |
+| scene-board-customize | 163 | 25 | **6.52×** | 149 | 0 | 11 | 1 | 2 |
+| scene-creative | 132 | 36 | **3.67×** | 95 | 7 | 30 | 0 | 0 |
+| container-panel | 35 | 12 | **2.92×** | 26 | 3 | 6 | 0 | 0 |
+| character-picker | 58 | 22 | **2.64×** | 10 | 3 | 45 | 0 | 0 |
+| scene-evolution | 96 | 39 | **2.46×** | 48 | 0 | 42 | 4 | 2 |
+| auto-sprites | 17 | 7 | **2.43×** | 11 | 6 | 0 | 0 | 0 |
+| scene-evolution-lobby | 10 | 5 | **2.00×** | 2 | 0 | 8 | 0 | 0 |
+| scene-startup | 11 | 6 | **1.83×** | 3 | 0 | 8 | 0 | 0 |
+| scene-main-menu | 11 | 6 | **1.83×** | 3 | 0 | 8 | 0 | 0 |
+| parallax-background | 9 | 5 | **1.80×** | 1 | 8 | 0 | 0 | 0 |
+| profile-overlay | 28 | 16 | **1.75×** | 15 | 0 | 13 | 0 | 0 |
+| scene-play | 37 | 22 | **1.68×** | 24 | 5 | 8 | 0 | 0 |
+| main-menu | 8 | 5 | **1.60×** | 3 | 0 | 5 | 0 | 0 |
+| scene-level-select | 8 | 5 | **1.60×** | 2 | 0 | 6 | 0 | 0 |
+| config-form | 21 | 14 | **1.50×** | 8 | 0 | 13 | 0 | 0 |
+| minigame-hud | 12 | 8 | **1.50×** | 8 | 0 | 4 | 0 | 0 |
+| scene-evolution-catalog | 24 | 16 | **1.50×** | 13 | 0 | 11 | 0 | 0 |
+| cutscene | 10 | 7 | **1.43×** | 4 | 2 | 4 | 0 | 0 |
+| scene-auto-battler-guide | 70 | 51 | **1.37×** | 29 | 0 | 39 | 0 | 2 |
+| scene-multiplayer | 18 | 14 | **1.29×** | 7 | 0 | 11 | 0 | 0 |
+| scene-auto-battler-lobby | 24 | 19 | **1.26×** | 11 | 0 | 13 | 0 | 0 |
+| scene-skin-editor | 29 | 23 | **1.26×** | 13 | 1 | 15 | 0 | 0 |
+| scene-deck-lobby | 22 | 18 | **1.22×** | 9 | 0 | 13 | 0 | 0 |
+| scene-game-type-editor | 17 | 14 | **1.21×** | 7 | 0 | 10 | 0 | 0 |
+| scene-key-binds | 30 | 25 | **1.20×** | 12 | 0 | 18 | 0 | 0 |
+| crafting-panel | 36 | 33 | **1.09×** | 9 | 12 | 15 | 0 | 0 |
+
+**What this says for B5 and B6.** The world still batches ~30× and `particles`
+62× — flat geometry collapses almost completely and a GL backend serves it
+from one draw call. The scenes are where the ratio is poor, and the columns say
+why: `crafting-panel` (1.09×), `scene-key-binds` (1.20×),
+`scene-game-type-editor` (1.21×) and `scene-deck-lobby` (1.22×) are all short
+frames of *interleaved* text and shapes, where nearly every operation changes
+the batch key. `scene-auto-battler-guide` is the volume case — 70 operations
+across 51 batches, 39 of them text runs.
+
+That is exactly what B5's sprite atlas and B6's glyph atlas exist for, and the
+scenes now give those steps something to move: before B3 the only text-heavy
+frames in the table were three widget goldens. `scene-board-customize` at 6.52×
+is the counter-example worth keeping in view — 149 flat shapes in its board
+preview, already near the ceiling, and an atlas will do nothing for it.
 
 ---
 
@@ -1069,11 +1261,11 @@ in a real level where they do.
 ## 8. Order of record
 
 ```
-B0  golden frames                    ← start here
-B1  widen DrawTarget (7 new members + 2 audits)
-B2  port 12 shared painters/widgets
-B3  port 19 scenes, graphicsOf 39 → 0
-B4  seal the seam (delete graphicsOf, Renderer returns DrawTarget)
+B0  golden frames                      ← done
+B1  widen DrawTarget (7 new members + 2 audits)  ← done
+B2  port 12 shared painters/widgets    ← done
+B3  port 18 scenes, graphicsOf 39 → 0  ← done
+B4  seal the seam (delete graphicsOf, Renderer returns DrawTarget)  ← start here
 B5  sprite atlas
 B6  glyph atlas
 B7  :gl Gradle module
@@ -1108,25 +1300,32 @@ order.
 
 ## Appendix A — Migration surface, measured
 
-Counts from `src/main/java`, 2026-08-02, commit `85196b9`.
+Originally counted from `src/main/java` on 2026-08-02 at commit `85196b9`; the
+right-hand column is the same measurement re-taken after B3.
 
-| Measure | Count |
-|---------|-------|
-| `Java2DTarget.graphicsOf` call sites | 39 (+1 definition) |
-| Files naming `Graphics2D` | 48 before B2; **44 after** (19 in `demo/`, 25 elsewhere), and of the 25 all but `Engine`, `Java2DTarget`, `Java2DRenderer`, `Renderer` and `Scene`/`SceneManager` are `createGraphics()` bakes or comments |
-| `drawString` sites | 350 |
-| `drawImage` sites | 95 |
-| Files naming `BufferedImage` | 34 |
-| `DrawTarget` members today | 26 abstract (22 verbs, counting `drawImage`'s four overloads as one) |
-| `DrawTarget` members after B1 | 33 abstract (26 before), + 16 `Color` overloads |
+| Measure | Before B2 | After B3 |
+|---------|----------:|---------:|
+| `Java2DTarget.graphicsOf` call sites | 39 (+1 definition) | **0** (+1 definition) |
+| Files naming `Graphics2D` | 48 | **26** (2 in `demo/`) |
+| `drawString` sites | 350 | **1** |
+| `DrawTarget` abstract members | 26 | **29** |
+| `DrawTarget` `Color`/convenience overloads | 0 | **23** |
 
-Of the 29 non-demo files naming `Graphics2D`, these should still name it after
-B4 and are **not** migration targets: `Java2DTarget`, `Java2DRenderer`,
-`Renderer` (until B4 changes its return type), `AssetLoader`, `Skins`,
-`PlayerSprites`, `DirectionalSprites`, `EntitySprites`, `AutoSprites` — the last
-five because they bake images with `createGraphics()`, which is Java2D by
-definition. `TerrainPainter` and `TilePainter` retain a reference only in
-compatibility overloads and javadoc, both removed in B4.
+The two `demo/` files left are `CreativeScene`, which bakes 24 palette icons
+with `createGraphics()`, and one comment in `DeckGameScene`. The remaining 24
+are the ones that should still name it: `Java2DTarget`, `Java2DRenderer`,
+`Renderer` (until B4 changes its return type), `Engine`, `AssetLoader`,
+`Skins`, `PlayerSprites`, `DirectionalSprites`, `EntitySprites`, `AutoSprites`,
+`CharacterPicker`, `ParallaxBackground`, `CutscenePainter`, `Particles`,
+`TerrainCache` — bakes, all of them — plus javadoc and comments in `UiText`,
+`Scene`, `FrameProfiler`, `DecorPainter` and `SurfaceDecorPainter`.
+
+**Three things for B4 to clear, measured rather than assumed.** `SceneManager`,
+`DecorPainter` and `SurfaceDecorPainter` name `Graphics2D` only in an import
+that nothing uses. `TilePainter.drawTexture(Graphics2D, …)` and
+`TerrainPainter.draw(Graphics2D, …)` / `drawMiningCracks(Graphics2D, …)` now
+have **no callers in `src/main`** — only four in tests — so B4 deletes an
+overload nobody depends on rather than a migration path someone might.
 
 ---
 

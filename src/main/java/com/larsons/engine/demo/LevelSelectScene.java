@@ -12,15 +12,11 @@ import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelStore;
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.Menu;
 import com.larsons.engine.ui.MenuTheme;
 
-import java.awt.Color;
-import java.awt.Font;
-import java.awt.Graphics2D;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -222,22 +218,16 @@ public class LevelSelectScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
-        Graphics2D g = Java2DTarget.graphicsOf(target);
-        g.setColor(new Color(18, 18, 28));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
+        SceneChrome.backdrop(target, viewportWidth, viewportHeight);
         if (view == View.EDIT) {
             form.render(target, viewportWidth, viewportHeight);
         } else {
             menu.render(target, viewportWidth, viewportHeight);
         }
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         if (!status.isEmpty()) {
-            g.setColor(new Color(140, 200, 140));
-            g.drawString(status, 24, viewportHeight - 44);
+            SceneChrome.status(target, viewportHeight, status, SceneChrome.OK);
         }
-        g.setColor(new Color(120, 120, 140));
-        g.drawString(hint(), 24, viewportHeight - 24);
+        SceneChrome.hint(target, viewportHeight, hint());
     }
 
     private String hint() {

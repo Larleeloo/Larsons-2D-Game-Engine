@@ -31,17 +31,10 @@ import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 
-import java.awt.AlphaComposite;
-import java.awt.BasicStroke;
 import java.awt.Color;
-import java.awt.Composite;
 import java.awt.Font;
-import java.awt.FontMetrics;
-import java.awt.GradientPaint;
-import java.awt.Graphics2D;
 import java.awt.Polygon;
 import java.awt.Rectangle;
-import java.awt.RenderingHints;
 import java.awt.Shape;
 import java.awt.event.KeyEvent;
 import java.awt.geom.AffineTransform;
@@ -100,6 +93,23 @@ public class AutoBattlerScene extends AbstractScene {
     };
 
     // Damage-meter type colours (attack / ability / healing).
+    private static final Color LEGEND_TEXT = new Color(160, 168, 190);
+    private static final Color OWN_HALF_TINT = new Color(90, 130, 200, 40);
+    private static final Color HOVER_TINT = new Color(120, 170, 255, 70);
+    private static final Color TILE_EDGE = new Color(20, 22, 34);
+    private static final Color SELECTED_TILE = new Color(255, 220, 110);
+
+    /** Half the arrow trail's 2.5px stroke, rounded out to whole pixels. */
+    private static final int ARROW_CAP = 1;
+
+    /** The slash arc's stroke width, and therefore its round cap's diameter. */
+    private static final int SLASH_WIDTH = 3;
+
+    /** Reused by {@link #tilePolygon}; see the note there. */
+    private final Polygon tile = new Polygon();
+    private final int[] boltXs = new int[4];
+    private final int[] boltYs = new int[4];
+
     private static final Color DMG_PHYSICAL = new Color(235, 150, 80);
     private static final Color DMG_MAGIC = new Color(140, 160, 255);
     private static final Color DMG_HEAL = new Color(120, 220, 140);
@@ -237,6 +247,25 @@ public class AutoBattlerScene extends AbstractScene {
         double wx, wy;
         double age;
     }
+
+    private static final Font SANS_BOLD_28 = new Font("SansSerif", Font.BOLD, 28);
+    private static final Font SANS_BOLD_30 = new Font("SansSerif", Font.BOLD, 30);
+    private static final Font SANS_BOLD_34 = new Font("SansSerif", Font.BOLD, 34);
+    private static final Font SANS_BOLD_44 = new Font("SansSerif", Font.BOLD, 44);
+    private static final Font SANS_PLAIN_16 = new Font("SansSerif", Font.PLAIN, 16);
+    private static final Font SANS_PLAIN_17 = new Font("SansSerif", Font.PLAIN, 17);
+    private static final Font SANS_PLAIN_20 = new Font("SansSerif", Font.PLAIN, 20);
+    private static final Font SANS_BOLD_10 = new Font("SansSerif", Font.BOLD, 10);
+    private static final Font SANS_BOLD_11 = new Font("SansSerif", Font.BOLD, 11);
+    private static final Font SANS_BOLD_12 = new Font("SansSerif", Font.BOLD, 12);
+    private static final Font SANS_BOLD_13 = new Font("SansSerif", Font.BOLD, 13);
+    private static final Font SANS_BOLD_14 = new Font("SansSerif", Font.BOLD, 14);
+    private static final Font SANS_BOLD_15 = new Font("SansSerif", Font.BOLD, 15);
+    private static final Font SANS_BOLD_20 = new Font("SansSerif", Font.BOLD, 20);
+    private static final Font SANS_PLAIN_11 = new Font("SansSerif", Font.PLAIN, 11);
+    private static final Font SANS_PLAIN_12 = new Font("SansSerif", Font.PLAIN, 12);
+    private static final Font SANS_PLAIN_13 = new Font("SansSerif", Font.PLAIN, 13);
+    private static final Font SANS_PLAIN_14 = new Font("SansSerif", Font.PLAIN, 14);
 
     public AutoBattlerScene(GameContext ctx) {
         this.ctx = ctx;
@@ -1051,60 +1080,52 @@ public class AutoBattlerScene extends AbstractScene {
 
     // ------------------------------------------------------------------ render
 
-    /** This frame's target, for the widgets already ported off Graphics2D. */
-    private DrawTarget frameTarget;
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Most of this scene is not ported off Graphics2D yet; see
-        // Java2DTarget.graphicsOf. The frame's target is held so the widgets
-        // that *are* ported draw through it, which is also what puts their
-        // operations into the frame's draw-call count.
-        this.frameTarget = target;
-        Graphics2D g = Java2DTarget.graphicsOf(target);
         int w = viewportWidth, h = viewportHeight;
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
         BoardTheme theme = BoardTheme.active();
         BoardTheme.Scheme scheme = theme.scheme();
-        g.setPaint(new GradientPaint(0, 0, scheme.bgTop, 0, h, scheme.bgBottom));
-        g.fillRect(0, 0, w, h);
-        drawBackgroundImage(g, theme, w, h);
+        target.fillLinearGradient(0, 0, w, h,
+                0, 0, scheme.bgTop.getRGB(), 0, h, scheme.bgBottom.getRGB());
+        drawBackgroundImage(target, theme, w, h);
         if (client == null) return;
 
         layoutHud();
-        drawBoard(g);
-        drawProps(g, theme);
+        drawBoard(target);
+        drawProps(target, theme);
         if (fighting()) {
-            drawCorpses(g);
-            drawCombatUnits(g);
-            drawMissiles(g);
-            drawSlashes(g);
+            drawCorpses(target);
+            drawCombatUnits(target);
+            drawMissiles(target);
+            drawSlashes(target);
         } else {
-            drawPlanningUnits(g);
+            drawPlanningUnits(target);
         }
         particles.render(target, camera);
-        drawFloaters(g);
+        drawFloaters(target);
 
-        drawTopHud(g);
+        drawTopHud(target);
         if (fighting()) {
-            drawDamagePanel(g);
+            drawDamagePanel(target);
         } else {
-            drawSynergies(g);
+            drawSynergies(target);
         }
-        drawStandings(g);
-        drawBench(g);
-        drawShopBar(g);
-        drawItemBench(g);
-        drawToasts(g);
-        drawBanner(g);
-        drawDrag(g);
-        if (!dragging && viewingId < 0) drawTooltips(g);
-        drawBoardView(g);
-        drawOverlays(g);
+        drawStandings(target);
+        drawBench(target);
+        drawShopBar(target);
+        drawItemBench(target);
+        drawToasts(target);
+        drawBanner(target);
+        drawDrag(target);
+        if (!dragging && viewingId < 0) drawTooltips(target);
+        drawBoardView(target);
+        drawOverlays(target);
     }
 
     /** The optional custom backdrop image, scaled to cover and dimmed to taste. */
-    private void drawBackgroundImage(Graphics2D g, BoardTheme theme, int w, int h) {
+    private void drawBackgroundImage(DrawTarget target, BoardTheme theme, int w, int h) {
         if (theme.background().isEmpty()) return;
         BufferedImage bg = AssetLoader.loadImageOrNull(theme.background());
         if (bg == null) return;
@@ -1112,17 +1133,16 @@ public class AutoBattlerScene extends AbstractScene {
         double scale = Math.max(w / (double) bg.getWidth(), h / (double) bg.getHeight());
         int bw = (int) (bg.getWidth() * scale);
         int bh = (int) (bg.getHeight() * scale);
-        g.drawImage(bg, (w - bw) / 2, (h - bh) / 2, bw, bh, null);
+        target.drawImage(bg, (w - bw) / 2, (h - bh) / 2, bw, bh);
         // Dim it so the board and HUD stay readable over any picture.
-        g.setColor(new Color(8, 9, 16, 150));
-        g.fillRect(0, 0, w, h);
+        target.fillRect(0, 0, w, h, new Color(8, 9, 16, 150));
     }
 
     /**
      * Decorative props (cosmetic only) at their player-placed positions;
      * slots with an imported image draw that instead of the procedural prop.
      */
-    private void drawProps(Graphics2D g, BoardTheme theme) {
+    private void drawProps(DrawTarget target, BoardTheme theme) {
         int size = (int) (40 * camera.zoom);
         int[] out = new int[2];
         for (int i = 0; i < BoardTheme.PROP_SLOTS; i++) {
@@ -1135,11 +1155,11 @@ public class AutoBattlerScene extends AbstractScene {
                 img = AutoSprites.prop(theme.prop(i), size);
             }
             if (img == null) continue;
-            g.drawImage(img, out[0] - size / 2, out[1] - size + size / 4, size, size, null);
+            target.drawImage(img, out[0] - size / 2, out[1] - size + size / 4, size, size);
         }
     }
 
-    private void drawBoard(Graphics2D g) {
+    private void drawBoard(DrawTarget target) {
         boolean plan = planning();
         BoardTheme.Scheme scheme = BoardTheme.active().scheme();
         BufferedImage tileA = Skins.frame("board/tile_a", animClock);
@@ -1151,35 +1171,29 @@ public class AutoBattlerScene extends AbstractScene {
                 BufferedImage skin = (c + r) % 2 == 0 ? tileA : tileB;
                 if (skin != null) {
                     // Skinned board: stretch the frame over the tile diamond.
-                    Shape oldClip = g.getClip();
-                    g.clip(p);
+                    // The clip is what keeps each tile's art off its
+                    // neighbours — see DrawTarget.pushClip(Shape).
+                    target.pushClip(p);
                     Rectangle b = p.getBounds();
-                    g.drawImage(skin, b.x, b.y, b.width, b.height, null);
-                    g.setClip(oldClip);
+                    target.drawImage(skin, b.x, b.y, b.width, b.height);
+                    target.popClip();
                     if (plan && own) {
-                        g.setColor(new Color(90, 130, 200, 40));
-                        g.fillPolygon(p);
+                        target.fillPolygon(p.xpoints, p.ypoints, p.npoints, OWN_HALF_TINT);
                     }
                 } else {
                     Color base = (c + r) % 2 == 0 ? scheme.tileA : scheme.tileB;
                     if (plan && own) {
                         base = (c + r) % 2 == 0 ? scheme.ownA : scheme.ownB;
                     }
-                    g.setColor(base);
-                    g.fillPolygon(p);
+                    target.fillPolygon(p.xpoints, p.ypoints, p.npoints, base);
                 }
                 if (plan && c == hoverCol && r == hoverRow && own) {
-                    g.setColor(new Color(120, 170, 255, 70));
-                    g.fillPolygon(p);
+                    target.fillPolygon(p.xpoints, p.ypoints, p.npoints, HOVER_TINT);
                 }
-                g.setColor(new Color(20, 22, 34));
-                g.drawPolygon(p);
+                target.drawPolygon(p.xpoints, p.ypoints, p.npoints, TILE_EDGE);
             }
         }
         // Board edge glow.
-        g.setColor(new Color(scheme.edge.getRed(), scheme.edge.getGreen(),
-                scheme.edge.getBlue(), 90));
-        g.setStroke(new BasicStroke(2f));
         int[] sx = new int[4];
         int[] sy = new int[4];
         int[][] corners = {{0, 0}, {BattleSim.COLS, 0},
@@ -1190,19 +1204,31 @@ public class AutoBattlerScene extends AbstractScene {
             sx[i] = out[0];
             sy[i] = out[1];
         }
-        g.drawPolygon(sx, sy, 4);
-        g.setStroke(new BasicStroke(1f));
+        target.drawPolygon(sx, sy, 4, new Color(scheme.edge.getRed(), scheme.edge.getGreen(),
+                scheme.edge.getBlue(), 90), 2f);
     }
 
+    /**
+     * The four screen corners of board cell {@code (c, r)}, as a reusable
+     * {@link Polygon}.
+     *
+     * <p>One instance, reset per call, because the board is 8x8 and every tile
+     * is filled and then outlined every frame — a fresh {@code Polygon} (and
+     * the two arrays inside it) per call was 64 allocations a frame before the
+     * highlights and the glow tiles were counted. Every caller uses the result
+     * immediately and none of them keeps it, which is what makes the reuse
+     * safe; the type stays {@code Polygon} rather than a pair of scratch
+     * arrays because the skinned-tile path needs a {@link Shape} to clip to.
+     */
     private Polygon tilePolygon(int c, int r) {
         int[] out = new int[2];
-        Polygon p = new Polygon();
+        tile.reset();
         double[][] corners = {{c, r}, {c + 1, r}, {c + 1, r + 1}, {c, r + 1}};
         for (double[] corner : corners) {
             camera.worldToScreen(corner[0] * TILE, corner[1] * TILE, out);
-            p.addPoint(out[0], out[1]);
+            tile.addPoint(out[0], out[1]);
         }
-        return p;
+        return tile;
     }
 
     /**
@@ -1231,7 +1257,7 @@ public class AutoBattlerScene extends AbstractScene {
      * breathing squash-and-stretch, swaying, or wiggling), phase-shifted per
      * instance so a bench of the same unit doesn't move in lockstep.
      */
-    private void drawUnitInWorld(Graphics2D g, UnitDef def, int size, boolean friendly,
+    private void drawUnitInWorld(DrawTarget target, UnitDef def, int size, boolean friendly,
                                  AnimState state, double stateTime, int cx, int cy,
                                  int seed) {
         int dx = 0, dy = 0;
@@ -1275,28 +1301,24 @@ public class AutoBattlerScene extends AbstractScene {
         if (state == AnimState.CAST) {
             // Casting: a pulsing accent ring on the ground.
             int rw = (int) (size * (0.8 + 0.15 * Math.sin(animClock * 12)));
-            g.setColor(new Color(def.accent.getRed(), def.accent.getGreen(),
-                    def.accent.getBlue(), 120));
-            g.setStroke(new BasicStroke(2.5f));
-            g.drawOval(cx - rw / 2, cy - rw / 6 + size / 4, rw, rw / 3);
-            g.setStroke(new BasicStroke(1f));
+            target.drawOval(cx - rw / 2, cy - rw / 6 + size / 4, rw, rw / 3,
+                    new Color(def.accent.getRed(), def.accent.getGreen(),
+                            def.accent.getBlue(), 120), 2.5f);
         }
         BufferedImage img = unitImage(def, size, friendly, state, stateTime);
         // Squash & stretch scale about the feet so figures stay grounded.
         int drawW = (int) (size * sx);
         int drawH = (int) (size * sy);
         int footY = cy + size / 4;
-        g.drawImage(img, cx - drawW / 2 + dx, footY - drawH + dy, drawW, drawH, null);
+        target.drawImage(img, cx - drawW / 2 + dx, footY - drawH + dy, drawW, drawH);
         if (state == AnimState.HIT) {
             // Hit flash: a brief red ring around the figure.
-            g.setColor(new Color(235, 90, 80, 110));
-            g.setStroke(new BasicStroke(2f));
-            g.drawOval(cx - drawW / 2 + dx, footY - drawH + dy, drawW, drawH);
-            g.setStroke(new BasicStroke(1f));
+            target.drawOval(cx - drawW / 2 + dx, footY - drawH + dy, drawW, drawH,
+                    new Color(235, 90, 80, 110), 2f);
         }
     }
 
-    private void drawPlanningUnits(Graphics2D g) {
+    private void drawPlanningUnits(DrawTarget target) {
         AutoClient.You you = client.you();
         if (you == null) return;
         List<UnitInstance> board = new ArrayList<>(you.board());
@@ -1308,33 +1330,29 @@ public class AutoBattlerScene extends AbstractScene {
             if (def == null) continue;
             camera.worldToScreen((u.col + 0.5) * TILE, (u.row + 0.5) * TILE, out);
             if (u.id == selectedUnitId) {
-                g.setColor(new Color(255, 220, 110));
-                g.setStroke(new BasicStroke(2.5f));
-                g.drawPolygon(tilePolygon(u.col, u.row));
-                g.setStroke(new BasicStroke(1f));
+                Polygon p = tilePolygon(u.col, u.row);
+                target.drawPolygon(p.xpoints, p.ypoints, p.npoints, SELECTED_TILE, 2.5f);
             }
-            drawUnitInWorld(g, def, size, true, AnimState.IDLE, animClock,
+            drawUnitInWorld(target, def, size, true, AnimState.IDLE, animClock,
                     out[0], out[1], u.id);
-            AutoSprites.drawStars(frameTarget, u.star, out[0], out[1] - size + size / 8, 8);
-            drawItemPips(g, u, out[0], out[1] + size / 6);
+            AutoSprites.drawStars(target, u.star, out[0], out[1] - size + size / 8, 8);
+            drawItemPips(target, u, out[0], out[1] + size / 6);
         }
     }
 
-    private void drawItemPips(Graphics2D g, UnitInstance u, int cx, int y) {
+    private void drawItemPips(DrawTarget target, UnitInstance u, int cx, int y) {
         if (u.items.isEmpty()) return;
         int pip = 10;
         int x = cx - (u.items.size() * (pip + 2)) / 2;
         for (String key : u.items) {
             AutoItem item = AutoItems.get(key);
-            g.setColor(item == null ? Color.GRAY : item.color);
-            g.fillRect(x, y, pip, pip);
-            g.setColor(new Color(20, 22, 32));
-            g.drawRect(x, y, pip, pip);
+            target.fillRect(x, y, pip, pip, item == null ? Color.GRAY : item.color);
+            target.drawRect(x, y, pip, pip, new Color(20, 22, 32));
             x += pip + 2;
         }
     }
 
-    private void drawCombatUnits(Graphics2D g) {
+    private void drawCombatUnits(DrawTarget target) {
         AutoClient.CombatFrame frame = client.combatLatest();
         if (frame == null) return;
         boolean home = isHomeSide();
@@ -1358,47 +1376,45 @@ public class AutoBattlerScene extends AbstractScene {
             UnitFx fx = unitFx.get(u.id());
             AnimState state = fx != null ? fx.state : u.state();
             double stateTime = fx != null ? fx.time : 0;
-            drawUnitInWorld(g, def, size, friendly, state, stateTime,
+            drawUnitInWorld(target, def, size, friendly, state, stateTime,
                     out[0], out[1], u.id());
-            AutoSprites.drawStars(frameTarget, u.star(), out[0], out[1] - size + size / 12, 7);
+            AutoSprites.drawStars(target, u.star(), out[0], out[1] - size + size / 12, 7);
 
             // Health + mana bars.
             int bw = (int) (40 * camera.zoom);
             int bx = out[0] - bw / 2;
             int by = out[1] - size + size / 4 - 10;
-            g.setColor(new Color(15, 15, 22, 210));
-            g.fillRect(bx, by, bw, 5);
-            g.setColor(friendly ? new Color(110, 220, 120) : new Color(235, 100, 90));
-            g.fillRect(bx, by, (int) (bw * Math.max(0, u.hp() / Math.max(1, u.maxHp()))), 5);
+            target.fillRect(bx, by, bw, 5, new Color(15, 15, 22, 210));
+            target.fillRect(bx, by, (int) (bw * Math.max(0, u.hp() / Math.max(1, u.maxHp()))), 5,
+                    friendly ? new Color(110, 220, 120) : new Color(235, 100, 90));
             if (u.manaMax() > 0) {
-                g.setColor(new Color(15, 15, 22, 210));
-                g.fillRect(bx, by + 6, bw, 3);
-                g.setColor(new Color(90, 150, 255));
-                g.fillRect(bx, by + 6, (int) (bw * u.mana() / u.manaMax()), 3);
+                target.fillRect(bx, by + 6, bw, 3, new Color(15, 15, 22, 210));
+                target.fillRect(bx, by + 6, (int) (bw * u.mana() / u.manaMax()), 3,
+                        new Color(90, 150, 255));
             }
         }
     }
 
     /** Fading corpses where units died, so deaths read on the board. */
-    private void drawCorpses(Graphics2D g) {
+    private void drawCorpses(DrawTarget target) {
         if (corpses.isEmpty()) return;
         int size = (int) (46 * camera.zoom);
         int[] out = new int[2];
-        Composite old = g.getComposite();
         for (Corpse c : corpses) {
             float a = (float) Math.max(0, 1 - c.age / CORPSE_SECONDS);
             camera.worldToScreen(c.wx, c.wy, out);
-            g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, a * 0.8f));
+            // Scoped per corpse rather than set-and-restore-once: each one
+            // fades at its own rate, and a stack has to balance.
+            target.pushAlpha(a * 0.8f);
             BufferedImage img = unitImage(c.def, size, c.friendly, AnimState.DEATH, c.age);
             int sink = (int) (c.age * 12);
-            g.drawImage(img, out[0] - size / 2, out[1] - size + size / 4 + sink,
-                    size, size, null);
+            target.drawImage(img, out[0] - size / 2, out[1] - size + size / 4 + sink, size, size);
+            target.popAlpha();
         }
-        g.setComposite(old);
     }
 
     /** In-flight projectiles: skinned frames, or procedural arrows/orbs/bolts. */
-    private void drawMissiles(Graphics2D g) {
+    private void drawMissiles(DrawTarget target) {
         if (missiles.isEmpty()) return;
         int[] out = new int[2];
         int[] ahead = new int[2];
@@ -1410,11 +1426,11 @@ public class AutoBattlerScene extends AbstractScene {
 
             BufferedImage skin = Skins.frame("projectile/" + m.kind, animClock);
             if (skin != null) {
-                AffineTransform oldTx = g.getTransform();
-                g.translate(out[0], out[1]);
-                g.rotate(angle);
-                g.drawImage(skin, -size / 2, -size / 2, size, size, null);
-                g.setTransform(oldTx);
+                AffineTransform spin = AffineTransform.getTranslateInstance(out[0], out[1]);
+                spin.rotate(angle);
+                target.pushTransform(spin);
+                target.drawImage(skin, -size / 2, -size / 2, size, size);
+                target.popTransform();
                 continue;
             }
             switch (m.kind) {
@@ -1422,37 +1438,40 @@ public class AutoBattlerScene extends AbstractScene {
                     int len = size;
                     int tx = (int) (Math.cos(angle) * len / 2);
                     int ty = (int) (Math.sin(angle) * len / 2);
-                    g.setColor(m.color);
-                    g.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND,
-                            BasicStroke.JOIN_ROUND));
-                    g.drawLine(out[0] - tx, out[1] - ty, out[0] + tx, out[1] + ty);
-                    g.fillOval(out[0] + tx - 3, out[1] + ty - 3, 6, 6);
-                    g.setStroke(new BasicStroke(1f));
+                    target.drawLine(out[0] - tx, out[1] - ty, out[0] + tx, out[1] + ty,
+                            m.color, 2.5f);
+                    // The stroke asked for round caps; the head already has a
+                    // disc, so the tail gets the matching one. See the note on
+                    // ARROW_CAP.
+                    target.fillOval(out[0] - tx - ARROW_CAP, out[1] - ty - ARROW_CAP,
+                            ARROW_CAP * 2, ARROW_CAP * 2, m.color);
+                    target.fillOval(out[0] + tx - 3, out[1] + ty - 3, 6, 6, m.color);
                 }
                 case "orb" -> {
-                    g.setColor(new Color(m.color.getRed(), m.color.getGreen(),
-                            m.color.getBlue(), 90));
-                    g.fillOval(out[0] - size / 2, out[1] - size / 2, size, size);
-                    g.setColor(m.color);
-                    g.fillOval(out[0] - size / 4, out[1] - size / 4, size / 2, size / 2);
-                    g.setColor(Color.WHITE);
-                    g.fillOval(out[0] - size / 8, out[1] - size / 8, size / 4, size / 4);
+                    target.fillOval(out[0] - size / 2, out[1] - size / 2, size, size,
+                            new Color(m.color.getRed(), m.color.getGreen(),
+                                    m.color.getBlue(), 90));
+                    target.fillOval(out[0] - size / 4, out[1] - size / 4, size / 2, size / 2,
+                            m.color);
+                    target.fillOval(out[0] - size / 8, out[1] - size / 8, size / 4, size / 4,
+                            Color.WHITE);
                 }
                 default -> { // bolt: a small rotated diamond
-                    AffineTransform oldTx = g.getTransform();
-                    g.translate(out[0], out[1]);
-                    g.rotate(angle);
-                    g.setColor(m.color);
+                    AffineTransform spin = AffineTransform.getTranslateInstance(out[0], out[1]);
+                    spin.rotate(angle);
+                    target.pushTransform(spin);
                     int hw = Math.max(4, size / 3);
-                    g.fillPolygon(new int[]{-hw, 0, hw, 0}, new int[]{0, -hw / 2, 0, hw / 2}, 4);
-                    g.setTransform(oldTx);
+                    boltXs[0] = -hw; boltXs[1] = 0;       boltXs[2] = hw; boltXs[3] = 0;
+                    boltYs[0] = 0;   boltYs[1] = -hw / 2; boltYs[2] = 0;  boltYs[3] = hw / 2;
+                    target.fillPolygon(boltXs, boltYs, 4, m.color);
+                    target.popTransform();
                 }
             }
         }
     }
 
     /** Melee impact arcs, expanding and fading over their short life. */
-    private void drawSlashes(Graphics2D g) {
+    private void drawSlashes(DrawTarget target) {
         if (slashes.isEmpty()) return;
         int[] out = new int[2];
         for (Slash s : slashes) {
@@ -1460,31 +1479,51 @@ public class AutoBattlerScene extends AbstractScene {
             int alpha = (int) (220 * (1 - t));
             int r = (int) ((14 + t * 22) * camera.zoom);
             camera.worldToScreen(s.wx, s.wy, out);
-            g.setColor(new Color(s.color.getRed(), s.color.getGreen(),
-                    s.color.getBlue(), Math.max(0, alpha)));
-            g.setStroke(new BasicStroke(3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             int startAngle = (int) (40 - t * 60);
-            g.drawArc(out[0] - r, out[1] - r - (int) (10 * camera.zoom), r * 2, r * 2,
-                    startAngle, 100);
-            g.setStroke(new BasicStroke(1f));
+            Color ink = new Color(s.color.getRed(), s.color.getGreen(), s.color.getBlue(),
+                    Math.max(0, alpha));
+            int cy = out[1] - r - (int) (10 * camera.zoom);
+            target.drawArc(out[0] - r, cy, r * 2, r * 2, startAngle, 100, ink, 3f);
+            // Round caps, as the stroke asked for: a cap of width w is a disc
+            // of diameter w on the endpoint, so the two ends get one each.
+            roundCap(target, out[0], cy + r, r, startAngle, ink);
+            roundCap(target, out[0], cy + r, r, startAngle + 100, ink);
         }
     }
 
-    private void drawFloaters(Graphics2D g) {
-        g.setFont(new Font("SansSerif", Font.BOLD, 15));
+    /**
+     * The disc a round-capped stroke of {@link #SLASH_WIDTH} paints at the end
+     * of an arc, placed at the angle's point on the circle.
+     *
+     * <p>Drawn rather than asked for. B1's stroke audit concluded that every
+     * solid stroke in the engine wanted only a width and that round caps
+     * belonged to dashes alone; the slash arc and the arrow trail here are the
+     * two sites that contradict it. Two sites do not justify a cap argument on
+     * every outline verb — every backend would have to implement and test a
+     * knob almost nothing turns — so the cap is emitted as the geometry it is.
+     */
+    private void roundCap(DrawTarget target, int cx, int cy, int r, int degrees, Color color) {
+        double a = Math.toRadians(degrees);
+        int px = cx + (int) Math.round(Math.cos(a) * r);
+        int py = cy - (int) Math.round(Math.sin(a) * r);
+        int half = SLASH_WIDTH / 2;
+        target.fillOval(px - half, py - half, SLASH_WIDTH, SLASH_WIDTH, color);
+    }
+
+    private void drawFloaters(DrawTarget target) {
         int[] out = new int[2];
         for (Floater f : floaters) {
             camera.worldToScreen(f.wx, f.wy, out);
             int alpha = (int) (255 * Math.max(0, 1 - f.age / 1.1));
-            g.setColor(new Color(f.color.getRed(), f.color.getGreen(), f.color.getBlue(), alpha));
-            g.drawString(f.text, out[0] - g.getFontMetrics().stringWidth(f.text) / 2,
-                    (int) (out[1] - 34 - f.age * 26));
+            target.drawText(f.text, out[0] - target.textWidth(f.text, SANS_BOLD_15) / 2,
+                    (int) (out[1] - 34 - f.age * 26), SANS_BOLD_15,
+                    new Color(f.color.getRed(), f.color.getGreen(), f.color.getBlue(), alpha));
         }
     }
 
     // --- HUD ---------------------------------------------------------------------
 
-    private void drawTopHud(Graphics2D g) {
+    private void drawTopHud(DrawTarget target) {
         AutoClient.PhaseState phase = client.phase();
         if (phase == null) return;
         String phaseName = switch (phase.phase()) {
@@ -1500,63 +1539,53 @@ public class AutoBattlerScene extends AbstractScene {
             title += "  ·  vs " + m.opponent();
         }
         Rectangle band = AutoHud.titleBand(viewportWidth);
-        g.setFont(new Font("SansSerif", Font.BOLD, 20));
-        g.setColor(new Color(235, 238, 250));
-        drawCentered(g, trim(g, title, band.width), viewportWidth / 2, band.y + 22);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 16));
-        g.setColor(new Color(160, 168, 190));
-        drawCentered(g, phaseName + "  ·  " + (int) Math.ceil(phase.leftNow()) + "s",
-                viewportWidth / 2, band.y + 46);
+        drawCentered(target, trim(target, SANS_BOLD_20, title, band.width),
+                viewportWidth / 2, band.y + 22, SANS_BOLD_20, new Color(235, 238, 250));
+        drawCentered(target, phaseName + "  ·  " + (int) Math.ceil(phase.leftNow()) + "s",
+                viewportWidth / 2, band.y + 46, SANS_PLAIN_16, new Color(160, 168, 190));
 
         int ping = client.pingMillis();
         if (ping >= 0) {
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            g.setColor(new Color(110, 115, 135));
-            g.drawString(ping + " ms", viewportWidth - 52, 18);
+            target.drawText(ping + " ms", viewportWidth - 52, 18, SANS_PLAIN_12,
+                    new Color(110, 115, 135));
         }
 
-        if (phase.phase() == AutoGame.Phase.PLAN) drawArrangeButtons(g);
-        drawRelicBadge(g, phase.round());
+        if (phase.phase() == AutoGame.Phase.PLAN) drawArrangeButtons(target);
+        drawRelicBadge(target, phase.round());
     }
 
     /** One-click formation buttons, shown while the board is editable. */
-    private void drawArrangeButtons(Graphics2D g) {
+    private void drawArrangeButtons(DrawTarget target) {
         AutoClient.You you = client.you();
         boolean enabled = you != null && !you.board().isEmpty();
         for (int i = 0; i < arrangeBtns.length; i++) {
             Rectangle r = arrangeBtns[i];
             boolean hot = r.contains(lastMouseX, lastMouseY);
-            g.setColor(!enabled ? new Color(30, 33, 48)
+            target.fillRoundRect(r.x, r.y, r.width, r.height, 8, 8, !enabled ? new Color(30, 33, 48)
                     : hot ? new Color(58, 66, 96) : new Color(40, 46, 68));
-            g.fillRoundRect(r.x, r.y, r.width, r.height, 8, 8);
-            g.setColor(enabled ? new Color(120, 130, 160) : new Color(60, 64, 84));
-            g.drawRoundRect(r.x, r.y, r.width, r.height, 8, 8);
-            g.setFont(new Font("SansSerif", Font.BOLD, 11));
-            g.setColor(enabled ? new Color(210, 216, 234) : new Color(110, 114, 134));
-            drawCentered(g, ARRANGE_LABELS[i], r.x + r.width / 2, r.y + 15);
+            target.drawRoundRect(r.x, r.y, r.width, r.height, 8, 8,
+                    enabled ? new Color(120, 130, 160) : new Color(60, 64, 84));
+            drawCentered(target, ARRANGE_LABELS[i], r.x + r.width / 2, r.y + 15, SANS_BOLD_11,
+                    enabled ? new Color(210, 216, 234) : new Color(110, 114, 134));
         }
     }
 
     /** The current relic in the top-left corner; hover for its description. */
-    private void drawRelicBadge(Graphics2D g, int round) {
+    private void drawRelicBadge(DrawTarget target, int round) {
         AutoClient.You you = client.you();
         if (you == null || you.relic() == null) return;
         Relic relic = you.relic();
         Rectangle r = relicBadge;
-        g.setColor(new Color(22, 25, 42, 235));
-        g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-        g.setColor(hoverRelic ? relic.color : new Color(70, 78, 108));
-        g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-        g.setColor(relic.color);
-        g.fillOval(r.x + 8, r.y + r.height / 2 - 7, 14, 14);
-        g.setFont(new Font("SansSerif", Font.BOLD, 13));
-        g.setColor(new Color(230, 234, 246));
-        g.drawString(trim(g, "Relic: " + relic.label, r.width - 36), r.x + 28, r.y + 19);
+        target.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10, new Color(22, 25, 42, 235));
+        target.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10,
+                hoverRelic ? relic.color : new Color(70, 78, 108));
+        target.fillOval(r.x + 8, r.y + r.height / 2 - 7, 14, 14, relic.color);
+        target.drawText(trim(target, SANS_BOLD_13, "Relic: " + relic.label, r.width - 36),
+                r.x + 28, r.y + 19,
+                SANS_BOLD_13, new Color(230, 234, 246));
         int untilSwap = AutoGame.RELIC_INTERVAL - ((round - 1) % AutoGame.RELIC_INTERVAL);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        g.setColor(new Color(150, 156, 178));
-        g.drawString("swaps in " + untilSwap + " round" + (untilSwap == 1 ? "" : "s"),
-                r.x + 28, r.y + 36);
+        target.drawText("swaps in " + untilSwap + " round" + (untilSwap == 1 ? "" : "s"), r.x + 28,
+                r.y + 36, SANS_PLAIN_11, new Color(150, 156, 178));
     }
 
     private record TraitCount(Trait trait, int count) {}
@@ -1583,7 +1612,7 @@ public class AutoBattlerScene extends AbstractScene {
     }
 
     /** Clickable category-icon chips ("All" first) atop the panel, wrapping. */
-    private int drawCategoryChips(Graphics2D g, Rectangle panel, int y) {
+    private int drawCategoryChips(DrawTarget target, Rectangle panel, int y) {
         categoryChips.clear();
         chipCategories.clear();
         int chip = 16;
@@ -1592,11 +1621,10 @@ public class AutoBattlerScene extends AbstractScene {
         Rectangle all = new Rectangle(x, y, chip + 8, chip);
         categoryChips.add(all);
         chipCategories.add(null);
-        g.setColor(categoryFilter == null ? new Color(70, 82, 118) : new Color(34, 38, 56));
-        g.fillRoundRect(all.x, all.y, all.width, all.height, 6, 6);
-        g.setColor(categoryFilter == null ? new Color(230, 234, 246) : new Color(130, 136, 156));
-        g.setFont(new Font("SansSerif", Font.BOLD, 10));
-        g.drawString("All", all.x + 5, all.y + 12);
+        target.fillRoundRect(all.x, all.y, all.width, all.height, 6, 6,
+                categoryFilter == null ? new Color(70, 82, 118) : new Color(34, 38, 56));
+        target.drawText("All", all.x + 5, all.y + 12, SANS_BOLD_10,
+                categoryFilter == null ? new Color(230, 234, 246) : new Color(130, 136, 156));
         x += all.width + 2;
 
         for (SynergyCategory cat : SynergyCategory.values()) {
@@ -1608,30 +1636,26 @@ public class AutoBattlerScene extends AbstractScene {
             categoryChips.add(r);
             chipCategories.add(cat);
             boolean active = categoryFilter == cat;
-            g.setColor(active ? new Color(70, 82, 118)
+            target.fillRoundRect(r.x, r.y, r.width, r.height, 6, 6, active ? new Color(70, 82, 118)
                     : hoverCategory == cat ? new Color(52, 58, 84) : new Color(34, 38, 56));
-            g.fillRoundRect(r.x, r.y, r.width, r.height, 6, 6);
-            g.drawImage(AutoSprites.categoryIcon(cat, chip - 4), r.x + 2, r.y + 2, null);
+            target.drawImage(AutoSprites.categoryIcon(cat, chip - 4), r.x + 2, r.y + 2);
             x += chip + 2;
         }
         return y + chip + 8;
     }
 
-    private void drawSynergies(Graphics2D g) {
+    private void drawSynergies(DrawTarget target) {
         traitRows.clear();
         List<TraitCount> rows = synergyRows();
         Rectangle panel = AutoHud.leftPanel(viewportWidth, viewportHeight, itemCount());
         int x = panel.x + 4, y = panel.y + 16;
-        g.setFont(new Font("SansSerif", Font.BOLD, 14));
-        g.setColor(new Color(160, 168, 190));
-        g.drawString("Synergies", x, y - 4);
-        y = drawCategoryChips(g, panel, y + 2);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
+        target.drawText("Synergies", x, y - 4, SANS_BOLD_14, new Color(160, 168, 190));
+        y = drawCategoryChips(target, panel, y + 2);
         if (rows.isEmpty()) {
-            g.setColor(new Color(110, 115, 135));
-            g.drawString(categoryFilter != null
+            target.drawText(categoryFilter != null
                     ? "No " + categoryFilter.label + " synergies fielded"
-                    : "Field units to activate traits", x, y + 16);
+                    : "Field units to activate traits", x, y + 16, SANS_PLAIN_14, new Color(110,
+                            115, 135));
             return;
         }
         // Cap the list so it can never grow into the item bench below it.
@@ -1644,31 +1668,31 @@ public class AutoBattlerScene extends AbstractScene {
             Rectangle row = new Rectangle(x, y - 14, 190, 22);
             traitRows.add(row);
             if (tier > 0) {
-                g.setColor(new Color(50, 58, 84, 180));
-                g.fillRoundRect(row.x - 4, row.y, row.width, row.height, 8, 8);
+                target.fillRoundRect(row.x - 4, row.y, row.width, row.height, 8, 8,
+                        new Color(50, 58, 84, 180));
             }
-            g.setColor(tier > 0 ? tc.trait.color : new Color(110, 115, 135));
-            g.fillOval(x, y - 10, 12, 12);
-            g.setColor(tier > 0 ? new Color(230, 234, 246) : new Color(130, 136, 156));
+            target.fillOval(x, y - 10, 12, 12,
+                    tier > 0 ? tc.trait.color : new Color(110, 115, 135));
             StringBuilder marks = new StringBuilder();
             for (int threshold : tc.trait.thresholds) {
                 if (marks.length() > 0) marks.append("/");
                 marks.append(threshold);
             }
-            g.drawString(tc.trait.label + "  " + tc.count + "  (" + marks + ")", x + 20, y + 1);
+            target.drawText(tc.trait.label + "  " + tc.count + "  (" + marks + ")", x + 20, y + 1,
+                    SANS_PLAIN_14, tier > 0 ? new Color(230, 234, 246) : new Color(130, 136, 156));
             // The trait's role icons, right-aligned in the row.
             int icon = 11;
             int ix = row.x + row.width - icon - 2;
             List<SynergyCategory> cats = tc.trait.categories;
             for (int ci = Math.min(2, cats.size() - 1); ci >= 0; ci--) {
-                g.drawImage(AutoSprites.categoryIcon(cats.get(ci), icon),
-                        ix - ci * (icon + 2), y - 9, null);
+                target.drawImage(AutoSprites.categoryIcon(cats.get(ci), icon), ix - ci * (icon + 2),
+                        y - 9);
             }
             y += 26;
         }
         if (shown < rows.size()) {
-            g.setColor(new Color(110, 115, 135));
-            g.drawString("+" + (rows.size() - shown) + " more…", x + 20, y + 1);
+            target.drawText("+" + (rows.size() - shown) + " more…", x + 20, y + 1, SANS_PLAIN_14,
+                    new Color(110, 115, 135));
         }
     }
 
@@ -1677,7 +1701,7 @@ public class AutoBattlerScene extends AbstractScene {
      * dealt, split by type (attack / ability), plus healing done. Replaces the
      * synergy panel while a battle runs.
      */
-    private void drawDamagePanel(Graphics2D g) {
+    private void drawDamagePanel(DrawTarget target) {
         traitRows.clear(); // no synergy hover targets during combat
         categoryChips.clear();
         chipCategories.clear();
@@ -1698,20 +1722,16 @@ public class AutoBattlerScene extends AbstractScene {
 
         Rectangle panel = AutoHud.leftPanel(viewportWidth, viewportHeight, itemCount());
         int x = panel.x + 4, y = panel.y + 16;
-        g.setFont(new Font("SansSerif", Font.BOLD, 14));
-        g.setColor(new Color(160, 168, 190));
-        g.drawString("Damage", x, y - 4);
+        target.drawText("Damage", x, y - 4, SANS_BOLD_14, new Color(160, 168, 190));
         // Legend: the damage-type colours.
-        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
         int lx = x + 66;
-        lx = legendSwatch(g, lx, y - 12, DMG_PHYSICAL, "attack");
-        lx = legendSwatch(g, lx, y - 12, DMG_MAGIC, "ability");
-        legendSwatch(g, lx, y - 12, DMG_HEAL, "heal");
+        lx = legendSwatch(target, lx, y - 12, DMG_PHYSICAL, "attack");
+        lx = legendSwatch(target, lx, y - 12, DMG_MAGIC, "ability");
+        legendSwatch(target, lx, y - 12, DMG_HEAL, "heal");
 
         if (rows.isEmpty()) {
-            g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-            g.setColor(new Color(110, 115, 135));
-            g.drawString("No damage dealt yet", x, y + 16);
+            target.drawText("No damage dealt yet", x, y + 16, SANS_PLAIN_13,
+                    new Color(110, 115, 135));
             return;
         }
 
@@ -1729,23 +1749,22 @@ public class AutoBattlerScene extends AbstractScene {
 
             // Your own units glow green so the meter reads at a glance.
             if (friendly) {
-                g.setColor(new Color(60, 160, 80, 70));
-                g.fillRoundRect(x - 3, y - 2, barMax + 6, rowH - 2, 6, 6);
+                target.fillRoundRect(x - 3, y - 2, barMax + 6, rowH - 2, 6, 6,
+                        new Color(60, 160, 80, 70));
             }
 
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
             Color nameColor = u.dead() ? new Color(115, 118, 136)
                     : friendly ? new Color(150, 235, 160) : new Color(240, 185, 175);
-            g.setColor(nameColor);
             String name = def != null ? def.name : u.key();
-            g.drawString(trim(g, name, barMax - 58), x, y + 10);
+            target.drawText(trim(target, SANS_PLAIN_12, name, barMax - 58), x, y + 10,
+                    SANS_PLAIN_12, nameColor);
 
             String amount = fmtAmount(total) + (heal >= 1 ? "  +" + fmtAmount(heal) : "");
-            g.setColor(heal >= 1 ? DMG_HEAL : new Color(200, 206, 226));
-            FontMetrics fm = g.getFontMetrics();
-            g.drawString(amount, x + barMax - fm.stringWidth(amount), y + 10);
+            target.drawText(amount, x + barMax - target.textWidth(amount, SANS_PLAIN_12),
+                    y + 10, SANS_PLAIN_12,
+                    heal >= 1 ? DMG_HEAL : new Color(200, 206, 226));
 
-            drawDamageBar(g, u, x, y + 14, barMax, total, maxTotal, phys);
+            drawDamageBar(target, u, x, y + 14, barMax, total, maxTotal, phys);
             y += rowH;
         }
     }
@@ -1756,10 +1775,9 @@ public class AutoBattlerScene extends AbstractScene {
      * whatever damage wasn't elemental splits into the plain attack/ability
      * colours.
      */
-    private void drawDamageBar(Graphics2D g, AutoClient.CombatUnit u, int x, int y,
+    private void drawDamageBar(DrawTarget target, AutoClient.CombatUnit u, int x, int y,
                                int barMax, double total, double maxTotal, double phys) {
-        g.setColor(new Color(15, 15, 22, 200));
-        g.fillRect(x, y, barMax, 5);
+        target.fillRect(x, y, barMax, 5, new Color(15, 15, 22, 200));
         int bw = (int) (barMax * Math.min(1, total / maxTotal));
         if (bw <= 0 || total <= 0) return;
 
@@ -1771,8 +1789,7 @@ public class AutoBattlerScene extends AbstractScene {
         for (Map.Entry<Element, Double> e : u.dmgByElement().entrySet()) {
             int seg = (int) (bw * e.getValue() / total);
             if (seg <= 0) continue;
-            g.setColor(e.getKey().color);
-            g.fillRect(x + drawn, y, seg, 5);
+            target.fillRect(x + drawn, y, seg, 5, e.getKey().color);
             drawn += seg;
         }
         // Plain remainder: attack then ability colours.
@@ -1780,22 +1797,18 @@ public class AutoBattlerScene extends AbstractScene {
         if (plain > 0) {
             double plainPhys = Math.min(phys, plain);
             int physW = (int) (bw * plainPhys / total);
-            g.setColor(DMG_PHYSICAL);
-            g.fillRect(x + drawn, y, physW, 5);
+            target.fillRect(x + drawn, y, physW, 5, DMG_PHYSICAL);
             drawn += physW;
         }
         if (drawn < bw) {
-            g.setColor(DMG_MAGIC);
-            g.fillRect(x + drawn, y, bw - drawn, 5);
+            target.fillRect(x + drawn, y, bw - drawn, 5, DMG_MAGIC);
         }
     }
 
-    private static int legendSwatch(Graphics2D g, int x, int y, Color color, String label) {
-        g.setColor(color);
-        g.fillRect(x, y, 8, 8);
-        g.setColor(new Color(150, 156, 178));
-        g.drawString(label, x + 11, y + 8);
-        return x + 11 + g.getFontMetrics().stringWidth(label) + 8;
+    private static int legendSwatch(DrawTarget target, int x, int y, Color color, String label) {
+        target.fillRect(x, y, 8, 8, color);
+        target.drawText(label, x + 11, y + 8, SANS_PLAIN_11, LEGEND_TEXT);
+        return x + 11 + target.textWidth(label, SANS_PLAIN_11) + 8;
     }
 
     /** Compact damage numbers: 843, 1.2k, 24k. */
@@ -1805,7 +1818,7 @@ public class AutoBattlerScene extends AbstractScene {
         return Integer.toString((int) v);
     }
 
-    private void drawStandings(Graphics2D g) {
+    private void drawStandings(DrawTarget target) {
         standingRects.clear();
         standingIds.clear();
         List<AutoClient.Standing> rows = new ArrayList<>(client.standings());
@@ -1816,14 +1829,10 @@ public class AutoBattlerScene extends AbstractScene {
         });
         Rectangle panel = AutoHud.standingsPanel(viewportWidth, viewportHeight);
         int x = panel.x + 6, y = panel.y + 16;
-        g.setFont(new Font("SansSerif", Font.BOLD, 14));
-        g.setColor(new Color(160, 168, 190));
-        g.drawString("Players", x, y - 4);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        g.setColor(new Color(110, 115, 135));
-        g.drawString("click a name to scout", x + 66, y - 4);
+        target.drawText("Players", x, y - 4, SANS_BOLD_14, new Color(160, 168, 190));
+        target.drawText("click a name to scout", x + 66, y - 4, SANS_PLAIN_11,
+                new Color(110, 115, 135));
 
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         int rowH = AutoHud.STANDING_ROW_HEIGHT;
         int maxRows = Math.max(1, (panel.y + panel.height - (y + 6)) / rowH);
         int shown = Math.min(rows.size(), rows.size() > maxRows ? maxRows - 1 : maxRows);
@@ -1837,29 +1846,26 @@ public class AutoBattlerScene extends AbstractScene {
             boolean hovered = viewingId < 0
                     ? rowRect.contains(lastMouseX, lastMouseY) : s.id() == viewingId;
             if (me || hovered) {
-                g.setColor(hovered ? new Color(62, 72, 104, 200) : new Color(50, 58, 84, 180));
-                g.fillRoundRect(rowRect.x, rowRect.y, rowRect.width, rowRect.height, 8, 8);
+                target.fillRoundRect(rowRect.x, rowRect.y, rowRect.width, rowRect.height, 8, 8,
+                        hovered ? new Color(62, 72, 104, 200) : new Color(50, 58, 84, 180));
             }
-            g.setColor(s.alive() ? (me ? new Color(255, 220, 120) : new Color(220, 224, 238))
-                    : new Color(105, 108, 126));
             String label = s.name() + (s.bot() ? " [bot]" : "");
             if (!s.alive() && s.place() > 0) label = "#" + s.place() + " " + label;
-            g.drawString(trim(g, label, 120), x, y + 2);
+            target.drawText(trim(target, SANS_PLAIN_14, label, 120), x, y + 2, SANS_PLAIN_14,
+                    s.alive() ? (me ? new Color(255, 220, 120) : new Color(220, 224, 238))
+                            : new Color(105, 108, 126));
             if (s.alive()) {
-                g.setColor(new Color(15, 15, 22, 200));
-                g.fillRect(x + 128, y - 8, 60, 10);
-                g.setColor(hpColor(s.hp()));
-                g.fillRect(x + 128, y - 8, (int) (60 * Math.min(1, s.hp() / 100.0)), 10);
-                g.setColor(new Color(230, 234, 246));
-                g.setFont(new Font("SansSerif", Font.PLAIN, 11));
-                g.drawString(String.valueOf(s.hp()), x + 132, y + 1);
-                g.setFont(new Font("SansSerif", Font.PLAIN, 14));
+                target.fillRect(x + 128, y - 8, 60, 10, new Color(15, 15, 22, 200));
+                target.fillRect(x + 128, y - 8, (int) (60 * Math.min(1, s.hp() / 100.0)), 10,
+                        hpColor(s.hp()));
+                target.drawText(String.valueOf(s.hp()), x + 132, y + 1, SANS_PLAIN_11,
+                        new Color(230, 234, 246));
             }
             y += rowH;
         }
         if (shown < rows.size()) {
-            g.setColor(new Color(110, 115, 135));
-            g.drawString("+" + (rows.size() - shown) + " more…", x, y + 2);
+            target.drawText("+" + (rows.size() - shown) + " more…", x, y + 2, SANS_PLAIN_14,
+                    new Color(110, 115, 135));
         }
     }
 
@@ -1869,15 +1875,13 @@ public class AutoBattlerScene extends AbstractScene {
         return new Color(230, 110, 95);
     }
 
-    private void drawBench(Graphics2D g) {
+    private void drawBench(DrawTarget target) {
         AutoClient.You you = client.you();
-        g.setFont(new Font("SansSerif", Font.PLAIN, 12));
         for (int i = 0; i < 9; i++) {
             Rectangle r = benchSlots[i];
-            g.setColor(new Color(30, 34, 52, 220));
-            g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-            g.setColor(i == hoverBench ? new Color(140, 170, 240) : new Color(60, 66, 92));
-            g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
+            target.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10, new Color(30, 34, 52, 220));
+            target.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10,
+                    i == hoverBench ? new Color(140, 170, 240) : new Color(60, 66, 92));
         }
         if (you == null) return;
         for (UnitInstance u : you.bench()) {
@@ -1886,119 +1890,105 @@ public class AutoBattlerScene extends AbstractScene {
             UnitDef def = u.def();
             if (def == null) continue;
             if (u.id == selectedUnitId) {
-                g.setColor(new Color(255, 220, 110));
-                g.setStroke(new BasicStroke(2.5f));
-                g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-                g.setStroke(new BasicStroke(1f));
+                target.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10, new Color(255, 220, 110),
+                        2.5f);
             }
             int size = r.width - 10;
             BufferedImage img = unitImage(def, size, true, AnimState.IDLE, animClock);
-            g.drawImage(img, r.x + 5, r.y + 2, size, size, null);
-            AutoSprites.drawStars(frameTarget, u.star, r.x + r.width / 2, r.y + 2, 7);
-            drawItemPips(g, u, r.x + r.width / 2, r.y + r.height - 12);
+            target.drawImage(img, r.x + 5, r.y + 2, size, size);
+            AutoSprites.drawStars(target, u.star, r.x + r.width / 2, r.y + 2, 7);
+            drawItemPips(target, u, r.x + r.width / 2, r.y + r.height - 12);
         }
     }
 
-    private void drawShopBar(Graphics2D g) {
+    private void drawShopBar(DrawTarget target) {
         AutoClient.You you = client.you();
         int w = viewportWidth, h = viewportHeight;
         int shopH = shopBarHeight();
         int barY = h - shopH;
-        g.setColor(new Color(18, 20, 34, 235));
-        g.fillRect(0, barY, w, shopH);
-        g.setColor(new Color(60, 66, 92));
-        g.drawLine(0, barY, w, barY);
+        target.fillRect(0, barY, w, shopH, new Color(18, 20, 34, 235));
+        target.drawLine(0, barY, w, barY, new Color(60, 66, 92));
         if (you == null) return;
 
         // Economy buttons.
-        drawButton(g, xpBtn, "Buy XP  4g  (F)", you.gold() >= 4 && you.level() < 9);
-        drawButton(g, rerollBtn, "Reroll  2g  (D)", you.gold() >= 2);
+        drawButton(target, xpBtn, "Buy XP  4g  (F)", you.gold() >= 4 && you.level() < 9);
+        drawButton(target, rerollBtn, "Reroll  2g  (D)", you.gold() >= 2);
 
         // Shop lock: keep this exact shop through the round change.
         boolean locked = you.shopLocked();
-        g.setColor(locked ? new Color(200, 165, 60) : new Color(45, 52, 76));
-        g.fillRoundRect(lockBtn.x, lockBtn.y, lockBtn.width, lockBtn.height, 8, 8);
-        g.setColor(locked ? new Color(255, 225, 130) : new Color(120, 130, 158));
-        g.drawRoundRect(lockBtn.x, lockBtn.y, lockBtn.width, lockBtn.height, 8, 8);
-        g.setFont(new Font("SansSerif", Font.BOLD, 11));
-        g.setColor(locked ? new Color(35, 28, 8) : new Color(170, 178, 200));
-        drawCentered(g, "Lock", lockBtn.x + lockBtn.width / 2, lockBtn.y + 17);
+        target.fillRoundRect(lockBtn.x, lockBtn.y, lockBtn.width, lockBtn.height, 8, 8,
+                locked ? new Color(200, 165, 60) : new Color(45, 52, 76));
+        target.drawRoundRect(lockBtn.x, lockBtn.y, lockBtn.width, lockBtn.height, 8, 8,
+                locked ? new Color(255, 225, 130) : new Color(120, 130, 158));
+        drawCentered(target, "Lock", lockBtn.x + lockBtn.width / 2, lockBtn.y + 17, SANS_BOLD_11,
+                locked ? new Color(35, 28, 8) : new Color(170, 178, 200));
 
         // Gold / level / XP / streak readout: two short lines that stay left of
         // the (centred) bench strip — see AutoHud.economyLine.
         Rectangle eco = AutoHud.economyLine(w, h);
-        g.setFont(new Font("SansSerif", Font.BOLD, 15));
-        g.setColor(new Color(255, 214, 100));
         String goldText = you.gold() + "g";
-        g.drawString(goldText, eco.x + 2, eco.y + 14);
-        int cx = eco.x + 2 + g.getFontMetrics().stringWidth(goldText);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        g.setColor(new Color(170, 176, 198));
+        target.drawText(goldText, eco.x + 2, eco.y + 14, SANS_BOLD_15, new Color(255, 214, 100));
+        int cx = eco.x + 2 + target.textWidth(goldText, SANS_BOLD_15);
         String lvl = " · Level " + you.level();
-        g.drawString(lvl, cx, eco.y + 14);
-        cx += g.getFontMetrics().stringWidth(lvl);
+        target.drawText(lvl, cx, eco.y + 14, SANS_PLAIN_13, new Color(170, 176, 198));
+        cx += target.textWidth(lvl, SANS_PLAIN_13);
         if (you.streak() != 0) {
-            g.setColor(you.streak() > 0 ? new Color(130, 220, 140) : new Color(230, 130, 110));
-            g.drawString("  " + (you.streak() > 0 ? "W" : "L") + Math.abs(you.streak()),
-                    cx, eco.y + 14);
+            target.drawText("  " + (you.streak() > 0 ? "W" : "L") + Math.abs(you.streak()), cx,
+                    eco.y + 14, SANS_PLAIN_13,
+                    you.streak() > 0 ? new Color(130, 220, 140) : new Color(230, 130, 110));
         }
-        g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-        g.setColor(new Color(150, 156, 178));
         String xp = you.level() >= 9 ? "max xp" : you.xp() + "/" + you.xpNeed() + " xp";
-        g.drawString(trim(g, xp + " · " + you.board().size() + "/" + you.boardCap()
-                + " fielded", eco.width - 4), eco.x + 2, eco.y + 34);
+        target.drawText(trim(target, SANS_PLAIN_12,
+                        xp + " · " + you.board().size() + "/" + you.boardCap() + " fielded",
+                        eco.width - 4),
+                eco.x + 2, eco.y + 34, SANS_PLAIN_12, new Color(150, 156, 178));
 
         // Shop cards.
         for (int i = 0; i < 5; i++) {
             Rectangle r = shopCards[i];
             String key = i < you.shop().size() ? you.shop().get(i) : null;
-            g.setColor(new Color(28, 32, 50));
-            g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
+            target.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10, new Color(28, 32, 50));
             if (key == null) {
-                g.setColor(new Color(48, 52, 72));
-                g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
+                target.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10, new Color(48, 52, 72));
                 continue;
             }
             UnitDef def = AutoUnits.get(key);
             if (def == null) continue;
             Color tier = COST_COLORS[def.cost - 1];
-            g.setColor(i == hoverShop ? tier.brighter() : tier);
-            g.setStroke(new BasicStroke(i == hoverShop ? 2.5f : 1.5f));
-            g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-            g.setStroke(new BasicStroke(1f));
+            target.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10,
+                    i == hoverShop ? tier.brighter() : tier, i == hoverShop ? 2.5f : 1.5f);
 
             BufferedImage img = unitImage(def, 54, true, AnimState.IDLE, animClock);
-            g.drawImage(img, r.x + 6, r.y + r.height / 2 - 27, 54, 54, null);
+            target.drawImage(img, r.x + 6, r.y + r.height / 2 - 27, 54, 54);
             if (!def.attackElements.isEmpty()) {
-                AutoSprites.drawElementPips(frameTarget, def.attackElements,
+                AutoSprites.drawElementPips(target, def.attackElements,
                         r.x + 33, r.y + r.height - 20, 9);
             }
-            g.setFont(new Font("SansSerif", Font.BOLD, 14));
-            g.setColor(new Color(232, 236, 248));
-            g.drawString(trim(g, def.name, r.width - 72), r.x + 62, r.y + 22);
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            g.setColor(def.origin.color);
-            g.drawString(trim(g, def.origin.label, r.width - 96), r.x + 62, r.y + 42);
-            g.setColor(def.clazz.color);
-            g.drawString(trim(g, def.clazz.label, r.width - 96), r.x + 62, r.y + 58);
+            target.drawText(trim(target, SANS_BOLD_14, def.name, r.width - 72),
+                    r.x + 62, r.y + 22, SANS_BOLD_14,
+                    new Color(232, 236, 248));
+            target.drawText(trim(target, SANS_PLAIN_12, def.origin.label, r.width - 96),
+                    r.x + 62, r.y + 42,
+                    SANS_PLAIN_12, def.origin.color);
+            target.drawText(trim(target, SANS_PLAIN_12, def.clazz.label, r.width - 96),
+                    r.x + 62, r.y + 58,
+                    SANS_PLAIN_12, def.clazz.color);
             int price = you.shopPrice(i);
             boolean discounted = price < def.cost;
-            g.setColor(discounted ? new Color(130, 235, 150) : new Color(255, 214, 100));
-            g.setFont(new Font("SansSerif", Font.BOLD, 14));
-            g.drawString(price + "g", r.x + r.width - 30, r.y + r.height - 10);
+            target.drawText(price + "g", r.x + r.width - 30, r.y + r.height - 10, SANS_BOLD_14,
+                    discounted ? new Color(130, 235, 150) : new Color(255, 214, 100));
             if (discounted) {
                 // The Bargainer's slash: the list price, struck through.
-                g.setFont(new Font("SansSerif", Font.PLAIN, 11));
-                g.setColor(new Color(170, 176, 198));
                 String was = def.cost + "g";
                 int wx = r.x + r.width - 30;
                 int wy = r.y + r.height - 24;
-                g.drawString(was, wx, wy);
-                g.drawLine(wx - 1, wy - 4, wx + g.getFontMetrics().stringWidth(was), wy - 4);
+                target.drawText(was, wx, wy, SANS_PLAIN_11, new Color(170, 176, 198));
+                target.drawLine(wx - 1, wy - 4, wx + target.textWidth(was, SANS_PLAIN_11), wy - 4,
+                        new Color(170, 176, 198));
             }
             if (you.gold() < price) {
-                g.setColor(new Color(10, 10, 18, 130));
-                g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
+                target.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10,
+                        new Color(10, 10, 18, 130));
             }
         }
 
@@ -2006,10 +1996,10 @@ public class AutoBattlerScene extends AbstractScene {
         if (selectedUnitId >= 0) {
             UnitInstance sel = findOwn(selectedUnitId);
             if (sel != null && sel.def() != null) {
-                drawButton(g, sellBtn, "Sell " + sellPrice(you, sel) + "g  (S)", true,
+                drawButton(target, sellBtn, "Sell " + sellPrice(you, sel) + "g  (S)", true,
                         new Color(120, 55, 55), new Color(235, 140, 120));
                 if (!sel.items.isEmpty()) {
-                    drawButton(g, unequipBtn, you.unequipUsed()
+                    drawButton(target, unequipBtn, you.unequipUsed()
                                     ? "Items removed this round"
                                     : "Remove items  (1/round)",
                             !you.unequipUsed(), new Color(50, 70, 100),
@@ -2026,44 +2016,38 @@ public class AutoBattlerScene extends AbstractScene {
         return you.relic() == Relic.FENCE ? value * 3 : value;
     }
 
-    private void drawButton(Graphics2D g, Rectangle r, String label, boolean enabled) {
-        drawButton(g, r, label, enabled, new Color(45, 52, 76), new Color(160, 172, 205));
+    private void drawButton(DrawTarget target, Rectangle r, String label, boolean enabled) {
+        drawButton(target, r, label, enabled, new Color(45, 52, 76), new Color(160, 172, 205));
     }
 
-    private void drawButton(Graphics2D g, Rectangle r, String label, boolean enabled,
+    private void drawButton(DrawTarget target, Rectangle r, String label, boolean enabled,
                             Color fill, Color edge) {
-        g.setColor(enabled ? fill : new Color(32, 35, 50));
-        g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-        g.setColor(enabled ? edge : new Color(70, 74, 95));
-        g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-        g.setFont(new Font("SansSerif", Font.BOLD, 13));
-        g.setColor(enabled ? Color.WHITE : new Color(120, 124, 145));
-        FontMetrics fm = g.getFontMetrics();
-        g.drawString(label, r.x + (r.width - fm.stringWidth(label)) / 2,
-                r.y + r.height / 2 + 5);
+        target.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10,
+                enabled ? fill : new Color(32, 35, 50));
+        target.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10,
+                enabled ? edge : new Color(70, 74, 95));
+        target.drawText(label, r.x + (r.width - target.textWidth(label, SANS_BOLD_13)) / 2,
+                r.y + r.height / 2 + 5, SANS_BOLD_13,
+                enabled ? Color.WHITE : new Color(120, 124, 145));
     }
 
-    private void drawItemBench(Graphics2D g) {
+    private void drawItemBench(DrawTarget target) {
         AutoClient.You you = client.you();
         if (you == null || you.items().isEmpty()) return;
-        g.setFont(new Font("SansSerif", Font.BOLD, 12));
-        g.setColor(new Color(160, 168, 190));
         Rectangle top = itemSlots.isEmpty() ? null : itemSlots.get(itemSlots.size() - 1);
-        if (top != null) g.drawString("Items", 14, top.y - 6);
+        if (top != null) target.drawText("Items", 14, top.y - 6, SANS_BOLD_12, LEGEND_TEXT);
         for (int i = 0; i < itemSlots.size() && i < you.items().size(); i++) {
             Rectangle r = itemSlots.get(i);
             AutoItem item = AutoItems.get(you.items().get(i));
-            g.setColor(new Color(30, 34, 52, 220));
-            g.fillRoundRect(r.x, r.y, r.width, r.height, 8, 8);
+            target.fillRoundRect(r.x, r.y, r.width, r.height, 8, 8, new Color(30, 34, 52, 220));
             boolean active = i == selectedItemIndex;
-            g.setColor(active ? new Color(255, 220, 110)
-                    : i == hoverItem ? new Color(140, 170, 240) : new Color(60, 66, 92));
-            g.setStroke(new BasicStroke(active ? 2.5f : 1f));
-            g.drawRoundRect(r.x, r.y, r.width, r.height, 8, 8);
-            g.setStroke(new BasicStroke(1f));
+            target.drawRoundRect(r.x, r.y, r.width, r.height, 8, 8,
+                    active ? new Color(255, 220, 110)
+                    : i == hoverItem ? new Color(140, 170, 240) : new Color(60, 66,
+                            92), active ? 2.5f : 1f);
             if (item != null) {
-                g.drawImage(itemImage(item, r.width - 8), r.x + 4, r.y + 4,
-                        r.width - 8, r.height - 8, null);
+                target.drawImage(itemImage(item, r.width - 8), r.x + 4, r.y + 4, r.width - 8,
+                        r.height - 8);
             }
         }
     }
@@ -2074,7 +2058,7 @@ public class AutoBattlerScene extends AbstractScene {
      * While dragging, highlight the legal drop target under the cursor and draw
      * the grabbed unit or item gem floating at the pointer.
      */
-    private void drawDrag(Graphics2D g) {
+    private void drawDrag(DrawTarget target) {
         if (!dragging) return;
         AutoClient.You you = client.you();
         if (you == null) return;
@@ -2082,85 +2066,78 @@ public class AutoBattlerScene extends AbstractScene {
         if (grabUnitId >= 0) {
             UnitInstance u = findOwn(grabUnitId);
             if (u == null || u.def() == null) return;
-            highlightUnitDrop(g);
+            highlightUnitDrop(target);
             int size = (int) (52 * camera.zoom);
             BufferedImage img = unitImage(u.def(), size, true, AnimState.IDLE, animClock);
-            drawGhost(g, img, lastMouseX, lastMouseY, size);
-            AutoSprites.drawStars(frameTarget, u.star, lastMouseX, lastMouseY - size / 2, 8);
+            drawGhost(target, img, lastMouseX, lastMouseY, size);
+            AutoSprites.drawStars(target, u.star, lastMouseX, lastMouseY - size / 2, 8);
         } else if (grabItemIndex >= 0 && grabItemIndex < you.items().size()) {
             AutoItem item = AutoItems.get(you.items().get(grabItemIndex));
             if (item == null) return;
-            highlightItemDrop(g, you);
+            highlightItemDrop(target, you);
             int size = 40;
-            drawGhost(g, itemImage(item, size), lastMouseX, lastMouseY, size);
+            drawGhost(target, itemImage(item, size), lastMouseX, lastMouseY, size);
         }
     }
 
     /** Draw a semi-transparent sprite centred on the cursor. */
-    private void drawGhost(Graphics2D g, BufferedImage img, int cx, int cy, int size) {
-        Composite old = g.getComposite();
-        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.8f));
-        g.drawImage(img, cx - size / 2, cy - size / 2, size, size, null);
-        g.setComposite(old);
+    private void drawGhost(DrawTarget target, BufferedImage img, int cx, int cy, int size) {
+        target.pushAlpha(0.8f);
+        target.drawImage(img, cx - size / 2, cy - size / 2, size, size);
+        target.popAlpha();
     }
 
     /** Green highlight on the bench slot or own-half cell a dragged unit would land on. */
-    private void highlightUnitDrop(Graphics2D g) {
+    private void highlightUnitDrop(DrawTarget target) {
         Color glow = new Color(130, 225, 150);
         if (hoverBench >= 0) {
             Rectangle r = benchSlots[hoverBench];
-            fillGlowRect(g, r, glow);
+            fillGlowRect(target, r, glow);
         } else if (hoverCol >= 0 && hoverRow >= BattleSim.ROWS / 2) {
-            fillGlowTile(g, tilePolygon(hoverCol, hoverRow), glow);
+            fillGlowTile(target, tilePolygon(hoverCol, hoverRow), glow);
         }
     }
 
     /** Highlight the unit a dragged item would equip — red if it can hold no more. */
-    private void highlightItemDrop(Graphics2D g, AutoClient.You you) {
-        UnitInstance target = null;
-        if (hoverBench >= 0) target = benchUnitAt(you, hoverBench);
-        else if (hoverCol >= 0) target = boardUnitAt(you, hoverCol, hoverRow);
-        if (target == null) return;
-        boolean full = target.items.size() >= UnitInstance.MAX_ITEMS;
+    private void highlightItemDrop(DrawTarget target, AutoClient.You you) {
+        // Named `unit`, not `target`: the drawing surface owns that name now.
+        UnitInstance unit = null;
+        if (hoverBench >= 0) unit = benchUnitAt(you, hoverBench);
+        else if (hoverCol >= 0) unit = boardUnitAt(you, hoverCol, hoverRow);
+        if (unit == null) return;
+        boolean full = unit.items.size() >= UnitInstance.MAX_ITEMS;
         Color glow = full ? new Color(235, 120, 110) : new Color(130, 225, 150);
-        if (target.onBoard()) {
-            fillGlowTile(g, tilePolygon(target.col, target.row), glow);
-        } else if (target.bench >= 0 && target.bench < benchSlots.length) {
-            fillGlowRect(g, benchSlots[target.bench], glow);
+        if (unit.onBoard()) {
+            fillGlowTile(target, tilePolygon(unit.col, unit.row), glow);
+        } else if (unit.bench >= 0 && unit.bench < benchSlots.length) {
+            fillGlowRect(target, benchSlots[unit.bench], glow);
         }
     }
 
-    private void fillGlowRect(Graphics2D g, Rectangle r, Color glow) {
-        g.setColor(new Color(glow.getRed(), glow.getGreen(), glow.getBlue(), 80));
-        g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-        g.setColor(glow);
-        g.setStroke(new BasicStroke(2.5f));
-        g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-        g.setStroke(new BasicStroke(1f));
+    private void fillGlowRect(DrawTarget target, Rectangle r, Color glow) {
+        target.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10,
+                new Color(glow.getRed(), glow.getGreen(), glow.getBlue(), 80));
+        target.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10, glow, 2.5f);
     }
 
-    private void fillGlowTile(Graphics2D g, Polygon p, Color glow) {
-        g.setColor(new Color(glow.getRed(), glow.getGreen(), glow.getBlue(), 80));
-        g.fillPolygon(p);
-        g.setColor(glow);
-        g.setStroke(new BasicStroke(2.5f));
-        g.drawPolygon(p);
-        g.setStroke(new BasicStroke(1f));
+    private void fillGlowTile(DrawTarget target, Polygon p, Color glow) {
+        target.fillPolygon(p.xpoints, p.ypoints, p.npoints,
+                new Color(glow.getRed(), glow.getGreen(), glow.getBlue(), 80));
+        target.drawPolygon(p.xpoints, p.ypoints, p.npoints, glow, 2.5f);
     }
 
-    private void drawToasts(Graphics2D g) {
+    private void drawToasts(DrawTarget target) {
         int y = viewportHeight - shopBarHeight() - 86;
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         for (int i = toasts.size() - 1; i >= 0; i--) {
             Toast t = toasts.get(i);
             int alpha = (int) (230 * Math.max(0, Math.min(1, (3.5 - t.age) / 0.8)));
-            g.setColor(new Color(240, 240, 250, alpha));
-            drawCentered(g, t.text, viewportWidth / 2, y);
+            drawCentered(target, t.text, viewportWidth / 2, y, SANS_PLAIN_14,
+                    new Color(240, 240, 250, alpha));
             y -= 20;
         }
     }
 
-    private void drawBanner(Graphics2D g) {
+    private void drawBanner(DrawTarget target) {
         if (banner == null) return;
         float fade = (float) Math.max(0, Math.min(1, (3.2 - bannerAge) / 0.6));
         String text;
@@ -2175,54 +2152,44 @@ public class AutoBattlerScene extends AbstractScene {
             text = "DEFEAT vs " + banner.opponent() + "  (-" + banner.damage() + " HP)";
             color = new Color(235, 120, 105);
         }
-        g.setFont(new Font("SansSerif", Font.BOLD, 34));
-        g.setColor(new Color(color.getRed(), color.getGreen(), color.getBlue(),
-                (int) (255 * fade)));
-        drawCentered(g, text, viewportWidth / 2, 120);
+        drawCentered(target, text, viewportWidth / 2, 120, SANS_BOLD_34,
+                new Color(color.getRed(), color.getGreen(), color.getBlue(),
+                        (int) (255 * fade)));
     }
 
     // --- the scout overlay -----------------------------------------------------------
 
     /** The board-view overlay: another player's board, bench, and stats. */
-    private void drawBoardView(Graphics2D g) {
+    private void drawBoardView(DrawTarget target) {
         if (viewingId < 0) return;
         Rectangle p = viewPanelRect;
-        g.setColor(new Color(8, 9, 16, 120));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
-        g.setColor(new Color(16, 18, 32, 245));
-        g.fillRoundRect(p.x, p.y, p.width, p.height, 14, 14);
-        g.setColor(new Color(90, 100, 140));
-        g.drawRoundRect(p.x, p.y, p.width, p.height, 14, 14);
+        target.fillRect(0, 0, viewportWidth, viewportHeight, new Color(8, 9, 16, 120));
+        target.fillRoundRect(p.x, p.y, p.width, p.height, 14, 14, new Color(16, 18, 32, 245));
+        target.drawRoundRect(p.x, p.y, p.width, p.height, 14, 14, new Color(90, 100, 140));
 
         // Close button.
-        g.setColor(new Color(45, 50, 70));
-        g.fillRoundRect(viewCloseRect.x, viewCloseRect.y, viewCloseRect.width,
-                viewCloseRect.height, 8, 8);
-        g.setColor(new Color(200, 206, 226));
-        g.drawRoundRect(viewCloseRect.x, viewCloseRect.y, viewCloseRect.width,
-                viewCloseRect.height, 8, 8);
-        g.setFont(new Font("SansSerif", Font.BOLD, 13));
-        drawCentered(g, "✕", viewCloseRect.x + viewCloseRect.width / 2,
-                viewCloseRect.y + 18);
+        target.fillRoundRect(viewCloseRect.x, viewCloseRect.y, viewCloseRect.width,
+                viewCloseRect.height, 8, 8, new Color(45, 50, 70));
+        target.drawRoundRect(viewCloseRect.x, viewCloseRect.y, viewCloseRect.width,
+                viewCloseRect.height, 8, 8, new Color(200, 206, 226));
+        drawCentered(target, "✕", viewCloseRect.x + viewCloseRect.width / 2,
+                viewCloseRect.y + 18, SANS_BOLD_13, new Color(200, 206, 226));
 
         AutoClient.BoardView bv = client.boardView();
         if (bv == null || bv.id() != viewingId) {
-            g.setFont(new Font("SansSerif", Font.PLAIN, 16));
-            g.setColor(new Color(160, 168, 190));
-            drawCentered(g, "Fetching board…", p.x + p.width / 2, p.y + p.height / 2);
+            drawCentered(target, "Fetching board…", p.x + p.width / 2, p.y + p.height / 2,
+                    SANS_PLAIN_16, new Color(160, 168, 190));
             return;
         }
 
         // Title.
-        g.setFont(new Font("SansSerif", Font.BOLD, 20));
-        g.setColor(new Color(235, 238, 250));
         String title = bv.name() + (bv.bot() ? "  [BOT]" : "");
-        g.drawString(trim(g, title, p.width - 260), p.x + 18, p.y + 32);
+        target.drawText(trim(target, SANS_BOLD_20, title, p.width - 260),
+                p.x + 18, p.y + 32, SANS_BOLD_20,
+                new Color(235, 238, 250));
         if (!bv.alive()) {
-            g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-            g.setColor(new Color(230, 130, 110));
-            g.drawString("Eliminated" + (bv.place() > 0 ? "  ·  #" + bv.place() : ""),
-                    p.x + 18, p.y + 50);
+            target.drawText("Eliminated" + (bv.place() > 0 ? "  ·  #" + bv.place() : ""), p.x + 18,
+                    p.y + 50, SANS_PLAIN_13, new Color(230, 130, 110));
         }
 
         // Their board (own half: rows 4-7) + bench, drawn as a flat grid.
@@ -2232,8 +2199,8 @@ public class AutoBattlerScene extends AbstractScene {
         int gx = p.x + 18, gy = p.y + 62;
         for (int r = 0; r < 4; r++) {
             for (int c = 0; c < 8; c++) {
-                g.setColor((c + r) % 2 == 0 ? new Color(40, 46, 66) : new Color(46, 52, 74));
-                g.fillRect(gx + c * cs, gy + r * cs, cs - 1, cs - 1);
+                target.fillRect(gx + c * cs, gy + r * cs, cs - 1, cs - 1,
+                        (c + r) % 2 == 0 ? new Color(40, 46, 66) : new Color(46, 52, 74));
             }
         }
         for (UnitInstance u : bv.board()) {
@@ -2242,90 +2209,78 @@ public class AutoBattlerScene extends AbstractScene {
             if (def == null || u.col < 0 || u.col >= 8 || gridRow < 0 || gridRow >= 4) continue;
             int ux = gx + u.col * cs, uy = gy + gridRow * cs;
             BufferedImage img = unitImage(def, cs - 6, true, AnimState.IDLE, animClock);
-            g.drawImage(img, ux + 3, uy + 2, cs - 6, cs - 6, null);
-            AutoSprites.drawStars(frameTarget, u.star, ux + cs / 2, uy + 1, 5);
-            drawItemPips(g, u, ux + cs / 2, uy + cs - 8);
+            target.drawImage(img, ux + 3, uy + 2, cs - 6, cs - 6);
+            AutoSprites.drawStars(target, u.star, ux + cs / 2, uy + 1, 5);
+            drawItemPips(target, u, ux + cs / 2, uy + cs - 8);
         }
 
         // Bench strip below the board.
         int bs = Math.max(18, cs * 8 / 9 - 2);
         int by = gy + 4 * cs + 10;
-        g.setFont(new Font("SansSerif", Font.BOLD, 11));
-        g.setColor(new Color(130, 136, 156));
-        g.drawString("Bench", gx, by - 2);
+        target.drawText("Bench", gx, by - 2, SANS_BOLD_11, new Color(130, 136, 156));
         for (int i = 0; i < 9; i++) {
-            g.setColor(new Color(30, 34, 52, 220));
-            g.fillRect(gx + i * (bs + 2), by + 2, bs, bs);
+            target.fillRect(gx + i * (bs + 2), by + 2, bs, bs, new Color(30, 34, 52, 220));
         }
         for (UnitInstance u : bv.bench()) {
             UnitDef def = u.def();
             if (def == null || u.bench < 0 || u.bench >= 9) continue;
             int ux = gx + u.bench * (bs + 2);
             BufferedImage img = unitImage(def, bs - 4, true, AnimState.IDLE, animClock);
-            g.drawImage(img, ux + 2, by + 4, bs - 4, bs - 4, null);
-            AutoSprites.drawStars(frameTarget, u.star, ux + bs / 2, by + 3, 4);
+            target.drawImage(img, ux + 2, by + 4, bs - 4, bs - 4);
+            AutoSprites.drawStars(target, u.star, ux + bs / 2, by + 3, 4);
         }
 
         // Stats column on the right.
         int sx = p.x + p.width - statsW;
         int sy = p.y + 66;
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
-        g.setColor(new Color(15, 15, 22, 200));
-        g.fillRect(sx, sy - 12, 130, 14);
-        g.setColor(hpColor(bv.hp()));
-        g.fillRect(sx, sy - 12, (int) (130 * Math.min(1, bv.hp() / 100.0)), 14);
-        g.setColor(new Color(235, 238, 250));
-        g.drawString(bv.hp() + " HP", sx + 138, sy);
+        target.fillRect(sx, sy - 12, 130, 14, new Color(15, 15, 22, 200));
+        target.fillRect(sx, sy - 12, (int) (130 * Math.min(1, bv.hp() / 100.0)), 14,
+                hpColor(bv.hp()));
+        target.drawText(bv.hp() + " HP", sx + 138, sy, SANS_PLAIN_14, new Color(235, 238, 250));
         sy += 26;
-        g.setColor(new Color(200, 206, 226));
         String xp = bv.xpNeed() > 0 ? bv.xp() + "/" + bv.xpNeed() + " xp" : "max";
-        g.drawString("Level " + bv.level() + "  ·  " + xp, sx, sy);
+        target.drawText("Level " + bv.level() + "  ·  " + xp, sx, sy, SANS_PLAIN_14,
+                new Color(200, 206, 226));
         sy += 22;
-        g.setColor(new Color(255, 214, 100));
-        g.drawString(bv.gold() + " gold", sx, sy);
+        target.drawText(bv.gold() + " gold", sx, sy, SANS_PLAIN_14, new Color(255, 214, 100));
         if (bv.streak() != 0) {
-            g.setColor(bv.streak() > 0 ? new Color(130, 220, 140) : new Color(230, 130, 110));
-            g.drawString((bv.streak() > 0 ? "W" : "L") + Math.abs(bv.streak()) + " streak",
-                    sx + 92, sy);
+            target.drawText((bv.streak() > 0 ? "W" : "L") + Math.abs(bv.streak()) + " streak",
+                    sx + 92, sy, SANS_PLAIN_14,
+                    bv.streak() > 0 ? new Color(130, 220, 140) : new Color(230, 130, 110));
         }
         sy += 22;
-        g.setColor(new Color(200, 206, 226));
-        g.drawString(bv.board().size() + "/" + bv.boardCap() + " fielded", sx, sy);
+        target.drawText(bv.board().size() + "/" + bv.boardCap() + " fielded", sx, sy, SANS_PLAIN_14,
+                new Color(200, 206, 226));
         sy += 28;
 
         // Their synergies, from the scouted board.
-        g.setFont(new Font("SansSerif", Font.BOLD, 13));
-        g.setColor(new Color(160, 168, 190));
-        g.drawString("Synergies", sx, sy);
+        target.drawText("Synergies", sx, sy, SANS_BOLD_13, new Color(160, 168, 190));
         sy += 18;
-        g.setFont(new Font("SansSerif", Font.PLAIN, 13));
         Map<Trait, Integer> counts = BattleSim.countTraits(bv.board());
         List<Map.Entry<Trait, Integer>> traits = new ArrayList<>(counts.entrySet());
         traits.sort((a, b) -> b.getValue() - a.getValue());
         int traitBottom = p.y + p.height - 26;
         if (traits.isEmpty()) {
-            g.setColor(new Color(110, 115, 135));
-            g.drawString("none", sx, sy);
+            target.drawText("none", sx, sy, SANS_PLAIN_13, new Color(110, 115, 135));
         }
         for (Map.Entry<Trait, Integer> e : traits) {
             if (sy > traitBottom) break;
             int tier = e.getKey().tier(e.getValue());
-            g.setColor(tier > 0 ? e.getKey().color : new Color(110, 115, 135));
-            g.fillOval(sx, sy - 10, 11, 11);
-            g.setColor(tier > 0 ? new Color(230, 234, 246) : new Color(130, 136, 156));
-            g.drawString(e.getKey().label + "  " + e.getValue(), sx + 17, sy);
+            target.fillOval(sx, sy - 10, 11, 11,
+                    tier > 0 ? e.getKey().color : new Color(110, 115, 135));
+            target.drawText(e.getKey().label + "  " + e.getValue(), sx + 17, sy, SANS_PLAIN_13,
+                    tier > 0 ? new Color(230, 234, 246) : new Color(130, 136, 156));
             sy += 20;
         }
 
-        g.setFont(new Font("SansSerif", Font.PLAIN, 11));
-        g.setColor(new Color(130, 136, 156));
-        drawCentered(g, "Esc or click outside to close  ·  updates live",
-                p.x + p.width / 2, p.y + p.height - 10);
+        drawCentered(target, "Esc or click outside to close  ·  updates live",
+                p.x + p.width / 2, p.y + p.height - 10, SANS_PLAIN_11,
+                new Color(130, 136, 156));
     }
 
     // --- tooltips ------------------------------------------------------------------
 
-    private void drawTooltips(Graphics2D g) {
+    private void drawTooltips(DrawTarget target) {
         AutoClient.You you = client.you();
         if (you == null) return;
         List<String> lines = new ArrayList<>();
@@ -2402,22 +2357,17 @@ public class AutoBattlerScene extends AbstractScene {
         }
         if (lines.isEmpty()) return;
 
-        g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-        FontMetrics fm = g.getFontMetrics();
         int tw = 0;
-        for (String line : lines) tw = Math.max(tw, fm.stringWidth(line));
+        for (String line : lines) tw = Math.max(tw, target.textWidth(line, SANS_PLAIN_13));
         int th = lines.size() * 18 + 14;
         int mx = Math.min(viewportWidth - tw - 28, Math.max(8, lastMouseX + 16));
         int my = Math.min(viewportHeight - th - 8, Math.max(8, lastMouseY - th - 6));
-        g.setColor(new Color(12, 14, 24, 235));
-        g.fillRoundRect(mx, my, tw + 20, th, 10, 10);
-        g.setColor(new Color(90, 100, 140));
-        g.drawRoundRect(mx, my, tw + 20, th, 10, 10);
+        target.fillRoundRect(mx, my, tw + 20, th, 10, 10, new Color(12, 14, 24, 235));
+        target.drawRoundRect(mx, my, tw + 20, th, 10, 10, new Color(90, 100, 140));
         int y = my + 20;
         for (int i = 0; i < lines.size(); i++) {
-            g.setColor(colors.get(i));
-            g.setFont(new Font("SansSerif", i == 0 ? Font.BOLD : Font.PLAIN, 13));
-            g.drawString(lines.get(i), mx + 10, y);
+            target.drawText(lines.get(i), mx + 10, y,
+                    new Font("SansSerif", i == 0 ? Font.BOLD : Font.PLAIN, 13), colors.get(i));
             y += 18;
         }
     }
@@ -2471,68 +2421,59 @@ public class AutoBattlerScene extends AbstractScene {
 
     // --- overlays -----------------------------------------------------------------
 
-    private void drawOverlays(Graphics2D g) {
+    private void drawOverlays(DrawTarget target) {
         if (client.gameOver() != null) {
             AutoClient.GameOver over = client.gameOver();
-            dim(g);
-            g.setFont(new Font("SansSerif", Font.BOLD, 44));
-            g.setColor(new Color(255, 214, 100));
-            drawCentered(g, over.winner() + " wins!", viewportWidth / 2, viewportHeight / 3);
-            g.setFont(new Font("SansSerif", Font.PLAIN, 20));
+            dim(target);
+            drawCentered(target, over.winner() + " wins!", viewportWidth / 2, viewportHeight / 3,
+                    SANS_BOLD_44, new Color(255, 214, 100));
             int y = viewportHeight / 3 + 56;
             for (String row : over.standings()) {
-                g.setColor(new Color(215, 220, 235));
-                drawCentered(g, row, viewportWidth / 2, y);
+                drawCentered(target, row, viewportWidth / 2, y, SANS_PLAIN_20,
+                        new Color(215, 220, 235));
                 y += 30;
             }
-            g.setFont(new Font("SansSerif", Font.PLAIN, 16));
-            g.setColor(new Color(150, 156, 178));
-            drawCentered(g, "Press Esc to return to the lobby",
-                    viewportWidth / 2, y + 24);
+            drawCentered(target, "Press Esc to return to the lobby",
+                    viewportWidth / 2, y + 24, SANS_PLAIN_16, new Color(150, 156, 178));
             return;
         }
         if (!client.isConnected()) {
-            dim(g);
-            g.setFont(new Font("SansSerif", Font.BOLD, 28));
-            g.setColor(new Color(235, 120, 105));
-            drawCentered(g, "Disconnected", viewportWidth / 2, viewportHeight / 2 - 20);
-            g.setFont(new Font("SansSerif", Font.PLAIN, 17));
-            g.setColor(new Color(200, 205, 220));
-            drawCentered(g, String.valueOf(client.disconnectReason()),
-                    viewportWidth / 2, viewportHeight / 2 + 12);
-            g.setColor(new Color(150, 156, 178));
-            drawCentered(g, "Press Esc to leave", viewportWidth / 2, viewportHeight / 2 + 44);
+            dim(target);
+            drawCentered(target, "Disconnected", viewportWidth / 2, viewportHeight / 2 - 20,
+                    SANS_BOLD_28, new Color(235, 120, 105));
+            drawCentered(target, String.valueOf(client.disconnectReason()),
+                    viewportWidth / 2, viewportHeight / 2 + 12, SANS_PLAIN_17,
+                    new Color(200, 205, 220));
+            drawCentered(target, "Press Esc to leave", viewportWidth / 2, viewportHeight / 2 + 44,
+                    SANS_PLAIN_17, new Color(150, 156, 178));
             return;
         }
         if (paused) {
-            dim(g);
-            g.setFont(new Font("SansSerif", Font.BOLD, 30));
-            g.setColor(new Color(235, 238, 250));
-            drawCentered(g, "Paused", viewportWidth / 2, viewportHeight / 2 - 24);
-            g.setFont(new Font("SansSerif", Font.PLAIN, 17));
-            g.setColor(new Color(190, 195, 214));
-            drawCentered(g, "The match keeps running online",
-                    viewportWidth / 2, viewportHeight / 2 + 10);
-            drawCentered(g, "Esc — resume   ·   L — leave match",
-                    viewportWidth / 2, viewportHeight / 2 + 40);
+            dim(target);
+            drawCentered(target, "Paused", viewportWidth / 2, viewportHeight / 2 - 24, SANS_BOLD_30,
+                    new Color(235, 238, 250));
+            drawCentered(target, "The match keeps running online",
+                    viewportWidth / 2, viewportHeight / 2 + 10, SANS_PLAIN_17,
+                    new Color(190, 195, 214));
+            drawCentered(target, "Esc — resume   ·   L — leave match",
+                    viewportWidth / 2, viewportHeight / 2 + 40, SANS_PLAIN_17,
+                    new Color(190, 195, 214));
         }
     }
 
-    private void dim(Graphics2D g) {
-        g.setColor(new Color(8, 9, 16, 200));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
+    private void dim(DrawTarget target) {
+        target.fillRect(0, 0, viewportWidth, viewportHeight, new Color(8, 9, 16, 200));
     }
 
-    private void drawCentered(Graphics2D g, String s, int cx, int y) {
-        FontMetrics fm = g.getFontMetrics();
-        g.drawString(s, cx - fm.stringWidth(s) / 2, y);
+    private void drawCentered(DrawTarget target, String s, int cx, int y,
+                              Font font, Color color) {
+        target.drawText(s, cx - target.textWidth(s, font) / 2, y, font, color);
     }
 
-    private static String trim(Graphics2D g, String s, int maxWidth) {
-        FontMetrics fm = g.getFontMetrics();
-        if (fm.stringWidth(s) <= maxWidth) return s;
+    private static String trim(DrawTarget target, Font font, String s, int maxWidth) {
+        if (target.textWidth(s, font) <= maxWidth) return s;
         String out = s;
-        while (out.length() > 1 && fm.stringWidth(out + "…") > maxWidth) {
+        while (out.length() > 1 && target.textWidth(out + "…", font) > maxWidth) {
             out = out.substring(0, out.length() - 1);
         }
         return out + "…";

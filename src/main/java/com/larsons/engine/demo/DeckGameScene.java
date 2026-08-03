@@ -19,18 +19,12 @@ import com.larsons.engine.graphics.shader.Shaders;
 import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.AbstractScene;
 
-import java.awt.BasicStroke;
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.FontMetrics;
-import java.awt.GradientPaint;
-import java.awt.Graphics2D;
 import java.awt.Rectangle;
-import java.awt.RenderingHints;
 import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.List;
@@ -71,6 +65,44 @@ public class DeckGameScene extends AbstractScene {
     private static final Color MIGHT = new Color(220, 90, 80);
     private static final Color VP_COLOR = new Color(255, 215, 120);
     private static final Color HIGHLIGHT = new Color(140, 220, 150);
+    private static final Color DISCONNECTED = new Color(235, 120, 110);
+
+    // The rules card, shared with DeckLobbyScene's How to Play.
+    private static final Font HELP_TITLE_FONT = new Font("SansSerif", Font.BOLD, 24);
+    private static final Font HELP_BODY_FONT = new Font("SansSerif", Font.PLAIN, 15);
+    private static final Color HELP_SCRIM = new Color(0, 0, 0, 200);
+    private static final Color HELP_PANEL = new Color(26, 29, 46);
+    private static final Color HELP_EDGE = new Color(90, 96, 122);
+    private static final Color HELP_TITLE = new Color(245, 245, 255);
+    private static final Color HELP_BULLET = new Color(200, 205, 224);
+    private static final Color HELP_BODY = new Color(225, 228, 240);
+    private static final Color HELP_FOOTER = new Color(150, 155, 175);
+
+    // Every font this scene sets, hoisted. They used to be built inside the
+    // render methods, which meant a fresh Font object per call per frame for
+    // values that never change; the port makes the font an argument at each
+    // call site, so the duplication became visible and the fix obvious.
+    private static final Font SANS_BOLD_10 = new Font("SansSerif", Font.BOLD, 10);
+    private static final Font SANS_BOLD_13 = new Font("SansSerif", Font.BOLD, 13);
+    private static final Font SANS_BOLD_14 = new Font("SansSerif", Font.BOLD, 14);
+    private static final Font SANS_BOLD_15 = new Font("SansSerif", Font.BOLD, 15);
+    private static final Font SANS_BOLD_16 = new Font("SansSerif", Font.BOLD, 16);
+    private static final Font SANS_BOLD_17 = new Font("SansSerif", Font.BOLD, 17);
+    private static final Font SANS_BOLD_20 = new Font("SansSerif", Font.BOLD, 20);
+    private static final Font SANS_BOLD_22 = new Font("SansSerif", Font.BOLD, 22);
+    private static final Font SANS_BOLD_24 = new Font("SansSerif", Font.BOLD, 24);
+    private static final Font SANS_BOLD_28 = new Font("SansSerif", Font.BOLD, 28);
+    private static final Font SANS_BOLD_34 = new Font("SansSerif", Font.BOLD, 34);
+    private static final Font SANS_BOLD_40 = new Font("SansSerif", Font.BOLD, 40);
+    private static final Font SANS_ITALIC_12 = new Font("SansSerif", Font.ITALIC, 12);
+    private static final Font SANS_PLAIN_11 = new Font("SansSerif", Font.PLAIN, 11);
+    private static final Font SANS_PLAIN_12 = new Font("SansSerif", Font.PLAIN, 12);
+    private static final Font SANS_PLAIN_13 = new Font("SansSerif", Font.PLAIN, 13);
+    private static final Font SANS_PLAIN_14 = new Font("SansSerif", Font.PLAIN, 14);
+    private static final Font SANS_PLAIN_15 = new Font("SansSerif", Font.PLAIN, 15);
+    private static final Font SANS_PLAIN_16 = new Font("SansSerif", Font.PLAIN, 16);
+    private static final Font SANS_PLAIN_17 = new Font("SansSerif", Font.PLAIN, 17);
+    private static final Font SANS_PLAIN_20 = new Font("SansSerif", Font.PLAIN, 20);
 
     private final GameContext ctx;
     private DeckSession session;
@@ -572,61 +604,49 @@ public class DeckGameScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
-        Graphics2D g = Java2DTarget.graphicsOf(target);
-        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING,
-                RenderingHints.VALUE_ANTIALIAS_ON);
-        g.setPaint(new GradientPaint(0, 0, BG_TOP, 0, viewportHeight, BG_BOTTOM));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
-        g.setPaint(null);
+        target.fillLinearGradient(0, 0, viewportWidth, viewportHeight,
+                0, 0, BG_TOP.getRGB(), 0, viewportHeight, BG_BOTTOM.getRGB());
 
         if (client == null) return;
         DeckClient.Table table = client.table();
         DeckClient.You you = client.you();
 
-        renderTopBar(g, table);
-        renderStandings(g, table);
-        renderLocations(g, table, you);
-        renderTerritories(g, table);
-        renderMarket(g, table, you);
-        renderHand(g, you);
-        renderButtons(g, you);
-        if (pendingLoc != null) renderTerritoryPick(g);
+        renderTopBar(target, table);
+        renderStandings(target, table);
+        renderLocations(target, table, you);
+        renderTerritories(target, table);
+        renderMarket(target, table, you);
+        renderHand(target, you);
+        renderButtons(target, you);
+        if (pendingLoc != null) renderTerritoryPick(target);
 
         // The particle layer: rendered bright, bloomed by the shader chain.
         particles.render(target, camera);
 
-        renderFloatersAndToasts(g);
-        renderBanner(g);
-        renderTooltip(g);
+        renderFloatersAndToasts(target);
+        renderBanner(target);
+        renderTooltip(target);
 
-        if (paused) renderPause(g);
-        if (client.gameOver() != null) renderGameOver(g);
-        else if (!client.isConnected()) renderDisconnected(g);
-        if (showHelp) renderHelpOverlay(g, viewportWidth, viewportHeight);
+        if (paused) renderPause(target);
+        if (client.gameOver() != null) renderGameOver(target);
+        else if (!client.isConnected()) renderDisconnected(target);
+        if (showHelp) renderHelpOverlay(target, viewportWidth, viewportHeight);
     }
 
-    private void renderTopBar(Graphics2D g, DeckClient.Table table) {
-        g.setColor(PANEL);
-        g.fillRect(0, 0, viewportWidth, TOP_H);
-        g.setColor(PANEL_EDGE);
-        g.drawLine(0, TOP_H, viewportWidth, TOP_H);
+    private void renderTopBar(DrawTarget target, DeckClient.Table table) {
+        target.fillRect(0, 0, viewportWidth, TOP_H, PANEL);
+        target.drawLine(0, TOP_H, viewportWidth, TOP_H, PANEL_EDGE);
 
-        g.setColor(TEXT);
-        g.setFont(new Font("SansSerif", Font.BOLD, 22));
-        g.drawString("Council of Six", 16, 34);
+        target.drawText("Council of Six", 16, 34, SANS_BOLD_22, TEXT);
 
         if (table == null) return;
-        g.setFont(new Font("SansSerif", Font.PLAIN, 15));
-        g.setColor(TEXT_DIM);
         String round = "Round " + table.round();
-        g.drawString(round, 220, 33);
+        target.drawText(round, 220, 33, SANS_PLAIN_15, TEXT_DIM);
 
         DeckGame.ConflictReward cr = table.conflict();
         String conflict = "Conflict prize: " + rewardText(cr.firstVp(), cr.firstGold())
                 + "   ·   2nd: " + rewardText(cr.secondVp(), cr.secondGold());
-        g.setColor(MIGHT);
-        g.drawString(conflict, 310, 33);
+        target.drawText(conflict, 310, 33, SANS_PLAIN_15, MIGHT);
 
         // Whose turn + the clock.
         String turnText;
@@ -640,10 +660,10 @@ public class DeckGameScene extends AbstractScene {
             turnText = s == null ? ""
                     : s.name() + "'s turn — " + (int) Math.ceil(table.turnLeftNow()) + "s";
         }
-        g.setFont(new Font("SansSerif", Font.BOLD, 16));
-        g.setColor(table.turnPlayerId() == client.localId() ? HIGHLIGHT : TEXT_DIM);
-        FontMetrics fm = g.getFontMetrics();
-        g.drawString(turnText, viewportWidth - fm.stringWidth(turnText) - 16, 34);
+        target.drawText(turnText,
+                viewportWidth - target.textWidth(turnText, SANS_BOLD_16) - 16, 34,
+                SANS_BOLD_16,
+                table.turnPlayerId() == client.localId() ? HIGHLIGHT : TEXT_DIM);
     }
 
     private static String rewardText(int vp, int gold) {
@@ -663,19 +683,15 @@ public class DeckGameScene extends AbstractScene {
         return null;
     }
 
-    private void renderStandings(Graphics2D g, DeckClient.Table table) {
+    private void renderStandings(DrawTarget target, DeckClient.Table table) {
         int x = 8;
         int y = TOP_H + 10;
         int w = LEFT_W - 8;
         int h = viewportHeight - HAND_H - y - 8;
-        g.setColor(PANEL);
-        g.fillRoundRect(x, y, w, h, 10, 10);
-        g.setColor(PANEL_EDGE);
-        g.drawRoundRect(x, y, w, h, 10, 10);
+        target.fillRoundRect(x, y, w, h, 10, 10, PANEL);
+        target.drawRoundRect(x, y, w, h, 10, 10, PANEL_EDGE);
 
-        g.setColor(TEXT_DIM);
-        g.setFont(new Font("SansSerif", Font.BOLD, 13));
-        g.drawString("PLAYERS", x + 12, y + 20);
+        target.drawText("PLAYERS", x + 12, y + 20, SANS_BOLD_13, TEXT_DIM);
 
         standingRects.clear();
         if (table == null) return;
@@ -689,56 +705,47 @@ public class DeckGameScene extends AbstractScene {
             boolean me = s.id() == client.localId();
             boolean turn = s.id() == table.turnPlayerId();
             if (turn) {
-                g.setColor(new Color(46, 56, 60));
-                g.fillRoundRect(r.x, r.y, r.width, r.height, 8, 8);
+                target.fillRoundRect(r.x, r.y, r.width, r.height, 8, 8, new Color(46, 56, 60));
             }
 
             Color accent = s.leader() != null ? s.leader().color : TEXT_DIM;
-            g.setColor(accent);
-            g.fillOval(r.x + 6, r.y + 8, 30, 30);
-            g.setColor(Color.BLACK);
-            g.setFont(new Font("SansSerif", Font.BOLD, 16));
+            target.fillOval(r.x + 6, r.y + 8, 30, 30, accent);
             String initial = s.leader() != null
                     ? s.leader().friendName.substring(0, 1) : "?";
-            g.drawString(initial, r.x + 16, r.y + 29);
+            target.drawText(initial, r.x + 16, r.y + 29, SANS_BOLD_16, Color.BLACK);
 
-            g.setFont(new Font("SansSerif", Font.BOLD, 14));
-            g.setColor(me ? new Color(255, 210, 90) : TEXT);
             String name = s.name() + (s.bot() ? " [BOT]" : "") + (me ? " (you)" : "");
-            g.drawString(clip(g, name, r.width - 96), r.x + 44, r.y + 16);
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            g.setColor(TEXT_DIM);
+            target.drawText(clip(target, SANS_BOLD_14, name, r.width - 96), r.x + 44, r.y + 16, SANS_BOLD_14,
+                    me ? new Color(255, 210, 90) : TEXT);
             if (s.leader() != null) {
-                g.drawString(s.leader().friendName + " · " + s.leader().title,
-                        r.x + 44, r.y + 31);
+                target.drawText(s.leader().friendName + " · " + s.leader().title, r.x + 44,
+                        r.y + 31, SANS_PLAIN_12, TEXT_DIM);
             }
             if (!s.connected()) {
-                g.setColor(new Color(235, 120, 110));
-                g.drawString("disconnected", r.x + 44, r.y + 45);
+                target.drawText("disconnected", r.x + 44, r.y + 45, SANS_PLAIN_12,
+                        new Color(235, 120, 110));
             } else {
-                g.setColor(s.revealed() ? TEXT_DIM : HIGHLIGHT);
-                g.drawString(s.revealed() ? "revealed"
-                        : s.agentsLeft() + " agents", r.x + 44, r.y + 45);
+                target.drawText(s.revealed() ? "revealed"
+                        : s.agentsLeft() + " agents", r.x + 44, r.y + 45, SANS_PLAIN_12, s.revealed() ? TEXT_DIM : HIGHLIGHT);
             }
 
             // VP big on the right; the resource line under it.
-            g.setFont(new Font("SansSerif", Font.BOLD, 20));
-            g.setColor(VP_COLOR);
             String vp = s.vp() + " VP";
-            FontMetrics fm = g.getFontMetrics();
-            g.drawString(vp, r.x + r.width - fm.stringWidth(vp) - 8, r.y + 22);
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
+            target.drawText(vp,
+                    r.x + r.width - target.textWidth(vp, SANS_BOLD_20) - 8,
+                    r.y + 22, SANS_BOLD_20, VP_COLOR);
+
             String line = s.gold() + "g · " + s.lore() + "l · " + s.might() + "m · "
                     + s.troops() + "t";
-            g.setColor(TEXT_DIM);
-            fm = g.getFontMetrics();
-            g.drawString(line, r.x + r.width - fm.stringWidth(line) - 8, r.y + 42);
+            target.drawText(line,
+                    r.x + r.width - target.textWidth(line, SANS_PLAIN_12) - 8,
+                    r.y + 42, SANS_PLAIN_12, TEXT_DIM);
 
             rowY += rowH;
         }
     }
 
-    private void renderLocations(Graphics2D g, DeckClient.Table table,
+    private void renderLocations(DrawTarget target, DeckClient.Table table,
                                  DeckClient.You you) {
         CardDef selected = you != null && selectedCard >= 0
                 && selectedCard < you.hand().size()
@@ -751,44 +758,39 @@ public class DeckGameScene extends AbstractScene {
             boolean legal = selected != null && you != null && myTurn()
                     && isLegalTarget(selected, loc, you);
 
-            g.setColor(PANEL);
-            g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-            g.setColor(loc.icon.color);
-            g.fillRoundRect(r.x, r.y, 8, r.height, 10, 10);
+            target.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10, PANEL);
+            target.fillRoundRect(r.x, r.y, 8, r.height, 10, 10, loc.icon.color);
 
-            g.setFont(new Font("SansSerif", Font.BOLD, 14));
-            g.setColor(selected != null && !legal ? TEXT_DIM : TEXT);
-            g.drawString(clip(g, loc.name, r.width - 24), r.x + 16, r.y + 20);
+            target.drawText(clip(target, SANS_BOLD_14, loc.name, r.width - 24), r.x + 16, r.y + 20, SANS_BOLD_14,
+                    selected != null && !legal ? TEXT_DIM : TEXT);
 
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            g.setColor(loc.icon.color);
-            g.drawString(loc.icon.label, r.x + 16, r.y + 37);
-            g.setColor(selected != null && !legal ? new Color(110, 114, 132) : TEXT_DIM);
-            drawWrapped(g, loc.summary(), r.x + 16, r.y + 54, r.width - 26, 14);
+            target.drawText(loc.icon.label, r.x + 16, r.y + 37, SANS_PLAIN_12, loc.icon.color);
+            drawWrapped(target, loc.summary(), r.x + 16, r.y + 54, r.width - 26, 14,
+                    SANS_PLAIN_12,
+                    selected != null && !legal ? new Color(110, 114, 132) : TEXT_DIM);
 
             // Agents standing here, as leader-coloured discs.
             List<Integer> occ = occupantsOf(loc.key);
             int dx = r.x + r.width - 24;
             for (int id : occ) {
                 Color c = leaderColorOf(table, id);
-                g.setColor(c);
-                g.fillOval(dx, r.y + 8, 16, 16);
-                g.setColor(Color.BLACK);
-                g.drawOval(dx, r.y + 8, 16, 16);
+                target.fillOval(dx, r.y + 8, 16, 16, c);
+                target.drawOval(dx, r.y + 8, 16, 16, Color.BLACK);
                 dx -= 12;
             }
 
+            // A legal target pulses in a heavier ring; everything else keeps
+            // the panel edge at 1px. Both used to be set on the Graphics2D and
+            // read back by the shared draw below.
+            Color ring = PANEL_EDGE;
+            float ringWidth = 1f;
             if (legal) {
                 float pulse = (float) (0.55 + 0.45 * Math.sin(animClock * 5));
-                g.setColor(new Color(HIGHLIGHT.getRed(), HIGHLIGHT.getGreen(),
-                        HIGHLIGHT.getBlue(), (int) (140 + 80 * pulse)));
-                g.setStroke(new BasicStroke(2.5f));
-            } else {
-                g.setColor(PANEL_EDGE);
-                g.setStroke(new BasicStroke(1f));
+                ring = new Color(HIGHLIGHT.getRed(), HIGHLIGHT.getGreen(),
+                        HIGHLIGHT.getBlue(), (int) (140 + 80 * pulse));
+                ringWidth = 2.5f;
             }
-            g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-            g.setStroke(new BasicStroke(1f));
+            target.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10, ring, ringWidth);
         }
     }
 
@@ -800,28 +802,22 @@ public class DeckGameScene extends AbstractScene {
         return TEXT_DIM;
     }
 
-    private void renderTerritories(Graphics2D g, DeckClient.Table table) {
+    private void renderTerritories(DrawTarget target, DeckClient.Table table) {
         Territory[] terrs = Territory.values();
         for (int i = 0; i < terrs.length; i++) {
             Territory t = terrs[i];
             Rectangle r = terrRects[i];
-            g.setColor(PANEL);
-            g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-            g.setColor(new Color(t.color.getRed(), t.color.getGreen(),
+            target.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10, PANEL);
+            target.fillRoundRect(r.x, r.y, r.width, 22, 10, 10, new Color(t.color.getRed(), t.color.getGreen(),
                     t.color.getBlue(), 60));
-            g.fillRoundRect(r.x, r.y, r.width, 22, 10, 10);
-            g.setColor(t.color);
-            g.setFont(new Font("SansSerif", Font.BOLD, 13));
-            g.drawString(clip(g, t.label, r.width - 40), r.x + 10, r.y + 16);
-            g.setColor(PANEL_EDGE);
-            g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
+            target.drawText(clip(target, SANS_BOLD_13, t.label, r.width - 40), r.x + 10, r.y + 16, SANS_BOLD_13,
+                    t.color);
+            target.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10, PANEL_EDGE);
 
             if (table == null) continue;
             Map<Integer, Integer> counts = table.territories().get(t);
             if (counts == null || counts.isEmpty()) {
-                g.setColor(TEXT_DIM);
-                g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-                g.drawString("unclaimed", r.x + 10, r.y + 42);
+                target.drawText("unclaimed", r.x + 10, r.y + 42, SANS_PLAIN_12, TEXT_DIM);
                 continue;
             }
 
@@ -840,32 +836,27 @@ public class DeckGameScene extends AbstractScene {
             }
 
             int rowY = r.y + 38;
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
             for (Map.Entry<Integer, Integer> e : counts.entrySet()) {
                 if (rowY > r.y + r.height - 8) break;
                 DeckClient.Standing s = standingOf(table, e.getKey());
                 Color c = leaderColorOf(table, e.getKey());
-                g.setColor(c);
                 int pips = Math.min(e.getValue(), 8);
                 for (int p = 0; p < pips; p++) {
-                    g.fillOval(r.x + 10 + p * 12, rowY - 8, 9, 9);
+                    target.fillOval(r.x + 10 + p * 12, rowY - 8, 9, 9, c);
                 }
                 String label = (s != null ? s.name() : "?") + " ×" + e.getValue()
                         + (!tied && e.getKey() == majority ? "  ♛ +1 VP" : "");
-                g.setColor(!tied && e.getKey() == majority ? VP_COLOR : TEXT_DIM);
-                g.drawString(clip(g, label, r.width - 20 - pips * 12),
-                        r.x + 14 + pips * 12, rowY);
+                target.drawText(clip(target, SANS_PLAIN_12, label, r.width - 20 - pips * 12), r.x + 14 + pips * 12,
+                        rowY, SANS_PLAIN_12, !tied && e.getKey() == majority ? VP_COLOR : TEXT_DIM);
                 rowY += 16;
             }
         }
     }
 
-    private void renderMarket(Graphics2D g, DeckClient.Table table,
+    private void renderMarket(DrawTarget target, DeckClient.Table table,
                               DeckClient.You you) {
         int x = viewportWidth - RIGHT_W + 2;
-        g.setColor(TEXT_DIM);
-        g.setFont(new Font("SansSerif", Font.BOLD, 13));
-        g.drawString("MARKET — buy on your turn", x + 6, TOP_H + 24);
+        target.drawText("MARKET — buy on your turn", x + 6, TOP_H + 24, SANS_BOLD_13, TEXT_DIM);
 
         if (table == null) return;
         List<String> market = table.market();
@@ -877,80 +868,65 @@ public class DeckGameScene extends AbstractScene {
                     - (you != null && you.bazaarDiscount() ? 1 : 0));
             boolean affordable = you != null && you.gold() >= price && myTurn();
 
-            g.setColor(affordable ? new Color(36, 42, 58) : PANEL);
-            g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
+            target.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10,
+                    affordable ? new Color(36, 42, 58) : PANEL);
 
-            g.setFont(new Font("SansSerif", Font.BOLD, 14));
-            g.setColor(affordable ? TEXT : TEXT_DIM);
-            g.drawString(clip(g, card.name, r.width - 56), r.x + 10, r.y + 20);
+            target.drawText(clip(target, SANS_BOLD_14, card.name, r.width - 56), r.x + 10, r.y + 20, SANS_BOLD_14,
+                    affordable ? TEXT : TEXT_DIM);
 
             // Price coin.
-            g.setColor(GOLD);
-            g.fillOval(r.x + r.width - 34, r.y + 6, 24, 24);
-            g.setColor(Color.BLACK);
-            g.setFont(new Font("SansSerif", Font.BOLD, 14));
-            FontMetrics fm = g.getFontMetrics();
+            target.fillOval(r.x + r.width - 34, r.y + 6, 24, 24, GOLD);
             String p = Integer.toString(price);
-            g.drawString(p, r.x + r.width - 22 - fm.stringWidth(p) / 2, r.y + 23);
+            target.drawText(p,
+                    r.x + r.width - 22 - target.textWidth(p, SANS_BOLD_14) / 2,
+                    r.y + 23, SANS_BOLD_14, Color.BLACK);
 
-            renderIconChips(g, card, r.x + 10, r.y + 30);
-            g.setFont(new Font("SansSerif", Font.PLAIN, 12));
-            g.setColor(affordable ? new Color(190, 195, 214) : TEXT_DIM);
-            g.drawString(clip(g, "Play: " + card.playSummary(), r.width - 18),
-                    r.x + 10, r.y + 60);
+            renderIconChips(target, card, r.x + 10, r.y + 30);
+            target.drawText(clip(target, SANS_PLAIN_12, "Play: " + card.playSummary(), r.width - 18), r.x + 10,
+                    r.y + 60, SANS_PLAIN_12, affordable ? new Color(190, 195, 214) : TEXT_DIM);
             if (r.height >= 88) {
-                g.drawString(clip(g, "Reveal: " + card.revealSummary(), r.width - 18),
-                        r.x + 10, r.y + 76);
+                target.drawText(clip(target, SANS_PLAIN_12, "Reveal: " + card.revealSummary(), r.width - 18),
+                        r.x + 10, r.y + 76, SANS_PLAIN_12,
+                        affordable ? new Color(190, 195, 214) : TEXT_DIM);
             }
 
-            g.setColor(affordable ? new Color(110, 160, 120) : PANEL_EDGE);
-            g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
+            target.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10,
+                    affordable ? new Color(110, 160, 120) : PANEL_EDGE);
         }
     }
 
-    private void renderIconChips(Graphics2D g, CardDef card, int x, int y) {
-        g.setFont(new Font("SansSerif", Font.BOLD, 10));
+    private void renderIconChips(DrawTarget target, CardDef card, int x, int y) {
         for (LocationIcon icon : LocationIcon.values()) {
             if (!card.icons.contains(icon)) continue;
-            FontMetrics fm = g.getFontMetrics();
-            int w = fm.stringWidth(icon.label) + 10;
-            g.setColor(new Color(icon.color.getRed(), icon.color.getGreen(),
+            int w = target.textWidth(icon.label, SANS_BOLD_10) + 10;
+            target.fillRoundRect(x, y, w, 14, 7, 7, new Color(icon.color.getRed(), icon.color.getGreen(),
                     icon.color.getBlue(), 70));
-            g.fillRoundRect(x, y, w, 14, 7, 7);
-            g.setColor(icon.color);
-            g.drawString(icon.label, x + 5, y + 11);
+            target.drawText(icon.label, x + 5, y + 11, SANS_BOLD_10, icon.color);
             x += w + 5;
         }
     }
 
-    private void renderHand(Graphics2D g, DeckClient.You you) {
+    private void renderHand(DrawTarget target, DeckClient.You you) {
         // Resource readout above the hand (clear of a lifted, selected card).
         int ry = viewportHeight - 190;
-        g.setFont(new Font("SansSerif", Font.BOLD, 15));
         if (you != null) {
             int x = 16;
-            x = drawStat(g, x, ry, GOLD, you.gold() + " gold");
-            x = drawStat(g, x, ry, LORE, you.lore() + " lore");
-            x = drawStat(g, x, ry, MIGHT, you.might() + " might");
-            x = drawStat(g, x, ry, VP_COLOR, you.vp() + " VP");
-            x = drawStat(g, x, ry, HIGHLIGHT, you.agentsLeft() + " agents");
-            g.setColor(TEXT_DIM);
-            g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-            g.drawString("deck " + you.deckCount() + " · discard " + you.discardCount(),
-                    x + 6, ry);
+            x = drawStat(target, x, ry, GOLD, you.gold() + " gold");
+            x = drawStat(target, x, ry, LORE, you.lore() + " lore");
+            x = drawStat(target, x, ry, MIGHT, you.might() + " might");
+            x = drawStat(target, x, ry, VP_COLOR, you.vp() + " VP");
+            x = drawStat(target, x, ry, HIGHLIGHT, you.agentsLeft() + " agents");
+            target.drawText("deck " + you.deckCount() + " · discard " + you.discardCount(), x + 6,
+                    ry, SANS_PLAIN_13, TEXT_DIM);
             if (you.bazaarDiscount()) {
-                g.setColor(GOLD);
-                g.drawString("bazaar: buys -1 gold", x + 6, ry + 16);
+                target.drawText("bazaar: buys -1 gold", x + 6, ry + 16, SANS_PLAIN_13, GOLD);
             }
         }
 
         if (you == null || you.hand().isEmpty()) {
-            g.setColor(TEXT_DIM);
-            g.setFont(new Font("SansSerif", Font.PLAIN, 15));
-            g.drawString(you != null && you.revealed()
+            target.drawText(you != null && you.revealed()
                             ? "Hand revealed — buy from the market, then end your turn."
-                            : "No cards in hand.",
-                    viewportWidth / 2 - 180, viewportHeight - 90);
+                            : "No cards in hand.", viewportWidth / 2 - 180, viewportHeight - 90, SANS_PLAIN_15, TEXT_DIM);
             return;
         }
 
@@ -962,121 +938,99 @@ public class DeckGameScene extends AbstractScene {
             boolean sel = i == selectedCard;
             int lift = sel ? -16 : 0;
 
-            g.setColor(sel ? new Color(44, 52, 72) : new Color(34, 38, 56));
-            g.fillRoundRect(r.x, r.y + lift, r.width, r.height, 10, 10);
+            target.fillRoundRect(r.x, r.y + lift, r.width, r.height, 10, 10,
+                    sel ? new Color(44, 52, 72) : new Color(34, 38, 56));
 
-            g.setFont(new Font("SansSerif", Font.BOLD, 13));
-            g.setColor(active ? TEXT : TEXT_DIM);
-            drawWrapped(g, card.name, r.x + 8, r.y + lift + 18, r.width - 16, 14);
-            renderIconChips(g, card, r.x + 8, r.y + lift + 44);
+            drawWrapped(target, card.name, r.x + 8, r.y + lift + 18, r.width - 16, 14,
+                    SANS_BOLD_13, active ? TEXT : TEXT_DIM);
+            renderIconChips(target, card, r.x + 8, r.y + lift + 44);
 
-            g.setFont(new Font("SansSerif", Font.PLAIN, 11));
-            g.setColor(active ? new Color(195, 200, 218) : TEXT_DIM);
-            drawWrapped(g, card.playSummary(), r.x + 8, r.y + lift + 76,
-                    r.width - 16, 13);
-            g.setColor(TEXT_DIM);
-            g.drawString(clip(g, "Rev: " + card.revealSummary(), r.width - 16),
-                    r.x + 8, r.y + lift + r.height - 10);
+            drawWrapped(target, card.playSummary(), r.x + 8, r.y + lift + 76,
+                    r.width - 16, 13, SANS_PLAIN_11,
+                    active ? new Color(195, 200, 218) : TEXT_DIM);
+            target.drawText(clip(target, SANS_PLAIN_11, "Rev: " + card.revealSummary(), r.width - 16), r.x + 8,
+                    r.y + lift + r.height - 10, SANS_PLAIN_11, TEXT_DIM);
 
-            g.setColor(sel ? HIGHLIGHT : PANEL_EDGE);
-            g.setStroke(new BasicStroke(sel ? 2.4f : 1f));
-            g.drawRoundRect(r.x, r.y + lift, r.width, r.height, 10, 10);
-            g.setStroke(new BasicStroke(1f));
+            target.drawRoundRect(r.x, r.y + lift, r.width, r.height, 10, 10,
+                    sel ? HIGHLIGHT : PANEL_EDGE, sel ? 2.4f : 1f);
         }
     }
 
-    private int drawStat(Graphics2D g, int x, int y, Color color, String text) {
-        g.setColor(color);
-        g.setFont(new Font("SansSerif", Font.BOLD, 15));
-        g.drawString(text, x, y);
-        return x + g.getFontMetrics().stringWidth(text) + 18;
+    private int drawStat(DrawTarget target, int x, int y, Color color, String text) {
+        target.drawText(text, x, y, SANS_BOLD_15, color);
+        return x + target.textWidth(text, SANS_BOLD_15) + 18;
     }
 
-    private void renderButtons(Graphics2D g, DeckClient.You you) {
+    private void renderButtons(DrawTarget target, DeckClient.You you) {
         if (you == null) return;
         boolean turn = myTurn();
-        drawButton(g, revealBtn, "Reveal hand (R)", turn && !you.revealed(),
+        drawButton(target, revealBtn, "Reveal hand (R)", turn && !you.revealed(),
                 new Color(70, 100, 130));
-        drawButton(g, doneBtn, you.revealed() ? "End turn (E)" : "Pass — reveal & end (E)",
+        drawButton(target, doneBtn, you.revealed() ? "End turn (E)" : "Pass — reveal & end (E)",
                 turn, new Color(70, 120, 70));
         if (turn && selectedCard >= 0) {
-            g.setColor(TEXT_DIM);
-            g.setFont(new Font("SansSerif", Font.PLAIN, 13));
-            g.drawString("Click a highlighted location", viewportWidth - 190,
-                    viewportHeight - 44);
+            target.drawText("Click a highlighted location", viewportWidth - 190,
+                    viewportHeight - 44, SANS_PLAIN_13, TEXT_DIM);
         }
     }
 
-    private void drawButton(Graphics2D g, Rectangle r, String label, boolean enabled,
+    private void drawButton(DrawTarget target, Rectangle r, String label, boolean enabled,
                             Color color) {
-        g.setColor(enabled ? color : new Color(40, 44, 60));
-        g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-        g.setColor(enabled ? Color.WHITE : TEXT_DIM);
-        g.setFont(new Font("SansSerif", Font.BOLD, 14));
-        FontMetrics fm = g.getFontMetrics();
-        g.drawString(label, r.x + (r.width - fm.stringWidth(label)) / 2, r.y + 27);
-        g.setColor(enabled ? new Color(160, 190, 210) : PANEL_EDGE);
-        g.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10);
+        target.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10,
+                enabled ? color : new Color(40, 44, 60));
+        target.drawText(label,
+                r.x + (r.width - target.textWidth(label, SANS_BOLD_14)) / 2,
+                r.y + 27, SANS_BOLD_14, enabled ? Color.WHITE : TEXT_DIM);
+        target.drawRoundRect(r.x, r.y, r.width, r.height, 10, 10,
+                enabled ? new Color(160, 190, 210) : PANEL_EDGE);
     }
 
-    private void renderTerritoryPick(Graphics2D g) {
-        g.setColor(new Color(0, 0, 0, 120));
-        g.fillRect(0, 0, viewportWidth, viewportHeight - HAND_H);
-        g.setColor(TEXT);
-        g.setFont(new Font("SansSerif", Font.BOLD, 17));
-        FontMetrics fm = g.getFontMetrics();
+    private void renderTerritoryPick(DrawTarget target) {
+        target.fillRect(0, 0, viewportWidth, viewportHeight - HAND_H, new Color(0, 0, 0, 120));
         String label = "Deploy troops to which territory?";
-        g.drawString(label, viewportWidth / 2 - fm.stringWidth(label) / 2,
-                terrPickRects[0].y - 14);
+        target.drawText(label,
+                viewportWidth / 2 - target.textWidth(label, SANS_BOLD_17) / 2,
+                terrPickRects[0].y - 14, SANS_BOLD_17, TEXT);
         Territory[] terrs = Territory.values();
         for (int i = 0; i < terrs.length; i++) {
             Rectangle r = terrPickRects[i];
-            g.setColor(new Color(terrs[i].color.getRed(), terrs[i].color.getGreen(),
+            target.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10, new Color(terrs[i].color.getRed(), terrs[i].color.getGreen(),
                     terrs[i].color.getBlue(), 200));
-            g.fillRoundRect(r.x, r.y, r.width, r.height, 10, 10);
-            g.setColor(Color.BLACK);
-            g.setFont(new Font("SansSerif", Font.BOLD, 14));
-            fm = g.getFontMetrics();
-            g.drawString(terrs[i].label,
-                    r.x + (r.width - fm.stringWidth(terrs[i].label)) / 2, r.y + 28);
+            target.drawText(terrs[i].label,
+                    r.x + (r.width - target.textWidth(terrs[i].label,
+                            SANS_BOLD_14)) / 2,
+                    r.y + 28, SANS_BOLD_14, Color.BLACK);
         }
     }
 
-    private void renderFloatersAndToasts(Graphics2D g) {
-        g.setFont(new Font("SansSerif", Font.BOLD, 17));
+    private void renderFloatersAndToasts(DrawTarget target) {
         for (Floater f : floaters) {
             int a = (int) Math.max(0, 255 * (1 - f.age / 1.4));
-            g.setColor(new Color(f.color.getRed(), f.color.getGreen(),
+            target.drawText(f.text, (int) f.x, (int) f.y, SANS_BOLD_17, new Color(f.color.getRed(), f.color.getGreen(),
                     f.color.getBlue(), a));
-            g.drawString(f.text, (int) f.x, (int) f.y);
         }
 
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         int y = viewportHeight - HAND_H - 16;
         for (int i = toasts.size() - 1; i >= 0; i--) {
             Toast t = toasts.get(i);
             int a = (int) Math.max(0, Math.min(255, 255 * (4.0 - t.age)));
-            g.setColor(new Color(210, 215, 230, a));
-            g.drawString(t.text, 16, y);
+            target.drawText(t.text, 16, y, SANS_PLAIN_14, new Color(210, 215, 230, a));
             y -= 20;
         }
     }
 
-    private void renderBanner(Graphics2D g) {
+    private void renderBanner(DrawTarget target) {
         if (banner == null) return;
         float fade = (float) Math.max(0, Math.min(1, 3.0 - bannerAge));
-        g.setFont(new Font("SansSerif", Font.BOLD, 34));
-        FontMetrics fm = g.getFontMetrics();
-        int w = fm.stringWidth(banner);
+        int w = target.textWidth(banner, SANS_BOLD_34);
         int x = viewportWidth / 2 - w / 2;
         int y = viewportHeight / 2 - 60;
-        g.setColor(new Color(0, 0, 0, (int) (150 * fade)));
-        g.fillRoundRect(x - 24, y - 36, w + 48, 52, 16, 16);
-        g.setColor(new Color(255, 225, 150, (int) (255 * fade)));
-        g.drawString(banner, x, y);
+        target.fillRoundRect(x - 24, y - 36, w + 48, 52, 16, 16,
+                new Color(0, 0, 0, (int) (150 * fade)));
+        target.drawText(banner, x, y, SANS_BOLD_34, new Color(255, 225, 150, (int) (255 * fade)));
     }
 
-    private void renderTooltip(Graphics2D g) {
+    private void renderTooltip(DrawTarget target) {
         // A flavor tooltip for the hovered hand or market card (hover position
         // captured in update, where the input is available).
         DeckClient.You you = client.you();
@@ -1107,77 +1061,56 @@ public class DeckGameScene extends AbstractScene {
         int w = 240;
         int x = Math.max(8, Math.min(viewportWidth - w - 8, mx));
         int y = Math.max(TOP_H + 8, my - 54);
-        g.setColor(new Color(12, 14, 24, 235));
-        g.fillRoundRect(x, y, w, 46, 10, 10);
-        g.setColor(PANEL_EDGE);
-        g.drawRoundRect(x, y, w, 46, 10, 10);
-        g.setColor(new Color(200, 195, 170));
-        g.setFont(new Font("SansSerif", Font.ITALIC, 12));
-        drawWrapped(g, card.flavor, x + 10, y + 18, w - 20, 14);
+        target.fillRoundRect(x, y, w, 46, 10, 10, new Color(12, 14, 24, 235));
+        target.drawRoundRect(x, y, w, 46, 10, 10, PANEL_EDGE);
+        drawWrapped(target, card.flavor, x + 10, y + 18, w - 20, 14,
+                SANS_ITALIC_12, new Color(200, 195, 170));
     }
 
-    private void renderPause(Graphics2D g) {
-        g.setColor(new Color(0, 0, 0, 170));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
-        g.setColor(TEXT);
-        g.setFont(new Font("SansSerif", Font.BOLD, 34));
-        drawCentered(g, "Paused", viewportWidth / 2, viewportHeight / 2 - 40);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 17));
-        g.setColor(TEXT_DIM);
-        drawCentered(g, "The table keeps playing online.",
-                viewportWidth / 2, viewportHeight / 2);
-        drawCentered(g, "Esc — resume    ·    L — leave the game",
-                viewportWidth / 2, viewportHeight / 2 + 30);
+    private void renderPause(DrawTarget target) {
+        target.fillRect(0, 0, viewportWidth, viewportHeight, new Color(0, 0, 0, 170));
+        drawCentered(target, "Paused", viewportWidth / 2, viewportHeight / 2 - 40,
+                SANS_BOLD_34, TEXT);
+        drawCentered(target, "The table keeps playing online.",
+                viewportWidth / 2, viewportHeight / 2, SANS_PLAIN_17, TEXT_DIM);
+        drawCentered(target, "Esc — resume    ·    L — leave the game",
+                viewportWidth / 2, viewportHeight / 2 + 30, SANS_PLAIN_17, TEXT_DIM);
     }
 
-    private void renderGameOver(Graphics2D g) {
+    private void renderGameOver(DrawTarget target) {
         DeckClient.GameOver over = client.gameOver();
-        g.setColor(new Color(0, 0, 0, 190));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
-        g.setColor(VP_COLOR);
-        g.setFont(new Font("SansSerif", Font.BOLD, 40));
-        drawCentered(g, over.winner() + " wins!", viewportWidth / 2, 160);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 20));
+        target.fillRect(0, 0, viewportWidth, viewportHeight, new Color(0, 0, 0, 190));
+        drawCentered(target, over.winner() + " wins!", viewportWidth / 2, 160,
+                SANS_BOLD_40, VP_COLOR);
         int y = 220;
         for (String row : over.standings()) {
-            g.setColor(TEXT);
-            drawCentered(g, row, viewportWidth / 2, y);
+            drawCentered(target, row, viewportWidth / 2, y, SANS_PLAIN_20, TEXT);
             y += 30;
         }
-        g.setColor(TEXT_DIM);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 16));
-        drawCentered(g, "Press Esc to return to the lobby", viewportWidth / 2, y + 24);
+        drawCentered(target, "Press Esc to return to the lobby", viewportWidth / 2, y + 24,
+                SANS_PLAIN_16, TEXT_DIM);
     }
 
-    private void renderDisconnected(Graphics2D g) {
-        g.setColor(new Color(0, 0, 0, 190));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
-        g.setColor(new Color(235, 120, 110));
-        g.setFont(new Font("SansSerif", Font.BOLD, 28));
-        drawCentered(g, "Disconnected", viewportWidth / 2, viewportHeight / 2 - 30);
-        g.setColor(TEXT_DIM);
-        g.setFont(new Font("SansSerif", Font.PLAIN, 17));
-        drawCentered(g, String.valueOf(client.disconnectReason()),
-                viewportWidth / 2, viewportHeight / 2 + 4);
-        drawCentered(g, "Press Esc to return to the lobby",
-                viewportWidth / 2, viewportHeight / 2 + 34);
+    private void renderDisconnected(DrawTarget target) {
+        target.fillRect(0, 0, viewportWidth, viewportHeight, new Color(0, 0, 0, 190));
+        drawCentered(target, "Disconnected", viewportWidth / 2, viewportHeight / 2 - 30,
+                SANS_BOLD_28, DISCONNECTED);
+        drawCentered(target, String.valueOf(client.disconnectReason()),
+                viewportWidth / 2, viewportHeight / 2 + 4, SANS_PLAIN_17, TEXT_DIM);
+        drawCentered(target, "Press Esc to return to the lobby",
+                viewportWidth / 2, viewportHeight / 2 + 34, SANS_PLAIN_17, TEXT_DIM);
     }
 
     /** The rules card; shared with the lobby scene's How to Play. */
-    static void renderHelpOverlay(Graphics2D g, int viewportWidth, int viewportHeight) {
-        g.setColor(new Color(0, 0, 0, 200));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
+    static void renderHelpOverlay(DrawTarget target, int viewportWidth, int viewportHeight) {
+        target.fillRect(0, 0, viewportWidth, viewportHeight, HELP_SCRIM);
         int w = Math.min(760, viewportWidth - 60);
         int x = viewportWidth / 2 - w / 2;
         int y = Math.max(24, viewportHeight / 2 - 280);
-        g.setColor(new Color(26, 29, 46));
-        g.fillRoundRect(x, y, w, 560, 16, 16);
-        g.setColor(new Color(90, 96, 122));
-        g.drawRoundRect(x, y, w, 560, 16, 16);
+        target.fillRoundRect(x, y, w, 560, 16, 16, HELP_PANEL);
+        target.drawRoundRect(x, y, w, 560, 16, 16, HELP_EDGE);
 
-        g.setColor(new Color(245, 245, 255));
-        g.setFont(new Font("SansSerif", Font.BOLD, 24));
-        g.drawString("How to play Council of Six", x + 28, y + 40);
+        target.drawText("How to play Council of Six", x + 28, y + 40, HELP_TITLE_FONT, HELP_TITLE);
 
         String[] lines = {
                 "First to 10 victory points at the end of a round wins (8 rounds max).",
@@ -1199,46 +1132,41 @@ public class DeckGameScene extends AbstractScene {
                 "Every leader has one passive — read the cards in the lobby. That's",
                 "the whole rulebook: no stack, no instants, no priority. Sorry, Dustin.",
         };
-        g.setFont(new Font("SansSerif", Font.PLAIN, 15));
         int ly = y + 74;
         for (String line : lines) {
-            g.setColor(line.startsWith("  ·") ? new Color(200, 205, 224)
-                    : new Color(225, 228, 240));
-            g.drawString(line, x + 28, ly);
+            target.drawText(line, x + 28, ly, HELP_BODY_FONT,
+                    line.startsWith("  ·") ? HELP_BULLET : HELP_BODY);
             ly += 24;
         }
-        g.setColor(new Color(150, 155, 175));
-        g.drawString("H or Esc closes this.", x + 28, y + 536);
+        target.drawText("H or Esc closes this.", x + 28, y + 536, HELP_BODY_FONT, HELP_FOOTER);
     }
 
-    private void drawCentered(Graphics2D g, String s, int cx, int y) {
-        FontMetrics fm = g.getFontMetrics();
-        g.drawString(s, cx - fm.stringWidth(s) / 2, y);
+    private void drawCentered(DrawTarget target, String s, int cx, int y,
+                              Font font, Color color) {
+        target.drawText(s, cx - target.textWidth(s, font) / 2, y, font, color);
     }
 
-    private void drawWrapped(Graphics2D g, String text, int x, int y, int width,
-                             int lineHeight) {
-        FontMetrics fm = g.getFontMetrics();
+    private void drawWrapped(DrawTarget target, String text, int x, int y, int width,
+                             int lineHeight, Font font, Color color) {
         StringBuilder line = new StringBuilder();
         for (String word : text.split(" ")) {
             String candidate = line.isEmpty() ? word : line + " " + word;
-            if (fm.stringWidth(candidate) > width && !line.isEmpty()) {
-                g.drawString(line.toString(), x, y);
+            if (target.textWidth(candidate, font) > width && !line.isEmpty()) {
+                target.drawText(line.toString(), x, y, font, color);
                 y += lineHeight;
                 line = new StringBuilder(word);
             } else {
                 line = new StringBuilder(candidate);
             }
         }
-        if (!line.isEmpty()) g.drawString(line.toString(), x, y);
+        if (!line.isEmpty()) target.drawText(line.toString(), x, y, font, color);
     }
 
-    private String clip(Graphics2D g, String s, int width) {
-        FontMetrics fm = g.getFontMetrics();
-        if (fm.stringWidth(s) <= width) return s;
+    private String clip(DrawTarget target, Font font, String s, int width) {
+        if (target.textWidth(s, font) <= width) return s;
         String ellipsis = "…";
         int i = s.length();
-        while (i > 1 && fm.stringWidth(s.substring(0, i) + ellipsis) > width) i--;
+        while (i > 1 && target.textWidth(s.substring(0, i) + ellipsis, font) > width) i--;
         return s.substring(0, i) + ellipsis;
     }
 }

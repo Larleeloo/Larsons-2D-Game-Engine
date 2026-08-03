@@ -5,16 +5,12 @@ import com.larsons.engine.input.InputManager;
 import com.larsons.engine.input.KeyBindStore;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.scene.Scene;
 import com.larsons.engine.scene.SceneManager;
 import com.larsons.engine.ui.ConfigForm;
 import com.larsons.engine.ui.KeyBindForm;
 
-import java.awt.Color;
-import java.awt.Font;
-import java.awt.Graphics2D;
 
 /**
  * The controls screen: every action in the engine, and the key or mouse button
@@ -97,24 +93,18 @@ public class KeyBindsScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Not yet ported off Graphics2D; see Java2DTarget.graphicsOf.
-        Graphics2D g = Java2DTarget.graphicsOf(target);
-        g.setColor(new Color(18, 18, 28));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
+        SceneChrome.backdrop(target, viewportWidth, viewportHeight);
         form.render(target, viewportWidth, viewportHeight);
 
-        g.setFont(new Font("SansSerif", Font.PLAIN, 14));
         if (form.isCapturing()) {
             GameAction action = form.capturingAction();
-            g.setColor(new Color(255, 210, 90));
-            g.drawString("Press any key or mouse button for \""
+            SceneChrome.status(target, viewportHeight,
+                    "Press any key or mouse button for \""
                             + (action == null ? "" : action.label()) + "\" · Esc to cancel",
-                    24, viewportHeight - 44);
+                    SceneChrome.PROMPT);
         } else if (!status.isEmpty()) {
-            g.setColor(new Color(140, 200, 140));
-            g.drawString(status, 24, viewportHeight - 44);
+            SceneChrome.status(target, viewportHeight, status, SceneChrome.OK);
         }
-        g.setColor(new Color(120, 120, 140));
-        g.drawString(KeyBindForm.HINT, 24, viewportHeight - 24);
+        SceneChrome.hint(target, viewportHeight, KeyBindForm.HINT);
     }
 }
