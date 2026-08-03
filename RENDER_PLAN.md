@@ -1,13 +1,20 @@
 # Render Plan — GPU Acceleration, End to End
 
 **Status:** Living document. Written 2026-08-02 against commit `85196b9` on
-`claude/gpu-acceleration-shaders-oqbx54`. B0–B9 are done and recorded in place;
-B10 is the next step. **The GL backend exists, draws the same picture, and is
-now chosen** — all 32 golden frames within the 3.58 bar, worst 2.59, 3,356
-operations collapsing into 68 draw calls, and as of B9 the engine probes for a
-context at startup, falls back to Java2D when there is none, and names the
-backend in every frame report. What is left of Job B is measuring it on real
-hardware. Two of the plan's own instructions have now been measured to be
+`claude/gpu-acceleration-shaders-oqbx54`. **Job B is done and it delivered.** On
+the M1 Air — the machine that was over budget and therefore the one that decides
+— frame work fell from **16.83 ms to 6.94 ms**, the scene stage from **9.77 to
+3.92**, and headroom from **−1.0% to +58.3%**. The backend draws all 32 golden
+frames within the 3.58 bar (worst 2.59), collapses 3,356 operations into 68 draw
+calls, and as of B9 is probed for at startup with an honest fallback and named in
+every report.
+
+It also shipped one serious bug that the golden catalogue could not see, found by
+playing a real level: a vertex buffer that grew mid-triangle and desynchronised
+every triangle after it. That is B8a, recorded in place with the reproduction
+that now guards it. **The B10 numbers above were taken on the build that had it
+and are pending one confirming re-run** — the corruption changed which vertices
+were assembled, not how many were generated, so they are expected to stand. Two of the plan's own instructions have now been measured to be
 incomplete rather than wrong-headed: B6's "route `drawText` through it" (Java2D
 already has a glyph cache and beats any per-character blit) and B8's "against a
 1×1 white texture" (which shares a shader but not a batch — the white texel has
@@ -90,6 +97,8 @@ Everything in this table has been measured or executed, not assumed.
 | A GL backend draws the same picture as Java2D | B8 — `GlParityTest` renders all 32 of B0's frames through both and subtracts: worst **2.59 / 255** against a bar of 3.58, six frames at exactly 0.00 |
 | The batching the atlases were built for is real, not modelled | B8 — the catalogue's 3,356 operations become **68** `glDrawArrays` calls, 49.35×, measured on the backend rather than predicted by a counter |
 | The engine picks a backend and never strands a player | B9 — `Backends` probes for a GL 3.3 context over `ServiceLoader` and falls back to Java2D with a reason; `BackendSelectionTest` runs every route on a machine with no GPU, `GlBackendTest` provokes the failure on one that has |
+| **Job B made the frame faster on the machine that needed it** | B10 — M1 Air, same level, both backends: work per frame **16.83 → 6.94 ms**, scene **9.77 → 3.92 ms**, headroom **−1.0% → +58.3%**, 59 → 144 sustainable FPS |
+| A backend can pass 32 pixel-perfect frames and still be broken | B8a — `GlBatch` grew mid-triangle above 4,096 vertices and scrambled every triangle after it. No catalogue frame is that big. `GlBatchTest` reproduces it at the predicted vertex |
 | A profile says which renderer produced it | B9 — `DeviceProfile.backend()` / `gpu()`, printed by `FrameReport`. The build stamp taught this lesson once already |
 | Both backends run the whole game, not a test harness | B9 — `-Dlarsons.run.seconds` launches the real game on each and exits; both wrote a report under `xvfb-run`, `gl` at 0.631 ms scene against `java2d` at 1.591 ms on a software rasteriser |
 
@@ -124,8 +133,9 @@ much faster it makes things.
    the Java2D path working and tested.
 3. **Pixel parity is the contract.** "Looks fine" is not a result. Every port
    step compares rendered output against a reference and states the error.
-4. **The suite stays green.** Last full run: **959 tests, 0 failures, 17 skipped**
-   (was 810/0/3 when this was written; B0–B9 added the rest). The skips are
+4. **The suite stays green.** Last full run: **964 tests, 0 failures, 3 skipped**
+   under `xvfb-run` (was 810/0/3 when this was written; B0–B10 added the rest;
+   17 skip with no display at all). The skips are
    environment-dependent and skip rather than fail by design — three need a
    display, fourteen need a GL driver (seven in core, seven in `:gl`). Under
    `xvfb-run` the same suite is **959/0/3**: the GL tests all run on a software
@@ -2010,6 +2020,61 @@ still correct.
 
 ---
 
+### B8a — The bug 32 golden frames could not see
+
+**Found by playing the game, on the first real level anyone put through the GL
+backend.** Reported as "text looks jumbled and entities have lines coming out of
+them". Both symptoms, one cause.
+
+`GlBatch` grew its vertex buffer when a batch reached 4,096 vertices. **4,096 is
+not a multiple of three.** The check is `count == capacity` and `count` rises one
+vertex at a time, so the growth happened at vertex 4,096 — one vertex into a
+triangle. `glDrawArrays(GL_TRIANGLES, 0, 4096)` does not refuse that: it draws
+1,365 whole triangles and silently ignores the leftover vertex. The two vertices
+still to come were then written at the head of the reallocated buffer, and from
+that moment **every triangle in the frame was assembled from vertices two places
+apart** — the corners of different sprites and different glyphs. Long thin
+triangles between entities; glyph quads built from three different letters.
+
+The class had claimed the opposite in its own javadoc for three steps: "the
+buffer holds a multiple of three and callers never straddle it". The second half
+was true — every emitter appends three vertices with nothing between them. The
+first half was false for 4,096, 8,192, 16,384, 32,768 and 65,536, which is every
+capacity it ever used.
+
+**Why 32 golden frames and a 2.59/255 parity number all passed.** The catalogue's
+busiest frame issues 374 operations, and its frames change texture often enough
+that no single batch ever reached 4,096 vertices. A real level issues 2,942
+operations that merge into a handful of batches, so it crossed the boundary
+inside the first frame and corrupted every frame after it. **The catalogue tested
+the backend's vocabulary exhaustively and its volume not at all** — every verb,
+every shape, every text path, at a scale nothing in the game runs at. That is the
+general lesson worth keeping: a parity catalogue built from small deterministic
+frames answers "does each operation draw the right thing" and cannot answer "does
+the backend survive a real frame".
+
+**The fix** is `GlBatch.wholeTriangles`, which rounds any capacity down to a whole
+number of triangles and is used by the constructor, by every growth and by the
+ceiling. The invariant is now enforced by the code that depends on it rather than
+by five literals that all had to stay right. `flush()` additionally drops a
+partial triangle and says so once on stderr, so a future violation costs one
+missing shape instead of a ruined frame.
+
+**Verified by reproduction.** [`GlBatchTest`](gl/src/test/java/com/larsons/engine/gl/GlBatchTest.java)
+draws 4,800 rectangles in one batch — 28,800 vertices, crossing the growth
+boundary three times — each in a colour derived from its own index, then reads
+the surface back and checks every one. Run against the unfixed code it fails at
+**rectangle 682**, which is vertex 4,092, and every rectangle after it: the
+predicted index, arrived at from the arithmetic before the test was written. A
+second case does the same with several thousand glyph quads and asserts no ink
+lands below the last row of text, which is where a shifted stream throws
+triangles. Both are pixel tests; the capacity arithmetic is also checked as a
+pure function, so the cheapest half of this runs on a build agent with no GPU.
+
+Suite: **959 → 964**, still 0 failures.
+
+---
+
 ### B10 — Re-profile and decide
 
 **Goal.** Answer, with numbers, whether Job B delivered.
@@ -2048,6 +2113,69 @@ already a GPU texture.
 
 **Done when.** The numbers are recorded and the decision to continue is made
 from them.
+
+#### B10 — the M1 Air, measured
+
+**`PlayScene`, 1280×720, 600-frame window, 60 FPS cap, both backends, same
+level and same activity.** Mac OS X 26.3.1, M1, 8 cores, Java 21.0.9, on a
+1440×900 panel at **scale 2.0** — so every logical pixel is four real ones.
+
+| | Java2D | GL | change |
+|---|---:|---:|---:|
+| **work per frame** | **16.826 ms** | **6.944 ms** | **−59%** |
+| headroom (of 16.67 ms) | **−1.0%** | **+58.3%** | budget met |
+| sustainable FPS | 59 | 144 | |
+| **scene** | **9.768** | **3.920** | **−60%** |
+| — terrain | 4.899 | 2.217 | −55% |
+| — entities | 3.934 | 1.503 | −62% |
+| — hud | 0.386 | 0.069 | −82% |
+| — decor | 0.163 | 0.092 | −44% |
+| present | 5.061 | 1.105 | −78% |
+| update | 1.997 | 1.918 | unchanged, correctly |
+| overlay | 0.270 | 0.044 | −84% |
+| idle (headroom) | 0.991 | 10.025 | |
+
+**The bar is met and then some.** B10 set it as "if GL does not cut the scene
+stage substantially, something in B5/B6/B8 is not batching". The scene stage
+fell by 60% and the frame went from **1.0% over budget to 58% under it** —
+59 sustainable FPS to 144. Appendix B's baseline was 17.12 ms of work against a
+16.67 ms budget on this machine; the Java2D column above reproduces it at 16.83,
+which is the same measurement two weeks apart and says the comparison is sound
+before reading the other column.
+
+`present` falling by 78% is the second result and was not predicted. Java2D's
+present is a blit of a 1280×720 image onto a 2× surface, done by the CPU and
+paid on every frame; GL's is a buffer swap. On a HiDPI panel that blit was
+costing more than the whole GL scene stage.
+
+`update` is unchanged, which is the control: nothing about a renderer should
+move the fixed-step simulation, and nothing did.
+
+**The remaining hitch is not a rendering problem.** `update` spikes to 17.36 ms
+at p99 against a 0.68 ms median on *both* backends — one frame in a hundred
+spends the entire budget inside the simulation. That is the next thing between
+this game and a steady 60, and no renderer will touch it.
+
+#### B10 — and the bug the numbers did not show
+
+The two profiles above were taken on a build with the `GlBatch` desynchronisation
+described below, so the GL frame was **drawn wrong while being timed**. The
+numbers are kept rather than retaken, for a stated reason: the corruption changes
+which vertices are assembled into which triangle, not how many vertices are
+generated, uploaded or drawn. The scene stage is CPU-side vertex generation, and
+it did the same work either way. **They are still to be re-confirmed on the fixed
+build** — see the entry in §8 — and this section will say so until they are.
+
+**Do not read `merge ratio 2.2×` as this backend's batching.** The `Draw calls`
+block of a frame report is `DrawStats`, which is the *model* — the count a
+backend could achieve given the draw order, computed in the core with no backend
+present. B8 measured the model to be seven times pessimistic against what GL
+really issues. The report has no channel for a backend's real
+`glDrawArrays` count, so on a GL run it prints the Java2D-equivalent prediction
+and its verdict text ("a GPU backend would issue nearly one call per sprite and
+buy little") is advice about a decision that has already been made and
+contradicted by measurement. That is a reporting defect, not a batching one, and
+it is worth fixing before the next round of profiles is taken.
 
 ---
 
@@ -2369,6 +2497,7 @@ declared finished while broken.
 | **`GlParityTest`** | Does the GPU backend draw the same picture, and how many draw calls does it really issue? | `gl/…/GlParityTest.java`, B8 — writes `build/reports/gl-parity.md`, and PNGs for any frame over the bar |
 | **`ModuleBoundaryTest` + `:verifyNoRuntimeDependencies`** | Can the core quietly acquire a runtime dependency? | `render/ModuleBoundaryTest.java` and the root build, B7 |
 | **`BackendSelectionTest` + `GlBackendTest`** | Does the right renderer get picked, and does the wrong answer still leave a playable game? | `render/BackendSelectionTest.java` (every route, no GPU needed) and `gl/…/GlBackendTest.java` (the classpath, the driver, the provoked failure), B9 |
+| **`GlBatchTest`** | Does the backend survive a frame bigger than its buffers? The catalogue answers *vocabulary*; this answers *volume*, and the two are different questions — B8a shipped because only the first was being asked | `gl/…/GlBatchTest.java`, B8a |
 
 **`DrawStats` and `GlParityTest` answer different questions and B8 measured the
 gap.** `DrawStats` models what a batching backend *could* merge given the draw
@@ -2400,7 +2529,14 @@ B7  :gl Gradle module                  ← done
 B8  GlTarget + GlRenderer              ← done (2.59/255 worst, 3356 ops → 68 draws)
 B9  backend selection + fallback       ← done (ServiceLoader SPI; GLFW owns the
                                               window when GL wins; both launch)
-B10 re-profile on both machines, decide  ← start here
+B10 re-profile, decide                 ← M1 Air measured: 16.83 ms → 6.94 ms of
+                                         work, scene 9.77 → 3.92, −1.0% headroom
+                                         → +58.3%. Job B delivered.
+                                       ← REMAINING: re-run both profiles on the
+                                         build that fixes GlBatch, and confirm
+                                         the numbers stand. Desktop deliberately
+                                         skipped; the Air was the machine over
+                                         budget and therefore the one that decides.
       │
       ├─ A1  scene renders to an FBO
       │  A2  GlShaderChain ping-pong
