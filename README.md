@@ -361,6 +361,7 @@ com.larsons.engine
 │   │   ├── RecordingTarget.java DrawTarget that writes down what it was asked to draw
 │   │   └── DrawStats.java     Operations vs batches — what a GPU backend would save
 │   ├── atlas
+│   │   ├── GlyphAtlas.java    Packs rasterised glyphs beside the sprites so text batches with them
 │   │   └── SpriteAtlas.java   Packs baked sprites onto one page so runs of them batch
 │   └── shader
 │       ├── ShaderPass.java    One pass: GLSL 3.30 source + CPU implementation
@@ -864,8 +865,22 @@ sprite — a busy entity phase falls from 65 draw calls to 34, and the engine's
 whole generated art set fits on a single 2048×1024 page. Nothing at the call
 sites changed: the factories still hand back a plain `BufferedImage`, and the
 backend resolves it to its region on the way to the screen.
-`-Dlarsons.render.atlas=false` turns that off. What remains is text batching and
-the GL backend itself — see [`RENDER_PLAN.md`](RENDER_PLAN.md).
+`-Dlarsons.render.atlas=false` turns that off.
+
+Text is batched onto those same pages.
+[`GlyphAtlas`](src/main/java/com/larsons/engine/graphics/atlas/GlyphAtlas.java)
+rasterises each glyph once per font, colour and screen scale and packs it beside
+the sprites — the shared page grows to 2048×2048 to hold both — so an inventory
+row of icon-label-icon-label is one texture bind
+instead of one per item — the crafting panel falls from 33 draw calls to 14.
+Java2D still *draws* the text with `drawString`, because measuring said its own
+glyph cache is about 3.6× faster per glyph than any per-character blit; what the
+atlas gives it is the packing and the batch key a GPU backend will use.
+`-Dlarsons.render.glyphs=false` turns that off, and
+`-Dlarsons.render.glyphblit=true` makes Java2D draw from the pages as well.
+
+What remains is the GL backend itself — see
+[`RENDER_PLAN.md`](RENDER_PLAN.md).
 
 Both of those are large jobs, and which (if either) is worth doing is a
 question about measurements rather than architecture. The

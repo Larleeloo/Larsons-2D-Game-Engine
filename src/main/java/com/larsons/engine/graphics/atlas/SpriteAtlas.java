@@ -323,7 +323,14 @@ public final class SpriteAtlas {
     /** Every page, in the order they were opened. */
     public synchronized List<Page> pages() { return List.copyOf(pages); }
 
-    /** How many sprites are packed. */
+    /**
+     * How many regions are packed.
+     *
+     * <p>Sprites, and since B6 glyph cells too — {@link GlyphAtlas} packs into
+     * these same pages rather than opening a parallel atlas, because two
+     * atlases would leave an icon-then-label row flushing between every pair.
+     * Nothing here knows or needs to know which a region is.
+     */
     public int size() { return byImage.size(); }
 
     /** How many sprites were offered and turned away — too large, or no room. */
@@ -341,7 +348,7 @@ public final class SpriteAtlas {
     public synchronized String toString() {
         if (pages.isEmpty()) return "empty atlas";
         StringBuilder sb = new StringBuilder(
-                "%d sprites over %d page%s".formatted(byImage.size(), pages.size(),
+                "%d regions over %d page%s".formatted(byImage.size(), pages.size(),
                         pages.size() == 1 ? "" : "s"));
         for (Page page : pages) sb.append(" [").append(page).append(']');
         if (rejected > 0) sb.append(", ").append(rejected).append(" not packed");

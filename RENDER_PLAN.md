@@ -1,9 +1,10 @@
 # Render Plan — GPU Acceleration, End to End
 
 **Status:** Living document. Written 2026-08-02 against commit `85196b9` on
-`claude/gpu-acceleration-shaders-oqbx54`. B0–B5 are done and recorded in place;
-B6 is the next step, and B5's measurement changed what B6 has to do — see the
-correction at the end of B5.
+`claude/gpu-acceleration-shaders-oqbx54`. B0–B6 are done and recorded in place;
+B7 is the next step. B6 measured one of its own instructions to be wrong —
+Java2D already has a glyph cache and beats any per-character blit — so the glyph
+atlas ships packed but not blitted; see the finding inside B6.
 **Companion to:** [`STEAM_PLAN.md`](STEAM_PLAN.md), which covers the product.
 This one covers the renderer, and is the plan of record for Jobs A, B and C.
 
@@ -70,6 +71,7 @@ Everything in this table has been measured or executed, not assumed.
 | The GPU plumbing a backend needs is already written | [`GlShaderHarness`](src/test/java/com/larsons/engine/GlShaderHarness.java) — context, FBO, upload, uniform binding, readback, in ~200 lines |
 | The whole engine renders through `DrawTarget`, not `Graphics2D` | Every painter, widget and scene takes a `DrawTarget`; `Renderer.beginFrame()` returns one; `SceneFramesTest.noSceneReachesPastTheDrawTarget` records every scene through a target with no Graphics2D behind it |
 | It cannot quietly stop being true | `SealedSeamTest` — B4. Java2D is named in code by 13 of 236 main sources, 10 of them in `com.larsons.engine.graphics` and 3 bakes outside it; the scan fails the build on a fourth, and carries its own negative control |
+| Glyphs share the sprites' pages, so text and icons batch together | `GlyphBatchingTest` — 20 of 32 frames improved; `crafting-panel`, the frame B5 named as unreachable, went 33 batches → 14. `GlyphAtlasTest` holds the pixels at 0.00 over the printable ASCII range in six fonts |
 | Scenes are pixel-compared, not just the painters | `SceneFrames` — 16 of the 18 scenes goldened at 800×480 from fixed inputs; the two excluded draw nothing without a live network session |
 | Frames are always composed offscreen | `Java2DRenderer` composes to a backing image unconditionally (`-Dlarsons.render.direct=true` is the escape hatch). Scene stage on Linux fell 1.071 → 0.374 ms from this alone |
 | Static terrain is cached | `TerrainCache` — 7.8× on still ground, parity under churn, one global pixel lattice so the floor does not shake |
@@ -80,8 +82,9 @@ and the plumbing has a working prototype. Job B's migration is done and, as of
 B4, sealed — world, UI and scenes all draw through the seam, and a build fails
 if anything reaches back through it. Sprites batch as of B5: a busy entity phase
 went from 65 draw calls to 34, and every sprite the engine generates sits on one
-texture page. What remains of B is the text half of the batching work (B6) and
-the backend itself (B7–B10).
+texture page. Text batches onto that same page as of B6, which took the
+interleaved icon-and-label frames from 1.09× to 2.57× and the whole catalogue
+from 5.80× to 6.77×. What remains of B is the backend itself (B7–B10).
 
 ---
 
@@ -100,11 +103,11 @@ much faster it makes things.
    the Java2D path working and tested.
 3. **Pixel parity is the contract.** "Looks fine" is not a result. Every port
    step compares rendered output against a reference and states the error.
-4. **The suite stays green.** Last full run: **882 tests, 0 failures, 10 skipped**
-   (was 810/0/3 when this was written; B0–B5 added the rest). The skips are
+4. **The suite stays green.** Last full run: **899 tests, 0 failures, 10 skipped**
+   (was 810/0/3 when this was written; B0–B6 added the rest). The skips are
    environment-dependent and skip rather than fail by design — three need a
    display, seven need a GL driver. Under `xvfb-run` the same suite is
-   **882/0/3**: the seven GL tests do run on a software driver, and the three
+   **899/0/3**: the seven GL tests do run on a software driver, and the three
    that do not are display tests losing a race with the eleven classes that set
    `java.awt.headless=true` in the shared JVM (see B4). A step ends with that or
    better.
@@ -1104,6 +1107,213 @@ Profile one of those, not `PlayScene`.
 **Done when.** Text batches, layout is bit-identical, and the text-heavy scenes
 are measurably cheaper.
 
+#### B6 — done, and one instruction was measured to be wrong
+
+[`GlyphAtlas`](src/main/java/com/larsons/engine/graphics/atlas/GlyphAtlas.java)
+rasterises a glyph on demand per `(font, colour, rendering context, char)` and
+packs it into a page of B5's `SpriteAtlas`, as the step required. `DrawStats`
+keys a text run on that page, so an icon and the label beside it are one batch.
+Text batches, layout is bit-identical, and **the text-heavy scenes are not
+measurably cheaper on Java2D — because they cannot be.** That last part is the
+step's real finding and it is set out below rather than buried.
+
+| frame | ops | batches before | after | merge before | merge after |
+|-------|----:|---------------:|------:|-------------:|------------:|
+| **crafting-panel** | 36 | 33 | **14** | 1.09× | **2.57×** |
+| scene-evolution-lobby | 10 | 5 | **2** | 2.00× | **5.00×** |
+| scene-level-select | 8 | 5 | **2** | 1.60× | **4.00×** |
+| **scene-auto-battler-guide** | 70 | 51 | **29** | 1.37× | **2.41×** |
+| character-picker | 58 | 22 | **14** | 2.64× | **4.14×** |
+| main-menu | 8 | 5 | **3** | 1.60× | **2.67×** |
+| scene-main-menu | 11 | 6 | **4** | 1.83× | **2.75×** |
+| scene-startup | 11 | 6 | **4** | 1.83× | **2.75×** |
+| container-panel | 35 | 12 | **9** | 2.92× | **3.89×** |
+| scene-key-binds | 30 | 25 | **20** | 1.20× | **1.50×** |
+| *all 32 frames* | 3364 | 580 | **497** | 5.80× | **6.77×** |
+
+Twenty of the thirty-two frames moved. The full table is
+`build/reports/glyph-batching.md`, written by `GlyphBatchingTest` on every
+build; the only variable between its two halves is `-Dlarsons.render.glyphs`,
+with the sprite atlas on throughout, which is the configuration that ships.
+
+**`crafting-panel` is the row that matters**, because B5 named it as the frame
+its own step could not reach and predicted exactly what would reach it. 33
+batches to 14, 1.09× to 2.57×. Twelve icons and fifteen labels interleaved one
+for one now come off one texture, and the interleaving has stopped mattering
+exactly as the shared page was supposed to make it stop mattering. B5's
+correction was right, and following it is why this step packed into
+`SpriteAtlas` instead of building a second atlas beside it.
+
+#### The instruction that was wrong: "route `drawText` through it"
+
+The step says to route `Java2DTarget.drawText` through the atlas, on the premise
+that "each one is currently a separate Java2D text-layout-and-rasterise". **That
+premise is false.** Java2D already has a glyph atlas — the font system's glyph
+cache — and `drawString` rasterises a whole run out of it in one dispatch.
+Replacing it with one `drawImage` per character pays the general image
+pipeline's per-call setup every character instead of once per run:
+
+| putting one glyph on the surface | cost per glyph |
+|----------------------------------|---------------:|
+| `drawString` for the whole run | **82.6 ns** |
+| `drawImage` from a page sub-rectangle | 304.3 ns |
+| `drawImage` from a cached sub-image of the page | 303.8 ns |
+| `drawImage` from a loose per-glyph cell | 296.4 ns |
+| `drawImage` from a premultiplied per-glyph cell | 293.5 ns |
+
+The four blitting forms agree to within noise, which is the answer: the cost is
+the per-call dispatch, so no arrangement of the pixels recovers it. Premultiplied
+storage was tried specifically because a non-premultiplied source onto an
+`INT_RGB` surface is the classic slow blit, and it changes nothing here. Over
+whole frames the penalty was **+0.6% to +18.4%**, worst on exactly the
+text-heavy scenes the step aimed at.
+
+So the step ships **packed but not blitted**: `drawText` resolves its run
+through the atlas, packs whatever is not packed yet, and records the page as its
+batch key — then draws with `drawString`, because on this backend that is
+faster. `-Dlarsons.render.glyphblit=true` takes the other path.
+
+Three reasons that is the right answer rather than a retreat:
+
+- **The two halves answer different questions.** The packing is what a GL
+  backend needs and what makes an icon and a label one bind; the blitting is how
+  *this* backend would have consumed it, and this backend has something better.
+  Nothing about the GL case depends on Java2D choosing the slow path to prove
+  it.
+- **The key is a claim, and it is the same claim B5 already makes.**
+  `drawRegion` records a sprite against its page while Java2D blits per call
+  either way, on the grounds that a batching backend really would hold one
+  texture across the run. That argument is unchanged here, and it is *stronger*,
+  because the cells are not merely packed — they are proved drawable.
+- **The blitting path is the proof.** With it on, `GlyphAtlasTest` renders every
+  printable ASCII character in six fonts through both paths and subtracts. If it
+  were deleted, the atlas's contents would go unchecked until B8, on a backend
+  that does not exist yet, which is the position B0 exists to prevent.
+
+Measured cost of the shipping configuration, over the seven most text-heavy
+frames, 100 renders a burst, best-of-fourteen interleaved bursts per
+configuration: **−3.0% to +3.1%**, with `config-form` — the smallest frame in
+the set at half a millisecond — reading −0.4% on one run and +9.8% on another,
+which is what noise looks like rather than a signal. The honest claim is *no
+regression*, which is the bar invariant 2 sets for anything that touches the
+shipping backend.
+
+#### Layout is bit-identical, and it is checked rather than hoped
+
+`textWidth`, `textAscent` and `textHeight` still answer from `FontMetrics`,
+untouched, as the step required — so nothing in any UI moved by a pixel and the
+goldens are unchanged at 0.00 across all 33 painter frames and 16 scenes. The
+step predicted "a small nonzero error from hinting differences and state the
+number rather than waving at it". **The number is 0.00**, and it is worth saying
+why it can be, because it is not luck:
+
+With antialiasing on and fractional metrics off — what this engine renders with
+— Java2D lays a string out at integer advances and rasterises each glyph from
+its cache. Drawing the glyphs separately at those same advances is therefore the
+same operation, not an approximation of it. The property that has to hold is
+that per-character advances sum to the run's own width, and `blitRunUnscaled`
+asserts exactly that, per run, before it will place anything. It is not
+inferred once per font because it is not a property of fonts: at 1× it held for
+every font tried, and under a 2× transform it fails for proportional fonts and
+still holds for `Monospaced`. A run that fails it falls through to
+`drawString`, which does whatever the font and the transform really require.
+
+#### HiDPI, and why `DeviceProfile.displayScale` is not what asks
+
+The step says the atlas must rasterise at 2× on a 2× panel or all text goes
+soft, and names `displayScale` as the source. The cells do rasterise at the
+destination's scale — but the scale comes from the destination's own
+`FontRenderContext`, not from `displayScale`, and that is a correction rather
+than a shortcut. `displayScale` describes the *default screen*; the destination
+describes what the text is going onto. They differ on a second monitor, on a
+window dragged between panels, and on this engine's shipping path, which
+composes into an unscaled offscreen `BufferedImage` whatever the panel is doing
+(`Java2DRenderer.acquireFrame`). Asking the destination is right in all of those
+and never wrong where `displayScale` would have been right. A GL backend, which
+has no `Graphics2D` to ask, builds the context itself — and *that* is what
+`displayScale` is for.
+
+The 2× path is exact too, and needed a different placement rule to be:
+positions come from a `GlyphVector` laid out in the destination's context and
+rounded into device pixels, and the blit happens with the transform temporarily
+set aside so an integer device rectangle is not re-scaled on its way to the
+surface. `aScaledDestinationIsExactToo` holds it at 0.00 for all six fonts.
+Non-integer scales (1.25, 1.5) and any rotation or shear are refused outright:
+a cell is a rectangle of pixels at an integer device position, and under those
+transforms `drawString` is both correct and the only thing that is.
+
+#### What `DrawStats` had to decide, and what it refused to decide
+
+B5 left this as the open question: `TEXT` and `IMAGE` are treated as inherently
+unmergeable, and that stops being true when they share a page. They are now one
+family for batching — **but the key decides, not the kind.** A run the atlas
+could not serve is still keyed by its font, and a font is not a page, so it
+merges with nothing.
+
+That distinction is the whole safeguard. The instrument credits the step exactly
+where the step applies, and B5's correction is the reason to insist on it: the
+plan predicted a win in two frames and measured none, and the only defence
+against repeating that is a counter that cannot report a merge the backend would
+not get. `RecordingTarget` — which is what the report is measured through —
+therefore asks the atlas for the same key `Java2DTarget` would record. Its
+metrics stay faked, deliberately: a recorded command stream has to be identical
+on every machine, and a real `stringWidth` would make half the sequence
+assertions in the suite depend on the host's fonts.
+
+#### Twelve frames did not move, and the reason is the next step's
+
+`profile-overlay` (16 batches, unchanged), `minigame-hud`, `scene-play`,
+`scene-auto-battler-lobby` and `scene-board-customize` all draw plenty of text
+and gained nothing. The columns say why: their text runs are separated by *flat
+shapes* — label, box, label, box — so no text run is ever adjacent to another
+text run or to an image, and there is nothing to merge with. An atlas merges
+neighbours; these frames' neighbours are geometry.
+
+**This is not a gap in B6 and it should not be chased here.** It is already
+answered by B8's first bullet: flat shapes become two triangles against a 1×1
+white texture, so they join the same batch as sprites and glyphs. Once that
+lands, label-box-label is one batch as well, and these frames move without
+anything in B6 changing. The frames to re-measure after B8 are named here so
+that step has a prediction to be judged against — and, given B3 and B5 each got
+one of these predictions wrong, judged sceptically.
+
+#### Verified
+
+- **Goldens unchanged at 0.00** — all 33 `GoldenFramesTest` frames and 4
+  `SceneFramesTest` checks, in every one of the four routing/blitting
+  combinations. `neitherSwitchChangesThePicture` walks all four and subtracts,
+  because a flag that alters the picture is a bug wearing a flag's clothes.
+- **Pixel parity, directly and at the bar B0 set.** `GlyphAtlasTest` compares
+  the blitting path against `drawString` over the whole printable ASCII range in
+  six fonts at exactly 0.00, and again for five colours including two
+  translucent ones, for overhang- and kerning-prone runs, and on a 2×
+  destination. Its negative control shifts one run by one pixel and insists the
+  metric notices.
+- **The gutter is checked on the pixels**, as B5's was and for the same reason
+  Java2D can never show the bug: every one of 500+ packed glyphs is fenced by
+  transparent pixels on all four sides. Glyphs are the worse case for this —
+  they pack tightly and there are thousands.
+- **Unservable text falls back rather than vanishing.** A right-to-left run
+  needs shaping, is refused, and is still drawn — checked on the pixels, not
+  just on the stats, because "refused" and "dropped" look identical in a counter.
+- **One page still.** `everythingTheEngineDrawsStillFitsOnOnePage` asserts it,
+  because everything above rests on it: spill onto a second page and an
+  icon-label row is two binds again while every other assertion here keeps
+  passing. After a full suite run the shared page holds **6,760 regions at 56%
+  of one 2048×2048**, of which 5,867 are glyph cells over 307 styles. That is
+  the whole suite's accumulated art — every scene in every state — so it is a
+  generous upper bound on a play session, and the page grew from 2048×1024 to
+  hold it, which costs 8 MB of heap and is the price of the row above.
+- **Suite: 899 tests, 0 failures, 10 skipped** (was 882/0/10; the 17 new are 12
+  in `GlyphAtlasTest` and 5 in `GlyphBatchingTest`). The same 10
+  environment-dependent skips.
+- **B5's table is unchanged**, at 620 → 580 batches and 5.43× → 5.80×, because
+  `DrawCallReport` now holds glyph routing *off* through both halves of the
+  sprite measurement. Both atlases pack into the same pages, so leaving it on
+  moved both halves and turned B5's published number into a statement about
+  whichever step ran last. One variable at a time is what lets a table published
+  in one step survive being read in another.
+
 ---
 
 ### B7 — The GL module
@@ -1152,7 +1362,13 @@ open-ended rewrite.
   the buffer fills.
 - `GlTarget implements DrawTarget`: every member maps to appending vertices.
   - Flat shapes: two triangles against a 1×1 white texture, so shapes and
-    sprites share one shader and one batch.
+    sprites share one shader and one batch. **B6 named the frames this is worth
+    re-measuring on**: `profile-overlay`, `minigame-hud`, `scene-play`,
+    `scene-auto-battler-lobby` and `scene-board-customize` all gained nothing
+    from the glyph atlas because their text runs are separated by flat shapes —
+    label, box, label, box — with nothing textured adjacent to merge with. This
+    bullet is what should move them. Judge it sceptically: B3 and B5 each made a
+    prediction of exactly this shape and each was wrong.
   - `fillOval` / `drawOval` / `fillArc` / `drawArc`: tessellate to a triangle
     fan, segment count scaled by on-screen radius.
   - `fillShape(Shape)`: `PathIterator` with a flatness tolerance, then ear-clip.
@@ -1165,7 +1381,12 @@ open-ended rewrite.
     it does not break the batch.
   - `pushTransform`/`popTransform`: CPU-side `AffineTransform` stack applied to
     vertices as they are appended, for the same reason.
-  - `drawText`: quads from the B6 glyph atlas.
+  - `drawText`: quads from the B6 glyph atlas, whose cells are already on the
+    same pages as the sprites — so a label between two icons appends to the open
+    batch with no bind, which is the whole reason B6 packed into `SpriteAtlas`
+    rather than beside it. The cells are colour-keyed because Java2D cannot tint
+    a shared mask; GL can, so if page pressure ever becomes real this is where a
+    coverage-only variant belongs.
   - `stats()`: keep feeding `DrawStats` so the same merge-ratio instrument works
     on both backends and the two can be compared directly.
 - `GlRenderer implements Renderer`: `beginFrame()` returns the `GlTarget`,
@@ -1569,8 +1790,8 @@ B2  port 12 shared painters/widgets    ← done
 B3  port 18 scenes, graphicsOf 39 → 0  ← done
 B4  seal the seam (delete graphicsOf, Renderer returns DrawTarget)  ← done
 B5  sprite atlas                       ← done
-B6  glyph atlas                        ← start here (read B5's correction first)
-B7  :gl Gradle module
+B6  glyph atlas                        ← done
+B7  :gl Gradle module                  ← start here
 B8  GlTarget + GlRenderer
 B9  backend selection + fallback
 B10 re-profile on both machines, decide
@@ -1654,7 +1875,7 @@ path someone might.
 | scene | 11.49 | the target of Job B |
 | — terrain | 6.38 | already cached; this is the uncached remainder |
 | — entities | 3.85 | the target of B5 |
-| — hud | 0.37 | the target of B6, but see B6's note on which scene to profile |
+| — hud | 0.37 | was the target of B6 — which found there is no CPU time here to win, only draw calls; see B6 |
 | — decor | 0.13 | |
 | present | 3.71 | p99 9.74 |
 | update | — | p99 15.27 — worth watching; not a rendering problem |
