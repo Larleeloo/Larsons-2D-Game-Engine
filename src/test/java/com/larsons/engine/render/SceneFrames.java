@@ -44,7 +44,8 @@ import java.util.function.Function;
  * <p><b>Why B3 needs its own catalogue.</b> B0's frames golden the shared
  * painters, which is what B2 changed. B3 changes the eighteen scenes that
  * <em>call</em> those painters — around two thousand drawing statements that
- * were reaching past the seam through {@code Java2DTarget.graphicsOf}. None of
+ * were reaching past the seam through the static unwrap B4 has since deleted.
+ * None of
  * that code appears in any B0 frame, so B0 would have stayed green through a
  * port that moved every HUD element in the game by a pixel. A port claiming to
  * be a pure translation has to be checked against the thing it translated, and

@@ -1,7 +1,6 @@
 package com.larsons.engine.graphics;
 
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.sim.PerspectiveSpace;
 import com.larsons.engine.world.SurfaceDecor;
@@ -9,7 +8,6 @@ import com.larsons.engine.world.SurfaceDecorRegistry;
 
 import java.awt.BasicStroke;
 import java.awt.Color;
-import java.awt.Graphics2D;
 
 /**
  * Draws a level's painted {@link SurfaceDecor.Placement}s — the per-face

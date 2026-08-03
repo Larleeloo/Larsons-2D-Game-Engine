@@ -1,8 +1,7 @@
 package com.larsons.engine.graphics;
 
+import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.graphics.shader.ShaderChain;
-
-import java.awt.Graphics2D;
 
 /**
  * Rendering backend abstraction.
@@ -11,21 +10,36 @@ import java.awt.Graphics2D;
  * pipeline. That is what lets the engine run out of the box on any machine with
  * a JRE (requirement #4) — no native libraries, no GPU bindings.
  *
- * <p><b>Shader support (requirement #5) lives behind this seam.</b> Every
+ * <p><b>Nothing about this interface names Java2D.</b> {@link #beginFrame()}
+ * hands back a {@link DrawTarget}, so a frame is a sequence of backend-neutral
+ * drawing verbs from the moment it is acquired to the moment it is presented.
+ * That was not true until B4: it used to return a {@code Graphics2D}, which
+ * meant every scene in the engine was handed the CPU renderer by the loop
+ * itself, and a GPU backend could not be written without changing the loop.
+ * Now a backend is free to return a target that appends to a vertex buffer,
+ * and neither {@code Engine} nor any scene can tell.
+ *
+ * <p><b>Shader support (requirement #5) lives behind this seam too.</b> Every
  * backend honours a {@link ShaderChain} of post-processing passes. Each
  * {@link com.larsons.engine.graphics.shader.ShaderPass} is defined GLSL-first
  * (real GPU fragment shader source) with a semantically identical CPU
  * fallback; the default backend executes the CPU side, while a GPU backend
  * (e.g. OpenGL/LWJGL) can implement this same interface, compile each pass's
  * {@code glsl()} directly, and keep the loop's {@code beginFrame() -> draw ->
- * present()} lifecycle unchanged. The remaining porting work for full GPU
- * scene rendering is a backend-neutral draw API, since scenes currently draw
- * via {@link Graphics2D}.
+ * present()} lifecycle unchanged.
  */
 public interface Renderer {
 
-    /** Acquire the drawing surface for this frame and clear it to the background. */
-    Graphics2D beginFrame();
+    /**
+     * Acquire this frame's drawing surface, cleared to the background colour.
+     *
+     * <p>One target per frame, owned by the backend: its {@link DrawTarget#stats()}
+     * are therefore that frame's own draw-call tally, starting at zero, which
+     * is the number {@code DrawStats.mergeRatio()} is read off. The returned
+     * target is valid until {@link #present()} and must not be retained past
+     * it.
+     */
+    DrawTarget beginFrame();
 
     /** Flip/show the completed frame to the screen. */
     void present();

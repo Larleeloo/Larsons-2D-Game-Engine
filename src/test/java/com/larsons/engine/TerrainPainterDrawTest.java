@@ -165,16 +165,17 @@ class TerrainPainterDrawTest {
     }
 
     @Test
-    void theGraphics2DEntryPointStillReachesTheSamePainter() {
-        // Scenes have not been ported yet, so the compatibility overload has
-        // to keep producing a full terrain pass.
+    void aWrappedGraphics2DStillReachesTheSamePainter() {
+        // B4 deleted the Graphics2D overload; a caller that has one — a bake,
+        // or a test like this — wraps it and gets the same full terrain pass.
         Level lvl = level(LevelFormat.TOP_DOWN, true);
         java.awt.image.BufferedImage img =
                 new java.awt.image.BufferedImage(400, 300,
                         java.awt.image.BufferedImage.TYPE_INT_RGB);
         java.awt.Graphics2D g = img.createGraphics();
         DepthPass pass = DepthPass.of(lvl.perspective);
-        TerrainPainter.draw(g, lvl, camera(lvl),
+        TerrainPainter.draw(com.larsons.engine.graphics.draw.Java2DTarget.unsized(g),
+                lvl, camera(lvl),
                 new int[]{0, 0, lvl.width - 1, lvl.height - 1}, 0.0, pass, null, null);
         pass.flush();
         g.dispose();

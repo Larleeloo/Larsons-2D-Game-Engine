@@ -2,7 +2,7 @@ package com.larsons.engine.core;
 
 import com.larsons.engine.graphics.Java2DRenderer;
 import com.larsons.engine.graphics.Renderer;
-import com.larsons.engine.graphics.draw.Java2DTarget;
+import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.graphics.shader.ShaderChain;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.profile.DeviceProfile;
@@ -11,7 +11,6 @@ import com.larsons.engine.profile.FrameReport;
 import com.larsons.engine.profile.ProfileOverlay;
 import com.larsons.engine.scene.SceneManager;
 
-import java.awt.Graphics2D;
 import java.awt.event.KeyEvent;
 import java.nio.file.Path;
 
@@ -236,13 +235,12 @@ public class Engine {
     }
 
     private void draw(double alpha) {
-        Graphics2D g = renderer.beginFrame();
+        // One target for the whole frame, and the backend makes it — the loop
+        // no longer knows which backend it is talking to. Everything drawn goes
+        // through it, so its DrawStats are the frame's own draw-call count: the
+        // number that says what a batching backend would buy.
+        DrawTarget target = renderer.beginFrame();
         try {
-            // One target for the whole frame. Everything the scene draws goes
-            // through it, so its DrawStats are the frame's own draw-call
-            // count — the number that says what a batching backend would buy.
-            Java2DTarget target = new Java2DTarget(g, renderer.getWidth(), renderer.getHeight());
-
             // Only the scene's own drawing is timed here. The renderer reports
             // its shader and present costs itself, so the three stay separable.
             long sceneStart = profiler.begin();
@@ -250,21 +248,19 @@ public class Engine {
                 scenes.render(target, (float) alpha);
             } finally {
                 profiler.record(FrameProfiler.Stage.SCENE, sceneStart);
+                // Read before the overlay draws, and read by value —
+                // recordDraws copies the counters out rather than keeping the
+                // object — so the readout never inflates the count it is
+                // reporting. This used to be arranged by giving the overlay a
+                // second Java2DTarget over the same Graphics2D, which is not
+                // something a caller holding a DrawTarget can do, and was
+                // never the reason the numbers were right anyway.
                 profiler.recordDraws(target.stats());
             }
             if (overlayVisible) {
-                // Its own target over the same surface, deliberately: the
-                // readout is not part of the game, and sharing the frame's
-                // target would fold the overlay's own draw calls into the
-                // count it is reporting. A second Java2DTarget draws the same
-                // pixels and keeps a separate DrawStats, which is exactly the
-                // separation the old "draw straight at the Graphics2D" got by
-                // bypassing the seam altogether.
                 long overlayStart = profiler.begin();
                 try {
-                    ProfileOverlay.draw(
-                            new Java2DTarget(g, renderer.getWidth(), renderer.getHeight()),
-                            profiler.latest(), device, loop.getFps());
+                    ProfileOverlay.draw(target, profiler.latest(), device, loop.getFps());
                 } finally {
                     profiler.record(FrameProfiler.Stage.OVERLAY, overlayStart);
                 }

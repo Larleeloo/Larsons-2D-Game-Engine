@@ -1,9 +1,7 @@
 package com.larsons.engine.graphics;
 
 import com.larsons.engine.graphics.draw.DrawTarget;
-import com.larsons.engine.graphics.draw.Java2DTarget;
 
-import java.awt.Graphics2D;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 
@@ -15,12 +13,14 @@ import java.awt.image.BufferedImage;
  * creator assigns "translates" into every perspective instead of silently
  * falling back to the procedural colour in isometric view.
  *
- * <p><b>Ported to {@link DrawTarget}.</b> This was the first painter moved off
- * {@link Graphics2D}, chosen because the warped case is the hardest thing the
- * engine draws and therefore the real test of whether the draw API is wide
- * enough: a backend that can serve this finds the axis-aligned blits easy. The
- * {@link Graphics2D} overload remains so unported callers keep working — it
- * wraps and delegates, so there is still exactly one implementation.
+ * <p><b>Drawn entirely through {@link DrawTarget}.</b> This was the first
+ * painter moved off {@code Graphics2D}, chosen because the warped case is the
+ * hardest thing the engine draws and therefore the real test of whether the
+ * draw API is wide enough: a backend that can serve this finds the
+ * axis-aligned blits easy. A {@code Graphics2D} overload stood beside it
+ * through the migration so unported callers kept working; B3 left it with no
+ * callers and B4 removed it, so there is now one entry point and one backend
+ * decides what it means.
  */
 public final class TilePainter {
 
@@ -59,12 +59,5 @@ public final class TilePainter {
         double vx = (xs[3] - xs[0]) / (double) img.getHeight();
         double vy = (ys[3] - ys[0]) / (double) img.getHeight();
         return new AffineTransform(ux, uy, vx, vy, xs[0], ys[0]);
-    }
-
-    /** Graphics2D form, for callers not yet ported to {@link DrawTarget}. */
-    public static void drawTexture(Graphics2D g, BufferedImage img, int[] xs, int[] ys,
-                                   boolean flat) {
-        if (img == null) return;
-        drawTexture(Java2DTarget.unsized(g), img, xs, ys, flat);
     }
 }

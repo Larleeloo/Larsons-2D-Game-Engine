@@ -83,16 +83,19 @@ class SceneFramesTest {
     /**
      * No scene reaches past the seam.
      *
-     * <p>{@code Java2DTarget.graphicsOf} throws when handed a target with no
-     * Graphics2D behind it, so recording every scene through a
-     * {@link com.larsons.engine.graphics.draw.RecordingTarget} asks the
-     * question directly: a scene that still unwrapped the target would fail
-     * here with that exception rather than quietly drawing to a backend the
-     * GPU path cannot serve.
+     * <p>Recording every scene through a
+     * {@link com.larsons.engine.graphics.draw.RecordingTarget} — a target with
+     * no Graphics2D anywhere behind it — asks the question directly: a scene
+     * that assumed one would fail here rather than quietly drawing to a
+     * backend the GPU path cannot serve. Before B4 the failure was an
+     * exception thrown by the static unwrap; now it is a
+     * {@code ClassCastException} or nothing at all, because there is no unwrap
+     * left to call.
      *
-     * <p>Complementary to the grep-based architecture test B4 adds, not a
-     * substitute: a grep sees imports, and this sees what the code actually
-     * does when it runs — including through a helper in another class.
+     * <p>Complementary to {@link SealedSeamTest}, not a substitute: that one
+     * reads every line of every file and nothing at runtime, this one runs the
+     * scenes and sees what they actually do, including through a helper three
+     * classes away. Each covers the other's blind spot.
      */
     @Test
     void noSceneReachesPastTheDrawTarget() {
