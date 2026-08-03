@@ -88,7 +88,6 @@ import com.larsons.engine.world.World;
 
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.Graphics2D;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.nio.file.Files;
@@ -1912,8 +1911,6 @@ public class PlayScene extends AbstractScene {
     private static final Color HEALTH_FILL = new Color(90, 220, 90);
     private static final Color DROP_SHADOW = new Color(0, 0, 0, 70);
 
-    /** This frame's draw target, set at the top of {@link #render}. */
-    private DrawTarget frameTarget;
 
     /**
      * Time one named phase of this frame's drawing.
@@ -1940,11 +1937,6 @@ public class PlayScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Most of this scene is not ported off Graphics2D yet; see
-        // Java2DTarget.graphicsOf. The frame's target is held so the painters
-        // that *are* ported (the terrain) draw through it, which is also what
-        // puts their operations into the frame's draw-call count.
-        this.frameTarget = target;
         if (leaving) {
             // Session gone; hold a blank frame while the menu fade finishes.
             ctx.lighting().setDarkness(0);
@@ -2295,7 +2287,7 @@ public class PlayScene extends AbstractScene {
         target.popAlpha();
 
         if (bindsForm != null) {
-            bindsForm.render(frameTarget, viewportWidth, viewportHeight);
+            bindsForm.render(target, viewportWidth, viewportHeight);
             if (bindsForm.isCapturing()) {
                 target.drawText("Press any key or mouse button · Esc to cancel", 24,
                         viewportHeight - 44, HUD_FONT, new Color(255, 210, 90));
@@ -2304,7 +2296,7 @@ public class PlayScene extends AbstractScene {
                     new Color(120, 120, 140));
             return;
         }
-        pauseForm.render(frameTarget, viewportWidth, viewportHeight);
+        pauseForm.render(target, viewportWidth, viewportHeight);
         target.drawText(net == null
                         ? "Back to resume · Save Level keeps this world; edit toggles in "
                                 + "Load Level → Edit Settings"
@@ -2398,7 +2390,7 @@ public class PlayScene extends AbstractScene {
         // decorate. A decorator that does nothing still forces the floor to be
         // repainted cell by cell, because the painter cannot know it is a
         // no-op — so "no open container" has to mean "no decorator".
-        TerrainPainter.draw(frameTarget, level, camera, visibleTileBounds(), animClock,
+        TerrainPainter.draw(target, level, camera, visibleTileBounds(), animClock,
                 standing, containerPanel == null ? null : this::drawOpenLid,
                 miningStroke(), terrainCache);
     }
@@ -2444,8 +2436,8 @@ public class PlayScene extends AbstractScene {
 
     /** One scenery layer, queued into a pass it shares with something else. */
     private void drawDecorLayer(DrawTarget target, boolean foreground, DepthPass into) {
-        DecorPainter.draw(frameTarget, level, camera, foreground, animClock, into);
-        SurfaceDecorPainter.draw(frameTarget, level, camera, visibleTileBounds(), foreground,
+        DecorPainter.draw(target, level, camera, foreground, animClock, into);
+        SurfaceDecorPainter.draw(target, level, camera, visibleTileBounds(), foreground,
                 animClock, into);
     }
 
@@ -2822,7 +2814,6 @@ public class PlayScene extends AbstractScene {
         double size = ps();
         camera.worldToScreen(me.x + size / 2, me.y + size / 2, corner);
         int r = (int) (size * camera.zoom * 0.9);
-/*WAS setColor new Color(255, 255, 255, (int) (150 * Math.max(0, swingTime / 0.2)))*/
         int start = me.facingLeft ? 120 : -60;
         target.drawArc(corner[0] - r, corner[1] - r, r * 2, r * 2, start, 120,
                 new Color(255, 255, 255, (int) (150 * Math.max(0, swingTime / 0.2))), 3f);
@@ -2867,7 +2858,6 @@ public class PlayScene extends AbstractScene {
             }
             case DASH -> {
                 // A motion streak behind the roll rather than a weapon arc.
-/*WAS setColor new Color(235, 240, 255, (int) (120 * (1 - t)))*/
                 int dr = (int) (r * 0.6);
                 target.drawOval(corner[0] - dr, corner[1] - dr / 2, dr * 2, dr,
                         new Color(235, 240, 255, (int) (120 * (1 - t))), 2f);
@@ -2932,7 +2922,7 @@ public class PlayScene extends AbstractScene {
             double x = old != null ? old.x + (ps.x - old.x) * t : ps.x;
             double y = old != null ? old.y + (ps.y - old.y) * t : ps.y;
             if (mgView != null) {
-                MiniGameHud.drawTeamRing(frameTarget, camera, x + size / 2, y + size,
+                MiniGameHud.drawTeamRing(target, camera, x + size / 2, y + size,
                         size, mgView.teamOf(ps.id), camera.zoom);
             }
             // Remote players wear their own character's skin, hold their own
@@ -2997,7 +2987,6 @@ public class PlayScene extends AbstractScene {
             // The shadow marks where they will land, shrinking with height.
             double shrink = Math.max(0.35, 1 - z / (size * 3));
             int sw = (int) (w * 0.7 * shrink), sh = Math.max(2, (int) (w * 0.25 * shrink));
-/*WAS setColor new Color(0, 0, 0, (int) (90 * shrink))*/
             target.fillOval(footX - sw / 2, footY - sh / 2, sw, sh,
                     new Color(0, 0, 0, (int) (90 * shrink)));
         }
@@ -3190,7 +3179,6 @@ public class PlayScene extends AbstractScene {
         if (def.maxDurability() <= 0 || stack.wear <= 0) return;
         double t = 1.0 - stack.wear / (double) def.maxDurability();
         target.fillRect(x + 6, y + slot - 8, slot - 12, 4, new Color(0, 0, 0, 170));
-/*WAS setColor new Color((int) (220 * (1 - t) + 60 * t), (int) (60 * (1 - t) + 210 * t), 50)*/
         target.fillRect(x + 6, y + slot - 8, (int) ((slot - 12) * Math.max(0, t)), 4,
                 new Color((int) (220 * (1 - t) + 60 * t), (int) (60 * (1 - t) + 210 * t), 50));
     }

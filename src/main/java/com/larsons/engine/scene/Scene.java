@@ -29,10 +29,10 @@ public interface Scene {
      * Draw the scene.
      *
      * <p>The target is backend-neutral: today it wraps Java2D, and a GPU
-     * backend implements the same verbs. Scenes not yet ported off
-     * {@code Graphics2D} start by unwrapping it with
-     * {@link com.larsons.engine.graphics.draw.Java2DTarget#graphicsOf}, and
-     * the number of scenes still doing that is the migration's progress bar.
+     * backend implements the same verbs. Every scene draws through it and
+     * none reaches past it for a {@code Graphics2D} — the paragraph that used
+     * to describe how to do that, and counted the scenes still doing it, went
+     * away with the last of them in B3.
      *
      * @param target the drawing surface for this frame
      * @param alpha  interpolation factor in [0,1] between sim steps

@@ -13,6 +13,7 @@ import java.util.TreeSet;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -77,6 +78,28 @@ class SceneFramesTest {
 
         assertEquals(List.of(), ghosts,
                 "NOT_GOLDENABLE names scenes that are gone: " + ghosts);
+    }
+
+    /**
+     * No scene reaches past the seam.
+     *
+     * <p>{@code Java2DTarget.graphicsOf} throws when handed a target with no
+     * Graphics2D behind it, so recording every scene through a
+     * {@link com.larsons.engine.graphics.draw.RecordingTarget} asks the
+     * question directly: a scene that still unwrapped the target would fail
+     * here with that exception rather than quietly drawing to a backend the
+     * GPU path cannot serve.
+     *
+     * <p>Complementary to the grep-based architecture test B4 adds, not a
+     * substitute: a grep sees imports, and this sees what the code actually
+     * does when it runs — including through a helper in another class.
+     */
+    @Test
+    void noSceneReachesPastTheDrawTarget() {
+        for (Frame frame : SceneFrames.all()) {
+            assertDoesNotThrow(() -> GoldenFrames.record(frame),
+                    () -> frame.name() + " could not be drawn to a non-Java2D target");
+        }
     }
 
     /**

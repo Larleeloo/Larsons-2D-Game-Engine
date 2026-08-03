@@ -1025,10 +1025,8 @@ public class DeckGameScene extends AbstractScene {
         int w = target.textWidth(banner, SANS_BOLD_34);
         int x = viewportWidth / 2 - w / 2;
         int y = viewportHeight / 2 - 60;
-/*WAS setColor new Color(0, 0, 0, (int) (150 * fade))*/
         target.fillRoundRect(x - 24, y - 36, w + 48, 52, 16, 16,
                 new Color(0, 0, 0, (int) (150 * fade)));
-/*WAS setColor new Color(255, 225, 150, (int) (255 * fade))*/
         target.drawText(banner, x, y, SANS_BOLD_34, new Color(255, 225, 150, (int) (255 * fade)));
     }
 

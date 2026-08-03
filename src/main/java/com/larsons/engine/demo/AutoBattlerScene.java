@@ -33,7 +33,6 @@ import com.larsons.engine.scene.AbstractScene;
 
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.Graphics2D;
 import java.awt.Polygon;
 import java.awt.Rectangle;
 import java.awt.Shape;
@@ -1081,16 +1080,9 @@ public class AutoBattlerScene extends AbstractScene {
 
     // ------------------------------------------------------------------ render
 
-    /** This frame's target, for the widgets already ported off Graphics2D. */
-    private DrawTarget frameTarget;
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Most of this scene is not ported off Graphics2D yet; see
-        // Java2DTarget.graphicsOf. The frame's target is held so the widgets
-        // that *are* ported draw through it, which is also what puts their
-        // operations into the frame's draw-call count.
-        this.frameTarget = target;
         int w = viewportWidth, h = viewportHeight;
 
         BoardTheme theme = BoardTheme.active();
@@ -1343,7 +1335,7 @@ public class AutoBattlerScene extends AbstractScene {
             }
             drawUnitInWorld(target, def, size, true, AnimState.IDLE, animClock,
                     out[0], out[1], u.id);
-            AutoSprites.drawStars(frameTarget, u.star, out[0], out[1] - size + size / 8, 8);
+            AutoSprites.drawStars(target, u.star, out[0], out[1] - size + size / 8, 8);
             drawItemPips(target, u, out[0], out[1] + size / 6);
         }
     }
@@ -1386,7 +1378,7 @@ public class AutoBattlerScene extends AbstractScene {
             double stateTime = fx != null ? fx.time : 0;
             drawUnitInWorld(target, def, size, friendly, state, stateTime,
                     out[0], out[1], u.id());
-            AutoSprites.drawStars(frameTarget, u.star(), out[0], out[1] - size + size / 12, 7);
+            AutoSprites.drawStars(target, u.star(), out[0], out[1] - size + size / 12, 7);
 
             // Health + mana bars.
             int bw = (int) (40 * camera.zoom);
@@ -1904,7 +1896,7 @@ public class AutoBattlerScene extends AbstractScene {
             int size = r.width - 10;
             BufferedImage img = unitImage(def, size, true, AnimState.IDLE, animClock);
             target.drawImage(img, r.x + 5, r.y + 2, size, size);
-            AutoSprites.drawStars(frameTarget, u.star, r.x + r.width / 2, r.y + 2, 7);
+            AutoSprites.drawStars(target, u.star, r.x + r.width / 2, r.y + 2, 7);
             drawItemPips(target, u, r.x + r.width / 2, r.y + r.height - 12);
         }
     }
@@ -1969,7 +1961,7 @@ public class AutoBattlerScene extends AbstractScene {
             BufferedImage img = unitImage(def, 54, true, AnimState.IDLE, animClock);
             target.drawImage(img, r.x + 6, r.y + r.height / 2 - 27, 54, 54);
             if (!def.attackElements.isEmpty()) {
-                AutoSprites.drawElementPips(frameTarget, def.attackElements,
+                AutoSprites.drawElementPips(target, def.attackElements,
                         r.x + 33, r.y + r.height - 20, 9);
             }
             target.drawText(trim(target, SANS_BOLD_14, def.name, r.width - 72),
@@ -2078,7 +2070,7 @@ public class AutoBattlerScene extends AbstractScene {
             int size = (int) (52 * camera.zoom);
             BufferedImage img = unitImage(u.def(), size, true, AnimState.IDLE, animClock);
             drawGhost(target, img, lastMouseX, lastMouseY, size);
-            AutoSprites.drawStars(frameTarget, u.star, lastMouseX, lastMouseY - size / 2, 8);
+            AutoSprites.drawStars(target, u.star, lastMouseX, lastMouseY - size / 2, 8);
         } else if (grabItemIndex >= 0 && grabItemIndex < you.items().size()) {
             AutoItem item = AutoItems.get(you.items().get(grabItemIndex));
             if (item == null) return;
@@ -2160,7 +2152,6 @@ public class AutoBattlerScene extends AbstractScene {
             text = "DEFEAT vs " + banner.opponent() + "  (-" + banner.damage() + " HP)";
             color = new Color(235, 120, 105);
         }
-/*WAS setColor new Color(color.getRed(), color.getGreen(), color.getBlue(), (int) (255 * fade))*/
         drawCentered(target, text, viewportWidth / 2, 120, SANS_BOLD_34,
                 new Color(color.getRed(), color.getGreen(), color.getBlue(),
                         (int) (255 * fade)));
@@ -2219,7 +2210,7 @@ public class AutoBattlerScene extends AbstractScene {
             int ux = gx + u.col * cs, uy = gy + gridRow * cs;
             BufferedImage img = unitImage(def, cs - 6, true, AnimState.IDLE, animClock);
             target.drawImage(img, ux + 3, uy + 2, cs - 6, cs - 6);
-            AutoSprites.drawStars(frameTarget, u.star, ux + cs / 2, uy + 1, 5);
+            AutoSprites.drawStars(target, u.star, ux + cs / 2, uy + 1, 5);
             drawItemPips(target, u, ux + cs / 2, uy + cs - 8);
         }
 
@@ -2236,7 +2227,7 @@ public class AutoBattlerScene extends AbstractScene {
             int ux = gx + u.bench * (bs + 2);
             BufferedImage img = unitImage(def, bs - 4, true, AnimState.IDLE, animClock);
             target.drawImage(img, ux + 2, by + 4, bs - 4, bs - 4);
-            AutoSprites.drawStars(frameTarget, u.star, ux + bs / 2, by + 3, 4);
+            AutoSprites.drawStars(target, u.star, ux + bs / 2, by + 3, 4);
         }
 
         // Stats column on the right.

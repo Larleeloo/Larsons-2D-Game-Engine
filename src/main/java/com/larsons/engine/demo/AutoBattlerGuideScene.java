@@ -22,7 +22,6 @@ import com.larsons.engine.scene.AbstractScene;
 
 import java.awt.Color;
 import java.awt.Font;
-import java.awt.Graphics2D;
 import java.awt.Rectangle;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
@@ -248,17 +247,8 @@ public class AutoBattlerGuideScene extends AbstractScene {
 
     // ------------------------------------------------------------------ render
 
-    /** This frame's target, for the widgets already ported off Graphics2D. */
-    private DrawTarget frameTarget;
-
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Most of this scene is not ported off Graphics2D yet; see
-        // Java2DTarget.graphicsOf. The frame's target is held so the widgets
-        // that *are* ported draw through it, which is also what puts their
-        // operations into the frame's draw-call count.
-        this.frameTarget = target;
-
         target.fillRect(0, 0, viewportWidth, viewportHeight, new Color(16, 18, 30));
 
         layoutChrome();
@@ -1098,7 +1088,7 @@ public class AutoBattlerGuideScene extends AbstractScene {
             target.drawText(def.origin.label, tx, y + 38, SANS_PLAIN_12, def.origin.color);
             target.drawText(def.clazz.label, tx, y + 54, SANS_PLAIN_12, def.clazz.color);
             if (!def.attackElements.isEmpty()) {
-                AutoSprites.drawElementPips(frameTarget, def.attackElements,
+                AutoSprites.drawElementPips(target, def.attackElements,
                         x + w - 8 - def.attackElements.size() * 6, y + 32, 9);
             }
         } else {

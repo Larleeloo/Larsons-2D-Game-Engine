@@ -1137,7 +1137,6 @@ public class EvolutionScene extends AbstractScene {
             int a = (int) Math.max(0, Math.min(255, 235 * fade));
             int w = target.textWidth(t.text, SANS_PLAIN_14) + 20;
             int x = viewportWidth - w - 16;
-/*WAS setColor new Color(18, 22, 32, (int) (200 * fade))*/
             target.fillRoundRect(x, y - 16, w, 24, 6, 6, new Color(18, 22, 32, (int) (200 * fade)));
             target.drawText(t.text, x + 10, y, SANS_PLAIN_14,
                     new Color(t.color.getRed(), t.color.getGreen(), t.color.getBlue(), a));

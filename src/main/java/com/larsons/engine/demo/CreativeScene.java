@@ -102,14 +102,10 @@ import com.larsons.engine.world.SurfaceDecor;
 import com.larsons.engine.world.SurfaceDecorRegistry;
 import com.larsons.engine.world.World;
 
-import java.awt.AlphaComposite;
 import java.awt.BasicStroke;
 import java.awt.Color;
-import java.awt.Composite;
 import java.awt.Font;
-import java.awt.FontMetrics;
 import java.awt.Graphics2D;
-import java.awt.RadialGradientPaint;
 import java.awt.Rectangle;
 import java.awt.event.KeyEvent;
 import java.awt.geom.AffineTransform;
@@ -276,6 +272,22 @@ public class CreativeScene extends AbstractScene {
     private static final double PAN_SPEED = 640;   // world px/sec at zoom 1
     private static final double MIN_ZOOM = 0.15, MAX_ZOOM = 3.0;
     private static final double ERASE_RADIUS = 24; // world px for entity erase
+
+    private static final Color PATH_DASH = new Color(240, 220, 130, 150);
+    private static final Color PATH_MARK = new Color(240, 220, 130);
+    private static final Color MP_SPAWN = new Color(120, 170, 240);
+    private static final Color CUTSCENE_PUPIL = new Color(20, 20, 30);
+    private static final Color CUSTOM_BADGE = new Color(110, 220, 140);
+    private static final Color FACE_HIGHLIGHT = new Color(160, 240, 160);
+
+    /** The three-stop rarity halo, shared so no paint is built per item per frame. */
+    private static final float[] HALO_STOPS = {0f, 0.55f, 1f};
+
+    /** Corner scratch for the marker shapes; see {@link #pennant}. */
+    private final int[] triXs = new int[3];
+    private final int[] triYs = new int[3];
+    private final int[] quadXs = new int[4];
+    private final int[] quadYs = new int[4];
 
     private static final Font HUD_FONT = new Font("SansSerif", Font.PLAIN, 13);
     private static final Font SMALL_FONT = new Font("SansSerif", Font.PLAIN, 11);
@@ -551,6 +563,11 @@ public class CreativeScene extends AbstractScene {
     private CharacterProfile testCharacter = CharacterProfile.defaultProfile();
     /** The roster picker shown when a play-test starts, or {@code null}. */
     private CharacterPicker testPicker;
+
+    private static final Font SANS_BOLD_14 = new Font("SansSerif", Font.BOLD, 14);
+    private static final Font SANS_BOLD_16 = new Font("SansSerif", Font.BOLD, 16);
+    private static final Font SANS_PLAIN_11 = new Font("SansSerif", Font.PLAIN, 11);
+    private static final Font SANS_PLAIN_13 = new Font("SansSerif", Font.PLAIN, 13);
 
     public CreativeScene(GameContext ctx) {
         this.ctx = ctx;
@@ -2253,7 +2270,6 @@ public class CreativeScene extends AbstractScene {
         if (category == Category.SURFACE) top += 68;
         return top;
     }
-
 
     private int sliderPanelTop() {
         return net == null ? viewportHeight - 36 - SLIDER_PANEL_H : viewportHeight - 36;
@@ -5577,8 +5593,6 @@ public class CreativeScene extends AbstractScene {
 
     // --- rendering -----------------------------------------------------------------
 
-    /** This frame's draw target, set at the top of {@link #render}. */
-    private DrawTarget frameTarget;
 
     /**
      * The baked floor. Terrain is the biggest thing on screen and the least
@@ -5589,17 +5603,10 @@ public class CreativeScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        // Most of this scene is not ported off Graphics2D yet; see
-        // Java2DTarget.graphicsOf. The frame's target is held so the painters
-        // that *are* ported (the terrain) draw through it, which is also what
-        // puts their operations into the frame's draw-call count.
-        this.frameTarget = target;
-        Graphics2D g = Java2DTarget.graphicsOf(target);
         GameProfile p = profile();
         feedLighting(p);
 
-        g.setColor(level.background);
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
+        target.fillRect(0, 0, viewportWidth, viewportHeight, level.background);
 
         // A side view's blocks are a wall the background layer hides behind; a
         // plan view's are the floor it stands on, so there the scenery goes on
@@ -5607,51 +5614,51 @@ public class CreativeScene extends AbstractScene {
         // tile it was just painted onto.
         boolean sceneryBehind = PerspectiveSpace.of(camera.getPerspective())
                 .scenerySitsBehindTerrain();
-        if (sceneryBehind) drawDecorLayer(g, false);
+        if (sceneryBehind) drawDecorLayer(target, false);
         // Everything standing on the floor shares one queue on a plane, so
         // whether the player is in front of a tree — or of a wall — is settled
         // by where they are standing rather than by a fixed layer order. The
         // side view's layers are fixed and correct, so its pass draws straight
         // through in call order.
         DepthPass standing = DepthPass.of(camera.getPerspective());
-        drawTiles(g, standing);   // queues the crack overlay with its block
+        drawTiles(target, standing);   // queues the crack overlay with its block
         // The grid is drawn through the camera, so it lands as a diamond
         // lattice in isometric view — which is exactly where lining blocks
         // up by eye is hardest, so it is worth having there too.
-        if (showGrid && !testing) drawGrid(g);
-        if (!sceneryBehind) drawDecorLayer(g, false, standing);
-        drawWorldBounds(g);
-        drawEntities(g, standing);
-        drawSpawnMarker(g);
-        if (!testing) drawCutsceneMarkers(g);
+        if (showGrid && !testing) drawGrid(target);
+        if (!sceneryBehind) drawDecorLayer(target, false, standing);
+        drawWorldBounds(target);
+        drawEntities(target, standing);
+        drawSpawnMarker(target);
+        if (!testing) drawCutsceneMarkers(target);
         if (testing && testMe != null) {
             standing.at(footDepth(testMe.x, testMe.y, profile().playerSize),
-                    () -> drawTestPlayer(g));
+                    () -> drawTestPlayer(target));
         }
         standing.flush();
         if (testing && cutsceneDirector != null && cutsceneDirector.active() != null) {
             CutscenePainter.drawActors(target, camera, cutsceneDirector.active());
         }
-        drawDecorLayer(g, true); // foreground scenery covers players
+        drawDecorLayer(target, true); // foreground scenery covers players
         if (p.particlesEnabled) particles.render(target, camera);
 
         if (!testing) {
-            drawCursorPreview(g);
-            drawSidebar(g);
-            if (dialog == Dialog.NONE) drawPaletteTooltip(g);
+            drawCursorPreview(target);
+            drawSidebar(target);
+            if (dialog == Dialog.NONE) drawPaletteTooltip(target);
         }
         // The play-test's character choice sits over the level being tested.
         if (testing && testPicker != null) {
             testPicker.render(target, viewportWidth, viewportHeight);
         }
-        drawTopBar(g);
+        drawTopBar(target);
         if (testing) {
-            if (p.itemsEnabled) drawTestHotbar(g);
-            drawTestHealthBar(g);
-            drawTestResourceBars(g);
-            drawStatRuleBars(g);
-            drawDoorHint(g);
-            if (showInventory) drawTestInventory(g);
+            if (p.itemsEnabled) drawTestHotbar(target);
+            drawTestHealthBar(target);
+            drawTestResourceBars(target);
+            drawStatRuleBars(target);
+            drawDoorHint(target);
+            if (showInventory) drawTestInventory(target);
             if (craftingPanel != null) {
                 craftingPanel.render(target, viewportWidth, viewportHeight, testInv, animClock);
             }
@@ -5663,9 +5670,9 @@ public class CreativeScene extends AbstractScene {
                         cutsceneDirector.active());
             }
         }
-        drawStatus(g);
+        drawStatus(target);
 
-        if (dialog != Dialog.NONE) drawDialog(g);
+        if (dialog != Dialog.NONE) drawDialog(target);
         // "Create texture" floats over the dialog that opened it, so closing
         // the paint window puts the creator back in that dialog.
         if (spriteEditor != null) spriteEditor.render(target, viewportWidth, viewportHeight);
@@ -5758,12 +5765,12 @@ public class CreativeScene extends AbstractScene {
      * level plays like — including which way its walls stand and where their
      * shadows fall.
      */
-    private void drawTiles(Graphics2D g, DepthPass standing) {
+    private void drawTiles(DrawTarget target, DepthPass standing) {
         // The decorator is passed only when there is actually something to
         // decorate. A decorator that does nothing still forces the floor to be
         // repainted cell by cell, because the painter cannot know it is a
         // no-op — so "no open container" has to mean "no decorator".
-        TerrainPainter.draw(frameTarget, level, camera, visibleTileBounds(), animClock,
+        TerrainPainter.draw(target, level, camera, visibleTileBounds(), animClock,
                 standing, containerPanel == null ? null : this::drawOpenLid,
                 miningStroke(), terrainCache);
     }
@@ -5806,32 +5813,31 @@ public class CreativeScene extends AbstractScene {
         pxs[3] = pcorner[0]; pys[3] = pcorner[1];
     }
 
-    private void drawGrid(Graphics2D g) {
+    private void drawGrid(DrawTarget target) {
         int ts = level.tileSize;
         int[] b = visibleTileBounds();
-        g.setColor(new Color(255, 255, 255, 28));
         for (int c = b[0]; c <= b[2] + 1; c++) {
             double wx = c * (double) ts;
-            g.drawLine(camera.worldToScreenX(wx, b[1] * (double) ts),
+            target.drawLine(camera.worldToScreenX(wx, b[1] * (double) ts),
                     camera.worldToScreenY(wx, b[1] * (double) ts),
                     camera.worldToScreenX(wx, (b[3] + 1) * (double) ts),
-                    camera.worldToScreenY(wx, (b[3] + 1) * (double) ts));
+                    camera.worldToScreenY(wx, (b[3] + 1) * (double) ts),
+                    new Color(255, 255, 255, 28));
         }
         for (int r = b[1]; r <= b[3] + 1; r++) {
             double wy = r * (double) ts;
-            g.drawLine(camera.worldToScreenX(b[0] * (double) ts, wy),
+            target.drawLine(camera.worldToScreenX(b[0] * (double) ts, wy),
                     camera.worldToScreenY(b[0] * (double) ts, wy),
                     camera.worldToScreenX((b[2] + 1) * (double) ts, wy),
-                    camera.worldToScreenY((b[2] + 1) * (double) ts, wy));
+                    camera.worldToScreenY((b[2] + 1) * (double) ts, wy),
+                    new Color(255, 255, 255, 28));
         }
     }
 
     /** Outline the level so its edges are obvious while painting. */
-    private void drawWorldBounds(Graphics2D g) {
+    private void drawWorldBounds(DrawTarget target) {
         double w = level.width * (double) level.tileSize;
         double h = level.height * (double) level.tileSize;
-        g.setColor(new Color(255, 200, 90, 130));
-        g.setStroke(new BasicStroke(2f));
         int[] cx = new int[4];
         int[] cy = new int[4];
         double[][] corners = {{0, 0}, {w, 0}, {w, h}, {0, h}};
@@ -5840,7 +5846,7 @@ public class CreativeScene extends AbstractScene {
             cx[i] = pcorner[0];
             cy[i] = pcorner[1];
         }
-        g.drawPolygon(cx, cy, 4);
+        target.drawPolygon(cx, cy, 4, new Color(255, 200, 90, 130), 2f);
     }
 
     /**
@@ -5850,16 +5856,16 @@ public class CreativeScene extends AbstractScene {
      * of the terrain it lands on is the format's call — see
      * {@link PerspectiveSpace#scenerySitsBehindTerrain()} in {@code render}.
      */
-    private void drawDecorLayer(Graphics2D g, boolean foreground) {
+    private void drawDecorLayer(DrawTarget target, boolean foreground) {
         DepthPass own = DepthPass.sorted();
-        drawDecorLayer(g, foreground, own);
+        drawDecorLayer(target, foreground, own);
         own.flush();
     }
 
     /** One scenery layer, queued into a pass it shares with something else. */
-    private void drawDecorLayer(Graphics2D g, boolean foreground, DepthPass into) {
-        DecorPainter.draw(frameTarget, level, camera, foreground, animClock, into);
-        SurfaceDecorPainter.draw(frameTarget, level, camera, visibleTileBounds(), foreground,
+    private void drawDecorLayer(DrawTarget target, boolean foreground, DepthPass into) {
+        DecorPainter.draw(target, level, camera, foreground, animClock, into);
+        SurfaceDecorPainter.draw(target, level, camera, visibleTileBounds(), foreground,
                 animClock, into);
     }
 
@@ -5874,26 +5880,26 @@ public class CreativeScene extends AbstractScene {
     }
 
     /** Painted mobs/items/doors/markers: level spawns offline, snapshots online. */
-    private void drawEntities(Graphics2D g, DepthPass into) {
+    private void drawEntities(DrawTarget target, DepthPass into) {
         MobRegistry mobs = MobRegistry.standard();
         ItemRegistry items = ItemRegistry.standard();
-        drawDoors(g);
+        drawDoors(target);
         if (!testing) {
-            drawMpSpawnMarkers(g);
-            drawMiniGameMarkers(g);
+            drawMpSpawnMarkers(target);
+            drawMiniGameMarkers(target);
         }
         if (testing && testWorld != null) {
             for (DroppedItem item : testWorld.items()) {
                 into.at(footDepth(item.x, item.y, DroppedItem.SIZE), () ->
-                        drawItemAt(g, items.get(item.key), item.x, item.y));
+                        drawItemAt(target, items.get(item.key), item.x, item.y));
             }
             for (Mob m : testWorld.mobs()) {
                 into.at(footDepth(m.x, m.y, m.def.size()), () ->
-                        drawMobAt(g, m.def, m.x, m.y, m.facing, mobStateKey(m),
+                        drawMobAt(target, m.def, m.x, m.y, m.facing, mobStateKey(m),
                                 m.weaponKey(), m.melee.action(), m.meleeProgress()));
             }
             for (Projectile pr : testWorld.projectiles()) {
-                into.at(footDepth(pr.x, pr.y, 0), () -> drawProjectileAt(g, pr));
+                into.at(footDepth(pr.x, pr.y, 0), () -> drawProjectileAt(target, pr));
             }
             return;
         }
@@ -5902,16 +5908,16 @@ public class CreativeScene extends AbstractScene {
             if (snap != null) {
                 for (EntityView e : snap.items()) {
                     into.at(footDepth(e.x, e.y, DroppedItem.SIZE), () ->
-                            drawItemAt(g, items.get(e.key), e.x, e.y));
+                            drawItemAt(target, items.get(e.key), e.x, e.y));
                 }
                 for (EntityView e : snap.mobs()) {
                     MobDef def = mobs.get(e.key);
                     if (def != null) {
                         into.at(footDepth(e.x, e.y, def.size()), () ->
-                                drawMobAt(g, def, e.x, e.y, e.facing, "idle"));
+                                drawMobAt(target, def, e.x, e.y, e.facing, "idle"));
                     }
                 }
-                drawNetPlayers(g, snap);
+                drawNetPlayers(target, snap);
             }
             return;
         }
@@ -5923,11 +5929,11 @@ public class CreativeScene extends AbstractScene {
                     // the editor shows the species rather than a profile.
                     if (def != null) {
                         into.at(footDepth(e.x, e.y, def.size()), () ->
-                                drawMobAt(g, def, e.x, e.y, Facing.SOUTH, "idle"));
+                                drawMobAt(target, def, e.x, e.y, Facing.SOUTH, "idle"));
                     }
                 }
                 case "item" -> into.at(footDepth(e.x, e.y, DroppedItem.SIZE), () ->
-                        drawItemAt(g, items.get(e.type), e.x, e.y));
+                        drawItemAt(target, items.get(e.type), e.x, e.y));
                 default -> { /* doors/decor/markers drawn by their own passes */ }
             }
         }
@@ -5946,7 +5952,7 @@ public class CreativeScene extends AbstractScene {
     }
 
     /** Painted doors render as tinted door shapes with their label underneath. */
-    private void drawDoors(Graphics2D g) {
+    private void drawDoors(DrawTarget target) {
         double ts = level.tileSize;
         for (Level.EntitySpawn e : level.entities) {
             if (!"door".equals(e.kind)) continue;
@@ -5956,20 +5962,14 @@ public class CreativeScene extends AbstractScene {
             int dh = Math.max(12, (int) Math.round(ts * 1.6 * camera.zoom));
             camera.worldToScreen(e.x, e.y, pcorner);
             int x = pcorner[0] - dw / 2, y = pcorner[1] - dh;
-            g.setColor(tint);
-            g.fillRoundRect(x, y, dw, dh, dw / 3, dw / 3);
-            g.setColor(tint.darker());
-            g.setStroke(new BasicStroke(2f));
-            g.drawRoundRect(x, y, dw, dh, dw / 3, dw / 3);
-            g.setColor(new Color(255, 235, 170));
+            target.fillRoundRect(x, y, dw, dh, dw / 3, dw / 3, tint);
+            target.drawRoundRect(x, y, dw, dh, dw / 3, dw / 3, tint.darker(), 2f);
             int knob = Math.max(2, dw / 6);
-            g.fillOval(x + dw - knob * 2, y + dh / 2, knob, knob);
+            target.fillOval(x + dw - knob * 2, y + dh / 2, knob, knob, new Color(255, 235, 170));
             if (!testing && camera.zoom > 0.5) {
-                g.setFont(SMALL_FONT);
-                g.setColor(new Color(235, 235, 245));
                 String label = link != null ? link.label() : e.type;
-                g.drawString(label, x + dw / 2 - g.getFontMetrics().stringWidth(label) / 2,
-                        y + dh + 12);
+                target.drawText(label, x + dw / 2 - target.textWidth(label, SMALL_FONT) / 2,
+                        y + dh + 12, SMALL_FONT, new Color(235, 235, 245));
             }
         }
     }
@@ -5979,7 +5979,7 @@ public class CreativeScene extends AbstractScene {
      * spawns, and the numbered escort waypoint path — all in team colours so
      * the arena reads at a glance while building it.
      */
-    private void drawMiniGameMarkers(Graphics2D g) {
+    private void drawMiniGameMarkers(DrawTarget target) {
         double ts = level.tileSize;
         // The waypoint path draws first (under the markers): dashes + numbers.
         List<Level.EntitySpawn> path = new ArrayList<>();
@@ -5989,33 +5989,30 @@ public class CreativeScene extends AbstractScene {
         if (!path.isEmpty()) {
             path.sort((a, b) -> Integer.compare(
                     MiniGame.pathIndex(a.type), MiniGame.pathIndex(b.type)));
-            g.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND,
-                    0, new float[]{8, 8}, 0));
-            g.setColor(new Color(240, 220, 130, 150));
             int px = 0, py = 0;
             for (int i = 0; i < path.size(); i++) {
                 camera.worldToScreen(path.get(i).x, path.get(i).y, pcorner);
-                if (i > 0) g.drawLine(px, py, pcorner[0], pcorner[1]);
+                if (i > 0) {
+                    target.drawDashedLine(px, py, pcorner[0], pcorner[1], PATH_DASH, 2f, 8, 8);
+                }
                 px = pcorner[0];
                 py = pcorner[1];
             }
-            g.setStroke(new BasicStroke(2f));
             for (int i = 0; i < path.size(); i++) {
                 camera.worldToScreen(path.get(i).x, path.get(i).y, pcorner);
                 int r = Math.max(6, (int) (10 * camera.zoom));
-                g.setColor(new Color(50, 46, 26, 220));
-                g.fillOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2);
-                g.setColor(new Color(240, 220, 130));
-                g.drawOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2);
-                g.setFont(SMALL_FONT);
+                target.fillOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2,
+                        new Color(50, 46, 26, 220));
+                target.drawOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2,
+                        new Color(240, 220, 130), 2f);
                 String n = path.get(i).type;
-                g.drawString(n, pcorner[0] - g.getFontMetrics().stringWidth(n) / 2,
-                        pcorner[1] + 4);
+                target.drawText(n, pcorner[0] - target.textWidth(n, SMALL_FONT) / 2,
+                        pcorner[1] + 4, SMALL_FONT, new Color(240, 220, 130));
             }
             if (camera.zoom > 0.5) {
                 camera.worldToScreen(path.get(0).x, path.get(0).y, pcorner);
-                g.setColor(new Color(240, 220, 130));
-                g.drawString("payload start", pcorner[0] + 12, pcorner[1] - 8);
+                target.drawText("payload start", pcorner[0] + 12, pcorner[1] - 8,
+                        SMALL_FONT, PATH_MARK);
             }
         }
         for (Level.EntitySpawn e : level.entities) {
@@ -6026,19 +6023,20 @@ public class CreativeScene extends AbstractScene {
                     Color c = Team.color(team);
                     camera.worldToScreen(e.x, e.y, pcorner);
                     int h = Math.max(10, (int) (ts * 0.9 * camera.zoom));
-                    g.setColor(new Color(c.getRed(), c.getGreen(), c.getBlue(), 60));
-                    g.fillOval(pcorner[0] - h / 2, pcorner[1] - h / 6, h, h / 3);
-                    g.setColor(new Color(230, 230, 240));
-                    g.setStroke(new BasicStroke(2.5f));
-                    g.drawLine(pcorner[0], pcorner[1], pcorner[0], pcorner[1] - h);
-                    g.setColor(c);
-                    g.fillPolygon(
-                            new int[]{pcorner[0], pcorner[0] + (int) (h * 0.65), pcorner[0]},
-                            new int[]{pcorner[1] - h, pcorner[1] - h + h / 4,
-                                    pcorner[1] - h + h / 2}, 3);
+                    target.fillOval(pcorner[0] - h / 2, pcorner[1] - h / 6, h, h / 3,
+                            new Color(c.getRed(), c.getGreen(), c.getBlue(), 60));
+                    target.drawLine(pcorner[0], pcorner[1], pcorner[0], pcorner[1] - h,
+                            new Color(230, 230, 240), 2.5f);
+                    triXs[0] = pcorner[0];
+                    triXs[1] = pcorner[0] + (int) (h * 0.65);
+                    triXs[2] = pcorner[0];
+                    triYs[0] = pcorner[1] - h;
+                    triYs[1] = pcorner[1] - h + h / 4;
+                    triYs[2] = pcorner[1] - h + h / 2;
+                    target.fillPolygon(triXs, triYs, 3, c);
                     if (camera.zoom > 0.5) {
-                        g.setFont(SMALL_FONT);
-                        g.drawString(Team.name(team) + " flag", pcorner[0] + 6, pcorner[1] + 12);
+                        target.drawText(Team.name(team) + " flag", pcorner[0] + 6, pcorner[1] + 12,
+                                SMALL_FONT, c);
                     }
                 }
                 case MiniGame.KIND_STOCKPILE -> {
@@ -6046,17 +6044,16 @@ public class CreativeScene extends AbstractScene {
                     Color c = Team.color(team);
                     camera.worldToScreen(e.x, e.y, pcorner);
                     int s = Math.max(8, (int) (ts * 0.8 * camera.zoom));
-                    g.setColor(new Color(90, 65, 40));
-                    g.fillRoundRect(pcorner[0] - s / 2, pcorner[1] - s, s, s, s / 5, s / 5);
-                    g.setColor(c);
-                    g.setStroke(new BasicStroke(Math.max(2f, s / 10f)));
-                    g.drawRoundRect(pcorner[0] - s / 2, pcorner[1] - s, s, s, s / 5, s / 5);
-                    g.drawLine(pcorner[0] - s / 2, pcorner[1] - s / 2,
-                            pcorner[0] + s / 2, pcorner[1] - s / 2);
+                    target.fillRoundRect(pcorner[0] - s / 2, pcorner[1] - s, s, s, s / 5, s / 5,
+                            new Color(90, 65, 40));
+                    float crate = Math.max(2f, s / 10f);
+                    target.drawRoundRect(pcorner[0] - s / 2, pcorner[1] - s, s, s, s / 5, s / 5,
+                            c, crate);
+                    target.drawLine(pcorner[0] - s / 2, pcorner[1] - s / 2, pcorner[0] + s / 2,
+                            pcorner[1] - s / 2, c, crate);
                     if (camera.zoom > 0.5) {
-                        g.setFont(SMALL_FONT);
-                        g.drawString(Team.name(team) + " stockpile",
-                                pcorner[0] + s / 2 + 4, pcorner[1] - 2);
+                        target.drawText(Team.name(team) + " stockpile", pcorner[0] + s / 2 + 4,
+                                pcorner[1] - 2, SMALL_FONT, c);
                     }
                 }
                 case MiniGame.KIND_SPAWN -> {
@@ -6064,37 +6061,41 @@ public class CreativeScene extends AbstractScene {
                     Color c = Team.color(team);
                     camera.worldToScreen(e.x, e.y, pcorner);
                     int s = Math.max(6, (int) (14 * camera.zoom));
-                    g.setColor(c);
-                    g.setStroke(new BasicStroke(2f));
-                    g.drawLine(pcorner[0], pcorner[1] - s, pcorner[0], pcorner[1] + s / 2);
-                    g.fillPolygon(new int[]{pcorner[0], pcorner[0] + s, pcorner[0]},
-                            new int[]{pcorner[1] - s, pcorner[1] - s + s / 3,
-                                    pcorner[1] - s + 2 * s / 3}, 3);
-                    g.setFont(SMALL_FONT);
-                    g.drawString(Team.name(team).toLowerCase() + " spawn",
-                            pcorner[0] + 4, pcorner[1] + s / 2);
+                    target.drawLine(pcorner[0], pcorner[1] - s, pcorner[0], pcorner[1] + s / 2, c,
+                            2f);
+                    pennant(pcorner[0], pcorner[1], s);
+                    target.fillPolygon(triXs, triYs, 3, c);
+                    target.drawText(Team.name(team).toLowerCase() + " spawn", pcorner[0] + 4,
+                            pcorner[1] + s / 2, SMALL_FONT, c);
                 }
                 default -> { /* not a mini-game marker */ }
             }
         }
     }
 
+    /**
+     * The triangular flag on a spawn pole, written into {@link #triXs} and
+     * {@link #triYs}. Both spawn markers draw the same shape.
+     */
+    private void pennant(int x, int y, int s) {
+        triXs[0] = x;      triXs[1] = x + s;         triXs[2] = x;
+        triYs[0] = y - s;  triYs[1] = y - s + s / 3; triYs[2] = y - s + 2 * s / 3;
+    }
+
     /** Numbered flags where multiplayer players will spawn (editor-only). */
-    private void drawMpSpawnMarkers(Graphics2D g) {
+    private void drawMpSpawnMarkers(DrawTarget target) {
         int n = 0;
         for (Level.EntitySpawn e : level.entities) {
             if (!"mp_spawn".equals(e.kind)) continue;
             n++;
             camera.worldToScreen(e.x, e.y, pcorner);
             int s = Math.max(6, (int) (14 * camera.zoom));
-            g.setColor(new Color(120, 170, 240));
-            g.setStroke(new BasicStroke(2f));
-            g.drawLine(pcorner[0], pcorner[1] - s, pcorner[0], pcorner[1] + s / 2);
-            g.fillPolygon(new int[]{pcorner[0], pcorner[0] + s, pcorner[0]},
-                    new int[]{pcorner[1] - s, pcorner[1] - s + s / 3,
-                            pcorner[1] - s + 2 * s / 3}, 3);
-            g.setFont(SMALL_FONT);
-            g.drawString("mp " + n, pcorner[0] + 4, pcorner[1] + s / 2);
+            target.drawLine(pcorner[0], pcorner[1] - s, pcorner[0], pcorner[1] + s / 2,
+                    new Color(120, 170, 240), 2f);
+            pennant(pcorner[0], pcorner[1], s);
+            target.fillPolygon(triXs, triYs, 3, MP_SPAWN);
+            target.drawText("mp " + n, pcorner[0] + 4, pcorner[1] + s / 2, SMALL_FONT,
+                    new Color(120, 170, 240));
         }
     }
 
@@ -6104,9 +6105,9 @@ public class CreativeScene extends AbstractScene {
      * what a player sees: this direction's sheet, its mirror twin, the state's
      * sheet, the idle sheet, then the pre-generated directional art.
      */
-    private void drawMobAt(Graphics2D g, MobDef def, double x, double y,
+    private void drawMobAt(DrawTarget target, MobDef def, double x, double y,
                            Facing facing, String state) {
-        drawMobAt(g, def, x, y, facing, state,
+        drawMobAt(target, def, x, y, facing, state,
                 def.weapon() == null ? "" : def.weapon(), MeleeAction.NONE, 0);
     }
 
@@ -6115,7 +6116,7 @@ public class CreativeScene extends AbstractScene {
      * first say over how its body is drawn, and the weapon itself is drawn in
      * its hands — the same two sheets the play scene resolves.
      */
-    private void drawMobAt(Graphics2D g, MobDef def, double x, double y,
+    private void drawMobAt(DrawTarget target, MobDef def, double x, double y,
                            Facing facing, String state, String weapon,
                            MeleeAction move, double moveProgress) {
         Facing dir = facing == null ? Facing.EAST : facing;
@@ -6131,9 +6132,9 @@ public class CreativeScene extends AbstractScene {
         camera.worldToScreen(x + def.size() / 2, y + def.size(), pcorner);
         int dx = pcorner[0] - w / 2, dy = pcorner[1] - w;
         if (mirror) {
-            g.drawImage(img, dx + w, dy, -w, w, null);
+            target.drawImage(img, dx + w, dy, -w, w);
         } else {
-            g.drawImage(img, dx, dy, w, w, null);
+            target.drawImage(img, dx, dy, w, w);
         }
         if (!weapon.isEmpty()) {
             MeleeSprites.Hold hold = MeleeSprites.hold(move,
@@ -6148,17 +6149,18 @@ public class CreativeScene extends AbstractScene {
                 int iw = Math.max(5, (int) Math.round(def.size() * hold.scale()
                         * camera.zoom * 0.7));
                 int flip = dir.facingLeft() ? -1 : 1;
-                AffineTransform old = g.getTransform();
-                g.translate(pcorner[0] + flip * hold.offsetX() * def.size() * camera.zoom,
+                AffineTransform swing = AffineTransform.getTranslateInstance(
+                        pcorner[0] + flip * hold.offsetX() * def.size() * camera.zoom,
                         pcorner[1] - w / 2.0 + hold.offsetY() * def.size() * camera.zoom);
-                g.rotate(flip * hold.angle());
-                g.drawImage(held, flip * -iw / 2, -iw / 2, flip * iw, iw, null);
-                g.setTransform(old);
+                swing.rotate(flip * hold.angle());
+                target.pushTransform(swing);
+                target.drawImage(held, flip * -iw / 2, -iw / 2, flip * iw, iw);
+                target.popTransform();
             }
         }
     }
 
-    private void drawItemAt(Graphics2D g, ItemDef def, double x, double y) {
+    private void drawItemAt(DrawTarget target, ItemDef def, double x, double y) {
         if (def == null) return;
         BufferedImage img = Skins.frame("item/" + def.key(), animClock);
         if (img == null) img = EntitySprites.item(def, 16);
@@ -6169,11 +6171,10 @@ public class CreativeScene extends AbstractScene {
             // Top-down / isometric drops hover with a bob over a soft shadow.
             dy = (int) Math.round(Math.sin(animClock * 3 + (x + y) * 0.05) * w * 0.18
                     - w * 0.25);
-            g.setColor(new Color(0, 0, 0, 70));
-            g.fillOval(pcorner[0], pcorner[1] + w - w / 4, w, w / 2);
+            target.fillOval(pcorner[0], pcorner[1] + w - w / 4, w, w / 2, new Color(0, 0, 0, 70));
         }
-        drawRarityHalo(g, def, pcorner[0] + w / 2, pcorner[1] + dy + w / 2, w);
-        g.drawImage(img, pcorner[0], pcorner[1] + dy, w, w, null);
+        drawRarityHalo(target, def, pcorner[0] + w / 2, pcorner[1] + dy + w / 2, w);
+        target.drawImage(img, pcorner[0], pcorner[1] + dy, w, w);
     }
 
     /**
@@ -6181,27 +6182,19 @@ public class CreativeScene extends AbstractScene {
      * the rarity's colour, gently pulsing — visible in daylight, and matched
      * by a real point light after dark (see {@link #feedLighting}).
      */
-    private void drawRarityHalo(Graphics2D g, ItemDef def, int cx, int cy, int itemPx) {
+    private void drawRarityHalo(DrawTarget target, ItemDef def, int cx, int cy, int itemPx) {
         if (def.rarity() == ItemDef.Rarity.COMMON) return;
         float pulse = 0.82f + 0.18f * (float) Math.sin(animClock * 3
                 + def.key().hashCode() % 7);
         float radius = Math.max(4f, itemPx * (1.1f + 0.35f * def.rarity().ordinal()) * pulse);
         Color c = def.rarity().color;
-        RadialGradientPaint paint = new RadialGradientPaint(
-                new java.awt.geom.Point2D.Float(cx, cy), radius,
-                new float[]{0f, 0.55f, 1f},
-                new Color[]{
-                        new Color(c.getRed(), c.getGreen(), c.getBlue(), 110),
-                        new Color(c.getRed(), c.getGreen(), c.getBlue(), 46),
-                        new Color(c.getRed(), c.getGreen(), c.getBlue(), 0)});
-        var old = g.getPaint();
-        g.setPaint(paint);
-        g.fillOval((int) (cx - radius), (int) (cy - radius),
-                (int) (radius * 2), (int) (radius * 2));
-        g.setPaint(old);
+        target.fillRadialGradient((int) cx, (int) cy, (int) radius, HALO_STOPS, new int[]{
+                new Color(c.getRed(), c.getGreen(), c.getBlue(), 110).getRGB(),
+                new Color(c.getRed(), c.getGreen(), c.getBlue(), 46).getRGB(),
+                new Color(c.getRed(), c.getGreen(), c.getBlue(), 0).getRGB()});
     }
 
-    private void drawProjectileAt(Graphics2D g, Projectile pr) {
+    private void drawProjectileAt(DrawTarget target, Projectile pr) {
         // Skinnable like every other texture (the Effects palette edits these);
         // the procedural bolt is the fallback.
         BufferedImage img = Skins.frame("projectile/" + pr.def.key(), animClock);
@@ -6216,52 +6209,50 @@ public class CreativeScene extends AbstractScene {
         if (lift > 0) {
             double shrink = Math.max(0.3, 1 - pr.z / (level.tileSize * 8.0));
             int sw = Math.max(3, (int) (w * 0.6 * shrink));
-            g.setColor(new Color(0, 0, 0, (int) (80 * shrink)));
-            g.fillOval(pcorner[0] - sw / 2, pcorner[1] - sw / 4, sw, Math.max(2, sw / 2));
+            target.fillOval(pcorner[0] - sw / 2, pcorner[1] - sw / 4, sw, Math.max(2, sw / 2),
+                    new Color(0, 0, 0, (int) (80 * shrink)));
         }
-        var old = g.getTransform();
-        g.translate(pcorner[0], pcorner[1] - lift);
-        if (pr.vx != 0 || pr.vy != 0) g.rotate(Math.atan2(pr.vy, pr.vx));
-        g.drawImage(img, -w / 2, -w / 2, w, w, null);
-        g.setTransform(old);
+        AffineTransform spin = AffineTransform.getTranslateInstance(
+                pcorner[0], pcorner[1] - lift);
+        if (pr.vx != 0 || pr.vy != 0) spin.rotate(Math.atan2(pr.vy, pr.vx));
+        target.pushTransform(spin);
+        target.drawImage(img, -w / 2, -w / 2, w, w);
+        target.popTransform();
     }
 
     /** Other players painting/playing in the same online world. */
-    private void drawNetPlayers(Graphics2D g, Snapshot snap) {
+    private void drawNetPlayers(DrawTarget target, Snapshot snap) {
         int size = profile().playerSize;
         for (PlayerState ps : snap.players()) {
             if (ps.id == net.client().localId()) continue;
             Color body = Color.getHSBColor((ps.id * 0.6180339887f) % 1f, 0.6f, 0.85f);
             camera.worldToScreen(ps.x + size / 2.0, ps.y + size, pcorner);
             int w = Math.max(6, (int) Math.round(size * camera.zoom));
-            g.setColor(body);
-            g.fillRoundRect(pcorner[0] - w / 2, pcorner[1] - w, w, w, w / 4, w / 4);
+            target.fillRoundRect(pcorner[0] - w / 2, pcorner[1] - w, w, w, w / 4, w / 4, body);
             if (!ps.name.isEmpty()) {
-                g.setFont(SMALL_FONT);
-                g.setColor(Color.WHITE);
-                g.drawString(ps.name, pcorner[0] - w / 2, pcorner[1] - w - 4);
+                target.drawText(ps.name, pcorner[0] - w / 2, pcorner[1] - w - 4, SMALL_FONT,
+                        Color.WHITE);
             }
         }
     }
 
-    private void drawSpawnMarker(Graphics2D g) {
+    private void drawSpawnMarker(DrawTarget target) {
         camera.worldToScreen(level.spawnX, level.spawnY, pcorner);
         int s = Math.max(6, (int) (14 * camera.zoom));
-        g.setColor(new Color(120, 220, 130));
-        g.setStroke(new BasicStroke(2f));
-        g.drawLine(pcorner[0], pcorner[1] - s, pcorner[0], pcorner[1] + s / 2);
+        target.drawLine(pcorner[0], pcorner[1] - s, pcorner[0], pcorner[1] + s / 2,
+                new Color(120, 220, 130), 2f);
         int[] fx = {pcorner[0], pcorner[0] + s, pcorner[0]};
         int[] fy = {pcorner[1] - s, pcorner[1] - s + s / 3, pcorner[1] - s + 2 * s / 3};
-        g.fillPolygon(fx, fy, 3);
-        g.setFont(SMALL_FONT);
-        g.drawString("spawn", pcorner[0] + 4, pcorner[1] + s / 2);
+        target.fillPolygon(fx, fy, 3, new Color(120, 220, 130));
+        target.drawText("spawn", pcorner[0] + 4, pcorner[1] + s / 2, SMALL_FONT,
+                new Color(120, 220, 130));
     }
 
     /**
      * Editor-only cutscene trigger markers: a clapper diamond, the trigger
      * radius ring for zone/interact cutscenes, and the cutscene's name.
      */
-    private void drawCutsceneMarkers(Graphics2D g) {
+    private void drawCutsceneMarkers(DrawTarget target) {
         for (Cutscene cs : level.cutscenes) {
             if (cs.trigger == Cutscene.Trigger.LEVEL_START) continue;
             camera.worldToScreen(cs.x, cs.y, pcorner);
@@ -6270,23 +6261,23 @@ public class CreativeScene extends AbstractScene {
                     ? new Color(240, 170, 90) : new Color(190, 140, 240);
             // The trigger radius, in world scale.
             int r = (int) Math.round(cs.radiusTiles * level.tileSize * camera.zoom);
-            g.setColor(new Color(tint.getRed(), tint.getGreen(), tint.getBlue(), 40));
-            g.fillOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2);
-            g.setColor(new Color(tint.getRed(), tint.getGreen(), tint.getBlue(), 130));
-            g.setStroke(new BasicStroke(1.5f));
-            g.drawOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2);
-            g.setColor(tint);
-            g.setStroke(new BasicStroke(2f));
-            g.fillPolygon(new int[]{pcorner[0], pcorner[0] + s, pcorner[0], pcorner[0] - s},
-                    new int[]{pcorner[1] - s, pcorner[1], pcorner[1] + s, pcorner[1]}, 4);
-            g.setColor(new Color(20, 20, 30));
-            g.fillPolygon(new int[]{pcorner[0] - s / 3, pcorner[0] + s / 2, pcorner[0] - s / 3},
-                    new int[]{pcorner[1] - s / 3, pcorner[1], pcorner[1] + s / 3}, 3);
+            target.fillOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2,
+                    new Color(tint.getRed(), tint.getGreen(), tint.getBlue(), 40));
+            target.drawOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2,
+                    new Color(tint.getRed(), tint.getGreen(), tint.getBlue(), 130), 1.5f);
+            quadXs[0] = pcorner[0];     quadXs[1] = pcorner[0] + s;
+            quadXs[2] = pcorner[0];     quadXs[3] = pcorner[0] - s;
+            quadYs[0] = pcorner[1] - s; quadYs[1] = pcorner[1];
+            quadYs[2] = pcorner[1] + s; quadYs[3] = pcorner[1];
+            target.fillPolygon(quadXs, quadYs, 4, tint);
+            triXs[0] = pcorner[0] - s / 3;  triXs[1] = pcorner[0] + s / 2;
+            triXs[2] = pcorner[0] - s / 3;
+            triYs[0] = pcorner[1] - s / 3;  triYs[1] = pcorner[1];
+            triYs[2] = pcorner[1] + s / 3;
+            target.fillPolygon(triXs, triYs, 3, CUTSCENE_PUPIL);
             if (camera.zoom > 0.5) {
-                g.setFont(SMALL_FONT);
-                g.setColor(new Color(235, 235, 245));
-                g.drawString(cs.name + (cs.trigger == Cutscene.Trigger.INTERACT ? " [E]" : ""),
-                        pcorner[0] + s + 4, pcorner[1] + 4);
+                target.drawText(cs.name + (cs.trigger == Cutscene.Trigger.INTERACT ? " [E]" : ""),
+                        pcorner[0] + s + 4, pcorner[1] + 4, SMALL_FONT, new Color(235, 235, 245));
             }
         }
     }
@@ -6301,7 +6292,7 @@ public class CreativeScene extends AbstractScene {
      * draws, lifted by a plan-view hop over its own shadow — so testing a
      * top-down level shows the jump exactly as a player will see it.
      */
-    private void drawTestPlayer(Graphics2D g) {
+    private void drawTestPlayer(DrawTarget target) {
         double size = profile().playerSize;
         // Whatever is in their hands gets first say over how they are drawn
         // doing this — the same resolution the play scene uses.
@@ -6316,18 +6307,18 @@ public class CreativeScene extends AbstractScene {
         if (lift > 0) {
             double shrink = Math.max(0.35, 1 - testMe.z / (size * 3));
             int sw = (int) (w * 0.7 * shrink), sh = Math.max(2, (int) (w * 0.25 * shrink));
-            g.setColor(new Color(0, 0, 0, (int) (90 * shrink)));
-            g.fillOval(pcorner[0] - sw / 2, pcorner[1] - sh / 2, sw, sh);
+            target.fillOval(pcorner[0] - sw / 2, pcorner[1] - sh / 2, sw, sh,
+                    new Color(0, 0, 0, (int) (90 * shrink)));
         }
         int dy = pcorner[1] - h - lift;
         if (sprite.image() != null) {
             if (sprite.mirrored()) {
-                g.drawImage(sprite.image(), dx + w, dy, -w, h, null);
+                target.drawImage(sprite.image(), dx + w, dy, -w, h);
             } else {
-                g.drawImage(sprite.image(), dx, dy, w, h, null);
+                target.drawImage(sprite.image(), dx, dy, w, h);
             }
         }
-        drawTestHeldObject(g, size, w, lift);
+        drawTestHeldObject(target, size, w, lift);
         if (testMelee.action() != MeleeAction.NONE || swingTime > 0) {
             // While a move runs the arc is the weapon's own reach and width;
             // otherwise it is the short mining/firing stroke it always was.
@@ -6339,11 +6330,10 @@ public class CreativeScene extends AbstractScene {
                     ? (int) Math.round((testMe.facingLeft ? 180 : 0) + arc / 2
                     - arc * testMelee.progress() - arc / 4)
                     : (testMe.facingLeft ? 120 : -60);
-            g.setColor(new Color(255, 255, 255, (int) (150 * Math.max(0,
-                    move ? (testMelee.striking() ? 1 : 0.4) : swingTime / 0.2))));
-            g.setStroke(new BasicStroke(3f));
-            g.drawArc(pcorner[0] - r, pcorner[1] - w / 2 - r, r * 2, r * 2,
-                    start, (int) Math.round(move ? arc / 2 : arc));
+            target.drawArc(pcorner[0] - r, pcorner[1] - w / 2 - r, r * 2, r * 2,
+                    start, (int) Math.round(move ? arc / 2 : arc),
+                    new Color(255, 255, 255, (int) (150 * Math.max(0,
+                            move ? (testMelee.striking() ? 1 : 0.4) : swingTime / 0.2))), 3f);
         }
     }
 
@@ -6352,7 +6342,7 @@ public class CreativeScene extends AbstractScene {
      * sheet and its placement come from the same {@link MeleeSprites} the play
      * scene draws from, so a weapon's art is tested where it is authored.
      */
-    private void drawTestHeldObject(Graphics2D g, double size, int w, int lift) {
+    private void drawTestHeldObject(DrawTarget target, double size, int w, int lift) {
         if (testMeleeItem.isEmpty()) return;
         MeleeAction action = testMelee.action();
         double progress = testMelee.progress();
@@ -6370,15 +6360,15 @@ public class CreativeScene extends AbstractScene {
         int flip = testMe.facing != null && testMe.facing.facingLeft() ? -1 : 1;
         double cx = pcorner[0] + flip * hold.offsetX() * size * camera.zoom;
         double cy = pcorner[1] - w / 2.0 - lift + hold.offsetY() * size * camera.zoom;
-        AffineTransform old = g.getTransform();
-        g.translate(cx, cy);
-        g.rotate(flip * hold.angle());
-        g.drawImage(img, flip * -iw / 2, -iw / 2, flip * iw, iw, null);
-        g.setTransform(old);
+        AffineTransform swing = AffineTransform.getTranslateInstance(cx, cy);
+        swing.rotate(flip * hold.angle());
+        target.pushTransform(swing);
+        target.drawImage(img, flip * -iw / 2, -iw / 2, flip * iw, iw);
+        target.popTransform();
     }
 
     /** Ghost of what a click would paint, under the cursor. */
-    private void drawCursorPreview(Graphics2D g) {
+    private void drawCursorPreview(DrawTarget target) {
         Entry entry = selectedEntry();
         if (entry == null || dialog != Dialog.NONE || mouseX < SIDEBAR_W) return;
         double[] aim = camera.screenToWorld(mouseX, mouseY);
@@ -6386,8 +6376,7 @@ public class CreativeScene extends AbstractScene {
         int col = (int) Math.floor(aim[0] / ts);
         int row = (int) Math.floor(aim[1] / ts);
 
-        Composite old = g.getComposite();
-        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.55f));
+        target.pushAlpha(0.55f);
         switch (entry.kind) {
             case "block" -> {
                 Block b = level.blocks.get(entry.key);
@@ -6399,13 +6388,11 @@ public class CreativeScene extends AbstractScene {
                     for (int[] cell : Brush.cells(brushShape, brushSize, col, row)) {
                         projectCell(cell[0], cell[1], ts);
                         raiseQuad(previewLift(cell[0], cell[1]));
-                        g.setColor(b.color());
-                        g.fillPolygon(pxs, pys, 4);
+                        target.fillPolygon(pxs, pys, 4, b.color());
                     }
                     projectCell(col, row, ts);
                     raiseQuad(previewLift(col, row));
-                    g.setColor(Color.WHITE);
-                    g.drawPolygon(pxs, pys, 4);
+                    target.drawPolygon(pxs, pys, 4, Color.WHITE, 2f);
                 }
             }
             case "surface" -> {
@@ -6417,22 +6404,25 @@ public class CreativeScene extends AbstractScene {
                             : autoFace(def, aim[0], aim[1], col, row);
                     if (face != null && def.allows(face)) {
                         projectCell(col, row, ts);
-                        g.setColor(new Color(160, 240, 160));
-                        g.setStroke(new BasicStroke(3f));
                         switch (face) {
-                            case UP -> g.drawLine(pxs[0], pys[0], pxs[1], pys[1]);
-                            case RIGHT -> g.drawLine(pxs[1], pys[1], pxs[2], pys[2]);
-                            case DOWN -> g.drawLine(pxs[2], pys[2], pxs[3], pys[3]);
-                            case LEFT -> g.drawLine(pxs[3], pys[3], pxs[0], pys[0]);
+                            case UP -> target.drawLine(pxs[0], pys[0], pxs[1], pys[1],
+                                    FACE_HIGHLIGHT, 3f);
+                            case RIGHT -> target.drawLine(pxs[1], pys[1], pxs[2], pys[2],
+                                    FACE_HIGHLIGHT, 3f);
+                            case DOWN -> target.drawLine(pxs[2], pys[2], pxs[3], pys[3],
+                                    FACE_HIGHLIGHT, 3f);
+                            case LEFT -> target.drawLine(pxs[3], pys[3], pxs[0], pys[0],
+                                    FACE_HIGHLIGHT, 3f);
                         }
                     }
                 }
             }
             case "mob" -> {
                 MobDef def = MobRegistry.standard().get(entry.key);
-                if (def != null) drawMobAt(g, def, aim[0], aim[1], Facing.SOUTH, "idle");
+                if (def != null) drawMobAt(target, def, aim[0], aim[1], Facing.SOUTH, "idle");
             }
-            case "item" -> drawItemAt(g, ItemRegistry.standard().get(entry.key), aim[0], aim[1]);
+            case "item" -> drawItemAt(target, ItemRegistry.standard().get(entry.key),
+                    aim[0], aim[1]);
             case "decor" -> {
                 Decor def = DecorRegistry.standard().get(entry.key);
                 if (def != null) {
@@ -6440,7 +6430,7 @@ public class CreativeScene extends AbstractScene {
                     int size = Math.max(8,
                             (int) Math.round(def.sizeTiles() * ts * camera.zoom));
                     camera.worldToScreen(aim[0], aim[1], pcorner);
-                    g.drawImage(img, pcorner[0] - size / 2, pcorner[1] - size, size, size, null);
+                    target.drawImage(img, pcorner[0] - size / 2, pcorner[1] - size, size, size);
                 }
             }
             case "door" -> {
@@ -6449,100 +6439,89 @@ public class CreativeScene extends AbstractScene {
                 int dw = Math.max(8, (int) Math.round(ts * 0.9 * camera.zoom));
                 int dh = Math.max(12, (int) Math.round(ts * 1.6 * camera.zoom));
                 camera.worldToScreen(aim[0], aim[1], pcorner);
-                g.setColor(tint);
-                g.fillRoundRect(pcorner[0] - dw / 2, pcorner[1] - dh, dw, dh, dw / 3, dw / 3);
+                target.fillRoundRect(pcorner[0] - dw / 2, pcorner[1] - dh, dw, dh, dw / 3, dw / 3,
+                        tint);
             }
             case "eraser" -> {
-                g.setColor(new Color(230, 100, 120));
-                g.setStroke(new BasicStroke(2f));
                 for (int[] cell : Brush.cells(brushShape, brushSize, col, row)) {
                     projectCell(cell[0], cell[1], ts);
                     // Outline the block that would actually come off — the top
                     // of the stack, which is the one standing up.
                     raiseQuad(topBlockLift(cell[0], cell[1]));
-                    g.drawPolygon(pxs, pys, 4);
+                    target.drawPolygon(pxs, pys, 4, new Color(230, 100, 120), 2f);
                 }
             }
             case "spawn" -> {
                 camera.worldToScreen(aim[0], aim[1], pcorner);
-                g.setColor(new Color(120, 220, 130));
-                g.drawOval(pcorner[0] - 8, pcorner[1] - 8, 16, 16);
+                target.drawOval(pcorner[0] - 8, pcorner[1] - 8, 16, 16,
+                        new Color(120, 220, 130), 2f);
             }
             case "mp_spawn" -> {
                 camera.worldToScreen(aim[0], aim[1], pcorner);
-                g.setColor(new Color(120, 170, 240));
-                g.drawOval(pcorner[0] - 8, pcorner[1] - 8, 16, 16);
+                target.drawOval(pcorner[0] - 8, pcorner[1] - 8, 16, 16,
+                        new Color(120, 170, 240), 2f);
             }
             case MiniGame.KIND_FLAG, MiniGame.KIND_STOCKPILE, MiniGame.KIND_SPAWN -> {
                 camera.worldToScreen(aim[0], aim[1], pcorner);
-                g.setColor(Team.color(Team.fromMarkerType(entry.key)));
-                g.setStroke(new BasicStroke(2f));
-                g.drawOval(pcorner[0] - 8, pcorner[1] - 8, 16, 16);
+                target.drawOval(pcorner[0] - 8, pcorner[1] - 8, 16, 16,
+                        Team.color(Team.fromMarkerType(entry.key)), 2f);
             }
             case MiniGame.KIND_PATH -> {
                 camera.worldToScreen(aim[0], aim[1], pcorner);
-                g.setColor(new Color(240, 220, 130));
-                g.setStroke(new BasicStroke(2f));
-                g.drawOval(pcorner[0] - 8, pcorner[1] - 8, 16, 16);
-                g.setFont(SMALL_FONT);
-                g.drawString(Integer.toString(countKind(MiniGame.KIND_PATH) + 1),
-                        pcorner[0] - 3, pcorner[1] + 4);
+                target.drawOval(pcorner[0] - 8, pcorner[1] - 8, 16, 16,
+                        new Color(240, 220, 130), 2f);
+                target.drawText(Integer.toString(countKind(MiniGame.KIND_PATH) + 1), pcorner[0] - 3,
+                        pcorner[1] + 4, SMALL_FONT, new Color(240, 220, 130));
             }
             case "cutscene" -> {
                 Cutscene cs = cutsceneByKey(entry.key);
                 if (cs != null && cs.trigger != Cutscene.Trigger.LEVEL_START) {
                     int r = (int) Math.round(cs.radiusTiles * ts * camera.zoom);
                     camera.worldToScreen(aim[0], aim[1], pcorner);
-                    g.setColor(new Color(240, 170, 90));
-                    g.setStroke(new BasicStroke(2f));
-                    g.drawOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2);
+                    target.drawOval(pcorner[0] - r, pcorner[1] - r, r * 2, r * 2,
+                            new Color(240, 170, 90), 2f);
                 }
             }
             default -> { /* generate/managedoors are buttons; nothing to preview */ }
         }
-        g.setComposite(old);
+        target.popAlpha();
     }
 
-    private void drawSidebar(Graphics2D g) {
-        g.setColor(new Color(14, 14, 22, 235));
-        g.fillRect(0, 0, SIDEBAR_W, viewportHeight);
-        g.setColor(new Color(255, 255, 255, 40));
-        g.drawLine(SIDEBAR_W, 0, SIDEBAR_W, viewportHeight);
+    private void drawSidebar(DrawTarget target) {
+        target.fillRect(0, 0, SIDEBAR_W, viewportHeight, new Color(14, 14, 22, 235));
+        target.drawLine(SIDEBAR_W, 0, SIDEBAR_W, viewportHeight,
+                new Color(255, 255, 255, 40), 2f);
 
-        g.setFont(TITLE_FONT);
-        g.setColor(Color.WHITE);
-        g.drawString("Palette", 12, 22);
+        target.drawText("Palette", 12, 22, TITLE_FONT, Color.WHITE);
 
         // Category tabs.
-        g.setFont(HUD_FONT);
         int y = 34;
         for (Category c : Category.values()) {
             boolean active = c == category;
             if (active) {
-                g.setColor(new Color(255, 220, 120, 40));
-                g.fillRoundRect(6, y, SIDEBAR_W - 12, 20, 6, 6);
+                target.fillRoundRect(6, y, SIDEBAR_W - 12, 20, 6, 6, new Color(255, 220, 120, 40));
             }
-            g.setColor(active ? new Color(255, 220, 120) : new Color(180, 180, 195));
-            g.drawString(UiText.fit(g.getFontMetrics(),
+            target.drawText(
+                    UiText.fit(target, HUD_FONT,
                             categoryName(c) + "  (" + palette.get(c).size() + ")",
                             SIDEBAR_W - 26),
-                    14, y + 15);
+                    14, y + 15, HUD_FONT,
+                    active ? new Color(255, 220, 120) : new Color(180, 180, 195));
             y += 22;
         }
 
         int gridTop = paletteGridTop();
         // Decor layer toggle row.
         if (category == Category.DECOR) {
-            g.setColor(new Color(255, 255, 255, 22));
-            g.fillRoundRect(6, gridTop - 22, SIDEBAR_W - 12, 20, 6, 6);
-            g.setFont(SMALL_FONT);
-            g.setColor(decorForeground ? new Color(255, 190, 120) : new Color(150, 200, 255));
-            g.drawString("Layer: " + (decorForeground ? "FOREGROUND" : "BACKGROUND")
-                    + "  (click / B)", 14, gridTop - 8);
+            target.fillRoundRect(6, gridTop - 22, SIDEBAR_W - 12, 20, 6, 6,
+                    new Color(255, 255, 255, 22));
+            target.drawText("Layer: " + (decorForeground ? "FOREGROUND" : "BACKGROUND")
+                            + "  (click / B)",
+                    14, gridTop - 8, SMALL_FONT,
+                    decorForeground ? new Color(255, 190, 120) : new Color(150, 200, 255));
         }
         // SURFACE option rows: face / open-closed condition / layer.
         if (category == Category.SURFACE) {
-            g.setFont(SMALL_FONT);
             String[] rows = {
                     "Face: " + surfaceFaceLabel(),
                     "Show: " + surfaceVisibilityLabel(),
@@ -6555,10 +6534,8 @@ public class CreativeScene extends AbstractScene {
             };
             for (int i = 0; i < rows.length; i++) {
                 int y0 = gridTop - 66 + i * 22;
-                g.setColor(new Color(255, 255, 255, 22));
-                g.fillRoundRect(6, y0, SIDEBAR_W - 12, 20, 6, 6);
-                g.setColor(tints[i]);
-                g.drawString(rows[i] + " (click)", 14, y0 + 14);
+                target.fillRoundRect(6, y0, SIDEBAR_W - 12, 20, 6, 6, new Color(255, 255, 255, 22));
+                target.drawText(rows[i] + " (click)", 14, y0 + 14, SMALL_FONT, tints[i]);
             }
         }
 
@@ -6575,44 +6552,37 @@ public class CreativeScene extends AbstractScene {
                 int cx = cellPad + colI * (CELL + cellPad);
                 int cy = gridTop + rowI * (CELL + 12);
                 boolean sel = idx == selected.get(category);
-                g.setColor(new Color(255, 255, 255, sel ? 50 : 16));
-                g.fillRoundRect(cx, cy, CELL, CELL, 8, 8);
+                target.fillRoundRect(cx, cy, CELL, CELL, 8, 8,
+                        new Color(255, 255, 255, sel ? 50 : 16));
                 if (sel) {
-                    g.setColor(new Color(255, 220, 120));
-                    g.setStroke(new BasicStroke(2f));
-                    g.drawRoundRect(cx, cy, CELL, CELL, 8, 8);
+                    target.drawRoundRect(cx, cy, CELL, CELL, 8, 8, new Color(255, 220, 120), 2f);
                 }
-                g.drawImage(e.icon, cx + (CELL - 40) / 2, cy + (CELL - 40) / 2, null);
+                target.drawImage(e.icon, cx + (CELL - 40) / 2, cy + (CELL - 40) / 2);
                 if (e.custom) {
                     // User-created objects wear a green corner badge; their
                     // texture dialog (right-click) offers deletion.
-                    g.setColor(new Color(110, 220, 140));
-                    g.fillPolygon(new int[]{cx + CELL - 15, cx + CELL, cx + CELL},
-                            new int[]{cy + 1, cy + 1, cy + 16}, 3);
-                    g.setColor(new Color(10, 40, 20));
-                    g.setFont(SMALL_FONT);
-                    g.drawString("+", cx + CELL - 9, cy + 10);
+                    triXs[0] = cx + CELL - 15; triXs[1] = cx + CELL; triXs[2] = cx + CELL;
+                    triYs[0] = cy + 1;         triYs[1] = cy + 1;    triYs[2] = cy + 16;
+                    target.fillPolygon(triXs, triYs, 3, CUSTOM_BADGE);
+                    target.drawText("+", cx + CELL - 9, cy + 10, SMALL_FONT, new Color(10, 40, 20));
                 }
             }
         }
 
-        if (net == null) drawSizeSliders(g);
+        if (net == null) drawSizeSliders(target);
 
         // Selected entry name + hints at the bottom.
         Entry sel = selectedEntry();
-        g.setColor(new Color(10, 10, 16));
-        g.fillRect(0, viewportHeight - 36, SIDEBAR_W, 36);
-        g.setColor(new Color(255, 220, 120));
-        g.setFont(HUD_FONT);
+        target.fillRect(0, viewportHeight - 36, SIDEBAR_W, 36, new Color(10, 10, 16));
         // Entry names are content — a custom object is named by its creator —
         // so the name is cut to the sidebar rather than run out over the canvas.
-        g.drawString(UiText.fit(g.getFontMetrics(),
+        target.drawText(
+                UiText.fit(target, HUD_FONT,
                         sel != null ? sel.name + (sel.custom ? " · custom" : "") : "",
                         SIDEBAR_W - 20),
-                10, viewportHeight - 20);
-        g.setColor(new Color(150, 150, 165));
-        g.setFont(SMALL_FONT);
-        g.drawString("right-click icon = texture · Tab category", 10, viewportHeight - 6);
+                10, viewportHeight - 20, HUD_FONT, new Color(255, 220, 120));
+        target.drawText("right-click icon = texture · Tab category", 10, viewportHeight - 6,
+                SMALL_FONT, new Color(150, 150, 165));
     }
 
     /** Tooltip geometry: how wide the body wraps and what it insets by. */
@@ -6627,7 +6597,7 @@ public class CreativeScene extends AbstractScene {
      * below the sidebar's top, and the box is nudged back inside if the cursor
      * is near an edge — so a wordy entry never paints off the screen.
      */
-    private void drawPaletteTooltip(Graphics2D g) {
+    private void drawPaletteTooltip(DrawTarget target) {
         if (mouseX >= SIDEBAR_W) return;
         List<Entry> entries = palette.get(category);
         int idx = paletteIndexAt(mouseX, mouseY);
@@ -6641,31 +6611,23 @@ public class CreativeScene extends AbstractScene {
         if (wrapW < 80) return; // no room for a tooltip at all
         int maxLines = Math.max(1, (viewportHeight - 96) / TIP_LINE_H);
 
-        g.setFont(SMALL_FONT);
-        FontMetrics bodyFm = g.getFontMetrics();
-        List<String> lines = UiText.wrap(bodyFm, desc, wrapW, maxLines);
+        List<String> lines = UiText.wrap(target, SMALL_FONT, desc, wrapW, maxLines);
         int bodyW = 0;
-        for (String line : lines) bodyW = Math.max(bodyW, bodyFm.stringWidth(line));
+        for (String line : lines) bodyW = Math.max(bodyW, target.textWidth(line, SMALL_FONT));
 
-        g.setFont(HUD_FONT);
-        FontMetrics titleFm = g.getFontMetrics();
-        String title = UiText.fit(titleFm, e.name + (e.custom ? "  (custom)" : ""), wrapW);
-        int w = Math.max(titleFm.stringWidth(title), bodyW) + 2 * TIP_PAD;
+        String title = UiText.fit(target, HUD_FONT,
+                e.name + (e.custom ? "  (custom)" : ""), wrapW);
+        int w = Math.max(target.textWidth(title, HUD_FONT), bodyW) + 2 * TIP_PAD;
         int h = 30 + lines.size() * TIP_LINE_H + 8;
         x = Math.min(x, viewportWidth - w - 8);
         int y = Math.max(8, Math.min(mouseY - 12, viewportHeight - h - 8));
 
-        g.setColor(new Color(12, 12, 20, 235));
-        g.fillRoundRect(x, y, w, h, 10, 10);
-        g.setColor(new Color(255, 255, 255, 50));
-        g.setStroke(new BasicStroke(1f));
-        g.drawRoundRect(x, y, w, h, 10, 10);
-        g.setColor(new Color(255, 220, 120));
-        g.drawString(title, x + TIP_PAD, y + 19);
-        g.setFont(SMALL_FONT);
-        g.setColor(new Color(205, 205, 220));
+        target.fillRoundRect(x, y, w, h, 10, 10, new Color(12, 12, 20, 235));
+        target.drawRoundRect(x, y, w, h, 10, 10, new Color(255, 255, 255, 50));
+        target.drawText(title, x + TIP_PAD, y + 19, HUD_FONT, new Color(255, 220, 120));
         for (int i = 0; i < lines.size(); i++) {
-            g.drawString(lines.get(i), x + TIP_PAD, y + 36 + i * TIP_LINE_H);
+            target.drawText(lines.get(i), x + TIP_PAD, y + 36 + i * TIP_LINE_H, SMALL_FONT,
+                    new Color(205, 205, 220));
         }
     }
 
@@ -6817,70 +6779,59 @@ public class CreativeScene extends AbstractScene {
      * width/height sliders, and the "override map size" button that unlocks
      * them past {@value #STANDARD_MAX_SIZE} (up to 65536, exponential scale).
      */
-    private void drawSizeSliders(Graphics2D g) {
+    private void drawSizeSliders(DrawTarget target) {
         int top = sliderPanelTop();
-        g.setColor(new Color(10, 10, 16, 220));
-        g.fillRect(0, top, SIDEBAR_W, SLIDER_PANEL_H);
-        g.setColor(new Color(255, 255, 255, 30));
-        g.drawLine(0, top, SIDEBAR_W, top);
-        g.setFont(SMALL_FONT);
+        target.fillRect(0, top, SIDEBAR_W, SLIDER_PANEL_H, new Color(10, 10, 16, 220));
+        target.drawLine(0, top, SIDEBAR_W, top, new Color(255, 255, 255, 30), 2f);
 
         // Brush row: shape button + size slider ([ ] keys too).
-        g.setColor(new Color(200, 200, 215));
-        g.drawString("Brush", 10, top + 14);
+        target.drawText("Brush", 10, top + 14, SMALL_FONT, new Color(200, 200, 215));
         brushShapeBox.setBounds(48, top + 4, 64, 14);
-        g.setColor(new Color(255, 255, 255, 34));
-        g.fillRoundRect(brushShapeBox.x, brushShapeBox.y,
-                brushShapeBox.width, brushShapeBox.height, 6, 6);
-        g.setColor(new Color(255, 220, 120));
-        g.drawString(Brush.label(brushShape), brushShapeBox.x + 6, brushShapeBox.y + 11);
-        drawOneSlider(g, 2, top + 24, "S",
+        target.fillRoundRect(brushShapeBox.x, brushShapeBox.y, brushShapeBox.width,
+                brushShapeBox.height, 6, 6, new Color(255, 255, 255, 34));
+        target.drawText(Brush.label(brushShape), brushShapeBox.x + 6, brushShapeBox.y + 11,
+                SMALL_FONT, new Color(255, 220, 120));
+        drawOneSlider(target, 2, top + 24, "S",
                 brushSize, Brush.MIN_SIZE, Brush.MAX_SIZE, false);
 
-        g.setColor(new Color(200, 200, 215));
-        g.drawString("Level size (drag)", 10, top + 44);
+        target.drawText("Level size (drag)", 10, top + 44, SMALL_FONT, new Color(200, 200, 215));
         int shownW = draggingSizeSlider == 0 ? pendingLevelW : level.width;
         int shownH = draggingSizeSlider == 1 ? pendingLevelH : level.height;
-        drawOneSlider(g, 0, top + 54, "W", shownW, MIN_LEVEL_W, maxLevelSize(), true);
-        drawOneSlider(g, 1, top + 78, "H", shownH, MIN_LEVEL_H, maxLevelSize(), true);
+        drawOneSlider(target, 0, top + 54, "W", shownW, MIN_LEVEL_W, maxLevelSize(), true);
+        drawOneSlider(target, 1, top + 78, "H", shownH, MIN_LEVEL_H, maxLevelSize(), true);
 
         // Override button.
         overrideButtonBox.setBounds(8, top + 98, SIDEBAR_W - 16, 18);
-        g.setColor(overrideMapSize ? new Color(255, 190, 100, 60)
-                : new Color(255, 255, 255, 26));
-        g.fillRoundRect(overrideButtonBox.x, overrideButtonBox.y,
-                overrideButtonBox.width, overrideButtonBox.height, 8, 8);
-        g.setColor(overrideMapSize ? new Color(255, 200, 110) : new Color(180, 180, 200));
-        g.drawString(overrideMapSize
+        target.fillRoundRect(overrideButtonBox.x, overrideButtonBox.y,
+                overrideButtonBox.width, overrideButtonBox.height, 8, 8,
+                overrideMapSize ? new Color(255, 190, 100, 60)
+                        : new Color(255, 255, 255, 26));
+        target.drawText(overrideMapSize
                         ? "Override map size: ON (max 65536)"
                         : "Override map size: off (max " + STANDARD_MAX_SIZE + ")",
-                overrideButtonBox.x + 8, overrideButtonBox.y + 13);
+                overrideButtonBox.x + 8, overrideButtonBox.y + 13, SMALL_FONT,
+                overrideMapSize ? new Color(255, 200, 110) : new Color(180, 180, 200));
     }
 
-    private void drawOneSlider(Graphics2D g, int index, int y, String label,
+    private void drawOneSlider(DrawTarget target, int index, int y, String label,
                                int value, int min, int max, boolean sizeScale) {
         int trackX = 26, trackW = SIDEBAR_W - 26 - 48;
         sliderTracks[index].setBounds(trackX, y, trackW, 8);
-        g.setColor(new Color(200, 200, 215));
-        g.drawString(label, 10, y + 8);
-        g.setColor(new Color(255, 255, 255, 40));
-        g.fillRoundRect(trackX, y + 2, trackW, 4, 4, 4);
+        target.drawText(label, 10, y + 8, SMALL_FONT, new Color(200, 200, 215));
+        target.fillRoundRect(trackX, y + 2, trackW, 4, 4, 4, new Color(255, 255, 255, 40));
         double t = sizeScale ? sizeSliderT(value, min, max)
                 : Math.max(0, Math.min(1, (value - min) / (double) (max - min)));
-        g.setColor(draggingSizeSlider == index
+        target.fillRoundRect(trackX, y + 2, (int) (trackW * t), 4, 4, 4, draggingSizeSlider == index
                 ? new Color(255, 220, 120) : new Color(160, 180, 220));
-        g.fillRoundRect(trackX, y + 2, (int) (trackW * t), 4, 4, 4);
-        g.fillOval(trackX + (int) (trackW * t) - 5, y - 1, 10, 10);
-        g.setColor(new Color(220, 220, 235));
-        g.drawString(String.valueOf(value), trackX + trackW + 6, y + 8);
+        target.fillOval(trackX + (int) (trackW * t) - 5, y - 1, 10, 10, draggingSizeSlider == index
+                ? new Color(255, 220, 120) : new Color(160, 180, 220));
+        target.drawText(String.valueOf(value), trackX + trackW + 6, y + 8, SMALL_FONT,
+                new Color(220, 220, 235));
     }
 
-    private void drawTopBar(Graphics2D g) {
+    private void drawTopBar(DrawTarget target) {
         int x0 = testing ? 0 : SIDEBAR_W;
-        g.setColor(new Color(0, 0, 0, 150));
-        g.fillRect(x0, 0, viewportWidth - x0, 28);
-        g.setColor(Color.WHITE);
-        g.setFont(HUD_FONT);
+        target.fillRect(x0, 0, viewportWidth - x0, 28, new Color(0, 0, 0, 150));
         String chunkInfo = level.isChunked()
                 ? " · chunked: " + level.chunked.loadedCount() + " loaded / "
                 + level.chunked.dirtyCount() + " edited"
@@ -6929,12 +6880,12 @@ public class CreativeScene extends AbstractScene {
                     + KeyBinds.label(GameAction.EDITOR_NEW) + "] new"
                     + undo + redo + " · [" + KeyBinds.label(GameAction.MENU_BACK) + "] menu";
         }
-        g.drawString(bar, x0 + 12, 19);
+        target.drawText(bar, x0 + 12, 19, HUD_FONT, Color.WHITE);
     }
 
     // --- test-mode HUD ---------------------------------------------------------------
 
-    private void drawTestHotbar(Graphics2D g) {
+    private void drawTestHotbar(DrawTarget target) {
         int slot = 44, pad = 5;
         int total = Inventory.HOTBAR * (slot + pad) - pad;
         int x0 = (viewportWidth - total) / 2;
@@ -6942,96 +6893,79 @@ public class CreativeScene extends AbstractScene {
         for (int i = 0; i < Inventory.HOTBAR; i++) {
             int x = x0 + i * (slot + pad);
             boolean sel = testInv.selectedIndex() == i;
-            g.setColor(new Color(0, 0, 0, sel ? 200 : 140));
-            g.fillRoundRect(x, y0, slot, slot, 8, 8);
-            g.setColor(sel ? new Color(255, 220, 120) : new Color(255, 255, 255, 70));
-            g.setStroke(new BasicStroke(sel ? 2.5f : 1f));
-            g.drawRoundRect(x, y0, slot, slot, 8, 8);
-            drawStack(g, testInv.slot(i), x, y0, slot);
-            g.setColor(new Color(255, 255, 255, 130));
-            g.setFont(SMALL_FONT);
-            g.drawString(String.valueOf(i + 1), x + 4, y0 + 12);
+            target.fillRoundRect(x, y0, slot, slot, 8, 8, new Color(0, 0, 0, sel ? 200 : 140));
+            target.drawRoundRect(x, y0, slot, slot, 8, 8,
+                    sel ? new Color(255, 220, 120) : new Color(255, 255, 255, 70), sel ? 2.5f : 1f);
+            drawStack(target, testInv.slot(i), x, y0, slot);
+            target.drawText(String.valueOf(i + 1), x + 4, y0 + 12, SMALL_FONT,
+                    new Color(255, 255, 255, 130));
         }
         // The selected item's name floats above the bar in its rarity colour.
         ItemDef sel = testInv.selectedDef();
         if (sel != null) {
-            g.setFont(HUD_FONT);
-            int tw = g.getFontMetrics().stringWidth(sel.name());
+            int tw = target.textWidth(sel.name(), HUD_FONT);
             int nx = (viewportWidth - tw) / 2, ny = y0 - 10;
-            g.setColor(new Color(0, 0, 0, 160));
-            g.fillRoundRect(nx - 8, ny - 14, tw + 16, 20, 8, 8);
-            g.setColor(sel.rarity().color);
-            g.drawString(sel.name(), nx, ny);
+            target.fillRoundRect(nx - 8, ny - 14, tw + 16, 20, 8, 8, new Color(0, 0, 0, 160));
+            target.drawText(sel.name(), nx, ny, HUD_FONT, sel.rarity().color);
         }
     }
 
-    private void drawTestHealthBar(Graphics2D g) {
+    private void drawTestHealthBar(DrawTarget target) {
         int w = 180, h = 14;
         int x = 12, y = viewportHeight - 28;
-        g.setColor(new Color(0, 0, 0, 160));
-        g.fillRoundRect(x - 2, y - 2, w + 4, h + 4, 6, 6);
-        g.setColor(new Color(120, 30, 30));
-        g.fillRect(x, y, w, h);
-        g.setColor(new Color(220, 60, 60));
-        g.fillRect(x, y, (int) (w * Math.max(0, testMe.health / PlayerState.MAX_HEALTH)), h);
-        g.setColor(Color.WHITE);
-        g.setFont(SMALL_FONT);
-        g.drawString((int) Math.ceil(testMe.health) + " / " + (int) PlayerState.MAX_HEALTH,
-                x + w / 2 - 20, y + 11);
+        target.fillRoundRect(x - 2, y - 2, w + 4, h + 4, 6, 6, new Color(0, 0, 0, 160));
+        target.fillRect(x, y, w, h, new Color(120, 30, 30));
+        target.fillRect(x, y, (int) (w * Math.max(0, testMe.health / PlayerState.MAX_HEALTH)), h,
+                new Color(220, 60, 60));
+        target.drawText((int) Math.ceil(testMe.health) + " / " + (int) PlayerState.MAX_HEALTH,
+                x + w / 2 - 20, y + 11, SMALL_FONT, Color.WHITE);
     }
 
     /** Stamina (green, sprint/jump) and mana (blue, magic) above the health bar. */
-    private void drawTestResourceBars(Graphics2D g) {
+    private void drawTestResourceBars(DrawTarget target) {
         int w = 180, h = 8;
         int x = 12;
-        drawResourceBar(g, x, viewportHeight - 40, w, h,
+        drawResourceBar(target, x, viewportHeight - 40, w, h,
                 testMe.stamina / PlayerState.MAX_STAMINA,
                 new Color(40, 90, 40), new Color(110, 220, 110));
-        drawResourceBar(g, x, viewportHeight - 52, w, h,
+        drawResourceBar(target, x, viewportHeight - 52, w, h,
                 testMe.mana / PlayerState.MAX_MANA,
                 new Color(35, 45, 100), new Color(100, 140, 245));
     }
 
-    private void drawResourceBar(Graphics2D g, int x, int y, int w, int h,
+    private void drawResourceBar(DrawTarget target, int x, int y, int w, int h,
                                  double t, Color back, Color front) {
-        g.setColor(new Color(0, 0, 0, 150));
-        g.fillRoundRect(x - 2, y - 2, w + 4, h + 4, 5, 5);
-        g.setColor(back);
-        g.fillRect(x, y, w, h);
-        g.setColor(front);
-        g.fillRect(x, y, (int) (w * Math.max(0, Math.min(1, t))), h);
+        target.fillRoundRect(x - 2, y - 2, w + 4, h + 4, 5, 5, new Color(0, 0, 0, 150));
+        target.fillRect(x, y, w, h, back);
+        target.fillRect(x, y, (int) (w * Math.max(0, Math.min(1, t))), h, front);
     }
 
     /**
      * The level's programmable stat bars (rules marked "show bar"): live
      * progress toward each rule's next firing, top-right of the play-test HUD.
      */
-    private void drawStatRuleBars(Graphics2D g) {
+    private void drawStatRuleBars(DrawTarget target) {
         if (ruleEngine == null || testStats == null) return;
         int w = 170, h = 10;
         int x = viewportWidth - w - 14, y = 40;
-        g.setFont(SMALL_FONT);
         for (StatRule rule : level.statRules) {
             if (!rule.showBar()) continue;
             double t = ruleEngine.progress(rule, testStats);
-            g.setColor(new Color(0, 0, 0, 150));
-            g.fillRoundRect(x - 4, y - 13, w + 8, h + 18, 6, 6);
-            g.setColor(new Color(210, 210, 225));
+            target.fillRoundRect(x - 4, y - 13, w + 8, h + 18, 6, 6, new Color(0, 0, 0, 150));
             String label = PlayerStats.label(rule.stat()) + "  "
                     + (long) testStats.get(rule.stat()) + " / " + (long) rule.threshold()
                     + (rule.repeat() && ruleEngine.firedCount(rule) > 0
                     ? " ×" + ruleEngine.firedCount(rule) : "");
-            g.drawString(label, x, y - 3);
-            g.setColor(new Color(70, 60, 30));
-            g.fillRect(x, y, w, h);
-            g.setColor(t >= 1 ? new Color(150, 230, 150) : new Color(240, 200, 90));
-            g.fillRect(x, y, (int) (w * Math.max(0, Math.min(1, t))), h);
+            target.drawText(label, x, y - 3, SMALL_FONT, new Color(210, 210, 225));
+            target.fillRect(x, y, w, h, new Color(70, 60, 30));
+            target.fillRect(x, y, (int) (w * Math.max(0, Math.min(1, t))), h,
+                    t >= 1 ? new Color(150, 230, 150) : new Color(240, 200, 90));
             y += h + 22;
         }
     }
 
     /** "[E] Enter …" prompt while standing at a door in play-test. */
-    private void drawDoorHint(Graphics2D g) {
+    private void drawDoorHint(DrawTarget target) {
         double half = profile().playerSize / 2.0;
         Level.EntitySpawn door = level.doorNear(testMe.x + half, testMe.y + half,
                 level.tileSize * 1.3);
@@ -7040,13 +6974,10 @@ public class CreativeScene extends AbstractScene {
         String text = link == null ? "[E] Door (unlinked)"
                 : link.targetLevel().isEmpty() ? "[E] " + link.label() + " (no target)"
                 : "[E] Enter " + link.label();
-        g.setFont(HUD_FONT);
-        int tw = g.getFontMetrics().stringWidth(text);
+        int tw = target.textWidth(text, HUD_FONT);
         int x = (viewportWidth - tw) / 2, y = viewportHeight - 88;
-        g.setColor(new Color(0, 0, 0, 170));
-        g.fillRoundRect(x - 10, y - 16, tw + 20, 24, 8, 8);
-        g.setColor(new Color(255, 230, 160));
-        g.drawString(text, x, y);
+        target.fillRoundRect(x - 10, y - 16, tw + 20, 24, 8, 8, new Color(0, 0, 0, 170));
+        target.drawText(text, x, y, HUD_FONT, new Color(255, 230, 160));
     }
 
     // Inventory panel geometry (mirrors the play scene's).
@@ -7084,36 +7015,32 @@ public class CreativeScene extends AbstractScene {
                 && sy >= o[1] - 52 && sy <= o[1] + gh + 32;
     }
 
-    private void drawTestInventory(Graphics2D g) {
+    private void drawTestInventory(DrawTarget target) {
         int[] o = inventoryOrigin();
         int x0 = o[0], y0 = o[1];
         int gw = Inventory.COLS * (INV_SLOT + INV_PAD) - INV_PAD;
         int gh = Inventory.ROWS * (INV_SLOT + INV_PAD) - INV_PAD;
 
-        g.setColor(new Color(10, 10, 16, 220));
-        g.fillRoundRect(x0 - 20, y0 - 52, gw + 40, gh + 84, 14, 14);
-        g.setColor(Color.WHITE);
-        g.setFont(new Font("SansSerif", Font.BOLD, 16));
-        g.drawString("Inventory (play-test)", x0, y0 - 24);
-        g.setFont(SMALL_FONT);
-        g.setColor(new Color(170, 170, 190));
-        g.drawString(containerPanel != null
+        target.fillRoundRect(x0 - 20, y0 - 52, gw + 40, gh + 84, 14, 14,
+                new Color(10, 10, 16, 220));
+        target.drawText("Inventory (play-test)", x0, y0 - 24, SANS_BOLD_16, Color.WHITE);
+        target.drawText(containerPanel != null
                 ? "Click to pick up / place stacks · [Q] stash · [E]/[Esc] close"
                 : "Click to pick up / place stacks · click outside to drop"
-                + " · [Q] drop one · [F] eat · [I]/[Esc] close", x0, y0 - 8);
+                        + " · [Q] drop one · [F] eat · [I]/[Esc] close",
+                x0, y0 - 8, SMALL_FONT, new Color(170, 170, 190));
 
         for (int i = 0; i < Inventory.SIZE; i++) {
             int cx = x0 + (i % Inventory.COLS) * (INV_SLOT + INV_PAD);
             int cy = y0 + (i / Inventory.COLS) * (INV_SLOT + INV_PAD);
             boolean hotbar = i < Inventory.HOTBAR;
             boolean sel = i == testInv.selectedIndex();
-            g.setColor(new Color(255, 255, 255, hotbar ? 36 : 18));
-            g.fillRoundRect(cx, cy, INV_SLOT, INV_SLOT, 8, 8);
-            g.setColor(sel ? new Color(255, 220, 120) : new Color(255, 255, 255, 60));
-            g.setStroke(new BasicStroke(sel ? 2.5f : 1f));
-            g.drawRoundRect(cx, cy, INV_SLOT, INV_SLOT, 8, 8);
+            target.fillRoundRect(cx, cy, INV_SLOT, INV_SLOT, 8, 8,
+                    new Color(255, 255, 255, hotbar ? 36 : 18));
+            target.drawRoundRect(cx, cy, INV_SLOT, INV_SLOT, 8, 8,
+                    sel ? new Color(255, 220, 120) : new Color(255, 255, 255, 60), sel ? 2.5f : 1f);
             if (i == cursorSlot) continue;
-            drawStack(g, testInv.slot(i), cx, cy, INV_SLOT);
+            drawStack(target, testInv.slot(i), cx, cy, INV_SLOT);
         }
 
         if (cursorSlot >= 0) {
@@ -7121,55 +7048,43 @@ public class CreativeScene extends AbstractScene {
             if (held == null) {
                 cursorSlot = -1;
             } else {
-                drawStack(g, held, mouseX - INV_SLOT / 2, mouseY - INV_SLOT / 2, INV_SLOT);
+                drawStack(target, held, mouseX - INV_SLOT / 2, mouseY - INV_SLOT / 2, INV_SLOT);
             }
         }
     }
 
-    private void drawStack(Graphics2D g, ItemStack stack, int x, int y, int slot) {
+    private void drawStack(DrawTarget target, ItemStack stack, int x, int y, int slot) {
         if (stack == null) return;
         ItemDef def = testWorld.itemTypes.get(stack.key);
         if (def == null) return;
         BufferedImage img = Skins.frame("item/" + def.key(), animClock);
         if (img == null) img = EntitySprites.item(def, 32);
-        g.drawImage(img, x + 6, y + 6, slot - 12, slot - 12, null);
-        // PlayScene's durability bar is ported; this scene is not yet, so it
-        // draws through the frame's own target. Removed when CreativeScene lands.
-        PlayScene.drawDurabilityBar(frameTarget, def, stack, x, y, slot);
+        target.drawImage(img, x + 6, y + 6, slot - 12, slot - 12);
+        PlayScene.drawDurabilityBar(target, def, stack, x, y, slot);
         if (stack.count > 1) {
-            g.setFont(SMALL_FONT);
-            g.setColor(Color.BLACK);
             String n = String.valueOf(stack.count);
-            int tw = g.getFontMetrics().stringWidth(n);
-            g.drawString(n, x + slot - tw - 3, y + slot - 3);
-            g.setColor(Color.WHITE);
-            g.drawString(n, x + slot - tw - 4, y + slot - 4);
+            int tw = target.textWidth(n, SMALL_FONT);
+            target.drawText(n, x + slot - tw - 3, y + slot - 3, SMALL_FONT, Color.BLACK);
+            target.drawText(n, x + slot - tw - 4, y + slot - 4, SMALL_FONT, Color.WHITE);
         }
     }
 
-    private void drawStatus(Graphics2D g) {
+    private void drawStatus(DrawTarget target) {
         if (statusTime <= 0 || status.isEmpty()) return;
-        g.setFont(HUD_FONT);
-        int tw = g.getFontMetrics().stringWidth(status);
+        int tw = target.textWidth(status, HUD_FONT);
         int x = (viewportWidth + (testing ? 0 : SIDEBAR_W) - tw) / 2;
         int y = viewportHeight - 18;
-        g.setColor(new Color(0, 0, 0, 170));
-        g.fillRoundRect(x - 10, y - 16, tw + 20, 24, 8, 8);
-        g.setColor(new Color(235, 235, 245));
-        g.drawString(status, x, y);
+        target.fillRoundRect(x - 10, y - 16, tw + 20, 24, 8, 8, new Color(0, 0, 0, 170));
+        target.drawText(status, x, y, HUD_FONT, new Color(235, 235, 245));
     }
 
-    private void drawDialog(Graphics2D g) {
-        Composite old = g.getComposite();
-        g.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.75f));
-        g.setColor(new Color(8, 8, 14));
-        g.fillRect(0, 0, viewportWidth, viewportHeight);
-        g.setComposite(old);
-        dialogForm.render(frameTarget, viewportWidth, viewportHeight);
-        g.setColor(new Color(130, 130, 150));
-        g.setFont(SMALL_FONT);
-        g.drawString("Enter activates · Esc cancels · type to edit text fields",
-                24, viewportHeight - 16);
+    private void drawDialog(DrawTarget target) {
+        target.pushAlpha(0.75f);
+        target.fillRect(0, 0, viewportWidth, viewportHeight, new Color(8, 8, 14));
+        target.popAlpha();
+        dialogForm.render(target, viewportWidth, viewportHeight);
+        target.drawText("Enter activates · Esc cancels · type to edit text fields", 24,
+                viewportHeight - 16, SMALL_FONT, new Color(130, 130, 150));
     }
 
     private void setStatus(String msg) {
