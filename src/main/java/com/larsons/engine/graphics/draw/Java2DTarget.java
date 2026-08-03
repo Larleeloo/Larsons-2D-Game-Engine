@@ -1,5 +1,6 @@
 package com.larsons.engine.graphics.draw;
 
+import com.larsons.engine.graphics.atlas.GlyphAtlas;
 import com.larsons.engine.graphics.atlas.SpriteAtlas;
 
 import java.awt.AlphaComposite;
@@ -15,6 +16,8 @@ import java.awt.RadialGradientPaint;
 import java.awt.Rectangle;
 import java.awt.Shape;
 import java.awt.Stroke;
+import java.awt.font.FontRenderContext;
+import java.awt.font.GlyphVector;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Point2D;
 import java.awt.image.BufferedImage;
@@ -68,10 +71,22 @@ public final class Java2DTarget implements DrawTarget {
     private float strokeWidth = -1;
     private Stroke stroke;
 
+    // Glyph-atlas state. The scale is the destination's, tracked rather than
+    // asked for per draw; the rest is a one-entry memo and two scratch buffers,
+    // so a text run costs no allocation once its style has been seen.
+    private double deviceScale;
+    private Font glyphsFont;
+    private int glyphsArgb;
+    private FontRenderContext glyphsContext;
+    private GlyphAtlas.Glyphs glyphs;
+    private GlyphAtlas.Cell[] cells;
+    private int[] advances;
+
     public Java2DTarget(Graphics2D g, int width, int height) {
         this.g = g;
         this.width = width;
         this.height = height;
+        refreshDeviceScale();
     }
 
     /**
@@ -345,13 +360,211 @@ public final class Java2DTarget implements DrawTarget {
 
     // --- text ------------------------------------------------------------------
 
+    /**
+     * Draw a run of text, keyed for batching by the atlas page its glyphs are
+     * packed into.
+     *
+     * <p><b>Packed, and — on this backend — still drawn by the font system.</b>
+     * B6 set out to replace {@code drawString} with quads from a glyph atlas
+     * and measuring it said not to, for a reason worth stating plainly: Java2D
+     * already has a glyph atlas. It is the font system's glyph cache, and
+     * {@code drawString} rasterises a whole run out of it in one dispatch,
+     * where a per-character blit pays the general image pipeline's setup every
+     * character — ~300 ns a glyph against ~83 ns, whichever way the cells are
+     * arranged. So the packing is kept, because that is what a GL backend
+     * needs and what makes an icon and the label beside it one texture bind,
+     * and the drawing stays where it is fastest. {@code -Dlarsons.render.glyphblit=true}
+     * takes the other path; {@code GlyphAtlas} carries the numbers.
+     *
+     * <p><b>The key is a claim, and it is a checked one.</b> Recording the page
+     * says a batching backend would keep one texture bound across this run and
+     * the sprites either side of it. That is the same statement B5's
+     * {@code drawRegion} makes and it is true for the same reason — but here
+     * the cells are not merely packed, they are proved drawable: with blitting
+     * on, {@code GlyphAtlasTest} renders every printable ASCII character in six
+     * fonts through both paths and demands exactly 0.00 error, coloured,
+     * translucent and on a 2× destination.
+     *
+     * <p>One operation is recorded, not one per character. A run is one quad
+     * per glyph in a GL backend and they all land in the same batch, so
+     * counting them individually would inflate {@code operations()} without
+     * changing {@code batches()} and quietly improve every merge ratio in the
+     * table B3 and B5 published. The number has to keep meaning what it meant.
+     */
     @Override
     public void drawText(String text, int x, int y, Font font, int argb) {
         if (text == null || text.isEmpty()) return;
-        stats.record(DrawStats.Kind.TEXT, font);
+        BufferedImage page = font == null || !GlyphAtlas.routing()
+                ? null : resolveRun(text, font, argb);
+        stats.record(DrawStats.Kind.TEXT, page != null ? page : font);
+
+        if (page != null && GlyphAtlas.blitting() && deviceScale > 0
+                && blitRun(text, x, y, font, page)) {
+            return;
+        }
         g.setFont(font);
         g.setColor(new Color(argb, true));
         g.drawString(text, x, y);
+    }
+
+    /**
+     * Pack every glyph of {@code text} and return the page they share, or
+     * {@code null} if they do not share one — a character the atlas will not
+     * serve, a run split across two pages, or a run with no ink in it at all.
+     * Fills {@link #cells} as a side effect, for the blitting path.
+     */
+    private BufferedImage resolveRun(String text, Font font, int argb) {
+        int n = text.length();
+        GlyphAtlas.Glyphs glyphs = glyphsFor(font, argb);
+        GlyphAtlas.Cell[] run = cellScratch(n);
+        BufferedImage page = null;
+        for (int i = 0; i < n; i++) {
+            GlyphAtlas.Cell cell = glyphs.cell(text.charAt(i));
+            if (cell == null) return null;
+            run[i] = cell;
+            if (cell.blank()) continue;
+            BufferedImage image = cell.region().image();
+            if (page == null) page = image;
+            else if (page != image) return null;   // two pages is two binds
+        }
+        return page;
+    }
+
+    /** Blit the resolved run, or refuse it and leave the caller to draw it. */
+    private boolean blitRun(String text, int x, int y, Font font, BufferedImage page) {
+        return deviceScale == 1
+                ? blitRunUnscaled(text, x, y, font, cells, page)
+                : blitScaledRun(text, x, y, font, cells, page);
+    }
+
+    /**
+     * An untransformed destination — the common case, and the one where a
+     * glyph's device position is its user-space position and the advances are
+     * the integers {@link FontMetrics} already reports.
+     */
+    private boolean blitRunUnscaled(String text, int x, int y, Font font,
+                                    GlyphAtlas.Cell[] cells, BufferedImage page) {
+        int n = text.length();
+        FontMetrics fm = metrics(font);
+        int[] advances = advanceScratch(n);
+        int sum = 0;
+        for (int i = 0; i < n; i++) {
+            advances[i] = fm.charWidth(text.charAt(i));
+            sum += advances[i];
+        }
+        // The one property the placement rests on. If the glyphs do not add up
+        // to the run, this font does not lay out one character at a time here.
+        if (sum != fm.stringWidth(text)) return false;
+
+        int pen = x;
+        for (int i = 0; i < n; i++) {
+            blitCell(cells[i], page, pen, y);
+            pen += advances[i];
+        }
+        return true;
+    }
+
+    /**
+     * A destination under a whole-number scale — a HiDPI panel reached through
+     * {@code -Dlarsons.render.direct}, which is the only way the engine's frame
+     * graphics ever carries one.
+     *
+     * <p>Positions come from a {@link GlyphVector} laid out in the
+     * destination's own context and are rounded into device pixels, because
+     * that is where {@code drawString} puts them; the blit then happens with
+     * the transform temporarily set aside so the integer device rectangle is
+     * not re-scaled on its way to the surface. The cells are already device
+     * resolution, so the text is as sharp as the panel, which is the whole
+     * reason to handle this case rather than fall back and let it blur.
+     */
+    private boolean blitScaledRun(String text, int x, int y, Font font,
+                                  GlyphAtlas.Cell[] cells, BufferedImage page) {
+        GlyphVector gv = font.createGlyphVector(g.getFontRenderContext(), text);
+        AffineTransform user = g.getTransform();
+        int originX = (int) Math.round(user.getTranslateX() + x * deviceScale);
+        int originY = (int) Math.round(user.getTranslateY() + y * deviceScale);
+
+        g.setTransform(new AffineTransform());
+        try {
+            for (int i = 0; i < text.length(); i++) {
+                Point2D at = gv.getGlyphPosition(i);
+                blitCell(cells[i], page,
+                        originX + (int) Math.round(at.getX() * deviceScale),
+                        originY + (int) Math.round(at.getY() * deviceScale));
+            }
+        } finally {
+            g.setTransform(user);
+        }
+        return true;
+    }
+
+    /** One glyph, blitted out of its page at the pen position it belongs to. */
+    private void blitCell(GlyphAtlas.Cell cell, BufferedImage page, int penX, int penY) {
+        if (cell.blank()) return;
+        SpriteAtlas.Region region = cell.region();
+        int dx = penX + cell.offsetX();
+        int dy = penY + cell.offsetY();
+        g.drawImage(page, dx, dy, dx + region.width(), dy + region.height(),
+                region.x(), region.y(),
+                region.x() + region.width(), region.y() + region.height(), null);
+    }
+
+    /**
+     * The atlas's cells for this style, memoised for the run that follows it.
+     *
+     * <p>Consecutive draws in one style are the common case — a menu is a
+     * column of identical labels — and the memo turns the whole column into
+     * one map lookup. The {@link FontRenderContext} is fetched here rather
+     * than cached because {@code pushTransform} can change it mid-frame, and
+     * a stale context would rasterise at the wrong scale.
+     */
+    private GlyphAtlas.Glyphs glyphsFor(Font font, int argb) {
+        FontRenderContext frc = g.getFontRenderContext();
+        if (glyphs != null && argb == glyphsArgb && font.equals(glyphsFont)
+                && frc.equals(glyphsContext)) {
+            return glyphs;
+        }
+        glyphsFont = font;
+        glyphsArgb = argb;
+        glyphsContext = frc;
+        glyphs = GlyphAtlas.shared().glyphs(font, argb, frc);
+        return glyphs;
+    }
+
+    private GlyphAtlas.Cell[] cellScratch(int length) {
+        if (cells == null || cells.length < length) {
+            cells = new GlyphAtlas.Cell[Math.max(64, length)];
+        }
+        return cells;
+    }
+
+    private int[] advanceScratch(int length) {
+        if (advances == null || advances.length < length) {
+            advances = new int[Math.max(64, length)];
+        }
+        return advances;
+    }
+
+    /**
+     * Whether the destination transform is one glyph cells can be blitted
+     * through, and at what scale — or {@code -1} for one they cannot.
+     *
+     * <p>A cell is a rectangle of pixels placed at an integer device position.
+     * That is exact under a whole-number scale with an integer translation and
+     * nothing else: a rotation or a shear would have to resample every glyph,
+     * a fractional scale would land the run's origin between pixels, and in
+     * both cases {@code drawString} is both correct and the only thing that
+     * is. Recomputed when the transform stack moves rather than per draw,
+     * because text is drawn far more often than it is transformed.
+     */
+    private void refreshDeviceScale() {
+        AffineTransform t = g.getTransform();
+        double sx = t.getScaleX();
+        deviceScale = t.getShearX() == 0 && t.getShearY() == 0
+                && sx > 0 && sx == t.getScaleY() && sx == Math.rint(sx)
+                && t.getTranslateX() == Math.rint(t.getTranslateX())
+                && t.getTranslateY() == Math.rint(t.getTranslateY())
+                ? sx : -1;
     }
 
     @Override
@@ -424,6 +637,7 @@ public final class Java2DTarget implements DrawTarget {
         if (transforms == null) transforms = new ArrayDeque<>();
         transforms.push(g.getTransform());
         if (transform != null) g.transform(transform);
+        refreshDeviceScale();
     }
 
     @Override
@@ -431,6 +645,7 @@ public final class Java2DTarget implements DrawTarget {
         if (transforms == null || transforms.isEmpty()) return;
         stats.record(DrawStats.Kind.STATE, null);
         g.setTransform(transforms.pop());
+        refreshDeviceScale();
     }
 
     /**

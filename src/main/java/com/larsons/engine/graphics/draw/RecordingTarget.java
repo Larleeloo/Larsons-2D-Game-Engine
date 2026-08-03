@@ -1,5 +1,6 @@
 package com.larsons.engine.graphics.draw;
 
+import com.larsons.engine.graphics.atlas.GlyphAtlas;
 import com.larsons.engine.graphics.atlas.SpriteAtlas;
 
 import java.awt.Font;
@@ -324,12 +325,43 @@ public final class RecordingTarget implements DrawTarget {
 
     // --- text ------------------------------------------------------------------
 
+    /**
+     * Record a text run, keyed for batching the way a backend would key it.
+     *
+     * <p><b>Why this asks the glyph atlas anything at all.</b> This class is
+     * the instrument the draw-call table is measured through, and the table's
+     * whole subject is the batch key. A recorder that kept keying text by its
+     * font would report B6 as having changed nothing, which is not a
+     * conservative answer — it is the wrong one, and it would be wrong in the
+     * direction that hides a regression as easily as a win.
+     *
+     * <p>Layout stays faked, deliberately. The metrics this class reports have
+     * never come from a font and must not start: a recorded command stream is
+     * supposed to be the same on every machine, and a real {@code stringWidth}
+     * would make half the sequence assertions in the suite depend on the host's
+     * fonts. Only the key is asked for, and only ever as far as "would these
+     * glyphs come off one page".
+     */
     @Override
     public void drawText(String text, int x, int y, Font font, int argb) {
         if (text == null || text.isEmpty()) return;
-        stats.record(DrawStats.Kind.TEXT, font);
+        Object key = font;
+        if (font != null && GlyphAtlas.routing()) {
+            BufferedImage page = GlyphAtlas.shared().pageFor(text, font, argb, TEXT_CONTEXT);
+            if (page != null) key = page;
+        }
+        stats.record(DrawStats.Kind.TEXT, key);
         commands.add(new Cmd.Text("drawText", text, x, y, font, argb));
     }
+
+    /**
+     * The rendering context the recorder assumes a frame is drawn in:
+     * unscaled, antialiased, integer metrics — which is what
+     * {@code Java2DRenderer} composes into and what every golden frame is
+     * rendered with.
+     */
+    private static final java.awt.font.FontRenderContext TEXT_CONTEXT =
+            new java.awt.font.FontRenderContext(null, true, false);
 
     @Override
     public int textWidth(String text, Font font) {

@@ -34,7 +34,14 @@ public final class DrawStats {
         SHAPE,
         /** Textured geometry; batches only with the same source image. */
         IMAGE,
-        /** Glyph quads; batches only within one font's atlas. */
+        /**
+         * Glyph quads.
+         *
+         * <p>Keyed by the atlas page the run's glyphs were rasterised into
+         * when {@code GlyphAtlas} could serve it, and by the {@link
+         * java.awt.Font} when it could not. That difference is the whole of
+         * B6: see {@link #textured}.
+         */
         TEXT,
         /**
          * A gradient fill — its own kind because it never merges with
@@ -51,7 +58,30 @@ public final class DrawStats {
          */
         GRADIENT,
         /** Clip, alpha or transform changes — always break a batch. */
-        STATE
+        STATE;
+
+        /**
+         * Whether this kind draws from a texture, and so can share a batch
+         * with any other textured kind that names the same one.
+         *
+         * <p><b>Why {@link #IMAGE} and {@link #TEXT} are one family.</b> They
+         * were separate kinds because they were separate textures: a sprite
+         * came from its own image and a glyph run came from its font's
+         * rasteriser, and no backend could keep both bound at once. B6 makes
+         * that false by rasterising glyphs into the same {@code SpriteAtlas}
+         * pages the sprites are packed into, so an icon-then-label row really
+         * is one bind and one draw call.
+         *
+         * <p>Which is exactly why the key, not the kind, decides. A text run
+         * the glyph atlas could not serve is still keyed by its font, and a
+         * font is not a page, so it merges with nothing — the instrument
+         * credits the step only where the step actually applies. B5's
+         * correction is the reason to be careful here: the plan predicted a
+         * win in two frames and measured none, and the only defence against
+         * repeating that is a counter that cannot report a merge the backend
+         * would not get.
+         */
+        boolean textured() { return this == IMAGE || this == TEXT; }
     }
 
     private int operations;
@@ -85,11 +115,17 @@ public final class DrawStats {
             lastKey = null;
             return;
         }
-        if (kind != lastKind || !java.util.Objects.equals(key, lastKey)) {
+        // Two textured operations naming the same texture continue the batch
+        // whichever kinds they are — that is what a shared atlas page buys.
+        // Everything else needs the same kind as well.
+        boolean sameBatch = java.util.Objects.equals(key, lastKey)
+                && (kind == lastKind
+                    || (key != null && kind.textured() && lastKind != null && lastKind.textured()));
+        if (!sameBatch) {
             batches++;
-            lastKind = kind;
-            lastKey = key;
         }
+        lastKind = kind;
+        lastKey = key;
     }
 
     /** Convenience for operations with no batching key of their own. */
