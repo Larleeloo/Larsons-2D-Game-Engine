@@ -408,6 +408,13 @@ public final class TerrainCache {
         } finally {
             g.dispose();
         }
+        // Say so, for any backend holding a copy of these pixels rather than
+        // the pixels themselves. Java2D blits from the image and sees the
+        // rebuild for free; a GPU backend uploaded it once and would go on
+        // drawing the chunk this one replaced — which is what it did, and what
+        // the GL parity comparison caught on `scene-play`. Cheap here: this
+        // path has just re-rendered a chunk.
+        com.larsons.engine.graphics.draw.ImageRevision.changed(image);
         // Where this image belongs relative to the frame's single camera
         // rounding: its lattice position, shifted by the margin it was drawn
         // with.

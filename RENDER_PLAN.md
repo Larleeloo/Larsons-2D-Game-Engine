@@ -1,10 +1,15 @@
 # Render Plan — GPU Acceleration, End to End
 
 **Status:** Living document. Written 2026-08-02 against commit `85196b9` on
-`claude/gpu-acceleration-shaders-oqbx54`. B0–B6 are done and recorded in place;
-B7 is the next step. B6 measured one of its own instructions to be wrong —
-Java2D already has a glyph cache and beats any per-character blit — so the glyph
-atlas ships packed but not blitted; see the finding inside B6.
+`claude/gpu-acceleration-shaders-oqbx54`. B0–B8 are done and recorded in place;
+B9 is the next step. **The GL backend exists and draws the same picture** — all
+32 golden frames within the 3.58 bar, worst 2.59, and 3,356 operations
+collapsing into 68 draw calls. Two of the plan's own instructions have now been
+measured to be incomplete rather than wrong-headed: B6's "route `drawText`
+through it" (Java2D already has a glyph cache and beats any per-character blit)
+and B8's "against a 1×1 white texture" (which shares a shader but not a batch —
+the white texel has to be *on the atlas page*). Both findings are recorded
+inside their steps.
 **Companion to:** [`STEAM_PLAN.md`](STEAM_PLAN.md), which covers the product.
 This one covers the renderer, and is the plan of record for Jobs A, B and C.
 
@@ -76,6 +81,9 @@ Everything in this table has been measured or executed, not assumed.
 | Frames are always composed offscreen | `Java2DRenderer` composes to a backing image unconditionally (`-Dlarsons.render.direct=true` is the escape hatch). Scene stage on Linux fell 1.071 → 0.374 ms from this alone |
 | Static terrain is cached | `TerrainCache` — 7.8× on still ground, parity under churn, one global pixel lattice so the floor does not shake |
 | The frame cost is known per stage | `FrameProfiler` / `FrameReport` — see Appendix C |
+| The core still ships with nothing on its runtime classpath | B7 — `:verifyNoRuntimeDependencies` resolves it and fails the `jar` task on any external artefact; `ModuleBoundaryTest` reads the sources and fails on `org.lwjgl` or `com.larsons.engine.gl` appearing in one. The plain jar has 517 engine entries and 0 LWJGL entries |
+| A GL backend draws the same picture as Java2D | B8 — `GlParityTest` renders all 32 of B0's frames through both and subtracts: worst **2.59 / 255** against a bar of 3.58, six frames at exactly 0.00 |
+| The batching the atlases were built for is real, not modelled | B8 — the catalogue's 3,356 operations become **68** `glDrawArrays` calls, 49.35×, measured on the backend rather than predicted by a counter |
 
 **The honest summary:** Job A's *unknowns* are gone; only its plumbing remains,
 and the plumbing has a working prototype. Job B's migration is done and, as of
@@ -84,7 +92,10 @@ if anything reaches back through it. Sprites batch as of B5: a busy entity phase
 went from 65 draw calls to 34, and every sprite the engine generates sits on one
 texture page. Text batches onto that same page as of B6, which took the
 interleaved icon-and-label frames from 1.09× to 2.57× and the whole catalogue
-from 5.80× to 6.77×. What remains of B is the backend itself (B7–B10).
+from 5.80× to 6.77×. **The backend exists as of B8** and turns those 6.77×
+predicted batches into a measured 49.35× — one draw call for most frames in the
+catalogue — at a worst-case pixel difference of 2.59 out of 255. What remains of
+B is choosing it at startup and proving it on the two target machines (B9, B10).
 
 ---
 
@@ -103,14 +114,14 @@ much faster it makes things.
    the Java2D path working and tested.
 3. **Pixel parity is the contract.** "Looks fine" is not a result. Every port
    step compares rendered output against a reference and states the error.
-4. **The suite stays green.** Last full run: **899 tests, 0 failures, 10 skipped**
-   (was 810/0/3 when this was written; B0–B6 added the rest). The skips are
+4. **The suite stays green.** Last full run: **933 tests, 0 failures, 16 skipped**
+   (was 810/0/3 when this was written; B0–B8 added the rest). The skips are
    environment-dependent and skip rather than fail by design — three need a
-   display, seven need a GL driver. Under `xvfb-run` the same suite is
-   **899/0/3**: the seven GL tests do run on a software driver, and the three
-   that do not are display tests losing a race with the eleven classes that set
-   `java.awt.headless=true` in the shared JVM (see B4). A step ends with that or
-   better.
+   display, thirteen need a GL driver (seven in core, six in `:gl`). Under
+   `xvfb-run` the same suite is **933/0/3**: the GL tests all run on a software
+   driver, and the three that do not are display tests losing a race with the
+   eleven classes that set `java.awt.headless=true` in the shared JVM (see B4).
+   A step ends with that or better.
 5. **Nothing merges that cannot be measured.** If a change is supposed to make
    the frame faster, the profiler says so before it lands. This rule exists
    because it has already caught three things in this work that felt right and
@@ -1343,6 +1354,70 @@ tests from core.
 
 **Done when.** Two artefacts exist, and the plain one has no dependencies.
 
+#### B7 — done
+
+`settings.gradle.kts` includes `gl`; the core stayed at the root, which was the
+recommendation and is not revisited. [`gl/build.gradle.kts`](gl/build.gradle.kts)
+depends on `project(":")` and on LWJGL 3.3.3 as `implementation`, with the
+natives `runtimeOnly`. The core keeps LWJGL as `testImplementation` only, so
+`ShaderCompileTest` and `ShaderParityTest` still run from core whether or not
+`:gl` is built.
+
+**The `lwjglNatives` detection moved rather than being copied.** The step says
+to reuse the one already written in the root build, and the only way to reuse a
+`val` in a Kotlin build script across two projects is to stop it being a `val`:
+it is now [`gradle/lwjgl-natives.gradle.kts`](gradle/lwjgl-natives.gradle.kts),
+applied by both, holding the classifier and the LWJGL version. Two copies of one
+`when` would sit side by side looking identical until one of them learned about
+a platform the other did not, and the failure that produces — a jar that runs
+everywhere except the machine whose natives came from the stale copy — is silent
+until somebody launches it.
+
+**Two artefacts, from two projects, neither derived from the other.**
+
+| | task | contents | size |
+|---|------|----------|-----:|
+| plain | `./gradlew jar` | 517 engine classes and resources, **0 LWJGL entries** | 1.5 MB |
+| GL | `./gradlew :gl:glDist` | the same, plus `:gl`, LWJGL and this OS's natives | 3.7 MB |
+
+`tasks.jar` is byte-for-byte the task it was; `glDist` is a separate `Jar` in
+`:gl`. That arrangement matters more than packaging convenience: the plain jar
+is not the GL one with pieces removed, so there is no build path along which a
+GL dependency arrives in it by omission.
+
+**And the zero-dependency claim is checked twice, from both sides.**
+
+- `:verifyNoRuntimeDependencies` resolves the core's `runtimeClasspath` and
+  fails if anything on it came from outside this build. `jar` depends on it, so
+  the shipping artefact cannot be produced without the claim being checked, and
+  `check` depends on it, so a plain `./gradlew build` fails rather than a
+  release-day packaging step.
+- [`ModuleBoundaryTest`](src/test/java/com/larsons/engine/render/ModuleBoundaryTest.java)
+  reads the files: no runtime-scoped declaration in the root build, no core
+  source naming `org.lwjgl`, and — the one a compiler would not catch —
+  **no core source naming `com.larsons.engine.gl`**. That import compiles
+  perfectly well; it just does not exist for a player holding the plain jar. It
+  carries a negative control, in the same spirit as `SealedSeamTest`'s.
+
+The build check sees what resolves and the test sees what is written, and
+neither covers the other's blind spot. This is the same two-sided arrangement
+B4 used on the Java2D seam, for the same reason: one of them alone has a gap
+somebody will eventually walk through.
+
+Both halves were watched failing before being believed. `ModuleBoundaryTest`
+carries its negative control in the suite; the build check was verified by hand,
+by adding `implementation("org.lwjgl:lwjgl:3.3.3")` to the root build and
+confirming that `./gradlew jar` stops with *"the core is supposed to ship with
+zero runtime dependencies, and its runtime classpath now carries 1"* rather than
+producing a jar.
+
+**`runGl` exists and is honest about what it currently is.** It mirrors
+`runProfiled` — same flags, same report format, same instrument — and sets
+`-Dlarsons.render.backend=gl`. Nothing reads that property yet, because reading
+it is B9. So today the task is the GL classpath and nothing more: it launches,
+and it launches Java2D. Written now so B8 had somewhere to be run from and so
+B9 changes one file instead of two.
+
 ---
 
 ### B8 — `GlTarget`: the GL implementation of `DrawTarget`
@@ -1404,6 +1479,263 @@ precedent, where 3.58/255 was accepted as "the same picture" for bloom.
 
 **Done when.** Every golden scene renders on GL within the stated error, and
 `DrawStats` shows a merge ratio well above the Java2D baseline.
+
+#### B8 — done
+
+Eight classes in [`gl/src/main/java/com/larsons/engine/gl`](gl/src/main/java/com/larsons/engine/gl):
+`GlContext` (lifted from `GlShaderHarness`, VAO requirement and all),
+`GlProgram`, `GlBatch`, `GlTextures`, `GlPaths`, `GlSurface`, `GlTarget`,
+`GlRenderer`. **All 32 golden frames render on GL within the bar, and the whole
+catalogue's 3,356 operations collapse into 68 draw calls.**
+
+| | Java2D | GL |
+|---|-------:|---:|
+| draw calls, all 32 frames | 3,356 | **68** |
+| operations per draw call | 1.00× | **49.35×** |
+| worst frame, mean channel error | — | **2.59 / 255** |
+
+The bar is **3.58**, taken from `ShaderParityTest`, where `bloom` was accepted
+as "the same picture" on this same metric. Nothing was tuned to reach it: the
+number was fixed before the first frame was compared, and two frames failed
+against it and were fixed rather than argued with.
+
+#### The numbers, per frame
+
+Written by [`GlParityTest`](gl/src/test/java/com/larsons/engine/gl/GlParityTest.java)
+to `build/reports/gl-parity.md` on every build, driver string included. The
+reference and the GL render come from **one catalogue** — B0's, shared into
+`:gl` as a published test artefact rather than reimplemented — in one process,
+from the same fixed inputs. `theTwoRenderersAgreeWithTheGoldenCatalogue` holds
+the local reference at exactly 0.00 against `GoldenFrames.render`, because a
+comparison whose two sides can drift together is not a comparison.
+
+| frame | error | ops | `DrawStats` predicts | GL draws |
+|-------|------:|----:|---------------------:|---------:|
+| `world-crowd` | 2.09 | 374 | 34 | **1** |
+| `sprite-editor` | 2.12 | 1544 | 82 | **13** |
+| `scene-board-customize` | 2.59 | 161 | 23 | **3** |
+| `scene-skin-editor` | 2.39 | 26 | 19 | **1** |
+| `world-side-scroll` | 1.03 | 145 | 4 | **1** |
+| `world-isometric` | 0.55 | 153 | 4 | **4** |
+| `crafting-panel` | 1.45 | 36 | 14 | **1** |
+| `profile-overlay` | 0.88 | 28 | 16 | **1** |
+| `scene-play` | 0.27 | 37 | 22 | **6** |
+| `particles` | 0.00 | 62 | 1 | **1** |
+| `main-menu`, `parallax-background`, `scene-startup`, `scene-main-menu`, `scene-level-select`, `scene-evolution-lobby` | **0.00** | | | |
+| *all 32 frames* | **2.59 max** | 3356 | 488 | **68** |
+
+Six frames are *exactly* zero, which is worth stating plainly because the step
+predicted it would not happen: those frames draw only rectangles, images and
+text at integer coordinates, and on that content the two rasterisers do not
+merely agree closely, they agree bit for bit. The error that does exist is
+antialiasing along curves and diagonals — ovals, arcs, isometric diamonds,
+rounded corners — which is why the worst rows are the frames with the most
+curvature in them and not the busiest ones.
+
+#### The instruction that was incomplete: "against a 1×1 white texture"
+
+The step says flat shapes should become "two triangles against a 1×1 white
+texture, so shapes and sprites share one shader and one batch". **They share the
+shader. They do not share the batch**, and the difference is the whole of what
+this bullet was for: a standalone 1×1 white texture is still a different texture
+from the atlas page, and binding it is still a flush. A rectangle between two
+labels costs exactly what it cost before.
+
+That was built first, and measured, and it is why the paragraph below is not a
+guess:
+
+| frame B6 named | batches before B8 | GL draws, 1×1 white texture | GL draws, white texel **on the page** |
+|----------------|------------------:|----------------------------:|--------------------------------------:|
+| `profile-overlay` | 16 | 16 | **1** |
+| `minigame-hud` | 8 | 8 | **1** |
+| `scene-auto-battler-lobby` | 17 | 17 | **1** |
+| `scene-play` | 22 | 22 | **6** |
+| `scene-board-customize` | 23 | 20 | **3** |
+| *all 32 frames* | 488 | 454 | **68** |
+
+The fix is four pixels of a 2,048-pixel page: `GlTarget` registers an opaque
+white square into `SpriteAtlas` under the key `gl.white` and every flat shape
+samples its centre texel. Shapes, sprites and glyphs then name one texture, and
+label-box-label-box is one draw. The catalogue went from 454 draw calls to 68 on
+that change alone, with **every frame's error unchanged** — it is a batching
+change and it moved no pixels, which is the property that makes it safe.
+
+**So B6's prediction is upheld, and it was upheld by the second implementation
+rather than the first.** The plan said to judge it sceptically because B3 and B5
+each made a prediction of this shape and each was wrong. The scepticism was
+warranted for a reason neither of them had: the prediction was right about
+*which* frames and right about *why*, and the instruction written to deliver it
+would not have delivered it. Had the 1×1 version shipped, the five named frames
+would have sat at their old batch counts and the honest conclusion would have
+been a fourth failed prediction.
+
+#### Two bugs the comparison caught that nothing else would have
+
+Both drew entirely plausible pictures. Neither is visible in a screenshot unless
+you already know what the frame is supposed to look like — which is what the
+golden catalogue is, and why B0 was done before anything was touched.
+
+**1. An upload binds, and the batch was still holding triangles.**
+`GlTextures` uploaded on texture unit 0 — the unit the shader samples — so
+uploading a new image replaced the texture the *pending* triangles were about to
+be flushed against, and they came out wearing it. `parallax-background`
+rendered its third layer with the fourth layer's silhouette: a perfectly
+reasonable backdrop, wrong by one bind, invisible on every frame whose textures
+were already resident. **4.64 → 0.00.** Uploads now happen on a unit the shader
+never looks at, so the interference is impossible rather than unlikely, and
+`uploadingATextureDoesNotRepaintWhatIsAlreadyInTheBatch` pins it at the
+operation that causes it rather than at a whole-frame mean.
+
+**2. Two places in the engine repaint an image in place, and a texture is a
+copy.** `SpriteAtlas` packs a page lazily; `TerrainCache` rebuilds a chunk into
+the image it already has, deliberately, because at a third of a megabyte per
+chunk allocating a fresh one made the cache a garbage generator. Java2D blits
+from the `BufferedImage` and sees every write. GL uploaded once and went on
+drawing the terrain from a level three frames earlier — `scene-play` at **14.67**
+against a bar of 3.58, and the picture it drew was a completely convincing
+screenshot of the wrong place.
+
+The fix is in the core, because the announcement has to come from whoever did
+the writing:
+[`ImageRevision`](src/main/java/com/larsons/engine/graphics/draw/ImageRevision.java)
+counts repaints per image, weakly keyed by identity so a discarded chunk is not
+pinned for the life of the process. `SpriteAtlas.blit` and `TerrainCache.build`
+call `changed()`; `GlTextures` re-uploads when the count moves. It is free on
+the draw path: a global epoch says whether *anything anywhere* was repainted, so
+on the overwhelming majority of frames the per-image lookup is skipped on one
+int compare. **14.67 → 0.27.**
+
+The first version of that check watched atlas pages only, on the reasoning that
+loose images are baked once and never touched again. That reasoning was written
+down, was wrong, and would have stayed wrong until a player noticed the terrain
+was stale — the failure mode being "the game looks fine and shows you somewhere
+else".
+
+#### Where the design departed from the step, and why
+
+- **Curves come from `java.awt.geom`, not from a circle formula.** The step asks
+  for a triangle fan "with a segment count scaled by on-screen radius".
+  Flattening `Ellipse2D`, `Arc2D` and `RoundRectangle2D` through a
+  `PathIterator` at a quarter-pixel tolerance does that and does it better: the
+  count comes from a bound on the actual error rather than from a proxy for it,
+  and the vertices are the ones Java2D would have rasterised — so the only
+  difference left on a curve is antialiasing. A hand-rolled circle would have
+  introduced a second difference, and the two would be indistinguishable in the
+  metric.
+- **Outlines are stroked, not `createStrokedShape`d.** Java2D will hand back the
+  exact outline as a `Shape`, which would be shorter and geometrically perfect —
+  and an annulus, which is not convex, so all 82 rounded-rectangle outlines in
+  the UI would take the stencil path and flush the batch. `GlPaths.stroke`
+  emits a mitred strip whose adjacent quads *share* their corner vertices, which
+  is not tidiness: an outline drawn as independently-offset quads overlaps
+  itself at every corner, and at anything under full alpha those corners come
+  out darker than the line. That is a bug which is invisible in the opaque case
+  and appears the day somebody fades a border out, so
+  `strokeTrianglesDoNotOverlapEachOther` asserts total emitted area equals the
+  ring's area, at three widths.
+- **`fillShape` is stencil-then-cover with an even-odd rule, and non-zero paths
+  are normalised through `Area` first.** The plan suggests `PathIterator` plus
+  ear-clipping. Ear-clipping does not handle holes, and the one non-zero path
+  this engine fills is the terrain shadow union, where the entire point is that
+  overlapping shadows fill *once* instead of stacking — fed to an even-odd
+  rasteriser it would punch a hole through every overlap, which is the exact
+  opposite of what the call site exists for. Stencil parity in one isolated bit
+  handles holes, concavity and self-intersection; `Area` makes even-odd lossless
+  for the one caller that needs it. Correctness beats speed here, as the step
+  says, and it costs one `Area` construction a frame.
+- **A `pushClip` rectangle under a rotation becomes a shape clip.** Java2D would
+  clip to the transformed parallelogram; `glScissor` cannot. Approximating it by
+  the bounding box would let a scene draw slightly outside where it should,
+  which reads as a painter bug for as long as it takes to find.
+
+#### What `DrawStats` under-predicts, and why that is the right way round
+
+`DrawStats` said 488 batches. The backend issued 68. The instrument that guided
+B5 and B6 is **conservative by a factor of seven**, in two specific ways:
+
+- It breaks a batch on every `STATE` operation. GL does not: alpha multiplies
+  into the vertex colour and the transform is applied on the CPU as vertices are
+  appended, so neither flushes anything. The entity phase pushes and pops both
+  around every sprite, which is why `world-crowd` reads 34 and draws 1.
+- It cannot merge `SHAPE` with a textured kind, because until this step no
+  backend could. With the white texel on the page, GL can.
+
+Both are worth leaving as they are. An instrument that flattered the change it
+was measuring would have been useless for the decision B5 and B6 actually had to
+make — "is the art arranged so a backend *could* batch it" — and the number it
+reported was never a prediction of draw calls. The row that matters is now
+measured on the backend rather than modelled: `GL draws` in the table above is
+`glDrawArrays` calls, and Java2D's own draw-call count *is* its operation count,
+so the comparison is a before-and-after and not an estimate of one.
+
+#### Verified
+
+- **All 32 frames within 3.58**, worst 2.59, six at exactly 0.00 — the full
+  table with the driver string in `build/reports/gl-parity.md`, rewritten on
+  every run including failing ones, because a failed comparison is exactly when
+  the numbers are wanted. A frame over the bar also writes reference, GL and an
+  8×-amplified difference as PNGs: a mean says how much and never where, and
+  both bugs above were found by looking at the third image.
+- **The metric has teeth.** `theMetricNoticesAFrameThatIsWrong` shifts a passing
+  frame by eight per channel — far less than a moved widget, and nothing two
+  rasterisers would disagree about — and requires the number to cross the bar. A
+  mean over a 480×320 frame forgives a great deal, and a check nobody has
+  watched fail is not a check.
+- **Both backends count the same operations.**
+  `bothBackendsCountTheSameOperations` compares `DrawStats` from a `Java2DTarget`
+  and a `GlTarget` fed the identical command stream, per frame, and demands
+  equality on operations *and* batches. Without it B10 would be comparing two
+  instruments rather than two renderers, and in the flattering direction — it
+  already caught the harness's own background fill being counted on one side
+  only.
+- **The geometry is checked without a driver.** `GlPathsTest` — 18 tests, no GL,
+  milliseconds, any machine. Flattening honours its tolerance and no more;
+  convexity says yes to every shape the UI fills and no to a 270° pie and an
+  arrowhead; a stroke covers its ring exactly once at three widths; square, butt
+  and round caps each measure what they should; a repeated point does not
+  produce a NaN; a sharp corner bevels instead of spiking; and normalising a
+  non-zero path makes even-odd coverage equal the union. On a machine with no
+  driver the parity test skips and every one of these still runs.
+- **Suite: 933 tests, 0 failures, 3 skipped** under `xvfb-run` (was 899/0/3);
+  **933/0/16** with no display at all, where the six GL parity tests skip rather
+  than fail, as the seven core GL tests already did. The 34 new are 24 in `:gl`
+  and 10 in core (`ModuleBoundaryTest`, `ImageRevisionTest`).
+- **Java2D is untouched by all of this.** Its own goldens are unchanged, and the
+  two core changes B8 required — `ImageRevision` and the two calls to it — add a
+  map increment to two paths that were already doing a full re-render.
+
+#### What is not here, and where it lands
+
+`GlRenderer` exists, implements `Renderer`, and **nothing constructs it**.
+Choosing a backend is B9: probing for a context, falling back to
+`Java2DRenderer` and saying why, honouring `-Dlarsons.render.backend`, and
+reporting the choice in the frame profile. That step also has to decide how a
+GLFW window coexists with the AWT `GameWindow` the engine opens today — two
+windowing systems, and the answer is a decision rather than a detail, which is
+why it is not smuggled in here.
+
+A `ShaderChain` attached to `GlRenderer` is **not run**, and it says so once on
+stderr rather than dropping the passes quietly — a renderer that silently
+ignores post-processing looks exactly like one whose post-processing has no
+effect. Running the CPU chain instead would mean reading the frame back and
+uploading it again, which is the two-transfers-per-frame arrangement §1 rejects
+Job-A-before-Job-B for in the first place. `GlSurface.resolvedTexture()` is
+already there for A1 to render into.
+
+**And one number B10 should go looking for rather than be surprised by: a
+changed image is re-uploaded whole.** Over a full catalogue run the backend
+uploaded 80.7 MB across 81 uploads of 57 textures — most of that being the
+2,048-square atlas page going up again each time a new glyph was packed into it.
+In a real session that settles, because a UI runs out of new glyphs within
+seconds. What does *not* settle is `TerrainCache`: a level with liquids in it
+rebuilds chunks continuously, up to four a frame at about a third of a megabyte
+each, and each rebuild is now a full re-upload of that chunk. That is roughly
+80 MB/s of bus traffic at 60 fps — not obviously fatal, and not obviously fine
+either. The fix if it matters is a dirty rectangle on `ImageRevision` and
+`glTexSubImage2D` instead of `glTexImage2D`. It is deliberately **not** written
+yet, because invariant 5 says nothing merges that cannot be measured, and the
+machine that can measure it is the one B10 runs on rather than a software
+rasteriser in CI.
 
 ---
 
@@ -1772,6 +2104,16 @@ declared finished while broken.
 | **`DrawCallReport`** | What did a batching change actually buy, frame by frame? | `render/DrawCallReport.java`, B5 — writes `build/reports/draw-calls.md` |
 | **`FrameProfiler` / `FrameReport`** | Where does the frame actually go? | `profile/` |
 | **`ShaderParityTest` metric** | Do two implementations of the same effect agree? | `ShaderParityTest`, reused by A2 and B8 |
+| **`GlParityTest`** | Does the GPU backend draw the same picture, and how many draw calls does it really issue? | `gl/…/GlParityTest.java`, B8 — writes `build/reports/gl-parity.md`, and PNGs for any frame over the bar |
+| **`ModuleBoundaryTest` + `:verifyNoRuntimeDependencies`** | Can the core quietly acquire a runtime dependency? | `render/ModuleBoundaryTest.java` and the root build, B7 |
+
+**`DrawStats` and `GlParityTest` answer different questions and B8 measured the
+gap.** `DrawStats` models what a batching backend *could* merge given the draw
+order — which is the question B5 and B6 had to answer about the art, before any
+backend existed. `GlParityTest` counts what one *did*. The model came in
+seven times pessimistic (488 against 68), because it breaks a batch on every
+state change and GL breaks on almost none. Neither number was wrong; they were
+never the same number.
 
 `RecordingTarget` earned its keep through B2 and B3 and is the instrument B5
 will need next: it asserts the *sequence* of commands, which catches a
@@ -1791,9 +2133,9 @@ B3  port 18 scenes, graphicsOf 39 → 0  ← done
 B4  seal the seam (delete graphicsOf, Renderer returns DrawTarget)  ← done
 B5  sprite atlas                       ← done
 B6  glyph atlas                        ← done
-B7  :gl Gradle module                  ← start here
-B8  GlTarget + GlRenderer
-B9  backend selection + fallback
+B7  :gl Gradle module                  ← done
+B8  GlTarget + GlRenderer              ← done (2.59/255 worst, 3356 ops → 68 draws)
+B9  backend selection + fallback       ← start here
 B10 re-profile on both machines, decide
       │
       ├─ A1  scene renders to an FBO
