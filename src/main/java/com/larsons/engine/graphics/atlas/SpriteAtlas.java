@@ -509,6 +509,12 @@ public final class SpriteAtlas {
         } finally {
             g.dispose();
         }
+        // The page's pixels are not what they were. Anything holding a copy of
+        // them — a GL texture, most obviously — has to be told, and this is the
+        // only place they change without the image object changing with them.
+        // Growing does not need the same call: it swaps in a new image, and a
+        // cache keyed on the image misses that by itself.
+        com.larsons.engine.graphics.draw.ImageRevision.changed(region.image());
     }
 
     private static BufferedImage blank(int width, int height) {

@@ -261,6 +261,27 @@ java -jar build/libs/Larsons-2D-Game-Engine-0.1.0.jar
 ./gradlew runServer --args="--port 7777 --level levels/sample_level.json"
 ```
 
+The jar above has **no external dependencies** — that is checked on every build
+rather than intended (`:verifyNoRuntimeDependencies` fails the `jar` task if
+anything lands on the runtime classpath), so Java 21 really is the only
+requirement.
+
+### The GL backend (optional)
+
+The OpenGL scene renderer lives in its own Gradle project, `:gl`, so the engine
+above stays JDK-only. It is built and distributed separately:
+
+```bash
+./gradlew :gl:build    # compile and test the GL backend
+./gradlew :gl:glDist   # gl/build/libs/larsons-engine-gl.jar — engine + GL + LWJGL
+```
+
+The backend draws every scene in the golden catalogue to within 2.59/255 of the
+Java2D renderer and collapses the catalogue's 3,356 drawing operations into 68
+draw calls. **It is not selected automatically yet** — choosing a backend at
+startup, and falling back honestly when there is no driver, is the next step in
+[`RENDER_PLAN.md`](RENDER_PLAN.md) (B9).
+
 ### With just the JDK (no Gradle, no downloads)
 
 ```bash
@@ -3093,20 +3114,26 @@ larger job than it looks: the per-pass GLSL has never been compiled by
 anything, so it is an untested port target rather than ready source
 (see [Appendix A](STEAM_PLAN.md#appendix-a--the-shader-system-precisely)).
 
-- **GPU renderer backend:** an OpenGL (LWJGL) `Renderer` that compiles each
-  `ShaderPass.glsl()` into FBO ping-pong passes — the shader library
-  (including `LightingPass`) needs no changes, by design. Kept out of the
-  core so the engine itself stays JDK-only (requirement #4). GPU *scene*
-  rendering has its draw API — scenes draw through `DrawTarget`, not
-  `Graphics2D` — and what is left is batching and the GL backend.
+- **GPU renderer backend:** GPU *scene* rendering is written and pixel-verified.
+  The `:gl` project holds an OpenGL 3.3 `Renderer` and a `DrawTarget` over
+  batched vertex buffers; every scene in the golden catalogue renders through it
+  within 2.59/255 of Java2D, and the catalogue's 3,356 drawing operations become
+  68 draw calls. It is kept out of the core so the engine itself stays JDK-only
+  (requirement #4) — enforced, not assumed. What remains is **backend selection**
+  (picking GL where it works, falling back to Java2D and saying so where it does
+  not) and re-profiling on real hardware to decide whether it delivered; both are
+  specified in [`RENDER_PLAN.md`](RENDER_PLAN.md) as B9 and B10.
   **Measure before starting.** The
   [frame profiler](#frame-profiler-where-the-time-actually-goes) exists to
   decide this: it reports `scene` and `shaders` separately, and a frame with
-  headroom to spare justifies neither. Note also that ordering matters — once
-  the scene is drawn by GL the finished frame is already a GPU texture, so
-  GPU post-processing follows almost for free, whereas doing post-processing
-  first means building a per-frame upload path that the scene backend then
-  makes redundant.
+  headroom to spare justifies neither.
+- **GPU post-processing:** running each `ShaderPass.glsl()` as real GLSL in an
+  FBO ping-pong — the shader library (including `LightingPass`) needs no
+  changes, by design, and every pass is already compiled and diffed against its
+  CPU twin on a real driver. Deliberately scheduled *after* scene rendering:
+  once the scene is drawn by GL the finished frame is already a GPU texture, so
+  this follows almost for free, whereas doing it first means building a
+  per-frame upload path that the scene backend then makes redundant.
 - **Netcode next steps:** interest management for large worlds, lag
   compensation for hit detection.
 - **Deeper ports from the Side-Scroller engine:** alchemy/crafting recipes,
