@@ -56,6 +56,45 @@ final class GlProgram implements AutoCloseable {
             }
             """;
 
+    /**
+     * How far past a texel boundary a sample is nudged before the texel is
+     * chosen, in texels. See {@link #FRAGMENT}.
+     *
+     * <p>Four orders of magnitude above the interpolator's error and three
+     * below anything that could change which texel a sample not already on a
+     * boundary belongs to. There is a wide range of values that work and this
+     * is the middle of it; the number is not delicate.
+     */
+    private static final String TEXEL_BIAS = "0.001";
+
+    /**
+     * <b>The texel is chosen here rather than left to {@code GL_NEAREST}, and
+     * that is what stopped the sprites sparkling.</b>
+     *
+     * <p>A block is 16 texels of pixel art drawn 54.4 logical pixels wide at
+     * {@code zoom = 1.7} — the sizes a player actually plays at, since zoom is a
+     * {@code double} driven by a held key. At that ratio some texel boundaries
+     * land <em>exactly</em> on a device pixel centre, and {@code floor(uv *
+     * textureSize)} then decides that pixel from the last bits of a coordinate
+     * the rasteriser interpolated across the quad. Those bits change when the
+     * quad moves, even by a whole pixel, so the inside of every sprite fizzes as
+     * the camera pans while its edges sit perfectly still.
+     *
+     * <p>Measured, at 2× over a wall of tiles crept a quarter-pixel at a time:
+     * Java2D moved <b>0</b> pixels beyond the camera's own shift and GL moved
+     * <b>28–169</b>, every one of them inside a tile and none within two pixels
+     * of a tile's edge — which is what ruled out the rasteriser, the multisample
+     * resolve and the batch, and left the sampler.
+     *
+     * <p>Java2D does not have this because it maps destination column to source
+     * column with integer arithmetic anchored at the rectangle's own origin, so
+     * translating the rectangle translates the answer exactly. This gets the
+     * same determinism the way a shader can: nudge a fixed fraction of a texel
+     * past the boundary before flooring, then sample that texel's centre.
+     * Sampling the centre rather than the nudged coordinate is the half that
+     * keeps it safe — the value handed to the sampler is always well inside the
+     * texel it names, so no bias can push a sample into an atlas neighbour.
+     */
     private static final String FRAGMENT = """
             #version 330 core
             in vec2 vUV;
@@ -66,9 +105,14 @@ final class GlProgram implements AutoCloseable {
             out vec4 fragColor;
 
             void main() {
-                fragColor = texture(uTexture, vUV) * vColor;
+                // See GlProgram.FRAGMENT's note: the texel is picked with a
+                // fixed nudge off the boundary so a sprite samples the same
+                // way wherever it is standing, then read at its centre.
+                vec2 size = vec2(textureSize(uTexture, 0));
+                vec2 uv = (floor(vUV * size + %s) + 0.5) / size;
+                fragColor = texture(uTexture, uv) * vColor;
             }
-            """;
+            """.formatted(TEXEL_BIAS);
 
     private final int program;
     private final int viewportUniform;

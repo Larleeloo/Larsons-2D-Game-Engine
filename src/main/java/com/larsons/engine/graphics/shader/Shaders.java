@@ -141,8 +141,48 @@ public final class Shaders {
                 + "uniform float uTime;\n"
                 + "uniform float uStrength;\n"
                 + (extraUniforms.isEmpty() ? "" : extraUniforms + "\n")
+                + "\n" + FLIP_Y_GLSL
                 + "\nvoid main() {\n" + body + "}\n";
     }
+
+    /**
+     * Converts between the two coordinate spaces a pass has to live in, and
+     * every pass that measures a position rather than merely samples one must
+     * use it.
+     *
+     * <p><b>{@code vTexCoord} is a texture coordinate, not a screen position,
+     * and the difference is a whole bug.</b> The scene arrives as a GL texture
+     * rendered the right way up, which in GL's numbering puts the <em>top</em>
+     * of the picture at {@code v = 1}. So sampling with {@code vTexCoord} is
+     * correct and reads the pixel this fragment is standing on — while treating
+     * {@code vTexCoord.y} as a screen row reads it upside down. Everything a
+     * pass is handed from outside is in screen space: {@link LightingPass}'
+     * light positions come from {@code Camera.worldToScreen}, and every CPU
+     * {@code apply} indexes its arrays with row 0 at the top.
+     *
+     * <p><b>It shipped as a mirrored lighting pass.</b> Lights were reflected
+     * about the middle of the screen, which is invisible for anything on the
+     * player's own level — the camera keeps the player near that middle — and
+     * grows worse the further the view moves vertically. Reported as glowing
+     * that does not line up with the block it belongs to, and that wanders as
+     * you climb.
+     *
+     * <p><b>Its own inverse</b>, so one function converts in both directions:
+     * screen space in, texture space out, or the other way round. A pass that
+     * computes a position in screen space and then samples with it needs both
+     * ends — see {@code pixelate} and {@code wave}.
+     *
+     * <p>Passes that are symmetric in y need it and are none the worse for
+     * skipping it: {@code vignette} measures {@code length(uv - 0.5)} and
+     * {@code bloom} walks a full ring of offsets, and a mirror leaves both
+     * unchanged. They are left alone rather than decorated, so that the
+     * presence of this call in a shader means something.
+     */
+    public static final String FLIP_Y_GLSL =
+            "// Screen space <-> texture space. GL puts v = 0 at the bottom of the\n"
+            + "// picture; the frame's own coordinates put y = 0 at the top. Its own\n"
+            + "// inverse, so it converts either way.\n"
+            + "vec2 flipY(vec2 uv) { return vec2(uv.x, 1.0 - uv.y); }\n";
 
     static float smoothstep(float e0, float e1, float x) {
         float t = clamp01((x - e0) / (e1 - e0));
@@ -339,7 +379,9 @@ public final class Shaders {
         @Override public String glsl() {
             return fragmentShader("", """
                         vec4 c = texture(uTexture, vTexCoord);
-                        float odd = mod(floor(vTexCoord.y * uResolution.y), 2.0);
+                        // Rows counted from the top, as the CPU twin counts
+                        // them — otherwise the dimmed rows are the other ones.
+                        float odd = mod(floor(flipY(vTexCoord).y * uResolution.y), 2.0);
                         float v = 1.0 - uStrength * 0.35 * odd;
                         fragColor = vec4(c.rgb * v, c.a);
                     """);
@@ -378,9 +420,19 @@ public final class Shaders {
 
         @Override public String glsl() {
             return fragmentShader("uniform float uPixelSize;", """
-                        vec2 ps = vec2(max(uPixelSize, 1.0)) / uResolution;
-                        vec2 uv = (floor(vTexCoord / ps) + 0.5) * ps;
-                        fragColor = texture(uTexture, uv);
+                        // The block grid is anchored at the frame's top-left,
+                        // where the CPU twin anchors it, and the arithmetic is
+                        // done in the texture's own texels so it lands on a
+                        // texel centre at any display scale. A block's centre
+                        // expressed in UV falls exactly on a texel boundary,
+                        // and a boundary flipped to the other end of the axis
+                        // comes back one texel out — which is a whole row of
+                        // the block picked from its neighbour.
+                        vec2 ts = vec2(textureSize(uTexture, 0));
+                        vec2 sp = flipY(vTexCoord) * ts;                  // screen-oriented texels
+                        vec2 bs = vec2(max(uPixelSize, 1.0)) * ts / uResolution;
+                        vec2 pick = floor(sp / bs) * bs + floor(bs * 0.5) + 0.5;
+                        fragColor = texture(uTexture, flipY(pick / ts));
                     """);
         }
 
@@ -406,10 +458,15 @@ public final class Shaders {
 
         @Override public String glsl() {
             return fragmentShader("", """
-                        vec2 off = (vTexCoord - 0.5) * 0.012 * uStrength;
+                        // The split grows outward from the frame's centre, so
+                        // its magnitude is symmetric — but which channel goes
+                        // which way is not, and the CPU twin decides that from
+                        // a top-down y.
+                        vec2 uv = flipY(vTexCoord);
+                        vec2 off = (uv - 0.5) * 0.012 * uStrength;
                         vec4 c = texture(uTexture, vTexCoord);
-                        float r = texture(uTexture, clamp(vTexCoord + off, 0.0, 1.0)).r;
-                        float b = texture(uTexture, clamp(vTexCoord - off, 0.0, 1.0)).b;
+                        float r = texture(uTexture, flipY(clamp(uv + off, 0.0, 1.0))).r;
+                        float b = texture(uTexture, flipY(clamp(uv - off, 0.0, 1.0))).b;
                         fragColor = vec4(r, c.g, b, c.a);
                     """);
         }
@@ -448,10 +505,12 @@ public final class Shaders {
 
         @Override public String glsl() {
             return fragmentShader("", """
-                        vec2 uv = vTexCoord;
+                        // The wave's phase is measured down the frame, as the
+                        // CPU twin measures it, so the two ripple the same way.
+                        vec2 uv = flipY(vTexCoord);
                         uv.x += sin(uv.y * 24.0 + uTime * 2.2) * 0.006 * uStrength;
                         uv.y += cos(uv.x * 18.0 + uTime * 1.7) * 0.004 * uStrength;
-                        fragColor = texture(uTexture, clamp(uv, 0.0, 1.0));
+                        fragColor = texture(uTexture, flipY(clamp(uv, 0.0, 1.0)));
                     """);
         }
 

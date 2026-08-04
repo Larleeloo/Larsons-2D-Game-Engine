@@ -192,7 +192,12 @@ final class GlShaderHarness implements AutoCloseable {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         IntBuffer buffer = MemoryUtil.memAllocInt(pixels.length);
         try {
-            buffer.put(pixels).flip();
+            // Bottom row first, so the frame's top row lands at v = 1 — where
+            // the GL backend's own scene texture has it. See readBack.
+            for (int row = height - 1; row >= 0; row--) {
+                buffer.put(pixels, row * width, width);
+            }
+            buffer.flip();
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0,
                     GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, buffer);
         } finally {
@@ -211,12 +216,29 @@ final class GlShaderHarness implements AutoCloseable {
         return id;
     }
 
+    /**
+     * The rendered pass, top row first — the way up the caller handed the frame
+     * in, and the way up every raster in this engine is.
+     *
+     * <p><b>Flipped on both sides, and it used to be flipped on neither.</b> Two
+     * unflipped transfers cancel and the pass still measures as agreeing with
+     * its CPU twin — while running against a frame that is upside down relative
+     * to the one the GL backend actually produces. That is not a harmless
+     * convention: a pass which reads {@code vTexCoord.y} as a screen row then
+     * reads it from the wrong end of an inverted frame here, comes out right,
+     * and comes out mirrored in the game. It shipped as a lighting pass that put
+     * every light on the wrong side of the screen. So the upload puts the top
+     * row at {@code v = 1}, where {@code GlTarget} puts it, and this undoes that.
+     */
     private static int[] readBack(int width, int height) {
         IntBuffer buffer = MemoryUtil.memAllocInt(width * height);
         try {
             glReadPixels(0, 0, width, height, GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, buffer);
             int[] out = new int[width * height];
-            buffer.get(out);
+            for (int row = 0; row < height; row++) {
+                buffer.position((height - 1 - row) * width);
+                buffer.get(out, row * width, width);
+            }
             return out;
         } finally {
             MemoryUtil.memFree(buffer);

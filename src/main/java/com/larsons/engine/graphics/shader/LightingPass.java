@@ -197,7 +197,11 @@ public final class LightingPass implements ShaderPass {
                 uniform vec3  uLightPos[%d];   // x, y (pixels), radius (pixels)
                 uniform vec3  uLightColor[%d];""".formatted(n, n), """
                     vec4 c = texture(uTexture, vTexCoord);
-                    vec2 px = vTexCoord * uResolution;
+                    // Screen pixels, top-left origin — the space the scene
+                    // projected these lights into. Sampling uses vTexCoord and
+                    // measuring uses flipY(vTexCoord); see Shaders.FLIP_Y_GLSL
+                    // for the mirrored lighting that came of confusing them.
+                    vec2 px = flipY(vTexCoord) * uResolution;
                     float glow = 0.0;
                     vec3 warm = vec3(0.0);
                     for (int i = 0; i < uLightCount; i++) {

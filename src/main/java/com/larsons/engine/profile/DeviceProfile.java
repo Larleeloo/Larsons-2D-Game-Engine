@@ -80,6 +80,32 @@ public record DeviceProfile(String os, String osVersion, String arch, int cores,
                 backend, gpu);
     }
 
+    /**
+     * The same machine, with the display described by whoever owns the window
+     * rather than by AWT.
+     *
+     * <p><b>{@link #detect()} asks {@code GraphicsEnvironment}, and the GL build
+     * runs with no {@code GraphicsEnvironment} to ask.</b> The macOS GL path
+     * sets {@code java.awt.headless=true} — see {@code MacGlLauncher} for the
+     * main-thread reason — so every field here that came from AWT comes back
+     * zero, and the frame report says "headless / unknown" about a run on a
+     * real monitor. A backend that brought its own window knows better;
+     * {@code Engine} asks it and calls this.
+     *
+     * <p>Values that are not positive are ignored rather than stored, so a
+     * backend that knows the size and not the refresh rate improves the profile
+     * by exactly what it knows.
+     */
+    public DeviceProfile withDisplay(int width, int height, int hz, double scale) {
+        return new DeviceProfile(os, osVersion, arch, cores, maxHeapMb, javaVersion,
+                javaVendor, pipeline,
+                width > 0 ? width : displayWidth,
+                height > 0 ? height : displayHeight,
+                hz > 0 ? hz : refreshHz,
+                scale > 0 ? scale : displayScale,
+                backend, gpu);
+    }
+
     /** Inspect the current machine. Never throws; unknown fields degrade to defaults. */
     public static DeviceProfile detect() {
         Runtime runtime = Runtime.getRuntime();

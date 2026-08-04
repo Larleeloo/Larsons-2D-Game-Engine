@@ -494,12 +494,22 @@ class GlShaderChainTest {
     /**
      * The GPU side: upload, run the production chain, read the result back.
      *
-     * <p>No flip in either direction, and that is deliberate rather than lazy.
-     * GL numbers rows from the bottom, so an unflipped upload followed by an
-     * unflipped readback is consistently upside-down and cancels — which keeps
-     * even the row-parity of {@code scanlines} comparable with the CPU. A flip
-     * on one side only would make that pass fail for a reason that has nothing
-     * to do with the pass.
+     * <p><b>Flipped on both sides, and the previous arrangement is why a
+     * mirrored lighting pass shipped.</b> This used to flip on neither, on the
+     * stated grounds that GL numbers rows from the bottom and two unflipped
+     * transfers cancel. They do cancel — and that is the problem. The frame was
+     * consistently upside down <em>inside this test</em>, so a pass reading
+     * {@code vTexCoord.y} as a screen row read it from the wrong end of an
+     * upside-down frame and came out right here while coming out mirrored in
+     * the game. The test agreed with the CPU on every pass and the player saw
+     * lights on the wrong side of the screen.
+     *
+     * <p>So the upload now puts the image's top row at {@code v = 1}, which is
+     * where {@link GlTarget} puts it, and the readback undoes that. The texture
+     * this hands a pass is oriented like the one the renderer hands it, which
+     * is the only arrangement in which agreeing with the CPU means anything.
+     * {@code GlScreenSpaceTest} checks the same property end to end, through the
+     * renderer rather than through a texture of this test's own.
      */
     private static int[] run(GlShaderChain chain, List<ShaderPass> passes,
                              int[] src, int w, int h, float strength) {
@@ -599,7 +609,14 @@ class GlShaderChainTest {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         IntBuffer buffer = MemoryUtil.memAllocInt(pixels.length);
         try {
-            buffer.put(pixels).flip();
+            // Bottom row first, so the image's top row lands at v = 1 — where
+            // GlTarget puts it. Callers still pass and receive top-row-first
+            // arrays; only the GPU-side orientation changes, and it changes to
+            // match the renderer's. See run()'s note.
+            for (int row = height - 1; row >= 0; row--) {
+                buffer.put(pixels, row * width, width);
+            }
+            buffer.flip();
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0,
                     GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, buffer);
         } finally {
@@ -608,6 +625,7 @@ class GlShaderChainTest {
         return id;
     }
 
+    /** The framebuffer's pixels, top row first — the same way up as {@link #upload}. */
     private static int[] readBack(int framebuffer, int width, int height) {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
         glPixelStorei(GL_PACK_ALIGNMENT, 4);
@@ -616,7 +634,10 @@ class GlShaderChainTest {
             glReadPixels(0, 0, width, height,
                     GL_BGRA, GL_UNSIGNED_INT_8_8_8_8_REV, buffer);
             int[] out = new int[width * height];
-            buffer.get(out);
+            for (int row = 0; row < height; row++) {
+                buffer.position((height - 1 - row) * width);
+                buffer.get(out, row * width, width);
+            }
             return out;
         } finally {
             MemoryUtil.memFree(buffer);

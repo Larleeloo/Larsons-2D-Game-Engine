@@ -345,6 +345,23 @@ The trade is that dragging an edge can wait up to one frame per mouse move;
 who wants to tell the difference. Everywhere other than macOS this costs
 nothing and is never reached.
 
+**A macOS GL launch also runs AWT headless, and that is deliberate.** AWT and
+GLFW both want to run an `NSApplication` on the process's first thread, and
+AWT's loop is one that never returns — so once it starts, the engine's event
+pump enters `glfwPollEvents` and never comes back out. The game still plays,
+because the platform keeps delivering events to the window whoever is pumping;
+what stops is the *loop*, which means the close button sets a flag nobody reads
+and the game cannot be quit from its own window. Setting `java.awt.headless=true`
+before AWT initialises is LWJGL's documented answer and is what the launcher
+does, on macOS, when a GPU backend is on the classpath. Everything the engine
+uses AWT for — every sprite is a `BufferedImage`, terrain bakes through
+`Graphics2D`, the glyph atlas rasterises real fonts — works headless; the one
+thing that does not is opening a window, which on this path is exactly what AWT
+must not do. **The visible consequence** is that the sprite-sheet import dialogs
+in the creative, skin and board editors fall back to typing the path, which they
+have always been able to do, and say so. `-Djava.awt.headless=false` overrides
+it, and no other platform or backend is affected.
+
 The GL backend draws every scene in the golden catalogue to within **2.59/255**
 of the Java2D renderer and collapses the catalogue's 3,356 drawing operations
 into **68** draw calls.
@@ -743,6 +760,20 @@ single rounding would have put it, *uniformly*, which no eye can see;
 [`CameraStabilityTest`](src/test/java/com/larsons/engine/CameraStabilityTest.java)
 holds the property by requiring that every point on screen move by the same
 vector when the camera does.
+
+**The GL backend needed a second fix for the same symptom**, because a rigid
+projection is not enough if the sampler is not. A 16-texel block drawn 54.4
+pixels wide is 6.75 device pixels per texel, and at that ratio some texel
+boundaries land exactly on a pixel centre — where `GL_NEAREST` resolves the
+pixel from the last bits of a coordinate the rasteriser interpolated across the
+quad, and those bits move when the quad does. The inside of every sprite fizzed
+while its edges sat still. Java2D never had it, because it maps destination
+column to source column with integer arithmetic anchored at the rectangle's own
+origin. The GL sprite shader now picks the texel with a fixed nudge off the
+boundary and reads that texel's centre, which gets the same determinism a
+different way. Measured over a wall of tiles crept a quarter-pixel at a time,
+GL disturbed up to 169 pixels a step beyond the camera's own shift and now
+disturbs none — the same as Java2D.
 
 A level's perspective is **fixed for its lifetime**. There is no in-game
 switch, because the three formats are not three views of one world: they differ

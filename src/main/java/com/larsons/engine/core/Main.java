@@ -54,6 +54,20 @@ public class Main {
         // already been played out in that child process.
         if (MacGlLauncher.relaunchIfNeeded(args)) return;
 
+        // Still on macOS, still heading for a GPU backend: keep AWT off the
+        // first thread. It has to happen here, before any of the loading below
+        // can touch a BufferedImage, because a headless property set after the
+        // toolkit has started is ignored without a word. The relaunched child
+        // is told the same thing on its command line; this covers the run that
+        // was already on the first thread and never needed a child.
+        //
+        // Deliberately after the relaunch check and not before it: when the
+        // child reports that it found no driver, the parent runs the game on
+        // Java2D, and Java2D is AWT. MacGlLauncher.keepAwtOffTheFirstThread has
+        // the crash report that made this necessary — without it the window's
+        // close button does nothing.
+        MacGlLauncher.keepAwtOffTheFirstThread();
+
         // Development convenience only: launching from IntelliJ leaves a
         // ready-to-send copy of the game (plus empty texture and sound packs
         // to fill) in share/, built in the background. A shipped jar builds nothing —

@@ -6,7 +6,9 @@ import com.larsons.engine.graphics.Backends;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * The first-thread relaunch stays out of the way of every launch that does not
@@ -104,6 +106,85 @@ class MacGlLauncherTest {
         } finally {
             if (saved == null) System.clearProperty(MacGlLauncher.ENABLED_PROPERTY);
             else System.setProperty(MacGlLauncher.ENABLED_PROPERTY, saved);
+        }
+    }
+
+    // --- keeping AWT off the first thread ----------------------------------------
+
+    /**
+     * The headless switch is as narrow as the relaunch is, and these are the
+     * launches it must not touch.
+     *
+     * <p><b>Getting this wrong is worse than the bug it fixes.</b> A Java2D run
+     * that goes headless has no window at all — {@code GameWindow} opens a
+     * {@code JFrame} and a headless toolkit refuses. So every guard is checked
+     * from the side that matters: not "does it fire when it should" (which needs
+     * a GPU backend on the classpath, and lives in {@code :gl}) but "is it
+     * silent for everyone else".
+     */
+    @Test
+    void theHeadlessSwitchIsSilentOffMac() {
+        withoutHeadless(() -> {
+            MacGlLauncher.keepAwtOffTheFirstThread();
+            assertNull(System.getProperty(MacGlLauncher.HEADLESS_PROPERTY),
+                    "a non-macOS launch went headless; on Java2D that is a game with no window");
+        });
+    }
+
+    /** The plain jar on a Mac: no GPU backend on this classpath, so AWT is the renderer. */
+    @Test
+    void theHeadlessSwitchIsSilentWithNoGpuBackendOnTheClasspath() {
+        pretendMac();
+        withoutHeadless(() -> {
+            MacGlLauncher.keepAwtOffTheFirstThread();
+            assertNull(System.getProperty(MacGlLauncher.HEADLESS_PROPERTY),
+                    "a classpath with no GPU backend on it went headless, which leaves "
+                            + "the only renderer it has unable to open a window");
+        });
+    }
+
+    /** And a launch that asked for Java2D by name, which is a launch that asked for AWT. */
+    @Test
+    void theHeadlessSwitchIsSilentWhenJava2DWasAskedForByName() {
+        pretendMac();
+        request(Backends.JAVA2D);
+        withoutHeadless(() -> {
+            MacGlLauncher.keepAwtOffTheFirstThread();
+            assertNull(System.getProperty(MacGlLauncher.HEADLESS_PROPERTY),
+                    "-D" + Backends.PROPERTY + "=" + Backends.JAVA2D + " went headless anyway");
+        });
+    }
+
+    /** An operator who set it themselves has decided, either way. */
+    @Test
+    void anExplicitHeadlessSettingIsLeftAlone() {
+        pretendMac();
+        request("gl");
+        withoutHeadless(() -> {
+            System.setProperty(MacGlLauncher.HEADLESS_PROPERTY, "false");
+            MacGlLauncher.keepAwtOffTheFirstThread();
+            assertEquals("false", System.getProperty(MacGlLauncher.HEADLESS_PROPERTY),
+                    "-Djava.awt.headless=false was overridden; the switch is a default, "
+                            + "not a policy");
+        });
+    }
+
+    /**
+     * Run {@code body} with the headless property cleared, and put back
+     * whatever this JVM had.
+     *
+     * <p>Restoring matters more than usual: the suite's own AWT tests share this
+     * fork, and a stray {@code java.awt.headless=true} left behind would fail
+     * them somewhere else entirely.
+     */
+    private static void withoutHeadless(Runnable body) {
+        String saved = System.getProperty(MacGlLauncher.HEADLESS_PROPERTY);
+        System.clearProperty(MacGlLauncher.HEADLESS_PROPERTY);
+        try {
+            body.run();
+        } finally {
+            if (saved == null) System.clearProperty(MacGlLauncher.HEADLESS_PROPERTY);
+            else System.setProperty(MacGlLauncher.HEADLESS_PROPERTY, saved);
         }
     }
 }
