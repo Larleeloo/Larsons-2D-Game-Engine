@@ -51,12 +51,22 @@ import java.util.Map;
  * when it was baked, and neighbouring chunks land on the same lattice instead
  * of leaving a seam. The whole floor now translates as one rigid sheet.
  *
- * <p>The remaining differences from the live sweep are small and static: the
- * lattice can sit a pixel from where the live painter would have put the
- * terrain (uniformly — the sheet moves together), and chunks are baked whole so
- * cells just past the requested bounds are drawn, which fills the screen edge
- * rather than cutting it. Measured on a 1280x720 side-scrolling view: nine
- * pixels.
+ * <p><b>The live sweep is now on this same lattice, and this class is where the
+ * argument for it was worked out.</b> {@link Camera} used to round
+ * {@code (world - camera) * zoom} in one step, which is the very mistake
+ * described above — one object per rounding boundary rather than one chunk per
+ * rounding boundary — so everything this cache deliberately does <em>not</em>
+ * hold (stacked blocks, mobs, dropped items, decor, particles) went on shaking
+ * while the floor under them held still. {@code Camera} now splits the rounding
+ * the same way; see its class note. The consequence here is that a baked chunk
+ * and the live sweep land in the same place at any zoom rather than only at
+ * whole-pixel ones: on a 480x360 three-by-three-chunk view at {@code zoom = 1.7}
+ * they disagreed on 2,010 pixels and now disagree on 105.
+ *
+ * <p>The differences that remain are small and static, and are this cache's own
+ * rather than the projection's: a two-pixel bake margin, and chunks baked whole
+ * so cells just past the requested bounds are drawn, which fills the screen edge
+ * rather than cutting it.
  *
  * <p>{@code -Dlarsons.terrain.cache=false} turns the whole thing off and
  * restores the live sweep exactly.

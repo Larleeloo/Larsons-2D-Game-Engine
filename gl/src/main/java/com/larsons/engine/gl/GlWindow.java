@@ -35,6 +35,14 @@ import static org.lwjgl.glfw.GLFW.*;
  *       machine B10 profiles on.</li>
  * </ul>
  *
+ * <p><b>What that split does not buy is safety from a resize.</b> The two
+ * threads keep off each other's <em>functions</em>, and they still share one
+ * drawable: the platform reallocates the back buffer on this thread when the
+ * player drags the window's edge, and the render thread is drawing into it at
+ * the time. On macOS that terminated the process. {@link GlDrawableLock} is
+ * the arrangement that stops it, and it is worth reading before assuming the
+ * thread split above is the whole story.
+ *
  * <p><b>Input is translated, not synthesised.</b> The callbacks below turn GLFW
  * events into {@link InputManager}'s verbs through {@link GlKeys}; the
  * manager's latching, edge detection and typed-character buffering are the same
@@ -69,6 +77,8 @@ public final class GlWindow implements BackendWindow {
 
     private volatile int width;
     private volatile int height;
+    private volatile int deviceWidth;
+    private volatile int deviceHeight;
     private volatile double scale = 1;
 
     private InputManager input;
@@ -87,6 +97,8 @@ public final class GlWindow implements BackendWindow {
         this.handle = context.window();
         this.width = Math.max(1, width);
         this.height = Math.max(1, height);
+        this.deviceWidth = this.width;
+        this.deviceHeight = this.height;
 
         // Present on the panel's refresh unless someone is benchmarking. See
         // the class note for why this changed after B10 and what it does to a
@@ -119,6 +131,21 @@ public final class GlWindow implements BackendWindow {
 
     /** Device pixels per logical pixel, as the window currently reports it. */
     double scale() { return scale; }
+
+    /**
+     * The drawable's width in device pixels, as GLFW reports it.
+     *
+     * <p>Published beside {@link #scale()} rather than left to be derived from
+     * it. They are two answers to one question only while the window is still:
+     * a drag between panels of different scale moves the logical size and the
+     * framebuffer size at different moments, and a renderer that multiplied one
+     * by the other during that window would size its surface and its blit from
+     * a pair that was never simultaneously true.
+     */
+    int framebufferWidth() { return deviceWidth; }
+
+    /** The drawable's height in device pixels. See {@link #framebufferWidth()}. */
+    int framebufferHeight() { return deviceHeight; }
 
     @Override
     public void show() {
@@ -210,16 +237,27 @@ public final class GlWindow implements BackendWindow {
         glfwSetFramebufferSizeCallback(handle, (win, w, h) -> measure());
     }
 
-    /** Re-read the window's logical size and its device-pixel scale. */
+    /**
+     * Re-read the window's logical size, its drawable size and the scale
+     * between them.
+     *
+     * <p>Published in that order — sizes first, scale last — so a render thread
+     * that catches this mid-update sees a scale that goes with sizes it has
+     * already been able to read, rather than the other way round. It is a
+     * one-frame difference either way and costs nothing to get the useful way
+     * round.
+     */
     private void measure() {
         try (MemoryStack stack = MemoryStack.stackPush()) {
             IntBuffer w = stack.mallocInt(1), h = stack.mallocInt(1);
             glfwGetWindowSize(handle, w, h);
             int logicalW = Math.max(1, w.get(0)), logicalH = Math.max(1, h.get(0));
             glfwGetFramebufferSize(handle, w, h);
-            int deviceW = Math.max(1, w.get(0));
+            int deviceW = Math.max(1, w.get(0)), deviceH = Math.max(1, h.get(0));
             width = logicalW;
             height = logicalH;
+            deviceWidth = deviceW;
+            deviceHeight = deviceH;
             scale = deviceW / (double) logicalW;
         }
     }

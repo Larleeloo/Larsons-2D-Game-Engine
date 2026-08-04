@@ -51,6 +51,13 @@ import static org.lwjgl.opengl.GL33C.*;
  * keeps it. Getting this wrong does not produce an error — it produces a
  * window that never draws, which is the same symptom as everything else that
  * can go wrong with a first GL backend.
+ *
+ * <p><b>Two threads owning one window is also how the drawable gets pulled out
+ * from under a frame</b>, and on macOS that is a process-terminating crash
+ * rather than a glitch. {@link #lockDrawable()} and {@link #unlockDrawable()}
+ * are what {@link GlRenderer} wraps a frame in so a live window resize waits
+ * for it; {@link GlDrawableLock} carries the crash log that made them
+ * necessary and the reason they are nothing at all off macOS.
  */
 public final class GlContext implements AutoCloseable {
 
@@ -75,6 +82,14 @@ public final class GlContext implements AutoCloseable {
 
     /** The thread the context is current on, or {@code null} when it is detached. */
     private volatile Thread boundTo;
+
+    /**
+     * The CGL context behind this window on macOS, and {@code 0} everywhere
+     * else. Resolved the first time the context is made current on a thread,
+     * because "current" is the only state CGL will answer the question in.
+     * See {@link GlDrawableLock} for what it is for.
+     */
+    private volatile long drawable;
 
     /**
      * A hidden context for rendering that is never presented — the parity
@@ -212,6 +227,27 @@ public final class GlContext implements AutoCloseable {
         glfwMakeContextCurrent(window);
         GL.setCapabilities(capabilities);
         boundTo = me;
+        if (drawable == 0L) drawable = GlDrawableLock.current();
+    }
+
+    /**
+     * Hold the platform's drawable for the duration of a frame, so a window
+     * resize on another thread cannot reallocate it mid-command.
+     *
+     * <p>A no-op off macOS, and the caller is expected to treat it as one:
+     * the return value says whether an {@link #unlockDrawable()} is owed rather
+     * than whether anything is wrong. {@link GlDrawableLock} has the crash log
+     * this answers.
+     *
+     * @return whether the lock was taken and must be released
+     */
+    public boolean lockDrawable() {
+        return GlDrawableLock.lock(drawable);
+    }
+
+    /** Release a drawable lock this thread took. */
+    public void unlockDrawable() {
+        GlDrawableLock.unlock(drawable);
     }
 
     /**
@@ -260,6 +296,10 @@ public final class GlContext implements AutoCloseable {
     public void close() {
         if (closed) return;
         closed = true;
+        // Before the window goes: nothing may lock a drawable that is about to
+        // stop existing, and a render thread that has not quite noticed the
+        // shutdown yet is exactly the caller that would try.
+        drawable = 0L;
         try {
             if (vao != 0 && currentOnThisThread()) glDeleteVertexArrays(vao);
             detachCurrent();

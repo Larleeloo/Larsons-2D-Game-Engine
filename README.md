@@ -316,6 +316,8 @@ Java2D, and the GL distribution finds one and probes it.
 -Dlarsons.render.backend=gl       # GL only; still runs on Java2D if it cannot start,
                                   #   and says on stderr that the flag was not honoured
 -Dlarsons.render.gl.version=4.1   # ask for a different core profile (debugging)
+-Dlarsons.render.vsync=off        # present as fast as frames are made (benchmarking)
+-Dlarsons.render.gl.drawablelock=off   # macOS: draw without the resize lock (see below)
 -Dlarsons.run.seconds=30          # quit after 30 s — how a launch is checked unattended
 ```
 
@@ -330,6 +332,18 @@ of its own, and then no `JFrame` is created at all. They are never both alive.
 Input is identical either way — GLFW events are translated into the same
 `InputManager` the AWT canvas feeds, so key binds saved under one backend work
 under the other.
+
+**Resizing that window is not free on macOS, and the arrangement is worth
+knowing about.** The GL window is pumped on the thread that started the engine
+and drawn on the game loop's thread, and those two share one drawable: AppKit
+reallocates it during a live resize while the render thread is still writing
+into it, which used to terminate the process. Each frame now holds the
+platform's `CGLLockContext` from the first draw call to the buffer swap, so a
+resize waits for the frame in flight rather than landing in the middle of it.
+The trade is that dragging an edge can wait up to one frame per mouse move;
+`-Dlarsons.render.gl.drawablelock=off` restores the old behaviour for anyone
+who wants to tell the difference. Everywhere other than macOS this costs
+nothing and is never reached.
 
 The GL backend draws every scene in the golden catalogue to within **2.59/255**
 of the Java2D renderer and collapses the catalogue's 3,356 drawing operations
@@ -712,6 +726,23 @@ Rendering cost scales with the screen, not the level: `PlayScene` computes the
 visible tile range by inverse-projecting the viewport corners
 (`Camera.screenToWorld`) and only draws those tiles, so arbitrarily large
 levels render at the same speed.
+
+**The world lands on a pixel lattice the camera cannot move**, and that is what
+stops it shimmering. The obvious way to write the second half of the projection
+is to round once at the end — `round((world − camera) × zoom + viewport/2)` —
+and it is wrong in a way that only shows in motion: the camera is a `double`
+and slides continuously, so every object crosses its own rounding boundary at
+its own moment. At `zoom = 1.7` a 32-unit tile is 54.4 pixels wide, and as the
+view pans one tile rounds to 55 while its neighbour is still at 54, then they
+swap. Blocks slide against each other by a pixel, over and over, for as long as
+the camera moves. So the rounding is split in two — `round(world × zoom)`,
+which has no camera term in it at all, plus a single `round(viewport/2 −
+camera × zoom)` that the whole scene translates by. The picture moves as one
+rigid sheet. The cost is that everything can sit up to a pixel from where a
+single rounding would have put it, *uniformly*, which no eye can see;
+[`CameraStabilityTest`](src/test/java/com/larsons/engine/CameraStabilityTest.java)
+holds the property by requiring that every point on screen move by the same
+vector when the camera does.
 
 A level's perspective is **fixed for its lifetime**. There is no in-game
 switch, because the three formats are not three views of one world: they differ
