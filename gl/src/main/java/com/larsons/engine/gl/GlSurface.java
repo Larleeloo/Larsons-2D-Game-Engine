@@ -126,6 +126,31 @@ final class GlSurface implements AutoCloseable {
     int resolvedTexture() { return resolveTexture; }
 
     /**
+     * Copy this surface onto the window, resolving multisampling on the way.
+     *
+     * <p>A1's presentation step. {@code glBlitFramebuffer} from the multisample
+     * buffer straight to the back buffer is one driver-side resolve rather than
+     * a resolve followed by a textured quad, and it needs no shader, no vertex
+     * buffer and no state of its own — which matters because it runs after
+     * {@link GlTarget} has finished a frame and must not disturb anything the
+     * next frame assumes.
+     *
+     * @param deviceWidth  the drawable's width in device pixels
+     * @param deviceHeight the drawable's height in device pixels
+     */
+    void blitToWindow(int deviceWidth, int deviceHeight) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, msaaFbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        // Scissor and stencil are off by the time a frame ends, but a blit
+        // obeys the scissor if one is left on, and a half-presented frame is a
+        // hard thing to attribute later.
+        glDisable(GL_SCISSOR_TEST);
+        glBlitFramebuffer(0, 0, width, height, 0, 0, deviceWidth, deviceHeight,
+                GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
+
+    /**
      * The resolved frame as {@code 0xAARRGGBB}, top row first.
      *
      * <p>Flipped on the way out, because GL numbers rows from the bottom of the

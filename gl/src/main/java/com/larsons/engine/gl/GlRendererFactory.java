@@ -42,8 +42,15 @@ public final class GlRendererFactory implements RendererFactory {
     @Override
     public Backend create(Request request) {
         int[] version = requestedVersion();
+        // A single-sample window, and that is not an oversight. Since A1 the
+        // scene is drawn into a multisampled offscreen surface and blitted
+        // here, so coverage sampling belongs to that surface. Asking for it on
+        // the window as well makes the present a multisample-to-multisample
+        // blit, which is a second resolve the driver has to do by hand — 14 ms
+        // a frame of it on a software rasteriser, measured, where the intended
+        // path is one hardware resolve.
         GlContext context = GlContext.window(request.width(), request.height(),
-                request.title(), GlRenderer.SAMPLES, version[0], version[1]);
+                request.title(), 0, version[0], version[1]);
         if (!context.available()) {
             String why = context.whyUnavailable();
             context.close();

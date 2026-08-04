@@ -2357,6 +2357,47 @@ to the backbuffer and swap.
 
 ---
 
+#### A1 — done
+
+`GlRenderer` owns a `GlSurface` sized to the drawable, binds it in
+`beginFrame()`, and blits it to the back buffer in `present()`.
+`sceneTexture()` exposes the resolved texture, which is what A2 samples. The
+existing `GlSurface` needed one new method — `blitToWindow` — because a
+`glBlitFramebuffer` straight from the multisample buffer to the back buffer is
+one driver-side resolve and needs no shader, no vertex buffer and no state of
+its own, which matters when it runs after `GlTarget` has finished a frame.
+
+**And it binds the surface only when something will read it, which the step did
+not say and the measurement demanded.** The offscreen path costs one multisample
+resolve per frame. On a GPU that is a hardware blit; on a software rasteriser it
+is four samples × 921,600 pixels of CPU work, and it measured at **14–19 ms a
+frame under llvmpipe** — enough to take a playable software-GL configuration (a
+VM, a remote desktop, an old integrated driver) and make it unplayable. Since the
+backend does not yet run the chain, an unconditional surface would have bought
+nothing and cost that.
+
+So `-Dlarsons.render.offscreen` defaults to `auto`: offscreen when a chain with
+passes is attached — precisely when A2 needs the texture — and straight at the
+window otherwise. Measured under llvmpipe, on the real game:
+
+| | present | work/frame |
+|---|---:|---:|
+| `auto`, no passes (the pre-A1 path) | 5.875 ms | 6.483 ms |
+| `always` (forced offscreen) | 20.731 ms | 22.059 ms |
+
+`always` and `never` force it either way, so the difference can be measured on a
+given machine rather than taken from this note. **On the M1 this is expected to
+be a fraction of a millisecond and that is expected, not measured** — the number
+above is a software rasteriser and says nothing about hardware.
+
+Two things were ruled out on the way to that conclusion rather than assumed: it
+is not vsync (the cost is identical with the swap interval at 0 and 1), and it is
+not a multisample-to-multisample blit (the window is now requested single-sample,
+since coverage sampling belongs to the offscreen surface, and the cost did not
+move).
+
+---
+
 ### A2 — `GlShaderChain`: FBO ping-pong
 
 **Do.**
@@ -2680,79 +2721,90 @@ grid. Snapping is correct for an unrotated world and wrong for a yawed one, so
 if D0's measurement points there instead, that half waits for C and this section
 gets rewritten again.
 
-### D0 — Reproduce it in a test, before fixing anything
+### 7.1 The hypothesis, and why it was wrong
 
-**Goal.** Turn "seems to jitter" into a number.
+**Stated so it could be wrong, and it was.** The reasoning was: Java2D composes
+into a logical-size image and blits once, so every sprite lands on a whole
+logical pixel; GL rasterises straight at device resolution, so a sprite at
+logical `x = 100.37` lands at device `x = 200.74`, the texel grid sits at a
+fractional offset from the pixel grid, and that offset slides as the camera
+moves.
 
-**Do.**
-- Render the same scene through `GlTarget` at a sequence of sub-pixel camera
-  offsets — `x = 100.0, 100.1, … 100.9` — at `scale = 2`, and diff consecutive
-  frames against each other.
-- Do the same through `Java2DTarget`. Its consecutive frames should differ in
-  discrete jumps (nothing, then a whole pixel); GL's are predicted to differ
-  continuously and by different amounts along different edges.
-- Report both as a **shimmer metric**: the mean number of pixels that change
-  between consecutive sub-pixel offsets, per backend, per scale.
+**The premise is false.** `Camera.screenX` ends in `(int) Math.round(...)`, and
+`DrawTarget.drawImage` takes `int x, int y`. The scene cannot hand the backend a
+fractional position — there is no API for it. Every sprite arrives on a whole
+logical pixel, which at scale 2 is an even device pixel. There was never a
+fractional offset for anything to slide on.
 
-**Verify.** The metric is materially higher for GL at `scale = 2` than for
-Java2D, and GL's own figure at `scale = 1` sits between them. If it does not,
-the hypothesis in §7.1 is wrong and this job needs re-planning before any code
-is written.
+Worth recording rather than quietly deleting: the hypothesis was plausible, it
+was written down before the measurement, and one grep at the `Camera` end would
+have killed it in a minute. **D0 was still worth building, because what it found
+instead is the thing nobody had checked.**
 
-**Done when.** The number exists for both backends at both scales, and it is in
-this document.
+### D0 — done, and the rasteriser is exonerated
 
-**This is the same gap B8a fell through, in a different dimension.** The golden
-catalogue renders each frame once, from a fixed camera, at whole coordinates. It
-can no more see a shimmer than it could see a buffer overflow: both need
-*motion* or *volume*, and the catalogue has neither by construction. D0 is the
-first test in this plan whose subject is the relationship between two frames
-rather than the contents of one.
+**Every parity measurement in this project had been taken at scale 1**, and the
+machine the shimmer was seen on runs at scale 2. `GlParityTest` renders the
+golden catalogue on a 1× surface against a 1× Java2D reference; it had never
+seen the configuration the player is in.
 
-### D1 — Pick the fix from the measurement
+[`GlHiDpiParityTest`](gl/src/test/java/com/larsons/engine/gl/GlHiDpiParityTest.java)
+renders a tile wall through GL at scale 2 and compares it against the Java2D
+reference **upscaled 2× nearest — as the window server presents it** — across a
+sweep of camera positions:
 
-**Goal.** Choose between three fixes on evidence, not taste. Do not start until
-A1 has landed, because the first candidate may already be done.
+| what | result |
+|---|---|
+| tiles only, mean channel error, every camera position | **0.000** |
+| shapes and text, mean channel error | 2.666, **identical at every position** |
+| pixels changed by a one-pixel pan, GL | 8,160 |
+| pixels changed by a one-pixel pan, Java2D upscaled | **8,160** |
 
-**The candidates.**
+Not "within the 3.58 bar" — **exactly equal**, at every offset. A one-pixel pan
+disturbs precisely the same pixels on both backends. The 2.666 on the mixed
+frame is GL rendering shapes and glyphs at device resolution while Java2D
+renders them at logical resolution and the panel doubles them; it is constant,
+so it is a static difference in sharpness, not a temporal one.
 
-| Fix | What it costs | What it risks |
-|-----|---------------|---------------|
-| **Logical-size FBO, upscaled once on present** — A1's framebuffer sized `width × height` rather than `width × scale` | One full-screen blit per frame, trivial on any GPU that can run this backend at all | **Text.** B6 rasterises glyphs at device scale precisely so HiDPI text is sharp. Rendering the whole scene at logical size and upscaling makes GL's text exactly as soft as Java2D's is today — parity with the shipped renderer, but a regression against current GL |
-| **Snap image quads to whole device pixels** in `GlTarget`, for axis-aligned untransformed quads only | A rounding per quad corner | Wrong under rotation, so it interacts directly with Job C; and it fixes sprites without fixing strokes or shape fills |
-| **Render the world at logical size and the UI at device size** — two passes, two resolutions | Real complexity: two projections, two framebuffers, a composite | The most correct answer for a pixel-art game with a crisp HUD, and the most code. Only justified if D0 says the first two both fail |
+**The GL rasteriser does not shimmer.** Whatever was seen, it is not the picture
+being drawn differently from frame to frame.
 
-**Do.**
-- **Build the offscreen framebuffer A1 needs, one job early**, sized in logical
-  pixels, and present through it. `GlSurface` already exists and already resolves
-  to a texture — it was written for B8's parity comparison and
-  `resolvedTexture()` has been sitting there unused since, for exactly this.
-  Re-run D0's metric.
-- **Own it the way A1 will need it**, because A1 inherits this rather than
-  replacing it: the surface is the renderer's for the life of the window, it
-  resizes with the drawable, and the scene ends up in a texture the shader chain
-  can sample. A version that blits and forgets would have to be rewritten in one
-  step's time.
-- If the metric does not move, the hypothesis in §7.1 is wrong: fall back to the
-  second candidate and re-run.
+*(The first run of this diagnostic reported 1.594 rather than 0.000, entirely
+because its clear colour was a constant that disagreed with what `GoldenFrames`
+clears to — the exact trap `GlParityTest` has a comment about. It now discovers
+the colour instead of assuming it.)*
 
-**Verify.** D0's shimmer metric for GL at `scale = 2` falls to Java2D's, and the
-32 golden frames still pass at their existing bar. A fix that stabilises motion
-by moving every sprite half a pixel is not a fix.
+### D1 — done. What is left is presentation, and B9 caused it
 
-**Done when.** The metric matches Java2D's, the parity number is unchanged, and
-A1 begins by attaching a chain to a surface that is already there.
+If the picture is identical and the motion is identical, the difference is in
+how the frame reaches the panel. B9 set the swap interval to **zero**, with a
+comment saying the engine's frame limiter should be the only thing pacing
+frames — right for making B10's two profiles comparable, wrong for a player. A
+frame presented at an arbitrary phase against a 60 Hz panel tears, and the
+apparent motion of a large regular pattern — a wall of blocks — judders. Java2D
+never had this because on macOS it presents through the window server, which
+composites on the refresh whether asked to or not.
 
-### D2 — Guard it
+**Vsync is now on by default**, `-Dlarsons.render.vsync=off` for an uncapped
+benchmark. It changes what a profile means, and that is written into
+`GlWindow`'s javadoc: with vsync on, `swapBuffers` blocks, so the wait moves out
+of the limiter's `idle` stage and into `present`. **A profile taken with it on is
+not comparable to B10's without saying so.**
 
-**Goal.** The catalogue cannot see this class of bug. Give it an instrument that
-can.
+**This one is a candidate, not a measurement, and is not claimed as more.** D0's
+numbers are hard; this is the remaining explanation with a cheap fix attached,
+and it needs eyes on the Air to close. If the shimmer survives it, the next
+suspect is not in this plan at all: `update` spikes to 15–17 ms at p95 on both
+backends, which is one frame in twenty missing its deadline — visible judder by
+any other name, and the subject of [`SIM_PLAN.md`](SIM_PLAN.md).
 
-**Do.** Promote D0's harness to a standing test alongside `GlParityTest`, over a
-small number of frames at several sub-pixel offsets and both scales.
+### D2 — done
 
-**Done when.** It runs on every build, skips without a driver like its
-neighbours, and fails if the shimmer metric regresses.
+`GlHiDpiParityTest` is a standing test rather than a diagnostic: the tiles number
+must stay at exactly 0.000, the shapes-and-text number must not move with the
+camera, and a one-pixel pan must disturb the same count on both backends. It is
+the first parity instrument in this project that runs at a display scale other
+than 1 — the gap that let this question stay open for four steps.
 
 ---
 
@@ -2816,15 +2868,20 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
                                          when double-clicked; only the Gradle
                                          tasks passed -XstartOnFirstThread.
       │
-      ├─ D0  measure the HiDPI shimmer  ← START HERE
-      │  D1  logical-size offscreen surface, presented through
-      │  D2  guard it
+      ├─ D0  measure the HiDPI shimmer  ← done. GL at 2x is PIXEL-IDENTICAL
+      │        to Java2D upscaled, at every camera position. The rasteriser
+      │        does not shimmer; §7.1's hypothesis was wrong.
+      │  D1  vsync on by default        ← done. B9 had turned it off. The
+      │        remaining candidate, awaiting eyes on the Air.
+      │  D2  GlHiDpiParityTest          ← done. First parity test at scale 2.
       │
-      ├─ A1  attach the chain to D1's surface  ← JUSTIFIED: 5.460 ms/frame of
-      │        CPU shaders measured at 2x HiDPI (lighting 2.894 + bloom
-      │        2.563), and the GL backend runs NEITHER today — a GPU build
-      │        has no day/night at all. See §5.0-5.1.
-      │  A2  GlShaderChain ping-pong
+      ├─ A1  scene renders to a texture ← done. Offscreen when a chain has
+      │        passes; straight at the window otherwise, because the resolve
+      │        costs 14-19 ms/frame on a software rasteriser and buys nothing
+      │        until A2. JUSTIFIED by 5.460 ms/frame of CPU shaders at 2x
+      │        HiDPI, and the GL backend runs NEITHER pass today — a GPU
+      │        build has no day/night at all. See §5.0-5.1.
+      │  A2  GlShaderChain ping-pong    ← START HERE
       │  A3  uniform binding
       │  A4  LightingPass
       │  A5  keep + test the CPU chain

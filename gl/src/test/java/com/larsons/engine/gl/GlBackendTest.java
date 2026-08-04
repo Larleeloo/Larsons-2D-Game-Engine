@@ -121,6 +121,11 @@ class GlBackendTest {
         assertNotNull(choice.backend().window(), "a backend outside the core brings its own window");
 
         GlRenderer renderer = (GlRenderer) choice.backend().renderer();
+        String savedOffscreen = System.getProperty(GlRenderer.OFFSCREEN_PROPERTY);
+        // Force A1's offscreen path on: with no shader chain attached the
+        // renderer would correctly draw straight at the window, and this test
+        // is here to check the surface the chain will read from.
+        System.setProperty(GlRenderer.OFFSCREEN_PROPERTY, "always");
         try {
             renderer.window().attachInput(new InputManager());
 
@@ -130,20 +135,27 @@ class GlBackendTest {
             target.fillRect(10, 10, 100, 50, Color.RED);
             target.drawText("gl", 12, 40, null, Color.WHITE);
 
-            // Flush and look at the pixels before the swap discards them. B8
-            // proved GlTarget draws the right picture into a framebuffer it was
-            // handed; what is new here is that the window this backend brought
-            // is the framebuffer, and that the engine's own selection path
-            // reaches it. Two samples: one inside the rectangle and one outside
-            // it, because a readback of a uniformly red screen would pass just
-            // as well if the clear had been red and nothing else had happened.
+            // Flush and look at the pixels. Since A1 the frame is drawn into
+            // the renderer's offscreen surface and blitted to the window on
+            // present, so this reads the surface — which is also the texture
+            // A2's shader chain will sample, making this the check that the
+            // scene really does end up somewhere a shader could read it.
+            //
+            // Two samples: one inside the rectangle and one outside it, because
+            // a readback of a uniformly red screen would pass just as well if
+            // the clear had been red and nothing else had happened.
             ((GlTarget) target).endFrame();
-            assertEquals(0xFFFF0000, pixel(60, 35, REQUEST.height()),
-                    "the rectangle did not reach the window's framebuffer");
-            assertEquals(0xFF181C26, pixel(300, 190, REQUEST.height()),
+            int[] pixels = renderer.surface().readPixels();
+            int deviceW = renderer.deviceWidth(), deviceH = renderer.deviceHeight();
+            double scale = deviceW / (double) REQUEST.width();
+            assertEquals(0xFFFF0000, at(pixels, deviceW, deviceH, 60, 35, scale),
+                    "the rectangle did not reach the surface the scene renders into");
+            assertEquals(0xFF181C26, at(pixels, deviceW, deviceH, 300, 190, scale),
                     "the frame was not cleared to the background colour");
 
             renderer.present();
+            assertTrue(renderer.sceneTexture() != 0,
+                    "A1: the scene has to be readable as a texture for A2 to sample it");
 
             DrawStats stats = target.stats();
             assertTrue(stats.operations() >= 2, "the frame recorded nothing: " + stats.operations());
@@ -159,6 +171,8 @@ class GlBackendTest {
             // then the window that owns the context they lived in.
             renderer.dispose();
             choice.backend().window().close();
+            if (savedOffscreen == null) System.clearProperty(GlRenderer.OFFSCREEN_PROPERTY);
+            else System.setProperty(GlRenderer.OFFSCREEN_PROPERTY, savedOffscreen);
         }
     }
 
@@ -216,21 +230,15 @@ class GlBackendTest {
     // --- helpers -----------------------------------------------------------------
 
     /**
-     * One pixel of the window's back buffer as {@code 0xAARRGGBB}, addressed
-     * the way the engine addresses it — from the top-left, not GL's
-     * bottom-left.
+     * One logical pixel of a device-resolution readback, addressed the way the
+     * engine addresses it — from the top-left, and in logical coordinates
+     * whatever the display scale happens to be.
      */
-    private static int pixel(int x, int y, int height) {
-        org.lwjgl.opengl.GL33C.glReadBuffer(org.lwjgl.opengl.GL33C.GL_BACK);
-        java.nio.IntBuffer buffer = org.lwjgl.system.MemoryUtil.memAllocInt(1);
-        try {
-            org.lwjgl.opengl.GL33C.glReadPixels(x, height - 1 - y, 1, 1,
-                    org.lwjgl.opengl.GL33C.GL_BGRA,
-                    org.lwjgl.opengl.GL33C.GL_UNSIGNED_INT_8_8_8_8_REV, buffer);
-            return buffer.get(0);
-        } finally {
-            org.lwjgl.system.MemoryUtil.memFree(buffer);
-        }
+    private static int at(int[] pixels, int deviceWidth, int deviceHeight,
+                          int x, int y, double scale) {
+        int dx = Math.min(deviceWidth - 1, (int) (x * scale));
+        int dy = Math.min(deviceHeight - 1, (int) (y * scale));
+        return pixels[dy * deviceWidth + dx];
     }
 
     /** Run {@code body} with {@code larsons.render.gl.version} set, then restore it. */
