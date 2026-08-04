@@ -4,6 +4,7 @@ import com.larsons.engine.graphics.BackendWindow;
 import com.larsons.engine.input.InputManager;
 
 import org.lwjgl.glfw.Callbacks;
+import org.lwjgl.glfw.GLFWVidMode;
 import org.lwjgl.system.MemoryStack;
 
 import java.awt.event.KeyEvent;
@@ -132,6 +133,10 @@ public final class GlWindow implements BackendWindow {
     /** Device pixels per logical pixel, as the window currently reports it. */
     double scale() { return scale; }
 
+    /** The same number, for the frame report. See {@link BackendWindow#displayScale()}. */
+    @Override
+    public double displayScale() { return scale; }
+
     /**
      * The drawable's width in device pixels, as GLFW reports it.
      *
@@ -166,6 +171,31 @@ public final class GlWindow implements BackendWindow {
 
     @Override
     public boolean closeRequested() { return glfwWindowShouldClose(handle); }
+
+    /**
+     * The monitor's mode, straight from GLFW — the answer AWT cannot give in a
+     * headless process. See {@link BackendWindow#displayMode()}.
+     *
+     * <p>The primary monitor rather than the one this window happens to be on:
+     * GLFW will only name the latter for a fullscreen window, and the number is
+     * wanted for a line in a frame report rather than for anything that has to
+     * be exact. Null when GLFW has no monitor to describe, which is a
+     * legitimate answer on a headless build agent and is what the profile's
+     * existing "unknown" is for.
+     */
+    @Override
+    public int[] displayMode() {
+        try {
+            long monitor = glfwGetPrimaryMonitor();
+            if (monitor == 0L) return null;
+            GLFWVidMode mode = glfwGetVideoMode(monitor);
+            if (mode == null) return null;
+            return new int[] {mode.width(), mode.height(), mode.refreshRate()};
+        } catch (Throwable ignored) {
+            // A report is never worth failing a launch for.
+            return null;
+        }
+    }
 
     /**
      * Destroy the window and the context with it. Idempotent: GLFW's

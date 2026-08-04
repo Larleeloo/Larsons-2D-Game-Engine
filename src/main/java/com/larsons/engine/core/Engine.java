@@ -133,7 +133,7 @@ public class Engine {
             this.renderer = backend.backend().renderer();
             backendWindow.attachInput(input);
         }
-        this.device = DeviceProfile.detect().withRenderer(backend.chosen(), backend.driver());
+        this.device = describeDevice(backend);
 
         this.shaders = new ShaderChain();
         this.renderer.setShaderChain(shaders);
@@ -193,6 +193,31 @@ public class Engine {
 
     /** The machine these measurements were taken on, and the backend that drew them. */
     public DeviceProfile device() { return device; }
+
+    /**
+     * The machine this run is on, for the frame report — asked of AWT, then of
+     * the backend for anything AWT could not answer.
+     *
+     * <p><b>The second half is not belt-and-braces, it is the only source in a
+     * GL run.</b> The macOS GL path sets {@code java.awt.headless=true} — see
+     * {@link MacGlLauncher} for the main-thread reason — so
+     * {@code DeviceProfile.detect()} comes back with no display size and no
+     * refresh rate at all, and the report would say "headless / unknown" about
+     * a run on a real monitor. A backend that brought its own window knows its
+     * own monitor, so it is asked.
+     */
+    private DeviceProfile describeDevice(BackendChoice backend) {
+        DeviceProfile detected = DeviceProfile.detect()
+                .withRenderer(backend.chosen(), backend.driver());
+        if (backendWindow == null) return detected;
+        int[] mode = backendWindow.displayMode();
+        int width = mode != null && mode.length >= 3 ? mode[0] : 0;
+        int height = mode != null && mode.length >= 3 ? mode[1] : 0;
+        int hz = mode != null && mode.length >= 3 ? mode[2] : 0;
+        // The scale the window reports is the one the frame is really drawn at,
+        // which is a better answer than AWT's even when AWT is available.
+        return detected.withDisplay(width, height, hz, backendWindow.displayScale());
+    }
 
     /** Which renderer is drawing, and why that one. */
     public BackendChoice backend() { return backend; }

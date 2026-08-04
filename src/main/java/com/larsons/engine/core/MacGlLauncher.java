@@ -60,7 +60,65 @@ public final class MacGlLauncher {
     /** {@code -Dlarsons.launch.relaunch=false} turns the whole mechanism off. */
     public static final String ENABLED_PROPERTY = "larsons.launch.relaunch";
 
+    /** AWT's own switch, set on the macOS GL path. See {@link #keepAwtOffTheFirstThread}. */
+    public static final String HEADLESS_PROPERTY = "java.awt.headless";
+
     private MacGlLauncher() {}
+
+    /**
+     * Keep AWT from taking the first thread, on a macOS run that is going to
+     * draw with a GPU backend.
+     *
+     * <p><b>This is not a tidiness measure; without it the window's close
+     * button does nothing.</b> A crash report from the Air showed
+     * {@code +[AWTStarter starter:headless:]} → {@code runAWTLoopWithApp:} →
+     * {@code [NSApplication run]} sitting on thread 0 <em>underneath</em>
+     * GLFW's {@code glfwPollEvents}. AWT's loop is {@code do { [app run]; }
+     * while (YES)} — it never returns. So the first call to
+     * {@code Engine.pumpUntilStopped()} entered {@code pumpEvents()} and stayed
+     * there for the life of the process. Events still flowed, because AppKit
+     * dispatches them to the GLFW window whoever is pumping, which is why the
+     * game played normally and hid this completely: what stopped happening was
+     * the <em>loop</em>. {@code closeRequested()} is never read again,
+     * {@code larsons.run.seconds} never fires, and {@code shutdown()} is
+     * unreachable. Clicking the red button sets a flag nobody looks at.
+     *
+     * <p>LWJGL's own guidance is exactly this: a JVM that uses AWT and GLFW
+     * together on macOS must be headless. The engine uses AWT hard — every
+     * sprite is a {@code BufferedImage}, terrain chunks bake through
+     * {@code Graphics2D}, the glyph atlas rasterises real fonts — and all of
+     * that is supported headless. What is not supported is opening a window,
+     * which on this path is precisely what AWT must not do.
+     *
+     * <p><b>What it costs, stated rather than discovered later.</b> Two things
+     * ask AWT for something a headless process has not got:
+     *
+     * <ul>
+     *   <li>The three {@code JFileChooser} dialogs — importing a sprite sheet in
+     *       the creative, skin and board editors. All three already catch
+     *       {@code RuntimeException} and say so in the scene's status line, and
+     *       {@code HeadlessException} is one, so they degrade to the typed path
+     *       that has always been the fallback rather than breaking. That is the
+     *       whole of the product cost, and it applies only to a GL run on
+     *       macOS.</li>
+     *   <li>{@code DeviceProfile}'s display size, refresh rate and scale, which
+     *       would leave a frame report saying "headless / unknown" about a run
+     *       on a real monitor. Not accepted: {@code BackendWindow.displayMode()}
+     *       now answers it from GLFW, which knows the monitor better than AWT
+     *       does anyway.</li>
+     * </ul>
+     *
+     * <p>Called from {@link Main} before anything can touch AWT, and again as a
+     * command-line flag on the relaunched child, because a property set after
+     * the toolkit has initialised is ignored in silence.
+     */
+    public static void keepAwtOffTheFirstThread() {
+        if (!isMac()) return;
+        if (System.getProperty(HEADLESS_PROPERTY) != null) return;   // the operator decided
+        if (Backends.JAVA2D.equals(Backends.requested())) return;    // AWT is the renderer
+        if (Backends.discover().isEmpty()) return;                   // no GPU backend to run
+        System.setProperty(HEADLESS_PROPERTY, "true");
+    }
 
     /**
      * Relaunch on the first thread if this run needs it and is not already
@@ -162,6 +220,7 @@ public final class MacGlLauncher {
         List<String> command = new ArrayList<>();
         command.add(javaBinary());
         command.add("-XstartOnFirstThread");
+        command.add("-D" + HEADLESS_PROPERTY + "=true");
         command.add("-D" + CHILD_PROPERTY + "=true");
         command.addAll(inheritedJvmArguments());
         command.add("-cp");

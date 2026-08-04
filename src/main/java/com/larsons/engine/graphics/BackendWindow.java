@@ -60,6 +60,33 @@ public interface BackendWindow extends AutoCloseable {
     /** Whether the player has asked to close the window. */
     boolean closeRequested();
 
+    /**
+     * The display this window is on, as {@code {width, height, refreshHz}} in
+     * device pixels, or {@code null} when the backend cannot say.
+     *
+     * <p><b>This exists because the GL build runs headless and AWT is where
+     * that answer used to come from.</b> {@code DeviceProfile.detect()} asks
+     * {@code GraphicsEnvironment} for the screen's size and refresh rate, and
+     * under {@code java.awt.headless=true} — which the macOS GL path now sets,
+     * for the reason {@code MacGlLauncher} gives — there is nobody to ask. The
+     * frame report would then print "headless / unknown" for a run on a real
+     * monitor, and a profile that cannot say what it was taken on is the thing
+     * this project's reports exist not to be. A backend that brought its own
+     * window knows its own monitor; this is how it says so.
+     *
+     * <p>Default {@code null} so a backend that does not know is not obliged to
+     * invent something. The profile keeps whatever it already had.
+     */
+    default int[] displayMode() { return null; }
+
+    /**
+     * Device pixels per logical pixel, or {@code 0} when the backend cannot
+     * say. Same reason as {@link #displayMode()} — AWT's answer is unavailable
+     * in a headless process, and this one is better regardless: it is the scale
+     * the frame is actually drawn at rather than a property of the monitor.
+     */
+    default double displayScale() { return 0; }
+
     /** Destroy the window. Never throws. */
     @Override
     void close();

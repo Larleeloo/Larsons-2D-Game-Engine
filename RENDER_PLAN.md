@@ -43,20 +43,35 @@ fact three of `LightingPass`'s uniforms could not be advertised at all — a
 nobody reads. Either one alone renders a plausible night with no torches in it.
 See A3.
 
-**Job D (§7) went first, ahead of A, and is now closed — by its fourth
-hypothesis.** The world shimmered by about a pixel as the camera moved. D0
-exonerated both rasterisers, D1 turned vsync on and fixed a real but different
-problem, and the shimmer survived both. **D3 found it in `Camera`**: the
-projection rounded `(world − camera) × zoom` in one step, so every object
-crossed its rounding boundary at its own moment and neighbouring blocks slid
-against each other. It was never a backend defect — both backends drew exactly
-what the camera told them — and no test in the project could see it, because
-they all render at `zoom = 1` or `2`, the only zooms at which the old arithmetic
-happens to be exactly right. See §7's D3.
+**Job D (§7) went first, ahead of A, and is now closed — by three fixes and four
+hypotheses, because "the shimmer" was never one defect.** D0 exonerated both
+rasterisers, D1 turned vsync on and fixed a real but different problem, and the
+shimmer survived both. **D3 found half of it in `Camera`**: the projection
+rounded `(world − camera) × zoom` in one step, so every object crossed its
+rounding boundary at its own moment and neighbouring blocks slid against each
+other — on both backends. **D4 found the other half in the GL sampler**: at a
+fractional zoom, texel boundaries land exactly on device pixel centres and
+`GL_NEAREST` then decides from the last bits of an interpolated float, which
+move when the quad does. Java2D disturbed 0 pixels a step; GL disturbed up to
+169, every one inside a tile and none at a tile edge.
 
-**A crash report closed a second defect this plan had not predicted.** Dragging
-the window's edge on the Air terminated the process: AppKit reallocates the GL
-drawable on thread 0 while the render thread is blitting into it. §10.
+**No test in the project could see either**, and for two different reasons worth
+keeping: D3 was invisible because everything here renders at `zoom = 1` or `2`,
+the only zooms at which the old arithmetic is exactly right; D4 was invisible
+because the one instrument aimed at it swept the camera in whole pixels through
+integer arithmetic of its own. §7's D3 and D4.
+
+**A crash report closed two more defects this plan had not predicted.** Dragging
+the window's edge on the Air terminated the process — AppKit reallocates the GL
+drawable on thread 0 while the render thread is blitting into it (§10) — and the
+same log showed AWT's `[NSApplication run]` sitting under `glfwPollEvents`, which
+is why the window's close button did nothing (§10.3).
+
+**And one shipped defect was found by a player's description alone.** *"Shaders
+don't line up unless you're on the same vertical level as a block"* is a
+vertical mirror, and it was: the lighting pass read a texture coordinate as a
+screen row. The parity harness could not fail on it, because it uploaded and
+read back with two flips that cancelled. §5's A7.
 
 Also open: **B11** fixed a GL jar that could not open a window when
 double-clicked on macOS, the platform it had been profiled on for four steps. And
@@ -2774,6 +2789,70 @@ the program. That is why "correct the documentation" is a numbered step with a
 precondition rather than a habit, and it is why the precondition is *once it is
 true* in both directions.
 
+### A7 — done. The lighting pass was mirrored, and the parity test was built not to notice
+
+**Reported from the Air:** *"shaders don't line up perfectly unless you're on
+the same vertical level as a block. This causes random glowing as you move
+vertically."* That description names the defect exactly, including the one
+position at which it vanishes.
+
+**Every light was reflected about the middle of the screen.** `vTexCoord` is a
+*texture coordinate*, and GL puts `v = 0` at the bottom of a picture that
+`GlTarget` renders the right way up. The pass read it as a screen row:
+
+```glsl
+vec2 px = vTexCoord * uResolution;      // y measured from the bottom
+```
+
+while every light in it arrives from `Camera.worldToScreen`, whose y is measured
+from the top. The camera keeps the player near the middle of the screen, so a
+torch on the player's own level lands about where it belongs and the picture
+looks right — and the further the view moves vertically, the further the glow
+slides the other way. Measured: a light at `y = 40` of a 200-pixel frame put the
+frame's brightest row at **159**, and 200 − 40 = 160.
+
+**The instrument had a symmetry that hid it, and that is the part worth
+keeping.** `GlShaderChainTest` uploaded its source texture unflipped and read
+the result back unflipped, with a comment explaining that GL numbers rows from
+the bottom so the two cancel. They do cancel — and the cancellation is exactly
+what made the test blind. Inside it the frame was consistently upside down, so a
+pass reading `vTexCoord.y` as a screen row read it from the wrong end of an
+inverted frame and came out right. The test agreed with the CPU on every pass to
+the hundredth while the player saw lights on the wrong side of the screen. The
+same arrangement, and the same blindness, was in the core's `GlShaderHarness`.
+
+> **A test whose two errors cancel measures nothing about either.** This is the
+> second time in this plan that an instrument agreed with itself: D0 compared two
+> backends and could not see a defect they shared, and this compared two
+> orientations and could not see a defect in either. Both were reasonable
+> constructions. Neither could fail.
+
+**Fixed in three places, because one of them alone would have been a patch.**
+`Shaders.FLIP_Y_GLSL` gives every fragment shader a `flipY` — its own inverse,
+so it converts either way — and the passes that *measure* a position rather than
+merely sample one now use it: `lighting`, `scanlines`, `pixelate`, `wave`,
+`chromatic_aberration`. `vignette` and `bloom` are deliberately left alone
+because they are symmetric in y, so that the presence of the call means
+something. Both harnesses now upload and read back flipped, so the texture they
+hand a pass is oriented like the one the renderer hands it. And
+[`GlScreenSpaceTest`](gl/src/test/java/com/larsons/engine/gl/GlScreenSpaceTest.java)
+drives the real renderer end to end and asks the crudest possible question: does
+a light near the top of the frame light the top of the frame.
+
+**Checked from both sides.** With the fix, the parity table is unchanged to the
+hundredth — `lighting` 1.27, `pixelate` 0.00, `scanlines` 0.04, and the rest of
+§2's numbers exactly. With the fix removed again, `lighting` parity goes to
+**34.68** against a bar of 3.0. It could not do that before, which is the whole
+point of having changed the harness.
+
+**One thing the fix uncovered on the way through.** `pixelate`'s parity went
+0.00 → 1.27 when the flip was corrected, because a block's centre expressed in
+UV lands exactly on a texel boundary, and a boundary flipped to the other end of
+an axis comes back one texel out — a whole row of each block sampled from its
+neighbour. It now does the arithmetic in the texture's own texels and lands on a
+texel centre at any display scale. Same family as D4 below, found the same way:
+by a number moving that had no business moving.
+
 ---
 
 ## 6. Job C — Eight-point camera rotation
@@ -3208,11 +3287,74 @@ anything else, whatever it is.
 out GL — this arithmetic is shared, and Java2D shimmers identically at the same
 zoom. D1's vsync change was a real fix for a real GL-only problem (tearing
 against an unsynchronised present) and is not withdrawn; this is a second,
-backend-independent defect underneath it. And it does not touch
+backend-independent defect underneath it. **D4 is the GL-only half, and it is
+what "singled out GL" was pointing at.** And none of it touches
 [`SIM_PLAN.md`](SIM_PLAN.md)'s 15–21 ms `update` spikes, which remain the
 outstanding candidate for anything that still reads as a *hitch* rather than a
 *shimmer*. Those are different words for different things, and the plan should
 stop treating them as one.
+
+### D4 — done. The GL sampler was picking a different texel for the same pixel
+
+**Reported after D3 shipped:** *"the shimmer still happens with every block."*
+D3 made the projection rigid and it was not enough, because there was a second
+shimmer underneath it that belonged to the backend alone.
+
+**The measurement that separated them.** Same wall of tiles, same real `Camera`
+at `zoom = 1.7`, camera crept a quarter-pixel at a time, and the question asked
+of each backend on its own: *how many pixels change beyond the whole-pixel shift
+the camera asked for?*
+
+| step | GL | Java2D upscaled 2× |
+|---|---:|---:|
+| 400.50 | **99** | 0 |
+| 401.50 | **154** | 0 |
+| 402.25 | **141** | 0 |
+| 402.75 | **169** | 0 |
+| 404.00 | **28** | 0 |
+
+Java2D moved nothing it was not asked to. GL moved up to 169 pixels a step, and
+**every one of them was inside a tile — not one within two pixels of a tile's
+edge.** That is what ruled out the rasteriser, the multisample resolve and the
+batch in a single query, and left the sampler.
+
+**The cause.** A 16-texel block drawn 54.4 pixels wide is 6.75 device pixels per
+texel, and at that ratio some texel boundaries land *exactly* on a device pixel
+centre. `GL_NEAREST` resolves such a pixel with `floor(uv * textureSize)`, where
+`uv` was interpolated across the quad by the rasteriser — so the answer comes
+from the last bits of a float, and those bits change when the quad moves, even
+by a whole pixel. The inside of every sprite fizzes while its edges sit still.
+
+**Java2D does not have this** because it maps destination column to source
+column with integer arithmetic anchored at the rectangle's own origin: translate
+the rectangle and the answer translates exactly. That is why it measured zero,
+and why the comparison was worth making before reaching for a cause.
+
+**The fix** is to take the decision away from the interpolator. `GlProgram`'s
+fragment shader nudges a thousandth of a texel past the boundary, floors, and
+then samples that texel's *centre* — four orders of magnitude above the
+interpolator's error, three below anything that could move a sample not already
+on a boundary, and safe against atlas bleed because the value handed to the
+sampler always names a texel interior. GL now moves **0** pixels a step, the
+same as Java2D.
+
+**Why nothing caught it.** `GlHiDpiParityTest` — D0's instrument, and the one
+whose name suggests it would — sweeps the camera in *whole* pixels, positions
+its tiles with integer arithmetic of its own rather than through `Camera`, and
+uses a 12×11 tile. Every coordinate in it is a whole number at every step, so
+the ratio that makes this possible never occurs. Its answer was true and
+narrower than it read.
+[`GlSubPixelStabilityTest`](gl/src/test/java/com/larsons/engine/gl/GlSubPixelStabilityTest.java)
+is the version that can fail: a real camera, a fractional zoom, quarter-pixel
+steps, and the two backends required to disturb the *same* amount of the frame
+rather than to draw the same frame — because at a fractional zoom they
+legitimately do not, GL being sharper by about 2.6 of 255.
+
+**Job D is closed by three separate fixes, and it took four hypotheses to get
+there.** D1 (vsync, presentation), D3 (`Camera`, projection, both backends), D4
+(the sampler, GL only). The lesson the section keeps: *"the shimmer" was never
+one defect*, and every instrument that said "no shimmer here" was answering a
+narrower question than the one being asked.
 
 ---
 
@@ -3237,6 +3379,8 @@ declared finished while broken.
 | **`GlBatchTest`** | Does the backend survive a frame bigger than its buffers? The catalogue answers *vocabulary*; this answers *volume*, and the two are different questions — B8a shipped because only the first was being asked | `gl/…/GlBatchTest.java`, B8a |
 | **`GlResizeTest`** | Does the backend survive the window *changing size*? Every other instrument here renders at a fixed size for the whole of its life | `gl/…/GlResizeTest.java`, §10 |
 | **`CameraStabilityTest`** | Does the world hold still relative to *itself* while the camera moves? Every parity test compares two backends and is therefore blind to a defect they share — which D3 was | `CameraStabilityTest.java`, D3 |
+| **`GlSubPixelStabilityTest`** | Does the *GL backend* hold still, at a fractional zoom and a fractional camera step? The two questions above are asked at whole-pixel sizes, where the defect cannot occur | `gl/…/GlSubPixelStabilityTest.java`, D4 |
+| **`GlScreenSpaceTest`** | Does a shader know which way up the frame is? The chain's parity harness uploads and reads back with two flips that cancel, so it cannot | `gl/…/GlScreenSpaceTest.java`, A7 |
 
 **`DrawStats` and `GlParityTest` answer different questions and B8 measured the
 gap.** `DrawStats` models what a batching backend *could* merge given the draw
@@ -3285,6 +3429,14 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
       │  D1  vsync on by default        ← done. B9 had turned it off. A real
       │        GL-only fix for tearing, and NOT the shimmer — see D3.
       │  D2  GlHiDpiParityTest          ← done. First parity test at scale 2.
+      │  D4  the GL sampler            ← done, and D3 was not enough on its
+      │        own: "the shimmer still happens with every block". A 16-texel
+      │        block drawn 54.4 px wide puts texel boundaries exactly on
+      │        device pixel centres, and GL_NEAREST then decides from the
+      │        last bits of an interpolated float — which move when the quad
+      │        does. Java2D moved 0 px a step; GL moved up to 169, all of
+      │        them inside tiles and none at a tile edge. Now 0.
+      │        JOB D DELIVERED, by three fixes and four hypotheses.
       │  D3  the shimmer, actually found ← done. Camera rounded
       │        (world - camera) * zoom in ONE step, so every object crossed
       │        its rounding boundary at its own moment and neighbours slid
@@ -3294,7 +3446,7 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
       │        32-unit tile is a whole number of pixels wide and the old
       │        arithmetic is exactly right. Fixed with TerrainCache's own
       │        lattice, moved down into Camera so everything gets it.
-      │        JOB D DELIVERED.
+      │        Necessary and not sufficient — see D4 above.
       │
       ├─ A1  scene renders to a texture ← done. Offscreen when a chain has
       │        passes; straight at the window otherwise, because the resolve
@@ -3320,6 +3472,14 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
       │  A5  keep + test the CPU chain  ← done. 983/0/3 both backends. Plus
       │        the end-to-end test the plan did not ask for: a chain
       │        attached to GlRenderer, over the scene it really drew.
+      │  A7  the mirrored lighting pass ← done. vTexCoord is a TEXTURE
+      │        coordinate and GL puts v=0 at the bottom; the pass read it as
+      │        a screen row, so every light was reflected about the middle of
+      │        the screen. Invisible on the player's own level, worse the
+      │        further you climb. The parity harnesses uploaded and read back
+      │        unflipped, so their two errors cancelled and they could not
+      │        fail. Both now match the renderer's orientation; removing the
+      │        fix takes lighting parity to 34.68 against a bar of 3.0.
       │  A6  correct the README         ← done. Three of the four fixes are
       │        corrections of UNDERstatement, which is new for Appendix B.
       │        JOB A DELIVERED — the correctness defect in §5.1 is closed.
@@ -3447,24 +3607,51 @@ down because it had been assumed not to: `xvfb-run ./gradlew test` takes all 52
 GL tests from skipped to run. The parity numbers this plan quotes were being
 checked on developer machines only.
 
-### 10.3 Open, and found while reading the same report
+### 10.3 The second defect in the same report — done, and the close button was the tell
 
 The crash log shows `+[AWTStarter starter:headless:]` → `runAWTLoopWithApp:` →
 `[NSApplication run]` on thread 0, **underneath** GLFW's `glfwPollEvents`. AWT's
 loop is `do { [app run]; } while (YES)` and never returns, so in that process
 `Engine.pumpUntilStopped()` had entered `pumpEvents()` once and would never come
 out. Events still flow — AppKit dispatches them to the GLFW window regardless of
-who is pumping — so the game plays normally, but the loop's exit conditions
-(`closeRequested()`, `larsons.run.seconds`) are never read again and
-`Engine.shutdown()` is unreachable.
+who is pumping — so the game plays normally, which is why this survived: what
+stopped happening was the *loop*. `closeRequested()` is never read again,
+`larsons.run.seconds` never fires, and `Engine.shutdown()` is unreachable.
+**Clicking the red button sets a flag nobody looks at.**
 
-LWJGL's own guidance is that a JVM using both AWT and GLFW on macOS must set
-`java.awt.headless=true` before AWT initialises, which `MacGlLauncher` is the
-natural place to do for the relaunched child. It is **not done here**: it is a
-different defect from the one reported, and it would break the three
-`JFileChooser` sites in the creative, skin and board editors, which is a decision
-about the product rather than a bug fix. Recorded so the next person does not
-have to re-derive it from the crash log.
+This was first recorded here as open, on the grounds that fixing it would break
+the three `JFileChooser` sites in the creative, skin and board editors and was
+therefore a decision about the product rather than a bug fix. **The first half of
+that was wrong, and checking rather than assuming is what changed the answer.**
+All three already wrap the chooser in `catch (RuntimeException)` and put "file
+browser unavailable" in the scene's status line; `HeadlessException` is a
+`RuntimeException`, and `CreativeScene`'s dialog has always had a text field to
+type the path into. They degrade to a fallback that exists, on a path that only
+exists on macOS with a GPU backend. Against that: a window that cannot be closed.
+
+So `MacGlLauncher.keepAwtOffTheFirstThread()` sets `java.awt.headless=true`, on
+macOS, when a GPU backend is on the classpath and Java2D was not asked for by
+name, and the relaunched child gets the same thing on its command line because a
+property set after the toolkit has started is ignored in silence. An explicit
+`-Djava.awt.headless=false` is left alone — this is a default, not a policy.
+
+**One cost was not accepted.** `DeviceProfile.detect()` reads the display's size,
+refresh rate and scale from `GraphicsEnvironment`, and a headless process has
+none, so every GL frame report would have said "headless / unknown" about a run
+on a real monitor — in a project whose reports exist precisely so a profile can
+say what it was taken on. `BackendWindow.displayMode()` and `displayScale()` now
+answer it from GLFW, which knows the monitor better than AWT does anyway, and
+`Engine` fills the profile from the backend for anything AWT could not supply.
+
+**What is tested, and by which module.** `MacGlLauncherTest` in the core holds
+every negative — off macOS, no GPU backend on the classpath, Java2D asked for by
+name, an explicit setting — and it can hold all of them precisely because the
+core's test classpath is the plain jar's world with no backend on it. That is
+also why it cannot hold the positive one, which lives in
+[`GlHeadlessLaunchTest`](gl/src/test/java/com/larsons/engine/gl/GlHeadlessLaunchTest.java)
+where `Backends.discover()` finds something. A headless flag that fires for a
+Java2D run is a game with no window at all, so the negatives are the ones worth
+the most checking.
 
 ---
 
