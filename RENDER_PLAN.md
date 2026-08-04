@@ -27,11 +27,16 @@ shows the GL backend running **neither** pass: a GPU build currently has no
 day/night lighting at all, which is a correctness defect rather than a missing
 optimisation. §5.0 and §5.1.
 
-Two other things are open and both are written down rather than remembered:
-**B11** fixed a GL jar that could not open a window when double-clicked on macOS
-— the platform it had been profiled on for four steps — and **Job D** (§7) plans
-the sub-pixel shimmer seen on GL at 2× HiDPI, deliberately scheduled after A and
-C because A1's framebuffer may resolve it for nothing. Two of the plan's own instructions have now been measured to be
+**Job D (§7) is next, ahead of A.** GL shimmers by about a pixel at 2× HiDPI as
+the camera moves and Java2D does not. It is scheduled first because a player sees
+it every second, and because its likely fix — an offscreen surface at logical
+resolution — *is* A1's first deliverable rather than a detour around it.
+
+Also open: **B11** fixed a GL jar that could not open a window when
+double-clicked on macOS, the platform it had been profiled on for four steps. And
+the `update` stage spikes to 15–21 ms at p99 on both backends, which no renderer
+work will touch; that has a plan of its own in
+**[`SIM_PLAN.md`](SIM_PLAN.md)**. Two of the plan's own instructions have now been measured to be
 incomplete rather than wrong-headed: B6's "route `drawText` through it" (Java2D
 already has a glyph cache and beats any per-character blit) and B8's "against a
 1×1 white texture" (which shares a shader but not a batch — the white texel has
@@ -2646,56 +2651,34 @@ says why.
 jitter slightly on GL."* Terrain shimmers by about a pixel as the camera moves.
 Java2D on the same machine, same level, same camera does not.
 
-### 7.0 Why this waits for A and C
+### 7.0 Why this is next, and not after A
 
-Not because it is unimportant — a shimmering world is the kind of defect a
-player feels without being able to name, and it is the sort of thing that gets
-described as "the GPU version looks worse" — but because **the two jobs ahead of
-it both move the thing that probably causes it, and one of them may fix it for
-free.**
+**This section previously argued for doing Job D last.** The argument was that
+A1 binds an offscreen framebuffer, that a framebuffer sized in logical pixels
+would remove the cause for free, and that building a bespoke fix first risks two
+implementations of one thing.
 
-A1 binds an offscreen framebuffer and renders the scene into it. If that
-framebuffer is sized in *logical* pixels rather than device pixels, GL adopts
-exactly the strategy Java2D already uses — rasterise at 1280×720, upscale once
-on present — and the jitter cannot occur, because there is no fractional device
-pixel left to land on. Building a bespoke fix first and then discovering A1
-subsumes it is two implementations of one thing, and the second one is always
-the one nobody removes.
+**The premise was right and the conclusion was wrong.** If a logical-size
+framebuffer is what fixes the shimmer, then *that framebuffer is the fix* — and
+it is also A1's first deliverable. Building it now does not duplicate A1's work,
+it **front-loads** it: D1 stands the offscreen surface up and presents through
+it, and A1 then has only to hang the shader chain off a surface that already
+exists. The two jobs share a step; they do not compete for it.
 
-C rotates the camera, which changes what "axis-aligned" means and therefore
-changes which of the fixes below is even applicable. Snapping quads to a pixel
-grid is a sensible thing to do to an unrotated world and a wrong thing to do to
-a yawed one.
+So the ordering is: **D now, A next, C after.** What that changes about D1 is not
+whether to build the framebuffer but that it must be built as the thing A1 will
+inherit — sized, formatted and owned the way A1 needs — rather than as a
+throwaway. That constraint is written into D1 below.
 
-So: **measure it now, fix it after.** D0 exists so the evidence is captured while
-it is fresh and reproducible, rather than relying on someone remembering the
-symptom in three steps' time.
+The reason this is worth doing before A is simpler than the sequencing argument:
+a shimmering world is a defect a player sees every second they play, and GPU
+post-processing is an optimisation of a stage that currently costs the GL backend
+nothing at all.
 
-### 7.1 The hypothesis, stated so it can be wrong
-
-Java2D composes every frame into a **logical-size** `BufferedImage` (1280×720)
-and blits it once; AWT upscales that to the 2× backing store. Every sprite
-therefore lands on an integer logical pixel, the fractional part of the camera
-is rounded away once per frame, and the 2× upscale is a clean integer
-duplication.
-
-GL renders **directly at device resolution** (2560×1440): `glViewport` is
-`width × scale`, and the vertex shader maps logical coordinates through
-`uViewport`. A block at logical `x = 100.37` lands at device `x = 200.74`. With
-`GL_NEAREST` sampling and no rounding anywhere, the texel grid sits at a
-fractional offset from the pixel grid — and as the camera moves, that offset
-changes continuously, so which device pixel a given texel covers flips back and
-forth. That is a one-pixel shimmer along every block edge, and it is worse at 2×
-than at 1× because there are two device pixels per logical one to flip between.
-
-**The interpolated camera makes it continuous rather than occasional.** The loop
-hands `render(alpha)` a fractional interpolation factor every frame by design, so
-the camera is almost never on a whole pixel.
-
-If this is right, three things follow and each is a cheap test: the jitter should
-disappear at `scale = 1`, it should disappear if quad positions are rounded to
-whole device pixels, and it should disappear if the scene is rendered at logical
-size and upscaled.
+**What still genuinely belongs after C:** any fix that snaps geometry to a pixel
+grid. Snapping is correct for an unrotated world and wrong for a yawed one, so
+if D0's measurement points there instead, that half waits for C and this section
+gets rewritten again.
 
 ### D0 — Reproduce it in a test, before fixing anything
 
@@ -2740,15 +2723,25 @@ A1 has landed, because the first candidate may already be done.
 | **Render the world at logical size and the UI at device size** — two passes, two resolutions | Real complexity: two projections, two framebuffers, a composite | The most correct answer for a pixel-art game with a crisp HUD, and the most code. Only justified if D0 says the first two both fail |
 
 **Do.**
-- Re-run D0's metric after A1. If a logical-size framebuffer has already
-  flattened it, write that down and **close this job** — the fix was free.
-- Otherwise implement the cheapest remaining candidate and re-run the metric.
+- **Build the offscreen framebuffer A1 needs, one job early**, sized in logical
+  pixels, and present through it. `GlSurface` already exists and already resolves
+  to a texture — it was written for B8's parity comparison and
+  `resolvedTexture()` has been sitting there unused since, for exactly this.
+  Re-run D0's metric.
+- **Own it the way A1 will need it**, because A1 inherits this rather than
+  replacing it: the surface is the renderer's for the life of the window, it
+  resizes with the drawable, and the scene ends up in a texture the shader chain
+  can sample. A version that blits and forgets would have to be rewritten in one
+  step's time.
+- If the metric does not move, the hypothesis in §7.1 is wrong: fall back to the
+  second candidate and re-run.
 
 **Verify.** D0's shimmer metric for GL at `scale = 2` falls to Java2D's, and the
 32 golden frames still pass at their existing bar. A fix that stabilises motion
 by moving every sprite half a pixel is not a fix.
 
-**Done when.** The metric matches Java2D's and the parity number is unchanged.
+**Done when.** The metric matches Java2D's, the parity number is unchanged, and
+A1 begins by attaching a chain to a surface that is already there.
 
 ### D2 — Guard it
 
@@ -2823,10 +2816,14 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
                                          when double-clicked; only the Gradle
                                          tasks passed -XstartOnFirstThread.
       │
-      ├─ A1  scene renders to an FBO  ← JUSTIFIED: 5.460 ms/frame of CPU
-      │        shaders measured at 2x HiDPI (lighting 2.894 + bloom 2.563),
-      │        and the GL backend currently runs NEITHER — a GPU build has
-      │        no day/night at all. See §5.0-5.1.
+      ├─ D0  measure the HiDPI shimmer  ← START HERE
+      │  D1  logical-size offscreen surface, presented through
+      │  D2  guard it
+      │
+      ├─ A1  attach the chain to D1's surface  ← JUSTIFIED: 5.460 ms/frame of
+      │        CPU shaders measured at 2x HiDPI (lighting 2.894 + bloom
+      │        2.563), and the GL backend runs NEITHER today — a GPU build
+      │        has no day/night at all. See §5.0-5.1.
       │  A2  GlShaderChain ping-pong
       │  A3  uniform binding
       │  A4  LightingPass
@@ -2844,10 +2841,18 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
          C9  editor + save format
          C10 multiplayer consistency
 
-      then D1  fix the HiDPI shimmer   ← D0 (measure it) can be done any time;
-           D2  guard it                  D1 waits because A1's framebuffer may
-                                         fix it for free. See §7.0.
 ```
+
+D is first because a shimmering world is a defect the player sees every second
+and GPU post-processing optimises a stage that currently costs the GL backend
+nothing. D1 builds the offscreen surface A1 then hangs the shader chain off, so
+the two share a step rather than competing for it — see §7.0.
+
+**The simulation stall is not in this plan.** `update` spikes to 15–21 ms at p99
+against a 0.6–0.8 ms median, identically on both backends, and no renderer work
+will touch it. It now has a plan of its own: **[`SIM_PLAN.md`](SIM_PLAN.md)**,
+whose first step is making the update stage as legible as the scene stage
+already is.
 
 A and C are independent of each other once B10 passes. A is much smaller and its
 risk is already retired, so it is the natural next one — but nothing forces that
