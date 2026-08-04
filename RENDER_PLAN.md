@@ -1,7 +1,11 @@
 # Render Plan — GPU Acceleration, End to End
 
 **Status:** Living document. Written 2026-08-02 against commit `85196b9` on
-`claude/gpu-acceleration-shaders-oqbx54`. **Job B is complete and it delivered.**
+`claude/gpu-acceleration-shaders-oqbx54`. **Jobs A and B are complete.** Job A
+closed 2026-08-04: the shipped GLSL runs on the GPU, matching the CPU chain pass
+for pass, and the GL backend has lighting again (§5, A2–A6).
+
+**Job B delivered.**
 Measured on the M1 Air across four runs on two builds: the scene stage fell from
 **9.77/9.42 ms to 3.92/3.65 ms** (−61%), frame work from 12.1–16.8 ms to a stable
 **6.7 ms**, and headroom from between −1.0% and +27% to a steady **+58–60%**. The
@@ -20,17 +24,29 @@ unstable on this machine. See B10.
 **The desktop was skipped by decision**, not omission; the bar B10 stated was in
 terms of the Air, which was the machine over budget.
 
-**Job A is now justified and is the next job.** A profile with the chain *on*
-puts the CPU shader stage at **5.460 ms** — 29% of the frame, and enough to take
-the Java2D renderer 12.6% over budget at 53 FPS. More seriously, the same run
-shows the GL backend running **neither** pass: a GPU build currently has no
-day/night lighting at all, which is a correctness defect rather than a missing
-optimisation. §5.0 and §5.1.
+**Job A is complete.** It was justified by a profile with the chain *on* that
+put the CPU shader stage at **5.460 ms** — 29% of the frame, and enough to take
+the Java2D renderer 12.6% over budget at 53 FPS — and, more seriously, showed
+the GL backend running **neither** pass: a GPU build had no day/night lighting
+at all, a correctness defect rather than a missing optimisation. §5.0 and §5.1.
+That is closed. `GlShaderChain` compiles each pass's shipped GLSL once and runs
+the chain as a framebuffer ping-pong over the texture A1 left behind, and it
+reproduces §2's per-pass parity table **to the hundredth** — which is what those
+numbers were measured before a backend existed for. A2–A6.
 
-**Job D (§7) is next, ahead of A.** GL shimmers by about a pixel at 2× HiDPI as
-the camera moves and Java2D does not. It is scheduled first because a player sees
-it every second, and because its likely fix — an offscreen surface at logical
-resolution — *is* A1's first deliverable rather than a detour around it.
+**Two of the job's own instructions were incomplete, and the second was a
+shipped defect rather than an inefficiency.** A3 says lifting the harness's
+`bindUniforms` is enough and that a location of −1 would be a backend bug; in
+fact three of `LightingPass`'s uniforms could not be advertised at all — a
+`Map<String, Float>` cannot carry a `vec3` — and a fourth was being bound with
+`glUniform1f` against an `int`, which the driver refuses while raising an error
+nobody reads. Either one alone renders a plausible night with no torches in it.
+See A3.
+
+**Job D (§7) went first, ahead of A.** GL shimmers by about a pixel at 2× HiDPI
+as the camera moves and Java2D does not. It was scheduled first because a player
+sees it every second, and because its likely fix — an offscreen surface at
+logical resolution — *is* A1's first deliverable rather than a detour around it.
 
 Also open: **B11** fixed a GL jar that could not open a window when
 double-clicked on macOS, the platform it had been profiled on for four steps. And
@@ -123,6 +139,11 @@ Everything in this table has been measured or executed, not assumed.
 | A number that moves between two runs of the same code is not a result | B10 — `present` read 5.061 ms then 0.962 ms on Java2D with nothing in between that touches it. The 78% saving written up from the first pair is withdrawn |
 | A backend can pass 32 pixel-perfect frames and still be broken | B8a — `GlBatch` grew mid-triangle above 4,096 vertices and scrambled every triangle after it. No catalogue frame is that big. `GlBatchTest` reproduces it at the predicted vertex |
 | A profile says which renderer produced it | B9 — `DeviceProfile.backend()` / `gpu()`, printed by `FrameReport`. The build stamp taught this lesson once already |
+| **The shipped GLSL executes on the GPU, and draws what the CPU draws** | A2 — `GlShaderChainTest` runs every pass through the production chain against `ShaderChain` and reproduces §2's own table to the hundredth: five at **0.00**, `scanlines` 0.04, `vignette` 0.32, `grayscale` 0.47, `bloom` 3.58 |
+| A GPU build has day/night lighting again | A4 — `LightingPass` runs as GLSL, its arrays bound as arrays; parity **1.27** on a fixed light set, and a separate test asserts the frame is *lit* rather than merely darkened, which is what an unbound light array looks like |
+| The uniform contract can be honoured to the letter and still be wrong | A3 — three of `LightingPass`'s uniforms were declared, sampled and advertised to nobody; `ShaderPass.vectorUniforms()` closes the hole and `ShaderCompileTest` now scans both directions instead of one |
+| A pass's cost on a GPU is not what the submitting thread's clock says | A2 — `Stage.SHADERS` and the per-pass split come from `GL_TIME_ELAPSED` queries, collected a frame later; `FrameProfiler.recordElapsed` exists for measurements that are not wall time |
+| The chain measures in the same pixels the CPU chain does | A2 — `uResolution` is the logical frame size, checked at 2× against the Java2D frame upscaled, with the device-units mistake as the negative control |
 | Both backends run the whole game, not a test harness | B9 — `-Dlarsons.run.seconds` launches the real game on each and exits; both wrote a report under `xvfb-run`, `gl` at 0.631 ms scene against `java2d` at 1.591 ms on a software rasteriser |
 
 **The honest summary:** Job A's *unknowns* are gone; only its plumbing remains,
@@ -158,8 +179,9 @@ much faster it makes things.
    the Java2D path working and tested.
 3. **Pixel parity is the contract.** "Looks fine" is not a result. Every port
    step compares rendered output against a reference and states the error.
-4. **The suite stays green.** Last full run: **964 tests, 0 failures, 3 skipped**
-   under `xvfb-run` (was 810/0/3 when this was written; B0–B10 added the rest;
+4. **The suite stays green.** Last full run: **984 tests, 0 failures, 3 skipped**
+   under `xvfb-run` (was 810/0/3 when this was written; B0–B11, D0–D2 and
+   A1–A5 added the rest, twelve of them in Job A;
    17 skip with no display at all). The skips are
    environment-dependent and skip rather than fail by design — three need a
    display, fourteen need a GL driver (seven in core, seven in `:gl`). Under
@@ -2309,6 +2331,13 @@ same machine, same level, **2 passes on** (`lighting` + `bloom`):
 | **headroom** | +27.2% | **−12.6%** | +59.5% |
 | sustainable FPS | 82 | **53** | 148 |
 
+> **The GL column's `0.000 — not run` is fixed as of A2.** The chain executes
+> on the GPU now, so a future run of this table has three columns that can
+> honestly be set against each other. **This one still does not** — the 6.745 ms
+> frame in it was measured with no lighting and no bloom in it, and no amount of
+> later work makes that measurement mean something it did not mean. It is left
+> exactly as it was recorded, as the bug report it was.
+
 **Job A is justified, and the number is 5.460 ms.** Turning two passes on costs
 29% of the frame and takes the Java2D renderer from inside its budget to 12.6%
 over it — 82 sustainable FPS down to 53. The HiDPI note in the report is not
@@ -2346,6 +2375,19 @@ owes the player one of:
 The third is only honest if A really is next. Whichever is chosen, it is a
 decision to record here rather than a detail — the same rule that governed the
 window question in B9.
+
+> **Resolved 2026-08-04: the third, and A really was next.** A2–A5 landed in one
+> pass, so neither the warning nor the forced fallback was ever built — both
+> would have been code written to describe a defect that was about to stop
+> existing. The GL backend runs `LightingPass` as GLSL and a GPU build has
+> day/night again.
+>
+> **What that option cost while it was open is exactly one day**, and the
+> alternative reading is worth stating: had A been *deferred* after this
+> section was written, "do neither" would have been the wrong choice and the
+> plan would have had to come back and take one of the first two. The third
+> option is only ever a bet on the next step, and it is honest only in
+> retrospect.
 
 ### A1 — Render the scene to a texture, not the backbuffer
 
@@ -2426,6 +2468,87 @@ existed.
 
 ---
 
+#### A2 — done
+
+[`GlShaderChain`](gl/src/main/java/com/larsons/engine/gl/GlShaderChain.java):
+two textures the size of the drawable, one program per pass compiled on first
+sight and kept, one fullscreen triangle per pass, no vertex buffer.
+`GlRenderer.present()` resolves the surface, runs the chain and blits the
+result instead of the scene.
+
+**The verification came out exactly as this step predicted, which is the
+result.** Every pass, both ways, through the shipping chain rather than the
+harness:
+
+| pass | mean channel error | §2 says |
+|------|-------------------:|--------:|
+| `pixelate`, `wave`, `chromatic_aberration`, `color_grade`, `invert` | **0.00** | 0.00 |
+| `scanlines` | **0.04** | 0.04 |
+| `vignette` | **0.32** | 0.32 |
+| `grayscale` | **0.47** | 0.47 |
+| `bloom` | **3.58** | 3.58 |
+
+Not close to §2's table — *identical to it*. That is what the numbers were
+taken before the backend existed for: they are a property of the shaders, so
+reproducing them to the hundredth is a statement about the backend and nothing
+else. `build/reports/gl-shader-chain.md` is written on every run.
+
+**Three things the step listed as risks, and what each turned into.**
+
+- **Order.** Held, and tested with a control that immediately caught the
+  test's own first draft. The pair chosen to prove ordering mattered was
+  grayscale-then-invert against invert-then-grayscale — which *commute*, because
+  Rec. 709's weights sum to one and `luma(1 − c) = 1 − luma(c)` exactly. The two
+  orders agreed to 0.00 and the control said so on the first run. It is
+  `vignette` and `invert` now, which genuinely do not commute.
+- **Resize.** Tested by changing both axes mid-run, for the reason the step
+  gives: a stale ping-pong does not crash or blank, it stretches, and "the game
+  looks a bit soft" is the hardest report to act on.
+- **Compile once.** Per pass, by identity, on first use rather than at
+  chain-set time — the chain is replaced atomically by a settings menu while
+  the render thread is mid-frame (`ShaderChain.setPasses`), so "at chain-set
+  time" would mean compiling on whatever thread the menu is on, against a
+  context that belongs to another. The uniform *locations* are cached with the
+  program for the same reason they should be: `glGetUniformLocation` is a string
+  lookup in the driver and the answer cannot change.
+
+**And one thing the step did not raise, which turned out to be the decision the
+whole class rests on: `uResolution` is bound at the frame's *logical* size, not
+the texture's.** Every pass that touches that uniform uses it as "the pixel
+space this frame's coordinates are measured in" — `pixelate` divides a block
+size by it, `bloom` turns a radius in pixels into a UV offset with it,
+`scanlines` counts rows with it, `lighting` multiplies by it to recover where a
+light is. Java2D composes at logical size, so all of those are logical
+quantities on the CPU side. Binding the device size — the obvious reading of
+"framebuffer size in pixels" — would at 2× HiDPI halve every scanline's
+thickness, quarter each pixelate block's area, halve bloom's radius and put
+every light at half its position: four wrong pictures, on the machine this plan
+exists for, none of which looks like a units bug.
+
+That is now measured rather than argued. `theChainMeasuresInLogicalPixelsSoHiDpiLooksTheSame`
+shades at 2× and compares against the logical CPU frame upscaled nearest-neighbour,
+the way D0 compares — `scanlines` 0.04, `pixelate` 0.00, `lighting` 1.62 — and
+carries the negative control that matters here more than usual: the same run
+with device units passed as the measuring unit has to fail the comparison, or
+three errors near zero would only prove the metric was blind.
+
+**GPU work is timed on the GPU.** `Stage.SHADERS` and the per-pass breakdown
+come from `GL_TIME_ELAPSED` queries collected a frame later, not from
+`System.nanoTime` around the draw call. A GL call returns as soon as the command
+is queued, so the wall clock would have charged the frame tens of microseconds
+for milliseconds of shading — and §5.0 has already had to correct one reading of
+`shaders 0.000` that meant "not run". A number that is wrong by two orders of
+magnitude *in the flattering direction* is worse than no number. `FrameProfiler`
+gained `recordElapsed` / `recordPassElapsed` for measurements that are not the
+caller's wall clock; `record(stage, start)` is now one line on top of it.
+
+The first version of that recycled a query object while it was still in flight,
+which is `GL_INVALID_OPERATION` and shows up as a pass quietly missing from the
+report rather than as an error. Queries that have not landed stay pending and
+are asked again next frame.
+
+---
+
 ### A3 — Uniform binding contract
 
 **Do.** Bind `uTexture`, `uResolution`, `uTime`, `uStrength`, then everything in
@@ -2436,6 +2559,54 @@ location of −1 here is a backend bug rather than a shader bug.
 
 **Verify.** The strength-zero test from `ShaderParityTest`, run against the
 production chain rather than the harness.
+
+---
+
+#### A3 — done
+
+Lifted as the step said, into `GlShaderChain.bindUniforms`, and verified by
+`strengthZeroLeavesTheFrameAloneThroughTheProductionChain` — the same check
+`ShaderParityTest` runs, pointed at the shipping chain, with the same two
+geometric passes excluded for the same reason (strength scales their
+displacement, not their opacity). `aPassSpecificScalarReachesItsShader` covers
+the other half: `uPixelSize` unbound quantises to blocks of zero, which GLSL
+clamps to one — an identity pass that looks exactly like a working chain doing
+nothing.
+
+**The step's premise was wrong in a way worth recording, and it is the bug this
+job existed to find.** A3 says a location of −1 "is a backend bug rather than a
+shader bug", because `ShaderCompileTest.everyExtraUniformAPassAdvertisesExistsInItsShader`
+guarantees no advertised uniform is missing from its shader. True — and it
+guarantees nothing about the opposite direction, which is where the defect was.
+`ShaderPass.uniforms()` returns `Map<String, Float>`, and a `Float` cannot carry
+a `vec3`, so `LightingPass`'s `uNightTint`, `uLightPos[]` and `uLightColor[]`
+were **declared in the shader, sampled by the shader, and advertised to nobody**.
+A backend honouring the documented contract to the letter — which is precisely
+what "lift `bindUniforms`" produces — shades every dark pixel toward
+`vec3(0)` and lights nothing.
+
+So the contract gained the member it was short of, `ShaderPass.vectorUniforms()`,
+returning a `Vector(components, values)` that carries its own component count
+because six floats are two `vec3`s or three `vec2`s and nothing in the values
+says which. And `ShaderCompileTest` now scans **both** directions: every
+advertised name must exist in the shader, and every `u`-prefixed uniform the
+shader declares must be advertised to backends. The second check is the one that
+had never existed and the one that was failing.
+
+**A second, quieter type error in the same pass.** `uLightCount` *is*
+advertised — through the `Float` map, because that is the only map there was —
+and the shader declares it `int`. `glUniform1f` against an integer uniform is
+`GL_INVALID_OPERATION`: the driver refuses the call, raises an error nobody is
+reading, and leaves the uniform at its default of zero. A lighting pass that
+compiles, links, runs, costs what lighting costs, darkens the frame correctly
+and lights nothing. `GlShaderHarness` has had this bug since it was written and
+it never showed, because `ShaderParityTest` only ever ran the nine built-ins and
+not one of them has an integer uniform.
+
+The production chain therefore asks the program what type each uniform is —
+`glGetActiveUniform` once at link time, cached beside the location — and binds
+accordingly. That is four extra lines and it is the difference between the
+uniform contract being a description and being a contract.
 
 ---
 
@@ -2453,6 +2624,56 @@ nearest N lit. Parity against the CPU lighting path on a fixed light set.
 
 ---
 
+#### A4 — done
+
+**Parity on a fixed light set: 1.27 out of 255**, and it is held to the ordinary
+3.0 bar rather than a looser one. The two sides are not the same algorithm —
+the CPU computes the light field at quarter resolution and upsamples it
+bilinearly (the original side-scroller's trick for keeping cost flat in the
+light count) while the GPU evaluates the falloff per fragment, because on a GPU
+that is the cheaper of the two — so a difference was expected and a looser bar
+was written first. Measuring it made that bar an unforced concession. A bar set
+above what the code achieves is a bar that lets it get worse in silence.
+
+The arrays bind as arrays through A3's new `vectorUniforms()`, so there is no
+lighting-shaped special case in the uniform path; see A3 for why that member had
+to exist at all, which is the substance of this step.
+
+**Two tests, because "matches the CPU" and "is lit" are different claims.**
+`theFrameIsActuallyLitRatherThanMerelyDarkened` asserts the middle of the frame
+is brighter than the corner. That sounds trivial and is the test that would have
+caught the shipped defect: an unbound light array renders a *uniformly darkened
+frame with no torches in it*, which has no error anywhere to point at and looks
+entirely like night.
+
+**The clamp: honoured, provoked, and narrower than the step imagined.** The
+budget comes from `GL_MAX_FRAGMENT_UNIFORM_COMPONENTS`, two `vec3`s per light
+charged at four components each because a driver may pad, with 64 held back for
+everything else. GL 3.3 guarantees 1,024 components and 32 lights need a quarter
+of that, so **on any conforming driver the clamp never engages** — which makes it
+code a player's driver would be the first ever to execute. So it is forced
+reachable with `-Dlarsons.render.gl.maxlights`, the same trick B9 uses to
+provoke its fallback by asking for a GL version no driver has, and
+`moreLightsThanTheDriverAffordsStillRenders` runs it at a budget of 4 with 12
+lights on a machine that could hold all 32.
+
+That test checks both halves, because they are separate mistakes: the *shader*
+has to be compiled with arrays the driver can declare (`LightingPass.glsl(int)`
+takes the size), and the *loop bound* has to stop inside them. Getting the first
+right and the second wrong reads past the end of a uniform array — undefined
+behaviour, which renders perfectly on the driver you tested it on.
+
+**One deviation from the step, stated rather than quietly taken.** A4 says the
+clamp should keep "the nearest N". It keeps the **first N**, which is the rule
+the CPU path has always applied at `MAX_LIGHTS` — `addLight` silently ignores
+anything past the limit. Picking the nearest would be a nicer rule and would
+make the two backends disagree about which lights are lit, and invariant 3 says
+pixel parity is the contract. A rule that is better on one backend and different
+on the other is worse than a rule that is merely adequate on both. Changing it
+is a change to `LightingPass`, where both paths would get it.
+
+---
+
 ### A5 — Keep the CPU chain, and keep testing it
 
 **Do.** `ShaderChain` stays and stays tested. It is what runs under
@@ -2464,11 +2685,84 @@ while both exist.
 
 ---
 
+#### A5 — done
+
+`ShaderChain` is untouched and every test it had still runs. It is not a legacy
+path: it is what runs under `-Dlarsons.render.backend=java2d`, in headless CI,
+on a machine whose driver the probe rejects, and — as of A2 — it is the
+reference the GPU chain is measured against on every build. The two keep each
+other honest and only work while both exist, which is exactly what this step
+says.
+
+**Full suite, both backends, under `xvfb-run`: 984 tests, 0 failures, 3
+skipped.** Twelve are new here — `GlShaderChainTest` (10), `GlBackendTest`'s
+end-to-end chain check, and `ShaderCompileTest`'s reverse-direction scan. The
+three skips are the
+same display-dependent `FrameProfilerTest` cases B4 traced to eleven classes
+setting `java.awt.headless=true` in a shared JVM — not this step's, and not new.
+
+**A5 also bought a test the plan did not ask for, and it is the one that
+matters.** `GlShaderChainTest` drives `GlShaderChain` over a texture it uploads
+itself, which means it would pass unchanged against a renderer that never called
+the chain, that called it with the multisample buffer unresolved, or that ran it
+and then presented the *unshaded* surface anyway. All three draw a plausible
+frame. So `GlBackendTest.aChainAttachedToTheRendererRunsOverTheSceneItDrew`
+attaches a chain the way `Engine` attaches one, draws a red rectangle, presents,
+and asks what colour the rectangle came out — cyan, through an `invert` pass,
+along with the inverted clear colour, which is what says the whole frame went
+through the chain rather than just the geometry. It deliberately does not force
+A1's offscreen property, because "offscreen when a chain has passes" is the
+condition A2 made load-bearing: get it wrong and there is no scene texture to
+post-process at all.
+
+---
+
 ### A6 — Correct the documentation, once it is true
 
 **Do.** Update the README rows listed in `STEAM_PLAN.md` Appendix B, and mark
 Appendix A item 3 complete. Update `Renderer`'s javadoc, which currently
 describes the GPU backend as hypothetical.
+
+---
+
+#### A6 — done
+
+`Renderer`'s javadoc no longer describes GPU shading in the conditional: both
+backends execute, and the paragraph names the instrument that holds them
+together rather than asserting they agree. `setShaderChain` and `setProfiler`
+say the same in miniature, the latter now pointing at `recordElapsed` for a
+backend whose work does not happen on the calling thread.
+
+`STEAM_PLAN.md` Appendix A: item 3 is marked done — and its estimate held, which
+is worth recording as loudly as a miss would have been. "What remains is the
+plumbing… `GlShaderHarness` already does it in about two hundred lines. That
+harness is the shape of the backend" was written before any of this and is
+exactly what happened. The appendix gains a **fourth** consequence, because A3
+found one the trace had missed: the uniform contract was a member short, and a
+backend honouring it to the letter would have shipped a lighting pass that lit
+nothing.
+
+**README, four places** — three of them corrections of *understatement*, which
+is a first for this document and is recorded in Appendix B as such:
+
+| Where | Was | Now |
+|-------|-----|-----|
+| Intro | "a multithreaded CPU post-processing pipeline that ships hand-written GLSL" | GLSL-first post-processing that runs as real fragment shaders on the GL backend and as the CPU pipeline everywhere else |
+| Requirement #5 row | "**Post-processing executes on the CPU today** … the GL backend says so on stderr" | Both sides execute; cites `GlShaderChainTest` reproducing the per-pass errors |
+| Rendering backends | (nothing about post-processing) | The chain is a ping-pong over the scene texture, lighting included, timed with GPU queries |
+| "Rendering backend & shaders" | "What remains is the GL backend itself" | Stale since B8/B9. Now says what remains is Jobs C and D |
+
+The fourth was not A6's to fix and was fixed anyway, on B4's precedent: a
+sentence that says the main remaining work is a thing finished two steps ago
+argues against work already done, which is worse than saying nothing.
+
+**Appendix B gains the rule it was missing.** Every row in it until now was an
+overstatement walked back. Three of today's are the opposite — text that was
+scrupulously accurate on 2026-08-03 and too modest by 2026-08-04. A README that
+undersells has the same defect as one that oversells: it has stopped describing
+the program. That is why "correct the documentation" is a numbered step with a
+precondition rather than a habit, and it is why the precondition is *once it is
+true* in both directions.
 
 ---
 
@@ -2822,6 +3116,7 @@ declared finished while broken.
 | **`DrawCallReport`** | What did a batching change actually buy, frame by frame? | `render/DrawCallReport.java`, B5 — writes `build/reports/draw-calls.md` |
 | **`FrameProfiler` / `FrameReport`** | Where does the frame actually go? | `profile/` |
 | **`ShaderParityTest` metric** | Do two implementations of the same effect agree? | `ShaderParityTest`, reused by A2 and B8 |
+| **`GlShaderChainTest`** | Does the *shipping* chain run the shaders the way the CPU runs them — in order, at any size, in logical units, with every uniform bound? | `gl/…/GlShaderChainTest.java`, A2–A4 — writes `build/reports/gl-shader-chain.md` |
 | **`GlParityTest`** | Does the GPU backend draw the same picture, and how many draw calls does it really issue? | `gl/…/GlParityTest.java`, B8 — writes `build/reports/gl-parity.md`, and PNGs for any frame over the bar |
 | **`ModuleBoundaryTest` + `:verifyNoRuntimeDependencies`** | Can the core quietly acquire a runtime dependency? | `render/ModuleBoundaryTest.java` and the root build, B7 |
 | **`BackendSelectionTest` + `GlBackendTest`** | Does the right renderer get picked, and does the wrong answer still leave a playable game? | `render/BackendSelectionTest.java` (every route, no GPU needed) and `gl/…/GlBackendTest.java` (the classpath, the driver, the provoked failure), B9 |
@@ -2881,11 +3176,27 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
       │        until A2. JUSTIFIED by 5.460 ms/frame of CPU shaders at 2x
       │        HiDPI, and the GL backend runs NEITHER pass today — a GPU
       │        build has no day/night at all. See §5.0-5.1.
-      │  A2  GlShaderChain ping-pong    ← START HERE
-      │  A3  uniform binding
-      │  A4  LightingPass
-      │  A5  keep + test the CPU chain
-      │  A6  correct the README
+      │  A2  GlShaderChain ping-pong    ← done. Every pass reproduces §2's
+      │        parity table to the hundredth (0.00 ×5, 0.04, 0.32, 0.47,
+      │        3.58). uResolution is LOGICAL, not device — four effects
+      │        would be wrong at 2x otherwise. GPU timer queries, because
+      │        a draw call returns before the work starts.
+      │  A3  uniform binding            ← done, and it found the defect: three
+      │        of LightingPass's uniforms could not be advertised at all
+      │        (a Float cannot carry a vec3) and uLightCount was bound with
+      │        glUniform1f against an int, which the driver refuses in
+      │        silence. ShaderPass.vectorUniforms(); types read from the
+      │        program. ShaderCompileTest now scans BOTH directions.
+      │  A4  LightingPass               ← done. Parity 1.27, held to the
+      │        ordinary 3.0 bar. Clamp provoked at 4 lights on a driver
+      │        that holds 32. Keeps the FIRST n, not the nearest — parity
+      │        with the CPU path beats a nicer rule. See A4.
+      │  A5  keep + test the CPU chain  ← done. 983/0/3 both backends. Plus
+      │        the end-to-end test the plan did not ask for: a chain
+      │        attached to GlRenderer, over the scene it really drew.
+      │  A6  correct the README         ← done. Three of the four fixes are
+      │        corrections of UNDERstatement, which is new for Appendix B.
+      │        JOB A DELIVERED — the correctness defect in §5.1 is closed.
       │
       └─ C1  camera yaw
          C2  formalise the height axis

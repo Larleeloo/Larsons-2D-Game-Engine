@@ -4,9 +4,10 @@ A **generic** 2D game engine in pure Java. It provides a clean game loop
 and the building blocks for any 2D game — sprite sheets, level loading,
 cameras with multiple perspectives, scenes, input, a customizable menu
 system, **online multiplayer** (host a server, friends join by IP + port,
-Minecraft-style), a **shader system** (a multithreaded CPU post-processing
-pipeline that ships hand-written GLSL alongside every effect, compiled and
-diffed against its CPU twin on a real driver) and **two rendering backends**
+Minecraft-style), a **shader system** (GLSL-first post-processing that runs as
+real fragment shaders on the GPU backend and as a multithreaded CPU pipeline
+everywhere else, each pass diffed against the other on a real driver) and
+**two rendering backends**
 (Java2D everywhere, OpenGL 3.3 where a driver answers — probed at startup, with
 a real fallback) — without committing to a single genre.
 
@@ -238,7 +239,7 @@ This engine was built against six explicit requirements:
 | 2 | **Multiple 2D perspectives** | Three **distinct level formats** ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)) — side-scroller, top-down, isometric — each with its own creative mode, movement model and **number of block layers**, all loading and playing through the same code. [`Camera`](src/main/java/com/larsons/engine/graphics/Camera.java) + [`Perspective`](src/main/java/com/larsons/engine/graphics/Perspective.java) supply the projections (`SIDE_SCROLL`, `TOP_DOWN`, `ISOMETRIC`). A level's format is fixed for its lifetime — the three are different worlds, not three views of one — and a door into a level of another format is how a game changes perspective. |
 | 3 | **Online play** | ✅ Implemented — see [Online play](#online-play). An authoritative [`GameServer`](src/main/java/com/larsons/engine/net/GameServer.java) ticks the same deterministic [`PlayerPhysics`](src/main/java/com/larsons/engine/sim/PlayerPhysics.java) clients predict with; host in-game or run a headless dedicated server; friends join by IP + port like Minecraft Java edition. |
 | 4 | **Out of the box on any Java machine** | The engine uses **only the JDK** (Java2D / AWT / Swing / sockets). No third-party runtime dependencies — JSON parsing, networking, and shader execution are all in-engine. The optional GL backend lives in a separate Gradle project and a separate jar, so this stays true of the one a player double-clicks — checked on every build by `:verifyNoRuntimeDependencies`, which fails the `jar` task if anything external reaches the runtime classpath. |
-| 5 | **Shader support** | ✅ Implemented — see [Shaders](#shaders). Every [`ShaderPass`](src/main/java/com/larsons/engine/graphics/shader/ShaderPass.java) is defined **GLSL-first** (real GPU fragment-shader source, exportable as `.frag` files) beside a multithreaded CPU implementation, and every pass is compiled on a real driver and diffed against its CPU twin (`ShaderCompileTest`, `ShaderParityTest`: five passes at 0.00 mean channel error out of 255, worst 3.58). **Post-processing executes on the CPU today** — running the GLSL on the GPU is Job A in [`RENDER_PLAN.md`](RENDER_PLAN.md), and the GL backend says so on stderr rather than dropping the passes quietly. |
+| 5 | **Shader support** | ✅ Implemented — see [Shaders](#shaders). Every [`ShaderPass`](src/main/java/com/larsons/engine/graphics/shader/ShaderPass.java) is defined **GLSL-first** (real GPU fragment-shader source, exportable as `.frag` files) beside a multithreaded CPU implementation, and every pass is compiled on a real driver and diffed against its CPU twin (`ShaderCompileTest`, `ShaderParityTest`: five passes at 0.00 mean channel error out of 255, worst 3.58). **Both sides now execute**: the GL backend compiles each pass's `glsl()` once and runs the chain as a framebuffer ping-pong over the scene texture, and the Java2D backend runs the CPU implementation in parallel row stripes. `GlShaderChainTest` renders every pass both ways through the shipping chain and reproduces those same per-pass errors — which is what says the backend is right, since the shaders were measured before it existed. |
 | ★ | **Rendering backend** | Two, chosen at startup by a real probe. Java2D is the floor and runs anywhere; the OpenGL 3.3 backend is used when a driver gives a context, and the engine falls back to Java2D with a stated reason when it does not. `-Dlarsons.render.backend=auto\|java2d\|gl` overrides, and every frame report names the backend and the driver. See [Rendering backends](#rendering-backends-java2d-and-opengl). |
 | 6 | **Editing outline of game essentials** | Working, minimal implementations of sprite sheets, level loading, and menu customization, wired together by the demo scenes. |
 | ★ | **Feature toggles + game types** | Clickable toggles enable/disable features. Toggles are stored **per level** ([`Level.settings`](src/main/java/com/larsons/engine/level/Level.java)) so one game type can group diverse levels; the game type ([`GameProfile`](src/main/java/com/larsons/engine/config/GameProfile.java) under `resources/gametypes/`) is just the folder, with its own feature values pinned to the defaults so there is exactly one place — the level — where a feature is decided. **Load Level** picks an individual level and either plays it or edits its settings. |
@@ -333,6 +334,15 @@ under the other.
 The GL backend draws every scene in the golden catalogue to within **2.59/255**
 of the Java2D renderer and collapses the catalogue's 3,356 drawing operations
 into **68** draw calls.
+
+**Post-processing runs on the GPU there too.** The scene lands in a texture
+rather than the back buffer, and the shader chain is a framebuffer ping-pong
+over it — no readback, no upload, one fullscreen triangle per pass. That
+includes `LightingPass`, which is day/night and every torch in the world rather
+than a cosmetic filter, so a GL build is no longer a build without lighting.
+Each pass is timed with GPU timer queries rather than by the clock on the
+submitting thread, because a draw call returns before the work it queued has
+started and the profile has to say what the frame really cost.
 
 **Measured on real hardware** (M1 MacBook Air, `PlayScene` at 1280×720 on a 2×
 panel, four runs across two builds):
@@ -945,8 +955,9 @@ with the **Facing** row on top for the wielder ones.
 All drawing goes through the `Renderer` interface. The default `Java2DRenderer`
 uses a double-buffered AWT `Canvas`, which is why the engine runs anywhere a JRE
 does (requirement #4). Every backend honours a `ShaderChain` of post-processing
-passes — see [Shaders](#shaders) for how that satisfies requirement #5 today on
-the CPU, and how the same passes run unmodified on a GPU backend.
+passes — see [Shaders](#shaders) for how that satisfies requirement #5 on both:
+the same passes, unmodified, as CPU row stripes on Java2D and as real fragment
+shaders on the GL backend.
 
 The backend-neutral draw API that full GPU *scene* rendering needs now exists:
 `Renderer.beginFrame()` returns a `DrawTarget`, every painter, widget and scene
@@ -975,14 +986,18 @@ atlas gives it is the packing and the batch key a GPU backend will use.
 `-Dlarsons.render.glyphs=false` turns that off, and
 `-Dlarsons.render.glyphblit=true` makes Java2D draw from the pages as well.
 
-What remains is the GL backend itself — see
-[`RENDER_PLAN.md`](RENDER_PLAN.md).
+The GL backend that consumes all of this exists and is selected at startup where
+a driver answers, and it now runs the shader chain as well as the scene. What
+remains of the renderer work — camera rotation, and the sub-pixel stability
+question at HiDPI — is in [`RENDER_PLAN.md`](RENDER_PLAN.md).
 
-Both of those are large jobs, and which (if either) is worth doing is a
-question about measurements rather than architecture. The
+Whether any of it was worth doing stayed a question about measurements rather
+than architecture. The
 [frame profiler](#frame-profiler-where-the-time-actually-goes) splits a frame
-into `scene` and `shaders` precisely so the answer can be looked up instead of
-guessed.
+into `scene` and `shaders` precisely so the answer could be looked up instead of
+guessed, and both jobs were funded by what it said: the scene stage at 11.49 ms
+of a 16.67 ms budget, and the shader stage at 5.460 ms once two passes were
+switched on.
 
 ---
 
@@ -993,13 +1008,21 @@ The shader system (requirement #5) is **GLSL-first**: every
 carries a complete **GLSL 3.30 fragment shader** — the universal GPU shading
 language (OpenGL directly; Vulkan/Metal via the standard SPIR-V translators;
 WebGL after a mechanical downgrade) — plus a semantically identical CPU
-implementation. The default backend executes the CPU side, multithreaded
+implementation. The Java2D backend executes the CPU side, multithreaded
 across all cores in row stripes, which is what keeps requirement #4 intact:
-shaders work out of the box on any Java machine, no native bindings. A GPU
-backend gets real GPU execution by compiling each pass's `glsl()` with the
-shared fullscreen-triangle vertex shader and binding four standard uniforms
-(`uTexture`, `uResolution`, `uTime`, `uStrength`) plus per-pass extras from
-`uniforms()` — no per-effect porting.
+shaders work out of the box on any Java machine, no native bindings.
+
+**The GL backend executes the GLSL**, and it needed no per-effect porting to do
+it — that was the claim the GLSL-first design was making, and this is where it
+was cashed. It compiles each pass's `glsl()` once against the shared
+fullscreen-triangle vertex shader, binds the four standard uniforms
+(`uTexture`, `uResolution`, `uTime`, `uStrength`) plus the per-pass extras from
+`uniforms()` and `vectorUniforms()`, and ping-pongs between two framebuffers in
+chain order. `uResolution` is the frame's *logical* size even at 2× HiDPI,
+because that is the unit every pass measures in — scanline rows, pixelate
+blocks, bloom radius, light positions — and the CPU side composes at logical
+size, so anything else would put the two backends a factor of two apart on four
+effects at once.
 
 **Built-in library** (`Shaders`): grayscale, invert, color grading, vignette,
 scanlines (CRT), pixelate, chromatic aberration, animated wave distortion, and

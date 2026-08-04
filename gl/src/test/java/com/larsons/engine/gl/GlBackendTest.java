@@ -6,6 +6,8 @@ import com.larsons.engine.graphics.Backends;
 import com.larsons.engine.graphics.RendererFactory;
 import com.larsons.engine.graphics.draw.DrawStats;
 import com.larsons.engine.graphics.draw.DrawTarget;
+import com.larsons.engine.graphics.shader.ShaderChain;
+import com.larsons.engine.graphics.shader.Shaders;
 import com.larsons.engine.input.InputManager;
 
 import org.junit.jupiter.api.Test;
@@ -173,6 +175,61 @@ class GlBackendTest {
             choice.backend().window().close();
             if (savedOffscreen == null) System.clearProperty(GlRenderer.OFFSCREEN_PROPERTY);
             else System.setProperty(GlRenderer.OFFSCREEN_PROPERTY, savedOffscreen);
+        }
+    }
+
+    /**
+     * A2 through the renderer rather than through the chain: a
+     * {@link com.larsons.engine.graphics.shader.ShaderChain} attached to
+     * {@code GlRenderer} really runs over the scene the frame drew.
+     *
+     * <p><b>{@code GlShaderChainTest} cannot prove this and it is the half that
+     * was broken.</b> That test drives {@code GlShaderChain} directly over a
+     * texture it uploaded itself, so it would pass unchanged against a renderer
+     * that never called it, that called it with the multisample buffer
+     * unresolved, or that ran it and then presented the unshaded surface
+     * anyway. Every one of those draws a plausible frame. This attaches a chain
+     * the way {@code Engine} attaches one, draws a rectangle of a known colour,
+     * presents, and asks what colour that rectangle came out.
+     *
+     * <p>It also checks A1's {@code auto} rule from the other side: the
+     * offscreen property is deliberately <em>not</em> forced here, because
+     * "offscreen when a chain with passes is attached" is the condition A2 made
+     * load-bearing — get it wrong and there is no scene texture to post-process.
+     */
+    @Test
+    void aChainAttachedToTheRendererRunsOverTheSceneItDrew() {
+        BackendChoice choice = Backends.select(Backends.AUTO, Backends.discover(), REQUEST);
+        assumeTrue(!choice.isJava2D(), "no GL driver here: " + choice.why());
+
+        GlRenderer renderer = (GlRenderer) choice.backend().renderer();
+        try {
+            renderer.window().attachInput(new InputManager());
+            ShaderChain shaders = new ShaderChain();
+            shaders.setPasses(List.of(Shaders.invert()));
+            shaders.setStrength(1.0f);
+            renderer.setShaderChain(shaders);
+
+            DrawTarget target = renderer.beginFrame();
+            target.fillRect(10, 10, 100, 50, Color.RED);
+            renderer.present();
+
+            GlShaderChain chain = renderer.shaderChain();
+            assertNotNull(chain, "the renderer never built a chain to run the passes with");
+            int[] pixels = chain.readPixels();
+            int deviceW = renderer.deviceWidth(), deviceH = renderer.deviceHeight();
+            double scale = deviceW / (double) REQUEST.width();
+
+            assertEquals(0xFF00FFFF, at(pixels, deviceW, deviceH, 60, 35, scale),
+                    "the red rectangle came back " + "un-inverted, so the chain did not "
+                            + "run over the scene this frame drew");
+            // And the background, which says the whole frame went through the
+            // pass rather than just the geometry: the clear is 0x181C26.
+            assertEquals(0xFFE7E3D9, at(pixels, deviceW, deviceH, 300, 190, scale),
+                    "the cleared background was not shaded");
+        } finally {
+            renderer.dispose();
+            choice.backend().window().close();
         }
     }
 

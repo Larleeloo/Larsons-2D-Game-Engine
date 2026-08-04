@@ -22,7 +22,9 @@ import java.util.Map;
  *   <li>{@code vec2 uResolution} — framebuffer size in pixels</li>
  *   <li>{@code float uTime} — seconds since the chain started</li>
  *   <li>{@code float uStrength} — global effect strength in [0,1]</li>
- *   <li>any pass-specific extras reported by {@link #uniforms()}</li>
+ *   <li>any pass-specific scalars reported by {@link #uniforms()}</li>
+ *   <li>any pass-specific vectors or arrays reported by
+ *       {@link #vectorUniforms()}</li>
  * </ul>
  *
  * <p>Pixels on the CPU side are packed {@code 0xAARRGGBB} ints (the layout of a
@@ -50,5 +52,64 @@ public interface ShaderPass {
      */
     default Map<String, Float> uniforms() {
         return Map.of();
+    }
+
+    /**
+     * Pass-specific <em>vector</em> and <em>array</em> uniforms, which
+     * {@link #uniforms()} cannot express because a {@code Float} is one
+     * component.
+     *
+     * <p><b>This exists because a pass that needs one was silently unbindable.</b>
+     * {@link LightingPass} declares {@code vec3 uNightTint} and the arrays
+     * {@code uLightPos[]} / {@code uLightColor[]}, none of which appear in
+     * {@link #uniforms()}; a backend binding only the scalar map compiles the
+     * shader, links it, runs it, and gets a black tint and no lights — a
+     * correct-looking picture of nothing, which is the failure mode this whole
+     * plan keeps finding. The uniform contract in this interface's header is
+     * what a backend is told to bind, so the thing a backend must bind belongs
+     * in it.
+     */
+    default Map<String, Vector> vectorUniforms() {
+        return Map.of();
+    }
+
+    /**
+     * One vector uniform, or an array of them: {@code components} floats per
+     * element, {@code values.length / components} elements.
+     *
+     * <p>The component count is carried rather than inferred because
+     * {@code glUniform3fv} over six floats is two {@code vec3}s and
+     * {@code glUniform2fv} over the same six is three {@code vec2}s, and
+     * nothing in the values themselves says which the shader declared. A
+     * backend that guesses is a backend that draws a plausible wrong picture.
+     */
+    record Vector(int components, float[] values) {
+
+        public Vector {
+            if (components < 1 || components > 4) {
+                throw new IllegalArgumentException(
+                        "a GLSL vector has 1 to 4 components, not " + components);
+            }
+            if (values.length % components != 0) {
+                throw new IllegalArgumentException(
+                        values.length + " floats is not a whole number of "
+                                + components + "-component elements");
+            }
+        }
+
+        /** A single {@code vecN}, its component count taken from the arguments. */
+        public static Vector of(float... values) {
+            return new Vector(values.length, values);
+        }
+
+        /** An array of {@code vecN}, flattened element after element. */
+        public static Vector array(int components, float[] values) {
+            return new Vector(components, values);
+        }
+
+        /** How many {@code vecN} this holds — the {@code count} of a {@code glUniform*v}. */
+        public int elements() {
+            return values.length / components;
+        }
     }
 }

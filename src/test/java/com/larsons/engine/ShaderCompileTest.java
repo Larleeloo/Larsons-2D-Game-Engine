@@ -158,12 +158,58 @@ class ShaderCompileTest {
         // a uniform the program does not have, and the effect would silently
         // read zero on the GPU while working perfectly on the CPU. That is the
         // worst kind of divergence to find later, and free to catch here.
-        for (ShaderPass pass : Shaders.allBuiltIns()) {
+        //
+        // vectorUniforms() is the same contract for the names a Float map
+        // cannot carry, and LightingPass is checked alongside the built-ins
+        // here because it is the only pass that has any — testing the contract
+        // on the nine passes that do not exercise it would be a test of
+        // nothing.
+        List<ShaderPass> passes = new ArrayList<>(Shaders.allBuiltIns());
+        passes.add(new com.larsons.engine.graphics.shader.LightingPass());
+        for (ShaderPass pass : passes) {
             String source = pass.glsl();
             for (String name : pass.uniforms().keySet()) {
                 assertTrue(source.contains(name),
                         pass.name() + " advertises the uniform \"" + name
                                 + "\" but its GLSL never declares it");
+            }
+            for (String name : pass.vectorUniforms().keySet()) {
+                assertTrue(source.contains(name),
+                        pass.name() + " advertises the vector uniform \"" + name
+                                + "\" but its GLSL never declares it");
+            }
+        }
+    }
+
+    /**
+     * The other direction, and the one that was actually broken: a uniform the
+     * shader declares that no map advertises is a uniform no backend will bind.
+     *
+     * <p>{@code uNightTint} was exactly that until A4 — declared, sampled,
+     * never advertised, so a GPU backend would have tinted every dark pixel
+     * toward {@code vec3(0)}. The scan is deliberately narrow: it looks only
+     * for the {@code u}-prefixed names the engine's own skeleton does not
+     * supply, because those are the ones a pass is responsible for.
+     */
+    @Test
+    void everyUniformAPassDeclaresIsAdvertisedToBackends() {
+        List<ShaderPass> passes = new ArrayList<>(Shaders.allBuiltIns());
+        passes.add(new com.larsons.engine.graphics.shader.LightingPass());
+        // The four Shaders.fragmentShader() writes for every pass; a backend
+        // binds these from the ShaderPass contract itself, not from a map.
+        List<String> standard = List.of("uTexture", "uResolution", "uTime", "uStrength");
+        java.util.regex.Pattern declaration = java.util.regex.Pattern.compile(
+                "uniform\\s+\\w+\\s+(u\\w+)");
+        for (ShaderPass pass : passes) {
+            java.util.regex.Matcher m = declaration.matcher(pass.glsl());
+            while (m.find()) {
+                String name = m.group(1);
+                if (standard.contains(name)) continue;
+                assertTrue(pass.uniforms().containsKey(name)
+                                || pass.vectorUniforms().containsKey(name),
+                        pass.name() + " declares the uniform \"" + name
+                                + "\" but advertises it in neither uniforms() nor "
+                                + "vectorUniforms(), so no GPU backend will ever bind it");
             }
         }
     }

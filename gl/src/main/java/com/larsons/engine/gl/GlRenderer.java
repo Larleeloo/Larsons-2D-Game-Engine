@@ -37,11 +37,13 @@ import static org.lwjgl.opengl.GL33C.*;
  * scene is already a GPU texture ({@link #sceneTexture()}), so post-processing
  * becomes a shader reading it rather than a readback and an upload every frame.
  *
- * <p><b>What this class still does not do.</b> A {@link ShaderChain} attached
- * here is <em>not</em> executed, and it says so once rather than quietly
- * dropping the passes — a renderer that silently ignores post-processing looks
- * exactly like one whose post-processing has no effect. Running them is A2-A4,
- * and they now have a texture to run against.
+ * <p><b>And since A2 the chain runs here too.</b> A {@link ShaderChain} with
+ * passes is executed as real GLSL against that texture by {@link GlShaderChain}
+ * — an FBO ping-pong with no transfer in either direction — and the result is
+ * what gets blitted to the back buffer. Before A2 the passes were dropped with
+ * a line on stderr, which meant a GL build had no day/night lighting at all;
+ * that was a correctness defect rather than a missing optimisation, and it is
+ * the reason Job A outranked the rest of the plan once Job B closed.
  */
 public final class GlRenderer implements Renderer {
 
@@ -80,7 +82,12 @@ public final class GlRenderer implements Renderer {
 
     private FrameProfiler profiler;
     private ShaderChain shaders;
-    private boolean warnedAboutShaders;
+
+    /**
+     * A2's post-processing, built lazily on the render thread for the same
+     * reason everything else here is — see the class note.
+     */
+    private GlShaderChain chain;
 
     /** Whether this frame was drawn offscreen. Decided per frame. */
     private boolean offscreen;
@@ -170,23 +177,70 @@ public final class GlRenderer implements Renderer {
         }
     }
 
+    /**
+     * Finish the frame: run the chain if there is one, then put the result on
+     * screen.
+     *
+     * <p><b>The chain is timed as its own stage, exactly as the CPU chain is.</b>
+     * {@code Java2DRenderer} closes out {@code PRESENT}, times
+     * {@code SHADERS} around {@code ShaderChain.apply}, and reopens
+     * {@code PRESENT} afterwards; this does the same, so the two backends'
+     * reports are the same shape and can be set side by side. The number this
+     * one puts in {@code SHADERS} comes from GPU timer queries rather than from
+     * this thread's clock — see {@link GlShaderChain}.
+     */
     @Override
     public void present() {
         long started = profiler == null ? 0L : profiler.begin();
         if (target != null) target.endFrame();
-        if (shaders != null && shaders.hasPasses() && !warnedAboutShaders) {
-            warnedAboutShaders = true;
-            System.err.println("[gl] post-processing passes are attached but not run: "
-                    + "running them on the GPU is A2-A4. The scene now renders to an "
-                    + "offscreen surface (A1), which is what they will read from.");
-        }
+        boolean shaded = false;
         if (offscreen && surface != null) {
+            if (shaders != null && shaders.hasPasses()) {
+                if (chain == null) chain = new GlShaderChain();
+                // The passes read a single-sample texture, so the coverage
+                // samples have to be collapsed into one first. A1's straight
+                // multisample-to-window blit did that resolve on the way out;
+                // with a chain in the way it happens here instead.
+                surface.resolve();
+                if (profiler != null) profiler.record(FrameProfiler.Stage.PRESENT, started);
+                shaded = chain.run(surface.resolvedTexture(),
+                        deviceWidth(), deviceHeight(), width, height, shaders, profiler);
+                if (profiler != null) started = profiler.begin();
+            }
             GlSurface.unbind();
-            surface.blitToWindow(deviceWidth(), deviceHeight());
+            if (shaded) {
+                chain.blitToWindow(deviceWidth(), deviceHeight());
+            } else {
+                surface.blitToWindow(deviceWidth(), deviceHeight());
+            }
+        } else if (shaders != null && shaders.hasPasses()) {
+            warnPassesDropped();
         }
         context.swapBuffers();
         if (profiler != null) profiler.record(FrameProfiler.Stage.PRESENT, started);
     }
+
+    /**
+     * The one route by which a chain can still go unrun, said once.
+     *
+     * <p>Post-processing reads the offscreen surface, so forcing
+     * {@code -Dlarsons.render.offscreen=never} with passes attached drops them.
+     * That combination only happens deliberately — it is the flag A1 added for
+     * measuring the resolve's cost on a given machine — but "deliberately" is
+     * not "knowingly", and a renderer that silently ignores post-processing
+     * looks exactly like one whose post-processing has no effect. That
+     * confusion cost §5.0 a whole column of a comparison table.
+     */
+    private void warnPassesDropped() {
+        if (warnedPassesDropped) return;
+        warnedPassesDropped = true;
+        System.err.println("[gl] " + OFFSCREEN_PROPERTY + " is forcing this frame "
+                + "straight at the window, so the " + shaders.passes().size()
+                + " attached shader pass(es) are not being run: the chain reads the "
+                + "offscreen surface. Use auto or always to get them.");
+    }
+
+    private boolean warnedPassesDropped;
 
     @Override public int getWidth() { return width; }
 
@@ -199,8 +253,11 @@ public final class GlRenderer implements Renderer {
     public void setProfiler(FrameProfiler profiler) { this.profiler = profiler; }
 
     /**
-     * The scene as a GPU texture, for A2's shader chain to sample, or 0 when
-     * this frame went straight at the window and there is no such texture.
+     * The scene as a GPU texture — what {@link GlShaderChain} samples — or 0
+     * when this frame went straight at the window and there is no such texture.
+     *
+     * <p>Valid after {@link GlSurface#resolve()}, which {@link #present()}
+     * calls before running the chain.
      */
     public int sceneTexture() {
         return offscreen && surface != null ? surface.resolvedTexture() : 0;
@@ -230,11 +287,18 @@ public final class GlRenderer implements Renderer {
                 surface.close();
                 surface = null;
             }
+            if (chain != null) {
+                chain.close();
+                chain = null;
+            }
         }
     }
 
     /** The offscreen surface this frame was drawn into, for tests to read back. */
     GlSurface surface() { return surface; }
+
+    /** The post-processing this renderer ran, or null if it has never had any. */
+    GlShaderChain shaderChain() { return chain; }
 
     int deviceWidth() { return Math.max(1, (int) Math.round(width * scale)); }
 
