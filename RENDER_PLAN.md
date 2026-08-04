@@ -43,10 +43,20 @@ fact three of `LightingPass`'s uniforms could not be advertised at all — a
 nobody reads. Either one alone renders a plausible night with no torches in it.
 See A3.
 
-**Job D (§7) went first, ahead of A.** GL shimmers by about a pixel at 2× HiDPI
-as the camera moves and Java2D does not. It was scheduled first because a player
-sees it every second, and because its likely fix — an offscreen surface at
-logical resolution — *is* A1's first deliverable rather than a detour around it.
+**Job D (§7) went first, ahead of A, and is now closed — by its fourth
+hypothesis.** The world shimmered by about a pixel as the camera moved. D0
+exonerated both rasterisers, D1 turned vsync on and fixed a real but different
+problem, and the shimmer survived both. **D3 found it in `Camera`**: the
+projection rounded `(world − camera) × zoom` in one step, so every object
+crossed its rounding boundary at its own moment and neighbouring blocks slid
+against each other. It was never a backend defect — both backends drew exactly
+what the camera told them — and no test in the project could see it, because
+they all render at `zoom = 1` or `2`, the only zooms at which the old arithmetic
+happens to be exactly right. See §7's D3.
+
+**A crash report closed a second defect this plan had not predicted.** Dragging
+the window's edge on the Air terminated the process: AppKit reallocates the GL
+drawable on thread 0 while the render thread is blitting into it. §10.
 
 Also open: **B11** fixed a GL jar that could not open a window when
 double-clicked on macOS, the platform it had been profiled on for four steps. And
@@ -3092,6 +3102,10 @@ suspect is not in this plan at all: `update` spikes to 15–17 ms at p95 on both
 backends, which is one frame in twenty missing its deadline — visible judder by
 any other name, and the subject of [`SIM_PLAN.md`](SIM_PLAN.md).
 
+**It did survive it.** Reported from the Air after D1 shipped: *"the shimmer or
+block shaking was not completely fixed."* D3 is what that turned out to be, and
+it was neither of the two suspects named above.
+
 ### D2 — done
 
 `GlHiDpiParityTest` is a standing test rather than a diagnostic: the tiles number
@@ -3099,6 +3113,106 @@ must stay at exactly 0.000, the shapes-and-text number must not move with the
 camera, and a one-pixel pan must disturb the same count on both backends. It is
 the first parity instrument in this project that runs at a display scale other
 than 1 — the gap that let this question stay open for four steps.
+
+### D3 — done. It was the projection, and every parity test in the project was blind to it
+
+**The cause is one line of `Camera`, it was never a backend defect at all, and
+four steps of this section looked in the wrong place because of how the question
+was asked.** D0 compared GL against Java2D and found them pixel-identical, which
+is a true and useful fact that cannot possibly find this bug: *both backends
+draw exactly what the camera tells them to, and the camera was telling them
+something slightly different every frame.* A comparison of two renderers is
+structurally unable to see a defect they share. That is the lesson worth keeping
+from §7 — more than the answer.
+
+**The defect.** Step 2 of the projection rounded once, at the end:
+
+```java
+screen = round((world - camera) * zoom + viewport / 2)
+```
+
+`camera` is a `double` and slides continuously as it follows the player, so
+every object crosses *its own* rounding boundary at *its own* moment. At
+`zoom = 1.7` a 32-unit tile is 54.4 pixels wide, and as the view pans one tile
+rounds to 55 while its neighbour is still at 54, then they swap. Neighbouring
+blocks slide against each other by a pixel, continuously, for as long as the
+camera moves.
+
+**Why no existing test could see it, in one line: every test in this project
+renders at `zoom = 1` or `zoom = 2`.** At either, a 32-unit tile is 32 or 64
+pixels — a whole number — the fractional parts of neighbouring tiles are all
+zero, and the old arithmetic is *exactly* correct. The bug cannot occur at the
+only two zooms anything was ever measured at. In the game the zoom is a
+`double` the player drives with a held key (`camera.zoom + dt * 2`), so it is
+almost never one of those.
+
+**Why the floor was steady and the blocks were not, which is what was
+reported.** `TerrainCache` had already worked this out — its class note
+describes the identical symptom ("as the view moved a fraction of a pixel the
+chunks slid against one another and the terrain visibly shook") and fixes it by
+baking each chunk at `round(worldX * zoom)`, with no camera term, and placing it
+with one integer offset. But it caches only the *floor*. Stacked blocks, mobs,
+dropped items, decor and particles are deliberately never cached — they join
+the depth pass — so they kept the old arithmetic. Steady ground with shivering
+blocks on it is exactly the picture that description fits.
+
+**The fix is that same lattice, moved down into `Camera` where everything gets
+it:**
+
+```java
+screen = round(world * zoom) + round(viewport/2 - camera * zoom)
+//       \_________________/   \___________________________/
+//        no camera term        one offset, shared by everything
+```
+
+Two roundings instead of one, so the whole scene can sit up to a pixel from
+where a single rounding would have put it — the camera's focus point included.
+That error is *uniform*, and a uniform offset is invisible where a moving one is
+the bug. It is also the same trade `TerrainCache` already documents and has
+shipped with since it was written.
+
+**A consequence worth recording, because it is independent evidence rather than
+a restatement: the baked floor and the live sweep now agree at a fractional zoom
+as well as they always did at a whole one.** The cache had been on the correct
+lattice all along and everything else had not, so the two drifted apart exactly
+where the bug lived. Measured on a 480×360 view of a three-by-three-chunk level,
+counting pixels where the cached frame differs from the live one with no offset
+allowed between them:
+
+| zoom | before D3 | after D3 |
+|---|---:|---:|
+| 1.0 — the old arithmetic was already exact here | 185 px (0.13%) | 185 px (0.13%) |
+| 1.7 | **2,010 px (1.43%)** | **105 px (0.07%)** |
+
+The 185 at `zoom = 1` is the genuine chunk-edge residual this cache has always
+had — the two-pixel bake margin, and chunks baked whole so cells just past the
+requested bounds are drawn. That number does not move, which is the point: at
+1.7 the disagreement was fourteen times *larger* than the residual and is now
+smaller than it.
+
+**Measured.** [`CameraStabilityTest`](src/test/java/com/larsons/engine/CameraStabilityTest.java),
+at `zoom = 1.7`, all three perspectives:
+
+| what | before | after |
+|---|---|---|
+| on-screen width of one tile, over 500 camera positions | **54 and 55** | 55 |
+| gap between two blocks 8 tiles apart | 451 and 452 | **one value** |
+| pixels moving non-rigidly per ¼-pixel camera step, live sweep of a block wall | **2,542** | **0** |
+| every projected point shares one delta when the camera moves | no | yes |
+
+The last row is the strong form and the one that closes this: if every point on
+screen moves by the same vector then nothing in the picture can move relative to
+anything else, whatever it is.
+
+**What this does not claim.** It does not explain why the Air's report singled
+out GL — this arithmetic is shared, and Java2D shimmers identically at the same
+zoom. D1's vsync change was a real fix for a real GL-only problem (tearing
+against an unsynchronised present) and is not withdrawn; this is a second,
+backend-independent defect underneath it. And it does not touch
+[`SIM_PLAN.md`](SIM_PLAN.md)'s 15–21 ms `update` spikes, which remain the
+outstanding candidate for anything that still reads as a *hitch* rather than a
+*shimmer*. Those are different words for different things, and the plan should
+stop treating them as one.
 
 ---
 
@@ -3121,6 +3235,8 @@ declared finished while broken.
 | **`ModuleBoundaryTest` + `:verifyNoRuntimeDependencies`** | Can the core quietly acquire a runtime dependency? | `render/ModuleBoundaryTest.java` and the root build, B7 |
 | **`BackendSelectionTest` + `GlBackendTest`** | Does the right renderer get picked, and does the wrong answer still leave a playable game? | `render/BackendSelectionTest.java` (every route, no GPU needed) and `gl/…/GlBackendTest.java` (the classpath, the driver, the provoked failure), B9 |
 | **`GlBatchTest`** | Does the backend survive a frame bigger than its buffers? The catalogue answers *vocabulary*; this answers *volume*, and the two are different questions — B8a shipped because only the first was being asked | `gl/…/GlBatchTest.java`, B8a |
+| **`GlResizeTest`** | Does the backend survive the window *changing size*? Every other instrument here renders at a fixed size for the whole of its life | `gl/…/GlResizeTest.java`, §10 |
+| **`CameraStabilityTest`** | Does the world hold still relative to *itself* while the camera moves? Every parity test compares two backends and is therefore blind to a defect they share — which D3 was | `CameraStabilityTest.java`, D3 |
 
 **`DrawStats` and `GlParityTest` answer different questions and B8 measured the
 gap.** `DrawStats` models what a batching backend *could* merge given the draw
@@ -3166,9 +3282,19 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
       ├─ D0  measure the HiDPI shimmer  ← done. GL at 2x is PIXEL-IDENTICAL
       │        to Java2D upscaled, at every camera position. The rasteriser
       │        does not shimmer; §7.1's hypothesis was wrong.
-      │  D1  vsync on by default        ← done. B9 had turned it off. The
-      │        remaining candidate, awaiting eyes on the Air.
+      │  D1  vsync on by default        ← done. B9 had turned it off. A real
+      │        GL-only fix for tearing, and NOT the shimmer — see D3.
       │  D2  GlHiDpiParityTest          ← done. First parity test at scale 2.
+      │  D3  the shimmer, actually found ← done. Camera rounded
+      │        (world - camera) * zoom in ONE step, so every object crossed
+      │        its rounding boundary at its own moment and neighbours slid
+      │        against each other by a pixel. Not a backend defect: both
+      │        drew what the camera said. Invisible to every test in the
+      │        project because they all render at zoom 1 or 2, where a
+      │        32-unit tile is a whole number of pixels wide and the old
+      │        arithmetic is exactly right. Fixed with TerrainCache's own
+      │        lattice, moved down into Camera so everything gets it.
+      │        JOB D DELIVERED.
       │
       ├─ A1  scene renders to a texture ← done. Offscreen when a chain has
       │        passes; straight at the window otherwise, because the resolve
@@ -3198,6 +3324,13 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
       │        corrections of UNDERstatement, which is new for Appendix B.
       │        JOB A DELIVERED — the correctness defect in §5.1 is closed.
       │
+      ├─ §10 the window resize crash    ← done. Dragging the window's edge
+      │        terminated the process on the Air: AppKit reallocates the
+      │        drawable on thread 0 while the render thread blits into it.
+      │        CGL context lock for the length of a frame; the drawable's
+      │        real size instead of round(logical x scale); GlResizeTest.
+      │        Came from a crash report, not from this plan.
+      │
       └─ C1  camera yaw
          C2  formalise the height axis
          C3  rotate the grid (re-measure TerrainCache seams FIRST)
@@ -3225,6 +3358,113 @@ already is.
 A and C are independent of each other once B10 passes. A is much smaller and its
 risk is already retired, so it is the natural next one — but nothing forces that
 order.
+
+---
+
+## 10. The resize crash, and the drawable nobody owned
+
+**Not a job, and it did not come from this plan.** A crash report arrived from
+the M1 Air: dragging the window's edge terminated the process. It belongs here
+because the fault is in the GL backend and because the arrangement it exposes —
+two threads sharing one window — is one this plan designed on purpose and
+described as safe.
+
+### 10.0 What the report said
+
+```
+Triggered by Thread: 23  Java: game-loop
+Exception Type:    EXC_BAD_ACCESS (SIGABRT)
+Exception Subtype: KERN_INVALID_ADDRESS at 0x0000000000000000
+
+Thread 23 Crashed:: Java: game-loop
+  9  GLEngine        gleBlitFramebuffer + 632
+ 11  GLEngine        glBlitFramebufferEXT_Exec + 2096
+ 12  libGL.dylib     glBlitFramebuffer + 80
+
+Thread 0:: Dispatch queue: com.apple.main-thread
+ 14  AppKit          -[NSWindow(NSWindowResizing) _resizeWithEvent:] + 640
+ 15  AppKit          -[NSTitledFrame attemptResizeWithEvent:] + 156
+```
+
+Both halves of the fault are on one page. The render thread was in
+`GlSurface.blitToWindow`, writing into framebuffer 0 — the window's back buffer.
+The main thread was inside AppKit's live-resize loop, where GLFW's window
+delegate answers `windowDidResize:` with `[nsgl.object update]`, which
+reallocates the drawable's storage. The blit dereferenced the buffer that was
+being replaced.
+
+**Nothing in the engine's own code was wrong, which is why no amount of reading
+it would have found this.** The sizes were right, the framebuffer was complete,
+the command was legal. `GlWindow`'s class note was careful about which thread
+may call which *function* and correct about all of it — and functions were never
+the shared resource. The drawable was.
+
+### 10.1 The fix
+
+`CGLLockContext` is the mutex the platform's own GL stack takes around drawable
+changes, and `NSOpenGLContext`'s methods — `update` included — acquire it
+internally. So a render thread that holds it for the length of a frame cannot be
+interrupted by a resize: AppKit's update blocks on the main thread until the
+frame is presented, then proceeds.
+[`GlDrawableLock`](gl/src/main/java/com/larsons/engine/gl/GlDrawableLock.java)
+is that, `GlRenderer.beginFrame()` takes it and `present()` returns it in a
+`finally`, and off macOS none of it is reached — LWJGL's `CGL` class is named
+only inside branches a non-Mac never takes.
+
+**The cost is stated rather than hidden:** a drag now waits up to one frame per
+mouse move. `-Dlarsons.render.gl.drawablelock=off` is there so a Mac user can
+say whether a sluggish drag is this.
+
+**A second, smaller thing was wrong on the same path.** The renderer sized its
+surface and its blit from `round(logicalWidth × scale)` rather than from the
+drawable GLFW reports. Those agree while the window is still and stop agreeing
+during a drag between panels of different scale, when the logical size and the
+framebuffer size move at different moments — so a blit could be sized from a
+pair that was never simultaneously true. `GlWindow` now publishes the
+framebuffer size beside the scale and `GlRenderer` samples both once per frame.
+
+### 10.2 What is tested, and what is not
+
+**The race itself needs a Mac, a mouse and a window edge, and is not
+reproducible in this suite.** Saying so is more useful than a test that implies
+otherwise. What
+[`GlResizeTest`](gl/src/test/java/com/larsons/engine/gl/GlResizeTest.java) does
+check, on any machine with a driver, is everything around it — each of which was
+an independent way to get the resize path wrong:
+
+- a frame after a resize is the new size in all three places that have to agree
+  (the scene's target, the offscreen surface, the blit), growing *and* shrinking;
+- twenty consecutive resizes — the shape of a real drag, one per mouse move,
+  each reallocating two framebuffers, two renderbuffers and a texture — leave
+  the driver with no error to report;
+- every frame gives the drawable back, **including a frame that threw**. On
+  macOS an unbalanced hold is not a crash but a window that freezes the first
+  time it is dragged, so `-Dlarsons.render.gl.drawablelock=force` runs the
+  protocol against a counter on platforms that have no CGL to run it against.
+
+**The whole GL suite runs under a software rasteriser**, which is worth writing
+down because it had been assumed not to: `xvfb-run ./gradlew test` takes all 52
+GL tests from skipped to run. The parity numbers this plan quotes were being
+checked on developer machines only.
+
+### 10.3 Open, and found while reading the same report
+
+The crash log shows `+[AWTStarter starter:headless:]` → `runAWTLoopWithApp:` →
+`[NSApplication run]` on thread 0, **underneath** GLFW's `glfwPollEvents`. AWT's
+loop is `do { [app run]; } while (YES)` and never returns, so in that process
+`Engine.pumpUntilStopped()` had entered `pumpEvents()` once and would never come
+out. Events still flow — AppKit dispatches them to the GLFW window regardless of
+who is pumping — so the game plays normally, but the loop's exit conditions
+(`closeRequested()`, `larsons.run.seconds`) are never read again and
+`Engine.shutdown()` is unreachable.
+
+LWJGL's own guidance is that a JVM using both AWT and GLFW on macOS must set
+`java.awt.headless=true` before AWT initialises, which `MacGlLauncher` is the
+natural place to do for the relaunched child. It is **not done here**: it is a
+different defect from the one reported, and it would break the three
+`JFileChooser` sites in the creative, skin and board editors, which is a decision
+about the product rather than a bug fix. Recorded so the next person does not
+have to re-derive it from the crash log.
 
 ---
 

@@ -12,6 +12,57 @@ package com.larsons.engine.graphics;
  * Because the projection is the only thing that changes between perspectives,
  * the same tile/sprite drawing code renders correctly in side-scroll, top-down,
  * and isometric views.
+ *
+ * <p><b>The world lands on a pixel lattice the camera cannot move, and that is
+ * the fix for the shimmer.</b> The obvious way to write step 2 is to round the
+ * whole thing at once — {@code round((world - camera) * zoom + viewport/2)} —
+ * and that is what this did. It is wrong in a way that only shows up in motion.
+ * The camera is a {@code double} and slides continuously, so every object
+ * crosses its own rounding boundary at its own moment: at {@code zoom = 1.7} a
+ * 32-unit tile is 54.4 pixels wide, and as the view pans each tile is
+ * alternately rounded to 54 and to 55 while its neighbour is not. Neighbouring
+ * blocks slide against one another by a pixel, over and over, for as long as the
+ * camera moves. That is the "blocks jitter slightly" a player reports, and it is
+ * a defect in the projection rather than in either rasteriser — both backends
+ * draw exactly what this told them to.
+ *
+ * <p>So the rounding is split in two:
+ *
+ * <pre>
+ *   screen = round(world * zoom)  +  round(viewport/2 - camera * zoom)
+ *            \_________________/     \___________________________/
+ *             the world's lattice     one offset, once, per frame
+ *             — no camera term        — the same for everything
+ * </pre>
+ *
+ * <p>The first term has no camera in it at all, so the pixel distance between
+ * any two things in the world is fixed forever; the second is a single integer
+ * that the whole scene translates by. The picture moves as one rigid sheet
+ * instead of shivering against itself.
+ *
+ * <p><b>This is not a new idea here — it is
+ * {@link TerrainCache}'s, applied to everything else.</b> That class worked the
+ * argument out for baked floor chunks, for exactly this symptom ("as the view
+ * moved a fraction of a pixel the chunks slid against one another and the
+ * terrain visibly shook") and fixed it the same way. What it could not fix was
+ * everything it deliberately does not cache: stacked blocks, mobs, dropped
+ * items, decor and particles all go through the live sweep, which kept the old
+ * arithmetic. A steady floor with shivering blocks on top of it is precisely
+ * what was left.
+ *
+ * <p><b>What it costs.</b> Two roundings instead of one, so the whole scene can
+ * sit up to a pixel from where a single rounding would have put it — including
+ * the camera's own focus point, which is no longer guaranteed to land exactly at
+ * the viewport centre. That error is <em>uniform</em>: everything shares it, so
+ * nothing moves relative to anything else, which is the only property the eye
+ * can see. A static half-pixel offset is invisible; a moving one is the bug.
+ *
+ * <p><b>It stays correct if the camera ever rotates.</b> The split works because
+ * {@link #planar} is linear, so it can be applied to the world point and the
+ * camera point separately and subtracted afterwards. A yaw belongs inside
+ * {@code planar}, on both, and the arithmetic below does not change. This is not
+ * snapping geometry to a screen-aligned grid, which would be wrong for a turned
+ * view; it is quantising the world in its own space.
  */
 public class Camera {
     /** Focus position in world coordinates (the point centred on screen). */
@@ -75,13 +126,39 @@ public class Camera {
     public int worldToScreenX(double wx, double wy) {
         double[] p = planar(wx, wy);
         double[] c = planar(x, y);
-        return (int) Math.round((p[0] - c[0]) * zoom + viewportWidth / 2.0);
+        return place(p[0], c[0], viewportWidth);
     }
 
     public int worldToScreenY(double wx, double wy) {
         double[] p = planar(wx, wy);
         double[] c = planar(x, y);
-        return (int) Math.round((p[1] - c[1]) * zoom + viewportHeight / 2.0);
+        return place(p[1], c[1], viewportHeight);
+    }
+
+    /**
+     * One axis of step 2: a projected world coordinate placed on the pixel
+     * lattice, plus the camera's single offset onto it.
+     *
+     * <p>The class note has the argument for why this is two roundings rather
+     * than one. The arithmetic is in {@code long} because the first term is a
+     * whole-world coordinate rather than a screen-relative one — a point far off
+     * the edge of a large level projects to a number a screen never holds, and
+     * callers do ask about those when they are deciding what to cull.
+     *
+     * @param planar       the world point, projected, before zoom
+     * @param planarCamera the camera's focus, projected the same way
+     * @param viewport     the viewport's extent on this axis
+     */
+    private int place(double planar, double planarCamera, int viewport) {
+        long lattice = Math.round(planar * zoom);
+        long offset = Math.round(viewport / 2.0 - planarCamera * zoom);
+        long screen = lattice + offset;
+        // Saturating rather than wrapping. A clipped-off coordinate draws
+        // nothing, which is what was wanted; a wrapped one draws it on the
+        // opposite side of the screen.
+        if (screen > Integer.MAX_VALUE) return Integer.MAX_VALUE;
+        if (screen < Integer.MIN_VALUE) return Integer.MIN_VALUE;
+        return (int) screen;
     }
 
     /**
@@ -106,8 +183,8 @@ public class Camera {
             cx = x;
             cy = y;
         }
-        out[0] = (int) Math.round((px - cx) * zoom + viewportWidth / 2.0);
-        out[1] = (int) Math.round((py - cy) * zoom + viewportHeight / 2.0);
+        out[0] = place(px, cx, viewportWidth);
+        out[1] = place(py, cy, viewportHeight);
     }
 
     /**
@@ -123,11 +200,21 @@ public class Camera {
         return new double[]{b[0] - a[0], b[1] - a[1]};
     }
 
-    /** Inverse mapping: screen pixel back to world coordinates. */
+    /**
+     * Inverse mapping: screen pixel back to world coordinates.
+     *
+     * <p>Inverted against the same camera offset the forward direction adds,
+     * rather than against the un-rounded {@code viewport/2 - camera * zoom} it
+     * approximates. The two differ by less than a pixel, and less than a pixel
+     * is exactly the size of the disagreement that puts a placed block in the
+     * wrong cell when a creative-mode stroke lands on a tile boundary. The
+     * remaining error is the lattice rounding in the forward direction, which no
+     * inverse can undo and which is sub-pixel by construction.
+     */
     public double[] screenToWorld(int sx, int sy) {
         double[] c = planar(x, y);
-        double px = (sx - viewportWidth / 2.0) / zoom + c[0];
-        double py = (sy - viewportHeight / 2.0) / zoom + c[1];
+        double px = (sx - Math.round(viewportWidth / 2.0 - c[0] * zoom)) / zoom;
+        double py = (sy - Math.round(viewportHeight / 2.0 - c[1] * zoom)) / zoom;
         return inversePlanar(px, py);
     }
 }

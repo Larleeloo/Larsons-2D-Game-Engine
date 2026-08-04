@@ -30,6 +30,13 @@ import static org.lwjgl.opengl.GL33C.*;
  * requirement: objects created against a context that is current somewhere else
  * belong to nothing.
  *
+ * <p><b>A frame is also the unit the drawable is held for.</b>
+ * {@link #beginFrame()} takes the platform's drawable lock and {@link #present()}
+ * gives it back once the swap has happened, so a window resize running on the
+ * other thread waits rather than reallocating the back buffer inside a
+ * half-finished frame. That crashed the process on macOS;
+ * {@link GlDrawableLock} carries the report.
+ *
  * <p><b>Since A1 the frame is drawn offscreen, not at the window.</b>
  * {@link #beginFrame()} binds a {@link GlSurface} sized to the drawable and
  * {@link #present()} blits it to the back buffer. That costs one driver-side
@@ -79,6 +86,26 @@ public final class GlRenderer implements Renderer {
     private int width;
     private int height;
     private double scale = 1;
+
+    /**
+     * The drawable in device pixels, as GLFW last reported it.
+     *
+     * <p><b>Asked of the window rather than computed from the logical size.</b>
+     * {@code round(width * scale)} agrees with the framebuffer nearly always and
+     * is a derivation of a number the window already has — and the two disagree
+     * exactly when a frame is at its most fragile, in the middle of a drag
+     * between panels of different scale, where the logical size and the
+     * framebuffer size move at different moments. A blit sized from the stale
+     * half of that pair writes the wrong rectangle into the back buffer.
+     */
+    private int deviceWidth = 1;
+    private int deviceHeight = 1;
+
+    /**
+     * Whether this frame holds the platform's drawable lock, and therefore owes
+     * a release. See {@link GlDrawableLock}.
+     */
+    private boolean drawableLocked;
 
     private FrameProfiler profiler;
     private ShaderChain shaders;
@@ -140,6 +167,8 @@ public final class GlRenderer implements Renderer {
         this.width = window.width();
         this.height = window.height();
         this.scale = window.scale();
+        this.deviceWidth = window.framebufferWidth();
+        this.deviceHeight = window.framebufferHeight();
     }
 
     /** The window this draws into — the engine shows and pumps it. */
@@ -153,6 +182,15 @@ public final class GlRenderer implements Renderer {
         long started = profiler == null ? 0L : profiler.begin();
         try {
             context.makeCurrent();
+            // From here to the end of present() this thread owns the drawable,
+            // so a window resize on the platform's own thread waits for the
+            // frame instead of reallocating the back buffer inside it. Taken
+            // before measure(), because the sizes measure() reads are the ones
+            // the resize is in the middle of changing. See GlDrawableLock for
+            // the crash this answers, and note the guard: a beginFrame() that
+            // is not followed by a present() — a test driving this by hand —
+            // must not stack a second lock on the first.
+            if (!drawableLocked) drawableLocked = context.lockDrawable();
             measure();
             if (target == null) {
                 target = new GlTarget(width, height, scale);
@@ -192,32 +230,49 @@ public final class GlRenderer implements Renderer {
     @Override
     public void present() {
         long started = profiler == null ? 0L : profiler.begin();
-        if (target != null) target.endFrame();
-        boolean shaded = false;
-        if (offscreen && surface != null) {
-            if (shaders != null && shaders.hasPasses()) {
-                if (chain == null) chain = new GlShaderChain();
-                // The passes read a single-sample texture, so the coverage
-                // samples have to be collapsed into one first. A1's straight
-                // multisample-to-window blit did that resolve on the way out;
-                // with a chain in the way it happens here instead.
-                surface.resolve();
-                if (profiler != null) profiler.record(FrameProfiler.Stage.PRESENT, started);
-                shaded = chain.run(surface.resolvedTexture(),
-                        deviceWidth(), deviceHeight(), width, height, shaders, profiler);
-                if (profiler != null) started = profiler.begin();
+        try {
+            if (target != null) target.endFrame();
+            boolean shaded = false;
+            if (offscreen && surface != null) {
+                if (shaders != null && shaders.hasPasses()) {
+                    if (chain == null) chain = new GlShaderChain();
+                    // The passes read a single-sample texture, so the coverage
+                    // samples have to be collapsed into one first. A1's straight
+                    // multisample-to-window blit did that resolve on the way out;
+                    // with a chain in the way it happens here instead.
+                    surface.resolve();
+                    if (profiler != null) profiler.record(FrameProfiler.Stage.PRESENT, started);
+                    shaded = chain.run(surface.resolvedTexture(),
+                            deviceWidth(), deviceHeight(), width, height, shaders, profiler);
+                    if (profiler != null) started = profiler.begin();
+                }
+                GlSurface.unbind();
+                if (shaded) {
+                    chain.blitToWindow(deviceWidth(), deviceHeight());
+                } else {
+                    surface.blitToWindow(deviceWidth(), deviceHeight());
+                }
+            } else if (shaders != null && shaders.hasPasses()) {
+                warnPassesDropped();
             }
-            GlSurface.unbind();
-            if (shaded) {
-                chain.blitToWindow(deviceWidth(), deviceHeight());
-            } else {
-                surface.blitToWindow(deviceWidth(), deviceHeight());
-            }
-        } else if (shaders != null && shaders.hasPasses()) {
-            warnPassesDropped();
+            context.swapBuffers();
+            if (profiler != null) profiler.record(FrameProfiler.Stage.PRESENT, started);
+        } finally {
+            // The drawable goes back to the platform only once the frame is on
+            // screen — the swap is the command that most needs the back buffer
+            // to still be the one this frame was drawn for. In a `finally`
+            // because a frame that threw has to release it too: a lock held by
+            // a thread that has moved on is a hung window rather than a crash,
+            // which is not an improvement.
+            releaseDrawable();
         }
-        context.swapBuffers();
-        if (profiler != null) profiler.record(FrameProfiler.Stage.PRESENT, started);
+    }
+
+    /** Hand the drawable back, if this frame took it. */
+    private void releaseDrawable() {
+        if (!drawableLocked) return;
+        drawableLocked = false;
+        context.unlockDrawable();
     }
 
     /**
@@ -300,24 +355,31 @@ public final class GlRenderer implements Renderer {
     /** The post-processing this renderer ran, or null if it has never had any. */
     GlShaderChain shaderChain() { return chain; }
 
-    int deviceWidth() { return Math.max(1, (int) Math.round(width * scale)); }
+    int deviceWidth() { return deviceWidth; }
 
-    int deviceHeight() { return Math.max(1, (int) Math.round(height * scale)); }
+    int deviceHeight() { return deviceHeight; }
 
     /**
-     * Window size in logical pixels and the scale to device pixels, as the
-     * window last observed them.
+     * Window size in logical pixels, the drawable in device pixels, and the
+     * scale between them, as the window last observed all three.
      *
      * <p>Read from {@link GlWindow}'s fields rather than asked of GLFW: window
      * queries belong to the thread that created the window and this is not that
      * thread. The window updates them from its resize callbacks, which is also
      * how a drag between a 1× and a 2× panel is noticed — a change to the
      * framebuffer under a window whose logical size never moved.
+     *
+     * <p>All four are sampled here, once, and the rest of the frame uses these
+     * copies. The window's fields are volatile and a resize can move them at any
+     * instant; a frame that read them again at present time could set a viewport
+     * from one size and blit to another.
      */
     private void measure() {
         width = window.width();
         height = window.height();
         scale = window.scale();
-        glViewport(0, 0, (int) Math.round(width * scale), (int) Math.round(height * scale));
+        deviceWidth = Math.max(1, window.framebufferWidth());
+        deviceHeight = Math.max(1, window.framebufferHeight());
+        glViewport(0, 0, deviceWidth, deviceHeight);
     }
 }
