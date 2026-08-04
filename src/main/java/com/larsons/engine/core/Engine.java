@@ -118,6 +118,11 @@ public class Engine {
         (backend.fellBack() ? System.err : System.out).println(backend.describe());
 
         if (backend.isJava2D()) {
+            // A process that exists only to run GL on macOS's first thread must
+            // not open a Swing window: AWT wants that thread for its own run
+            // loop and would hang on it. This exits, and the launcher that is
+            // still waiting runs the game in a process without the flag.
+            MacGlLauncher.abortIfThisProcessExistsOnlyForGl();
             this.window = new GameWindow(config);
             this.backendWindow = null;
             this.renderer = new Java2DRenderer(window.getCanvas(), config.backgroundColor);
