@@ -175,8 +175,23 @@ public final class FrameProfiler {
     /** Add the elapsed time since {@code startNanos} to {@code stage}. */
     public void record(Stage stage, long startNanos) {
         if (!enabled || startNanos == 0L) return;
-        long elapsed = System.nanoTime() - startNanos;
-        if (elapsed > 0) pending[stage.ordinal()] += elapsed;
+        recordElapsed(stage, System.nanoTime() - startNanos);
+    }
+
+    /**
+     * Add a duration measured by something other than this thread's clock.
+     *
+     * <p><b>For work whose cost is not the caller's wall time</b> — a GPU
+     * timer query, principally. A GL draw call returns as soon as the command
+     * is queued, so timing one with {@link #begin()} and {@link #record} would
+     * charge the frame a few microseconds of submission for milliseconds of
+     * shading, and the report would say a stage was nearly free at exactly the
+     * moment it became the expensive one. The backend that knows how to ask
+     * the GPU measures it and hands the answer here.
+     */
+    public void recordElapsed(Stage stage, long nanos) {
+        if (!enabled || nanos <= 0) return;
+        pending[stage.ordinal()] += nanos;
     }
 
     /**
@@ -206,9 +221,18 @@ public final class FrameProfiler {
      */
     public void recordPass(String passName, long startNanos) {
         if (!enabled || startNanos == 0L || passName == null) return;
-        long elapsed = System.nanoTime() - startNanos;
-        if (elapsed <= 0) return;
-        passPending.merge(passName, elapsed, Long::sum);
+        recordPassElapsed(passName, System.nanoTime() - startNanos);
+    }
+
+    /**
+     * The same for one shader pass, measured elsewhere — see
+     * {@link #recordElapsed(Stage, long)}. This is how a GPU backend reports a
+     * per-pass breakdown that can be set beside the CPU chain's, which is the
+     * comparison the whole post-processing job is judged on.
+     */
+    public void recordPassElapsed(String passName, long nanos) {
+        if (!enabled || passName == null || nanos <= 0) return;
+        passPending.merge(passName, nanos, Long::sum);
     }
 
     /**

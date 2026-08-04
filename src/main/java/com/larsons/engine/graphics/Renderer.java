@@ -28,14 +28,25 @@ import com.larsons.engine.graphics.shader.ShaderChain;
  * Now a backend is free to return a target that appends to a vertex buffer,
  * and neither {@code Engine} nor any scene can tell.
  *
- * <p><b>Shader support (requirement #5) lives behind this seam too.</b> Every
- * backend honours a {@link ShaderChain} of post-processing passes. Each
+ * <p><b>Shader support (requirement #5) lives behind this seam too, and both
+ * halves of it now exist.</b> Every backend honours a {@link ShaderChain} of
+ * post-processing passes. Each
  * {@link com.larsons.engine.graphics.shader.ShaderPass} is defined GLSL-first
  * (real GPU fragment shader source) with a semantically identical CPU
- * fallback; the default backend executes the CPU side, while a GPU backend
- * (e.g. OpenGL/LWJGL) can implement this same interface, compile each pass's
- * {@code glsl()} directly, and keep the loop's {@code beginFrame() -> draw ->
- * present()} lifecycle unchanged.
+ * implementation. {@link Java2DRenderer} runs the CPU side in parallel row
+ * stripes; the GL backend compiles each pass's {@code glsl()} once and runs it
+ * as a framebuffer ping-pong over the scene texture, with the same passes in
+ * the same order and no per-effect porting. Neither the loop's
+ * {@code beginFrame() -> draw -> present()} lifecycle nor any pass changed to
+ * make that true — which is the claim the GLSL-first design was making, and it
+ * has now been cashed rather than asserted.
+ *
+ * <p>The two are held to each other by measurement, not by intent:
+ * {@code GlShaderChainTest} renders every pass both ways and subtracts, and
+ * reproduces the same per-pass errors {@code ShaderParityTest} recorded of the
+ * shaders before any backend existed — five passes at 0.00 out of 255,
+ * {@code scanlines} 0.04, {@code vignette} 0.32, {@code grayscale} 0.47,
+ * {@code bloom} 3.58.
  */
 public interface Renderer {
 
@@ -61,8 +72,9 @@ public interface Renderer {
 
     /**
      * Attach the post-processing chain this backend should run on each
-     * presented frame. Backends are free to execute it however they like
-     * (CPU stripes, GPU FBO ping-pong) as long as pass order is preserved.
+     * presented frame. Backends are free to execute it however they like — the
+     * two that ship do it as CPU row stripes and as a GPU framebuffer
+     * ping-pong respectively — as long as pass order is preserved.
      */
     default void setShaderChain(ShaderChain chain) {}
 
@@ -73,7 +85,13 @@ public interface Renderer {
      * cost of acquiring, blitting and flipping the frame
      * ({@link com.larsons.engine.profile.FrameProfiler.Stage#PRESENT}), because
      * those two answer different questions about whether a GPU backend is
-     * worth building.
+     * worth building — and, now that one is, about whether it delivered.
+     *
+     * <p>A backend whose work does not happen on the calling thread reports it
+     * with {@link com.larsons.engine.profile.FrameProfiler#recordElapsed}
+     * instead of the wall clock. The GL backend times its shader passes with
+     * GPU timer queries for exactly that reason: a draw call returns before the
+     * work it queued has started.
      */
     default void setProfiler(com.larsons.engine.profile.FrameProfiler profiler) {}
 }

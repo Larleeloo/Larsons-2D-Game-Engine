@@ -27,9 +27,10 @@ import static org.lwjgl.opengl.GL33C.*;
  * it. Hence two framebuffers: the multisample one everything draws into, and a
  * single-sample one it is blitted to.
  *
- * <p>Job A will want the resolved texture rather than the pixels — that is the
- * whole economic argument for doing post-processing after Job B — so
- * {@link #resolvedTexture()} is here and unused for now.
+ * <p>Job A takes the resolved texture rather than the pixels — that is the whole
+ * economic argument for doing post-processing after Job B — so a frame with a
+ * shader chain attached is {@link #resolve()}d and then read by
+ * {@link GlShaderChain} with no transfer to the CPU anywhere in it.
  */
 final class GlSurface implements AutoCloseable {
 

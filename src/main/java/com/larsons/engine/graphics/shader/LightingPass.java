@@ -94,6 +94,11 @@ public final class LightingPass implements ShaderPass {
         return darkness;
     }
 
+    /** How many lights this frame carries, after {@link #MAX_LIGHTS} clipping. */
+    public int lightCount() {
+        return lightCount;
+    }
+
     /**
      * Raw light array data for a GPU backend:
      * {@code [x, y, radius, r, g, b] * uLightCount}, screen pixels + [0,1] colour.
@@ -127,15 +132,70 @@ public final class LightingPass implements ShaderPass {
         return u;
     }
 
+    /**
+     * The vectors and arrays a GPU backend must bind, alongside
+     * {@link #uniforms()}.
+     *
+     * <p><b>All three were unbindable before this existed</b> — a {@code Float}
+     * map cannot carry a {@code vec3}, so a backend binding only
+     * {@link #uniforms()} got {@code uNightTint} at the GLSL default of
+     * {@code vec3(0)} and two empty light arrays. That is a frame tinted to
+     * black wherever it is dark and lit nowhere, which is not obviously a
+     * missing uniform when you are looking at it.
+     *
+     * <p>{@code uLightPos} is {@code (x, y, radius)} in the same pixel space
+     * the scene projected the lights into, which is why the whole vector shares
+     * one unit and a backend rendering at a different scale can scale the
+     * vector rather than pick it apart.
+     */
+    @Override
+    public Map<String, ShaderPass.Vector> vectorUniforms() {
+        float[] pos = new float[lightCount * 3];
+        float[] color = new float[lightCount * 3];
+        for (int i = 0; i < lightCount; i++) {
+            pos[i * 3] = lightX[i];
+            pos[i * 3 + 1] = lightY[i];
+            pos[i * 3 + 2] = lightR[i];
+            color[i * 3] = lightRed[i];
+            color[i * 3 + 1] = lightGreen[i];
+            color[i * 3 + 2] = lightBlue[i];
+        }
+        Map<String, ShaderPass.Vector> v = new LinkedHashMap<>();
+        v.put("uNightTint", ShaderPass.Vector.of(tintR, tintG, tintB));
+        v.put("uLightPos", ShaderPass.Vector.array(3, pos));
+        v.put("uLightColor", ShaderPass.Vector.array(3, color));
+        return v;
+    }
+
     @Override
     public String glsl() {
+        return glsl(MAX_LIGHTS);
+    }
+
+    /**
+     * The same shader with the light arrays declared at {@code maxLights}.
+     *
+     * <p><b>For the driver that cannot afford {@link #MAX_LIGHTS}, not for
+     * tuning.</b> GL 3.3 guarantees 1,024 fragment uniform components and two
+     * {@code vec3[32]} arrays need a quarter of that, so on any conforming
+     * driver this is called with {@link #MAX_LIGHTS} and the source is
+     * identical. It exists because the alternative on a driver that reports
+     * less is a link failure at the moment a player enables lighting — the
+     * worst possible time to discover a limit — and because a limit that can
+     * be dialled down is a limit that can be tested on a machine that does not
+     * have it.
+     *
+     * @param maxLights array size to declare, clamped to 1..{@link #MAX_LIGHTS}
+     */
+    public String glsl(int maxLights) {
+        int n = Math.max(1, Math.min(MAX_LIGHTS, maxLights));
         return Shaders.fragmentShader("""
                 uniform float uDarkness;
                 uniform float uAmbient;
                 uniform vec3  uNightTint;
                 uniform int   uLightCount;
-                uniform vec3  uLightPos[32];   // x, y (pixels), radius (pixels)
-                uniform vec3  uLightColor[32];""", """
+                uniform vec3  uLightPos[%d];   // x, y (pixels), radius (pixels)
+                uniform vec3  uLightColor[%d];""".formatted(n, n), """
                     vec4 c = texture(uTexture, vTexCoord);
                     vec2 px = vTexCoord * uResolution;
                     float glow = 0.0;

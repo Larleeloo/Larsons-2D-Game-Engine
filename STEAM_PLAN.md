@@ -67,7 +67,11 @@ Measured on 2026-07-28 at commit `10ae9e8`.
 - No `LICENSE` file.
 - No CI. There is no `.github/workflows/` — those 16.7k lines of tests run only
   when someone types `./gradlew test`.
-- No GPU rendering. See Appendix A — this matters more than it looks.
+- ~~No GPU rendering.~~ **Both halves landed.** An OpenGL 3.3 backend draws the
+  scene and runs the post-processing chain, chosen at startup by a real probe
+  with Java2D as the floor. See Appendix A for the trace that started this and
+  what each of its consequences turned into, and `RENDER_PLAN.md` for the
+  measurements.
 
 ---
 
@@ -301,7 +305,10 @@ item's deliverable. Two things it is built to stop:
       `java -Dlarsons.profile=true -Dlarsons.profile.overlay=false -Dlarsons.profile.seconds=30 -jar <jar>`
 - [ ] Prototype a `jpackage` build on Windows. Confirm it launches on a machine
       with no JDK installed.
-- [ ] Correct the overstated claims in `README.md` (see Appendix B).
+- [x] Correct the overstated claims in `README.md` (see Appendix B). Done in
+      three passes, each in the commit that made it fixable: 2026-08-03 for the
+      overstatements, and 2026-08-04 for the three claims that had become
+      *under*statements once GPU post-processing shipped.
 
 ### Phase 1 — The flagship game (the main event)
 
@@ -421,6 +428,12 @@ roadmap, so it's recorded here rather than left in chat history.
 
 **GLSL never executes. The CPU path is the only path.**
 
+> **Answered in full 2026-08-04 (RENDER_PLAN A2–A5).** The GLSL executes. The
+> heading and the trace below are kept as written because they were true when
+> written and because the roadmap consequences that follow from them are the
+> useful part of this appendix — see the note after "CPU fallback is a
+> misnomer", and item 3, for what actually happened.
+
 The per-frame path is
 [`Java2DRenderer.present()`](src/main/java/com/larsons/engine/graphics/Java2DRenderer.java)
 → [`ShaderChain.apply()`](src/main/java/com/larsons/engine/graphics/shader/ShaderChain.java)
@@ -456,6 +469,20 @@ The per-frame path is
 > The README was corrected in the same commit as B9 and says exactly this — a
 > multithreaded CPU post-processing pipeline that ships verified GLSL as a port
 > target, and two rendering backends with a probe between them.
+
+> **Fully answered 2026-08-04 (RENDER_PLAN A2–A5).** `GlShaderChain` compiles
+> each pass's `glsl()` once and runs the chain as a framebuffer ping-pong over
+> the scene texture A1 left behind — no transfer in either direction. "CPU
+> fallback" is now the right word for the Java2D path rather than a misnomer:
+> it is what runs when the GL backend is not the one selected, on the same
+> probe-and-fallback that already governs scene rendering.
+>
+> **And the objection had a sharper edge than it was making.** What the GL
+> backend was silently not running included `LightingPass` — day/night and
+> every torch in the world, not a cosmetic filter — so a GL build had no
+> lighting at all and said so only on stderr. That was a correctness defect
+> rather than a missing optimisation, and it is what moved Job A to the front
+> of the plan. §5.1 of `RENDER_PLAN.md` records the reasoning; A2–A4 closed it.
 
 **Consequences for this plan:**
 
@@ -505,9 +532,41 @@ The per-frame path is
    about two hundred lines, because parity testing needed exactly the same
    machinery. That harness is the shape of the backend.
 
-None of this is a defect in the CPU pipeline, which works. The architecture is
-sound and the port target is real. It is simply less finished than the
-documentation suggests.
+   > **Done 2026-08-04 (RENDER_PLAN A2–A5), and the estimate held.**
+   > `GlShaderChain` is that plumbing, lifted from the harness as predicted:
+   > the same fullscreen triangle, the same uniform binding, the same texture
+   > format. `GlShaderChainTest` runs every pass through it against the CPU
+   > chain and reproduces the errors tabulated in item 2 — 0.00, 0.04, 0.32,
+   > 0.47, 3.58 — which is the point of having measured them before a backend
+   > existed: they are a property of the shaders, so reproducing them is a
+   > statement about the backend.
+   >
+   > **Two things the harness did not have to get right, and one it had
+   > wrong.** The chain has to hand each pass the previous pass's output in
+   > order, and has to reallocate when the drawable resizes; both are tested.
+   > And the harness bound every advertised uniform with `glUniform1f` —
+   > which is `GL_INVALID_OPERATION` against `LightingPass`'s `uLightCount`,
+   > declared `int`. The driver refuses the call, raises an error nobody
+   > reads, and leaves the uniform at zero: lighting that costs what lighting
+   > costs, darkens correctly and lights nothing. It never showed up because
+   > `ShaderParityTest` only ever ran the nine built-ins, and none of them has
+   > an integer uniform. The production chain asks the program what type each
+   > uniform is and binds accordingly.
+
+4. **The uniform contract was one member short.** `ShaderPass.uniforms()`
+   returns `Map<String, Float>`, and a `Float` cannot carry a `vec3` — so
+   `LightingPass`'s `uNightTint`, `uLightPos[]` and `uLightColor[]` were
+   declared in the shader, sampled by the shader, and advertised to nobody. A
+   backend honouring the documented contract to the letter would have shaded
+   with a black tint and an empty light array. `vectorUniforms()` closes it,
+   and `ShaderCompileTest` now scans in both directions: every advertised name
+   must exist in the shader, and every uniform the shader declares must be
+   advertised. The second direction is the one that had never been checked and
+   is the one that was failing.
+
+None of this was a defect in the CPU pipeline, which works. The architecture was
+sound and the port target was real — the port has since been done, and cost
+about what item 3 said it would.
 
 ---
 
@@ -522,6 +581,9 @@ Fixing these now builds the discipline that keeps store-page copy honest.
 | Intro paragraph | "a **shader system** (GLSL-first post-processing with a CPU fallback that runs anywhere)" | Reads as though GPU shading happens. Accurate framing: a multithreaded CPU post-processing pipeline that ships hand-written GLSL alongside each effect as a port target. | **Corrected 2026-08-03**, in that wording. The paragraph now also names the two *rendering* backends, which is the claim that did become true (RENDER_PLAN B9). |
 | Requirement #4 row | "shader execution … all in-engine" | Accurate as written — worth keeping, since it's the honest one. | Kept, and extended to say why the optional GL jar does not weaken it. |
 | Roadmap preamble | "the per-pass GLSL has never been compiled by anything" | Was true when written; `ShaderCompileTest` compiled all ten on a real driver on 2026-08-02. | **Removed 2026-08-03.** A stale warning is worse than none — it argues against work that has already been done. |
+| Requirement #5 row, again | "**Post-processing executes on the CPU today** … the GL backend says so on stderr" | Was true, and was the honest thing to say for two days. RENDER_PLAN A2–A5 made it false: the GL backend compiles and runs the chain. | **Corrected 2026-08-04.** The row now says both sides execute, and cites `GlShaderChainTest` reproducing the per-pass errors rather than asserting equivalence — the same discipline the row was rewritten under the first time. |
+| Intro paragraph, again | "a multithreaded CPU post-processing pipeline that ships hand-written GLSL alongside every effect" | Same: accurate on 2026-08-03, understated on 2026-08-04. | **Corrected 2026-08-04.** GLSL-first post-processing that runs as real fragment shaders on the GL backend and as the CPU pipeline everywhere else. |
+| "Rendering backend & shaders" section | "What remains is the GL backend itself" | Stale since B8/B9 — the backend exists and is selected by a probe. | **Corrected 2026-08-04.** It now says what remains of the renderer work (Jobs C and D) instead. |
 
 The javadoc in
 [`ShaderPass`](src/main/java/com/larsons/engine/graphics/shader/ShaderPass.java)
@@ -531,10 +593,17 @@ the README's summary framing overstated, and it no longer does.
 
 **The rule this table is really for.** Every row above was fixed in the commit
 that made it fixable, not before — B9's step in `RENDER_PLAN.md` says so in as
-many words, and the one claim that is *still* an overstatement (GPU
-post-processing) is still described as future work rather than quietly upgraded
-along with its neighbours. That is the discipline this appendix exists to
+many words, and GPU post-processing was described as future work right up to
+the commit that shipped it, rather than being quietly upgraded along with its
+neighbours a release early. That is the discipline this appendix exists to
 build, and it costs something to keep exactly once per release.
+
+**It also cuts the other way, which is newer.** The last three rows are
+corrections of *understatements*: text that was scrupulously accurate on
+2026-08-03 and too modest by 2026-08-04. A row that undersells is the same
+defect as one that oversells — the README stops describing the program — and
+the same rule catches both, which is why "correct the README" is a step in
+`RENDER_PLAN.md` (A6) rather than a habit.
 
 ---
 
