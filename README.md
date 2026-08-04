@@ -332,9 +332,22 @@ under the other.
 
 The GL backend draws every scene in the golden catalogue to within **2.59/255**
 of the Java2D renderer and collapses the catalogue's 3,356 drawing operations
-into **68** draw calls. What has not been done yet is measuring it on real
-hardware and deciding whether it delivered — B10 in
-[`RENDER_PLAN.md`](RENDER_PLAN.md).
+into **68** draw calls.
+
+**Measured on real hardware** (M1 MacBook Air, `PlayScene` at 1280×720 on a 2×
+panel, four runs across two builds):
+
+| | Java2D | GL |
+|---|---:|---:|
+| **scene** | 9.77 / 9.42 ms | **3.92 / 3.65 ms** |
+| work per frame (16.67 ms budget) | 16.83 / 12.13 ms | **6.94 / 6.67 ms** |
+| headroom | −1.0% / +27.2% | **+58.3% / +60.0%** |
+| sustainable FPS | 59 / 82 | **144 / 150** |
+
+The scene stage — the one a GPU renderer exists to move — fell **61%**, and the
+machine went from missing its frame budget to holding it with more than half to
+spare. Full table, method and caveats in [`RENDER_PLAN.md`](RENDER_PLAN.md)
+(B10).
 
 ### With just the JDK (no Gradle, no downloads)
 
@@ -3183,21 +3196,17 @@ path to a Steam release, phased with blockers, costs and risks — see
 record, [`RENDER_PLAN.md`](RENDER_PLAN.md), where each step states what must be
 true before it starts and the instrument that proves it worked.
 
-- **GPU renderer backend:** GPU *scene* rendering is written, pixel-verified and
-  selected. The `:gl` project holds an OpenGL 3.3 `Renderer` and a `DrawTarget`
-  over batched vertex buffers; every scene in the golden catalogue renders
-  through it within 2.59/255 of Java2D, and the catalogue's 3,356 drawing
-  operations become 68 draw calls. It is kept out of the core so the engine
-  itself stays JDK-only (requirement #4) — enforced, not assumed — and the
-  engine finds it over `ServiceLoader`, probes it, and falls back to Java2D with
-  a stated reason when there is no context. See
-  [Rendering backends](#rendering-backends-java2d-and-opengl). What remains is
-  **re-profiling on real hardware** to decide whether it delivered
-  ([`RENDER_PLAN.md`](RENDER_PLAN.md), B10).
-  **Measure before continuing.** The
-  [frame profiler](#frame-profiler-where-the-time-actually-goes) exists to
-  decide this: it reports `scene` and `shaders` separately, names the backend it
-  measured, and a frame with headroom to spare justifies neither GPU job.
+- **GPU renderer backend — done.** GPU *scene* rendering is written,
+  pixel-verified, selected automatically and **measured**. The `:gl` project
+  holds an OpenGL 3.3 `Renderer` and a `DrawTarget` over batched vertex buffers;
+  every scene in the golden catalogue renders through it within 2.59/255 of
+  Java2D, and the catalogue's 3,356 drawing operations become 68 draw calls. It
+  is kept out of the core so the engine itself stays JDK-only (requirement #4) —
+  enforced, not assumed — and the engine finds it over `ServiceLoader`, probes
+  it, and falls back to Java2D with a stated reason when there is no context. On
+  an M1 MacBook Air it cut the scene stage **61%** and took the frame from over
+  budget to 58–60% headroom. See
+  [Rendering backends](#rendering-backends-java2d-and-opengl).
 - **GPU post-processing:** running each `ShaderPass.glsl()` as real GLSL in an
   FBO ping-pong — the shader library (including `LightingPass`) needs no
   changes, by design, and every pass is already compiled and diffed against its

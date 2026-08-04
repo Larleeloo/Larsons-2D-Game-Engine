@@ -41,11 +41,26 @@ import static org.lwjgl.glfw.GLFW.*;
  * code the AWT path uses. A scene cannot tell which window it is being played
  * in, and a key bind saved under one backend works under the other.
  *
- * <p><b>No vsync, deliberately.</b> The swap interval is set to zero so the
- * engine's own frame limiter stays the only thing pacing frames — the same
- * arrangement the Java2D backend has always had. Letting the driver block in
- * {@code swapBuffers} instead would quietly move the cap to the panel's refresh
- * rate and make B10's two profiles measure different things.
+ * <p><b>Vsync is on, and B9 had it off for a reason that expired.</b> B9 set the
+ * swap interval to zero so the engine's frame limiter was the only thing pacing
+ * frames, which kept B10's two profiles measuring the same thing. That was right
+ * for the measurement and wrong for the player: a frame presented at an
+ * arbitrary phase against a 60 Hz panel tears, and the apparent motion of a
+ * large regular pattern — a wall of terrain blocks — judders. Java2D never had
+ * this problem because on macOS it presents through the window server, which
+ * composites on the refresh whether anyone asked it to or not.
+ *
+ * <p>D0 is why this is the suspect rather than the rasteriser: it measured GL at
+ * 2× against Java2D upscaled and found <b>0.000</b> mean channel error on
+ * sprites at every camera position, with both backends changing exactly the same
+ * pixels per one-pixel pan. Nothing about the picture moves; only when it
+ * reaches the panel does.
+ *
+ * <p>{@code -Dlarsons.render.vsync=off} restores the old behaviour, which is
+ * what an uncapped benchmark wants. <b>It changes what a frame profile means:</b>
+ * with vsync on, {@code swapBuffers} blocks until the refresh, so the wait moves
+ * out of the limiter's {@code idle} stage and into {@code present}. A profile
+ * taken with it on is not comparable to B10's without saying so.
  */
 public final class GlWindow implements BackendWindow {
 
@@ -73,14 +88,27 @@ public final class GlWindow implements BackendWindow {
         this.width = Math.max(1, width);
         this.height = Math.max(1, height);
 
-        // The engine's limiter paces frames; see the class note.
-        glfwSwapInterval(0);
+        // Present on the panel's refresh unless someone is benchmarking. See
+        // the class note for why this changed after B10 and what it does to a
+        // frame profile.
+        glfwSwapInterval(vsyncRequested() ? 1 : 0);
         measure();
         installCallbacks();
 
         // Hand the context over. From here it belongs to whichever thread
         // calls GlRenderer.beginFrame() first, and this one only pumps events.
         context.detachCurrent();
+    }
+
+    /** {@code -Dlarsons.render.vsync=off} to present as fast as frames are made. */
+    public static final String VSYNC_PROPERTY = "larsons.render.vsync";
+
+    /** Whether frames should wait for the panel's refresh. On unless refused. */
+    public static boolean vsyncRequested() {
+        String raw = System.getProperty(VSYNC_PROPERTY);
+        if (raw == null || raw.isBlank()) return true;
+        raw = raw.strip().toLowerCase();
+        return !(raw.equals("off") || raw.equals("false") || raw.equals("0"));
     }
 
     /** The driver behind this window, for the frame report. */

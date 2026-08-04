@@ -1,20 +1,42 @@
 # Render Plan — GPU Acceleration, End to End
 
 **Status:** Living document. Written 2026-08-02 against commit `85196b9` on
-`claude/gpu-acceleration-shaders-oqbx54`. **Job B is done and it delivered.** On
-the M1 Air — the machine that was over budget and therefore the one that decides
-— frame work fell from **16.83 ms to 6.94 ms**, the scene stage from **9.77 to
-3.92**, and headroom from **−1.0% to +58.3%**. The backend draws all 32 golden
-frames within the 3.58 bar (worst 2.59), collapses 3,356 operations into 68 draw
-calls, and as of B9 is probed for at startup with an honest fallback and named in
-every report.
+`claude/gpu-acceleration-shaders-oqbx54`. **Job B is complete and it delivered.**
+Measured on the M1 Air across four runs on two builds: the scene stage fell from
+**9.77/9.42 ms to 3.92/3.65 ms** (−61%), frame work from 12.1–16.8 ms to a stable
+**6.7 ms**, and headroom from between −1.0% and +27% to a steady **+58–60%**. The
+backend draws all 32 golden frames within the 3.58 bar (worst 2.59), collapses
+3,356 operations into 68 draw calls, is probed for at startup with an honest
+fallback (B9), and is named in every report.
 
-It also shipped one serious bug that the golden catalogue could not see, found by
-playing a real level: a vertex buffer that grew mid-triangle and desynchronised
-every triangle after it. That is B8a, recorded in place with the reproduction
-that now guards it. **The B10 numbers above were taken on the build that had it
-and are pending one confirming re-run** — the corruption changed which vertices
-were assembled, not how many were generated, so they are expected to stand. Two of the plan's own instructions have now been measured to be
+Two things are recorded against that result rather than tidied away. **One
+serious bug shipped and was caught by playing a real level, not by the suite** —
+a vertex buffer that grew mid-triangle and desynchronised every triangle after
+it, invisible to 32 pixel-perfect golden frames because none of them is big
+enough to trip it (B8a). And **one claim made here from a single sample was wrong
+and is corrected in place**: the `present` stage is not a Job B win, it is simply
+unstable on this machine. See B10.
+
+**The desktop was skipped by decision**, not omission; the bar B10 stated was in
+terms of the Air, which was the machine over budget.
+
+**Job A is now justified and is the next job.** A profile with the chain *on*
+puts the CPU shader stage at **5.460 ms** — 29% of the frame, and enough to take
+the Java2D renderer 12.6% over budget at 53 FPS. More seriously, the same run
+shows the GL backend running **neither** pass: a GPU build currently has no
+day/night lighting at all, which is a correctness defect rather than a missing
+optimisation. §5.0 and §5.1.
+
+**Job D (§7) is next, ahead of A.** GL shimmers by about a pixel at 2× HiDPI as
+the camera moves and Java2D does not. It is scheduled first because a player sees
+it every second, and because its likely fix — an offscreen surface at logical
+resolution — *is* A1's first deliverable rather than a detour around it.
+
+Also open: **B11** fixed a GL jar that could not open a window when
+double-clicked on macOS, the platform it had been profiled on for four steps. And
+the `update` stage spikes to 15–21 ms at p99 on both backends, which no renderer
+work will touch; that has a plan of its own in
+**[`SIM_PLAN.md`](SIM_PLAN.md)**. Two of the plan's own instructions have now been measured to be
 incomplete rather than wrong-headed: B6's "route `drawText` through it" (Java2D
 already has a glyph cache and beats any per-character blit) and B8's "against a
 1×1 white texture" (which shares a shader but not a batch — the white texel has
@@ -97,7 +119,8 @@ Everything in this table has been measured or executed, not assumed.
 | A GL backend draws the same picture as Java2D | B8 — `GlParityTest` renders all 32 of B0's frames through both and subtracts: worst **2.59 / 255** against a bar of 3.58, six frames at exactly 0.00 |
 | The batching the atlases were built for is real, not modelled | B8 — the catalogue's 3,356 operations become **68** `glDrawArrays` calls, 49.35×, measured on the backend rather than predicted by a counter |
 | The engine picks a backend and never strands a player | B9 — `Backends` probes for a GL 3.3 context over `ServiceLoader` and falls back to Java2D with a reason; `BackendSelectionTest` runs every route on a machine with no GPU, `GlBackendTest` provokes the failure on one that has |
-| **Job B made the frame faster on the machine that needed it** | B10 — M1 Air, same level, both backends: work per frame **16.83 → 6.94 ms**, scene **9.77 → 3.92 ms**, headroom **−1.0% → +58.3%**, 59 → 144 sustainable FPS |
+| **Job B made the frame faster on the machine that needed it** | B10 — M1 Air, four runs across two builds: scene **9.77/9.42 → 3.92/3.65 ms**, under 7% spread within each backend and −61% between them; work per frame → a stable **6.7 ms**, headroom → **+58–60%** |
+| A number that moves between two runs of the same code is not a result | B10 — `present` read 5.061 ms then 0.962 ms on Java2D with nothing in between that touches it. The 78% saving written up from the first pair is withdrawn |
 | A backend can pass 32 pixel-perfect frames and still be broken | B8a — `GlBatch` grew mid-triangle above 4,096 vertices and scrambled every triangle after it. No catalogue frame is that big. `GlBatchTest` reproduces it at the predicted vertex |
 | A profile says which renderer produced it | B9 — `DeviceProfile.backend()` / `gpu()`, printed by `FrameReport`. The build stamp taught this lesson once already |
 | Both backends run the whole game, not a test harness | B9 — `-Dlarsons.run.seconds` launches the real game on each and exits; both wrote a report under `xvfb-run`, `gl` at 0.631 ms scene against `java2d` at 1.591 ms on a software rasteriser |
@@ -114,7 +137,9 @@ predicted batches into a measured 49.35× — one draw call for most frames in t
 catalogue — at a worst-case pixel difference of 2.59 out of 255. **The engine
 chooses it as of B9**, over a `ServiceLoader` service so the core still cannot
 name it, with a probe, an honest fallback and the backend recorded in every
-report. What remains of B is proving it on the two target machines (B10).
+report. **B10 proved it on the machine that was over budget**: the scene stage
+fell 61% and the M1 Air now holds 60 FPS with 58–60% of the budget spare. Job B
+is closed.
 
 ---
 
@@ -452,7 +477,7 @@ golden is blind to — that `ContainerPanel`'s open animation pushes transform
 then alpha and unwinds both, that a settled panel issues *no* state changes at
 all, that `Menu` draws its scroll bar after the rows it scrolls over, and that
 the escort path emits two `drawDashedLine` calls rather than thirty short
-solid ones. §7 says these two instruments answer different questions; they do.
+solid ones. §8 says these two instruments answer different questions; they do.
 
 Suite: **840 tests, 0 failures, 10 skipped**.
 
@@ -2114,68 +2139,150 @@ already a GPU texture.
 **Done when.** The numbers are recorded and the decision to continue is made
 from them.
 
-#### B10 — the M1 Air, measured
+#### B10 — done. The M1 Air, four runs, and Job B delivered
 
-**`PlayScene`, 1280×720, 600-frame window, 60 FPS cap, both backends, same
-level and same activity.** Mac OS X 26.3.1, M1, 8 cores, Java 21.0.9, on a
-1440×900 panel at **scale 2.0** — so every logical pixel is four real ones.
+**`PlayScene`, 1280×720, 600-frame windows, 60 FPS cap, same level and same
+activity.** Mac OS X 26.3.1, M1, 8 cores, Java 21.0.9, on a 1440×900 panel at
+**scale 2.0** — so every logical pixel is four real ones. Two rounds of both
+backends: the first on `81c08d5`, the second on `44bca9b` after B8a fixed the
+vertex buffer. Four runs, because two would not have shown which numbers are
+reproducible and which are not.
 
-| | Java2D | GL | change |
-|---|---:|---:|---:|
-| **work per frame** | **16.826 ms** | **6.944 ms** | **−59%** |
-| headroom (of 16.67 ms) | **−1.0%** | **+58.3%** | budget met |
-| sustainable FPS | 59 | 144 | |
-| **scene** | **9.768** | **3.920** | **−60%** |
-| — terrain | 4.899 | 2.217 | −55% |
-| — entities | 3.934 | 1.503 | −62% |
-| — hud | 0.386 | 0.069 | −82% |
-| — decor | 0.163 | 0.092 | −44% |
-| present | 5.061 | 1.105 | −78% |
-| update | 1.997 | 1.918 | unchanged, correctly |
-| overlay | 0.270 | 0.044 | −84% |
-| idle (headroom) | 0.991 | 10.025 | |
+| | Java2D r1 | Java2D r2 | GL r1 | GL r2 |
+|---|---:|---:|---:|---:|
+| **work per frame** | 16.826 | 12.133 | **6.944** | **6.667** |
+| headroom (of 16.67 ms) | −1.0% | +27.2% | **+58.3%** | **+60.0%** |
+| sustainable FPS | 59 | 82 | 144 | 150 |
+| **scene** | **9.768** | **9.418** | **3.920** | **3.653** |
+| — terrain | 4.899 | 4.653 | 2.217 | 1.890 |
+| — entities | 3.934 | 3.858 | 1.503 | 1.502 |
+| — hud | 0.386 | 0.369 | 0.069 | 0.069 |
+| present | 5.061 | 0.962 | 1.105 | 1.053 |
+| update | 1.997 | 1.753 | 1.918 | 1.961 |
 
-**The bar is met and then some.** B10 set it as "if GL does not cut the scene
-stage substantially, something in B5/B6/B8 is not batching". The scene stage
-fell by 60% and the frame went from **1.0% over budget to 58% under it** —
-59 sustainable FPS to 144. Appendix B's baseline was 17.12 ms of work against a
-16.67 ms budget on this machine; the Java2D column above reproduces it at 16.83,
-which is the same measurement two weeks apart and says the comparison is sound
-before reading the other column.
+**The verdict is the scene stage, and it is the most reproducible number in the
+table.** Java2D 9.77 and 9.42; GL 3.92 and 3.65. Under 7% spread within each
+backend and a **61% cut** between them, holding across a code change that
+rewrote how the GL backend assembles triangles. B10 set the bar as "if GL does
+not cut that substantially, something in B5/B6/B8 is not batching". It did, and
+every component moved with it: terrain −60%, entities −62%, hud −82%.
 
-`present` falling by 78% is the second result and was not predicted. Java2D's
-present is a blit of a 1280×720 image onto a 2× surface, done by the CPU and
-paid on every frame; GL's is a buffer swap. On a HiDPI panel that blit was
-costing more than the whole GL scene stage.
+Frame work fell from 12.1–16.8 ms to a stable **6.7 ms**, and headroom went from
+somewhere between just-over-budget and 27% to a steady **58–60%**. The Air holds
+60 FPS on the GL backend with more than half the budget spare.
 
-`update` is unchanged, which is the control: nothing about a renderer should
-move the fixed-step simulation, and nothing did.
+`update` is unchanged at ~1.9 ms on all four runs, which is the control: nothing
+about a renderer should move the fixed-step simulation, and nothing did.
 
-**The remaining hitch is not a rendering problem.** `update` spikes to 17.36 ms
-at p99 against a 0.68 ms median on *both* backends — one frame in a hundred
-spends the entire budget inside the simulation. That is the next thing between
-this game and a steady 60, and no renderer will touch it.
+#### A correction: `present` is not a Job B win
 
-#### B10 — and the bug the numbers did not show
+The first round showed Java2D at 5.061 ms of present against GL's 1.105, and
+that was written up here as a 78% saving with an explanation attached — that
+Java2D was paying to blit a 1280×720 image onto a 2× surface. **The second round
+contradicts it.** Java2D's present came back at 0.962 ms, p50 0.913 against the
+first round's p50 of 5.377, and B8a touched nothing Java2D uses. In that run GL's
+present (1.053) is marginally the *slower* of the two.
 
-The two profiles above were taken on a build with the `GlBatch` desynchronisation
-described below, so the GL frame was **drawn wrong while being timed**. The
-numbers are kept rather than retaken, for a stated reason: the corruption changes
-which vertices are assembled into which triangle, not how many vertices are
-generated, uploaded or drawn. The scene stage is CPU-side vertex generation, and
-it did the same work either way. **They are still to be re-confirmed on the fixed
-build** — see the entry in §8 — and this section will say so until they are.
+So the honest record is: **Java2D's present cost is not reproducible on this
+machine — it varied by a factor of five between two runs of the same code — and
+no claim about present survives.** GL's is stable at ~1.05 ms across both rounds.
+The explanation offered for the first reading was plausible, which is exactly why
+it should not have been offered from one sample. Something outside the profiler
+moves that stage; whatever it is, it is not the renderer, and finding it is not
+Job B's business.
 
-**Do not read `merge ratio 2.2×` as this backend's batching.** The `Draw calls`
-block of a frame report is `DrawStats`, which is the *model* — the count a
-backend could achieve given the draw order, computed in the core with no backend
-present. B8 measured the model to be seven times pessimistic against what GL
-really issues. The report has no channel for a backend's real
-`glDrawArrays` count, so on a GL run it prints the Java2D-equivalent prediction
-and its verdict text ("a GPU backend would issue nearly one call per sprite and
-buy little") is advice about a decision that has already been made and
-contradicted by measurement. That is a reporting defect, not a batching one, and
-it is worth fixing before the next round of profiles is taken.
+Nothing else in the table depends on it. The scene stage is what B10 was set up
+to decide and it is stable to within 7%.
+
+#### The decision, and the scope it was made under
+
+**Job B delivered. Job A is unblocked but not yet justified.**
+
+- **The Ryzen 7 / RTX 4080 Super was deliberately skipped**, by decision rather
+  than by omission. B10 as written called for both machines; the bar it stated
+  was in terms of the Air, because the Air was the machine over budget and the
+  desktop already had headroom to spare. A second machine could have shown the
+  win to be larger and could not have shown it to be absent. The plan of record
+  is therefore closed on one machine, and this sentence is here so nobody later
+  reads the missing column as an oversight.
+- **These profiles cannot decide Job A, and their own verdict text should not be
+  read as if they could.** Every one of the four says `0 shader pass(es)` in its
+  context line: the post-processing chain was switched off entirely. A profile
+  with no shader passes in it measures nothing about the cost of shader passes,
+  so "neither GPU job is justified by these numbers" is true of these numbers and
+  says nothing about Job A. Deciding Job A needs a profile of the same level with
+  the chain **on** — and on a 2× panel, where a full-screen CPU pass covers four
+  times the pixels its logical size implies, that is exactly the measurement most
+  likely to change the answer.
+
+#### Two instrument defects this round exposed
+
+Neither affects the numbers above; both would mislead the next person to read a
+report, so they are recorded rather than left to be rediscovered.
+
+1. **`merge ratio 2.2×` is not this backend's batching.** The `Draw calls` block
+   is `DrawStats` — the *model*, computed in the core with no backend present, of
+   what a batching backend could achieve given the draw order. B8 measured that
+   model to be seven times pessimistic against what GL really issues (488
+   predicted, 68 actual). The report has no channel for a backend's real
+   `glDrawArrays` count, so on a GL run it prints a Java2D-shaped prediction and
+   then advises, in the verdict, that "a GPU backend would issue nearly one call
+   per sprite and buy little" — advice about a decision already made and already
+   contradicted by measurement. `GlTarget.drawCalls()` has the true number and
+   nothing carries it into `FrameProfiler`.
+2. **The verdict does not know which backend it is judging.** It recommends Job B
+   to a report produced *by* the Job B backend. `DeviceProfile.backend()` is
+   right there in the same report, and `FrameReport.verdict` never reads it.
+
+---
+
+### B11 — The GL jar could not open a window on the machine it was profiled on
+
+**Found by asking how a player would launch it, rather than how we had been
+launching it.** Every GL run through B10 went through `:gl:runGl`, which passes
+`-XstartOnFirstThread` on macOS. The shipping artefact is a jar, a manifest
+cannot carry JVM arguments, and GLFW must create its window on thread 0 — which
+the JVM does not run `main` on unless told. A GL window created off it **does not
+fail, it hangs**: no window, no error, nothing in the log.
+
+So `./gradlew :gl:runGl` worked and `java -jar larsons-engine-gl.jar` did not, on
+the one platform the backend had been measured on, for the whole of B7–B10.
+
+**The flag cannot just be set for everyone.** AWT wants thread 0 for its own run
+loop, so a Java2D launch *with* the flag hangs the `JFrame` exactly as a GL
+launch without it hangs the GLFW window. It is a per-backend setting, and the
+backend is not known until something has probed for a driver — which needs the
+thread.
+
+[`MacGlLauncher`](src/main/java/com/larsons/engine/core/MacGlLauncher.java)
+breaks the circle with a second process rather than a second attempt:
+
+1. The original process — no flag, so AWT would work — sees macOS, a GPU backend
+   on the classpath, and a request that is not `java2d`. It spawns itself with
+   the flag, inherits the console, and waits.
+2. The child probes. If it gets a context it runs the game and the parent exits
+   with the child's status: one window, one game, one idle `waitFor`.
+3. If it cannot, the child exits `86` **before touching AWT**, and the parent
+   runs the game itself — in a process that never had the flag, where Swing is
+   perfectly happy.
+
+Falling back inside the child would mean opening a Swing window on a thread AWT
+does not own, which is this bug pointing the other way.
+
+**Inert for everyone else**, which is the property most worth testing:
+non-macOS, `-Dlarsons.render.backend=java2d`, a classpath with no GPU backend on
+it (the plain jar — the common case), an already-flagged launch, and the child
+itself all skip it.
+[`MacGlLauncherTest`](src/test/java/com/larsons/engine/render/MacGlLauncherTest.java)
+pins each, faking `os.name` so the macOS branch is reachable from a Linux agent
+— which proves the guard that stops a plain jar relaunching is the classpath
+scan and not merely the platform check. A spawn that fails for any reason logs
+and continues on Java2D; nothing here can strand a player.
+
+**Still to confirm on the hardware:** that a double-clicked
+`larsons-engine-gl.jar` now opens a GL window on the M1 Air. Both jars were
+verified to still launch correctly on Linux, where the whole mechanism is a
+no-op.
 
 ---
 
@@ -2183,7 +2290,62 @@ it is worth fixing before the next round of profiles is taken.
 
 Precondition: **B10 complete and passed.** The frame must already live in a GPU
 texture, or this job costs two transfers per frame to save work that is not the
-bottleneck.
+bottleneck. **Met — see B10.**
+
+### 5.0 Measured, and now justified
+
+B10's four runs all had the shader chain switched off, which is why they closed
+Job B and were explicitly not allowed to decide this one. A fifth and sixth run,
+same machine, same level, **2 passes on** (`lighting` + `bloom`):
+
+| | Java2D, shaders **off** | Java2D, shaders **on** | GL, shaders **on** |
+|---|---:|---:|---:|
+| scene | 9.418 | 9.839 | 3.641 |
+| **shaders** | 0.000 | **5.460** | **0.000 — not run** |
+| — lighting | | 2.894 | |
+| — bloom | | 2.563 | |
+| present | 0.962 | 1.091 | 1.103 |
+| **work per frame** | 12.133 | **18.762** | 6.745 |
+| **headroom** | +27.2% | **−12.6%** | +59.5% |
+| sustainable FPS | 82 | **53** | 148 |
+
+**Job A is justified, and the number is 5.460 ms.** Turning two passes on costs
+29% of the frame and takes the Java2D renderer from inside its budget to 12.6%
+over it — 82 sustainable FPS down to 53. The HiDPI note in the report is not
+decoration: at `scale 2.0` a full-screen pass covers four times the pixels the
+window's logical size implies, so this is the stage that punishes exactly the
+machine this plan cares about. That is the budget A2 and A4 compete for.
+
+**And the GL column is not a comparison — it is a bug report.** `shaders 0.000`
+against a context line saying `2 shader pass(es)`: the GL backend was handed a
+chain and did not run it, which is what `GlRenderer` has said on stderr since B8
+and what §4's B8 notes recorded as Job A's business. **The 6.745 ms frame is a
+frame with no lighting and no bloom in it.** It cannot be set against 18.762 and
+nothing here does.
+
+### 5.1 What that means before A1 starts, and it is not a performance question
+
+`LightingPass` is not post-processing in the cosmetic sense. It is **day/night
+darkness and every point light in the world** — the thing that makes a torch a
+torch. A player on the GL distribution who enables lighting in their game type
+gets a uniformly lit world and no error they will ever see, because a single
+line on stderr is not a user interface. **The GPU build silently has no
+day/night.**
+
+That is a correctness defect, not a missing optimisation, and it outranks
+everything else in this job. A1–A5 fix it properly. Until they land, the engine
+owes the player one of:
+
+- **say so** — surface "post-processing is not available on this backend" where
+  the toggle lives, not on stderr; or
+- **honour it** — when a chain has passes and the chosen backend cannot run
+  them, select Java2D instead and say why, which is exactly the machinery B9
+  already built and would cost a condition; or
+- **do neither and finish A quickly.**
+
+The third is only honest if A really is next. Whichever is chosen, it is a
+decision to record here rather than a detail — the same rule that governed the
+window question in B9.
 
 ### A1 — Render the scene to a texture, not the backbuffer
 
@@ -2192,6 +2354,47 @@ bottleneck.
 to the backbuffer and swap.
 
 **Verify.** Frame is unchanged with an empty chain. Goldens green.
+
+---
+
+#### A1 — done
+
+`GlRenderer` owns a `GlSurface` sized to the drawable, binds it in
+`beginFrame()`, and blits it to the back buffer in `present()`.
+`sceneTexture()` exposes the resolved texture, which is what A2 samples. The
+existing `GlSurface` needed one new method — `blitToWindow` — because a
+`glBlitFramebuffer` straight from the multisample buffer to the back buffer is
+one driver-side resolve and needs no shader, no vertex buffer and no state of
+its own, which matters when it runs after `GlTarget` has finished a frame.
+
+**And it binds the surface only when something will read it, which the step did
+not say and the measurement demanded.** The offscreen path costs one multisample
+resolve per frame. On a GPU that is a hardware blit; on a software rasteriser it
+is four samples × 921,600 pixels of CPU work, and it measured at **14–19 ms a
+frame under llvmpipe** — enough to take a playable software-GL configuration (a
+VM, a remote desktop, an old integrated driver) and make it unplayable. Since the
+backend does not yet run the chain, an unconditional surface would have bought
+nothing and cost that.
+
+So `-Dlarsons.render.offscreen` defaults to `auto`: offscreen when a chain with
+passes is attached — precisely when A2 needs the texture — and straight at the
+window otherwise. Measured under llvmpipe, on the real game:
+
+| | present | work/frame |
+|---|---:|---:|
+| `auto`, no passes (the pre-A1 path) | 5.875 ms | 6.483 ms |
+| `always` (forced offscreen) | 20.731 ms | 22.059 ms |
+
+`always` and `never` force it either way, so the difference can be measured on a
+given machine rather than taken from this note. **On the M1 this is expected to
+be a fraction of a millisecond and that is expected, not measured** — the number
+above is a software rasteriser and says nothing about hardware.
+
+Two things were ruled out on the way to that conclusion rather than assumed: it
+is not vsync (the cost is identical with the swap interval at 0 and 1), and it is
+not a multisample-to-multisample blit (the window is now requested single-sample,
+since coverage sampling belongs to the offscreen surface, and the cost did not
+move).
 
 ---
 
@@ -2480,7 +2683,132 @@ world state stays identical.
 
 ---
 
-## 7. What each instrument proves
+## 7. Job D — Sub-pixel stability on HiDPI
+
+**Precondition: A and C are done, or abandoned.** Deliberately last, and §7.0
+says why.
+
+**The symptom.** Reported from a real level on the M1 Air: *"the blocks seem to
+jitter slightly on GL."* Terrain shimmers by about a pixel as the camera moves.
+Java2D on the same machine, same level, same camera does not.
+
+### 7.0 Why this is next, and not after A
+
+**This section previously argued for doing Job D last.** The argument was that
+A1 binds an offscreen framebuffer, that a framebuffer sized in logical pixels
+would remove the cause for free, and that building a bespoke fix first risks two
+implementations of one thing.
+
+**The premise was right and the conclusion was wrong.** If a logical-size
+framebuffer is what fixes the shimmer, then *that framebuffer is the fix* — and
+it is also A1's first deliverable. Building it now does not duplicate A1's work,
+it **front-loads** it: D1 stands the offscreen surface up and presents through
+it, and A1 then has only to hang the shader chain off a surface that already
+exists. The two jobs share a step; they do not compete for it.
+
+So the ordering is: **D now, A next, C after.** What that changes about D1 is not
+whether to build the framebuffer but that it must be built as the thing A1 will
+inherit — sized, formatted and owned the way A1 needs — rather than as a
+throwaway. That constraint is written into D1 below.
+
+The reason this is worth doing before A is simpler than the sequencing argument:
+a shimmering world is a defect a player sees every second they play, and GPU
+post-processing is an optimisation of a stage that currently costs the GL backend
+nothing at all.
+
+**What still genuinely belongs after C:** any fix that snaps geometry to a pixel
+grid. Snapping is correct for an unrotated world and wrong for a yawed one, so
+if D0's measurement points there instead, that half waits for C and this section
+gets rewritten again.
+
+### 7.1 The hypothesis, and why it was wrong
+
+**Stated so it could be wrong, and it was.** The reasoning was: Java2D composes
+into a logical-size image and blits once, so every sprite lands on a whole
+logical pixel; GL rasterises straight at device resolution, so a sprite at
+logical `x = 100.37` lands at device `x = 200.74`, the texel grid sits at a
+fractional offset from the pixel grid, and that offset slides as the camera
+moves.
+
+**The premise is false.** `Camera.screenX` ends in `(int) Math.round(...)`, and
+`DrawTarget.drawImage` takes `int x, int y`. The scene cannot hand the backend a
+fractional position — there is no API for it. Every sprite arrives on a whole
+logical pixel, which at scale 2 is an even device pixel. There was never a
+fractional offset for anything to slide on.
+
+Worth recording rather than quietly deleting: the hypothesis was plausible, it
+was written down before the measurement, and one grep at the `Camera` end would
+have killed it in a minute. **D0 was still worth building, because what it found
+instead is the thing nobody had checked.**
+
+### D0 — done, and the rasteriser is exonerated
+
+**Every parity measurement in this project had been taken at scale 1**, and the
+machine the shimmer was seen on runs at scale 2. `GlParityTest` renders the
+golden catalogue on a 1× surface against a 1× Java2D reference; it had never
+seen the configuration the player is in.
+
+[`GlHiDpiParityTest`](gl/src/test/java/com/larsons/engine/gl/GlHiDpiParityTest.java)
+renders a tile wall through GL at scale 2 and compares it against the Java2D
+reference **upscaled 2× nearest — as the window server presents it** — across a
+sweep of camera positions:
+
+| what | result |
+|---|---|
+| tiles only, mean channel error, every camera position | **0.000** |
+| shapes and text, mean channel error | 2.666, **identical at every position** |
+| pixels changed by a one-pixel pan, GL | 8,160 |
+| pixels changed by a one-pixel pan, Java2D upscaled | **8,160** |
+
+Not "within the 3.58 bar" — **exactly equal**, at every offset. A one-pixel pan
+disturbs precisely the same pixels on both backends. The 2.666 on the mixed
+frame is GL rendering shapes and glyphs at device resolution while Java2D
+renders them at logical resolution and the panel doubles them; it is constant,
+so it is a static difference in sharpness, not a temporal one.
+
+**The GL rasteriser does not shimmer.** Whatever was seen, it is not the picture
+being drawn differently from frame to frame.
+
+*(The first run of this diagnostic reported 1.594 rather than 0.000, entirely
+because its clear colour was a constant that disagreed with what `GoldenFrames`
+clears to — the exact trap `GlParityTest` has a comment about. It now discovers
+the colour instead of assuming it.)*
+
+### D1 — done. What is left is presentation, and B9 caused it
+
+If the picture is identical and the motion is identical, the difference is in
+how the frame reaches the panel. B9 set the swap interval to **zero**, with a
+comment saying the engine's frame limiter should be the only thing pacing
+frames — right for making B10's two profiles comparable, wrong for a player. A
+frame presented at an arbitrary phase against a 60 Hz panel tears, and the
+apparent motion of a large regular pattern — a wall of blocks — judders. Java2D
+never had this because on macOS it presents through the window server, which
+composites on the refresh whether asked to or not.
+
+**Vsync is now on by default**, `-Dlarsons.render.vsync=off` for an uncapped
+benchmark. It changes what a profile means, and that is written into
+`GlWindow`'s javadoc: with vsync on, `swapBuffers` blocks, so the wait moves out
+of the limiter's `idle` stage and into `present`. **A profile taken with it on is
+not comparable to B10's without saying so.**
+
+**This one is a candidate, not a measurement, and is not claimed as more.** D0's
+numbers are hard; this is the remaining explanation with a cheap fix attached,
+and it needs eyes on the Air to close. If the shimmer survives it, the next
+suspect is not in this plan at all: `update` spikes to 15–17 ms at p95 on both
+backends, which is one frame in twenty missing its deadline — visible judder by
+any other name, and the subject of [`SIM_PLAN.md`](SIM_PLAN.md).
+
+### D2 — done
+
+`GlHiDpiParityTest` is a standing test rather than a diagnostic: the tiles number
+must stay at exactly 0.000, the shapes-and-text number must not move with the
+camera, and a one-pixel pan must disturb the same count on both backends. It is
+the first parity instrument in this project that runs at a display scale other
+than 1 — the gap that let this question stay open for four steps.
+
+---
+
+## 8. What each instrument proves
 
 Six instruments, six distinct questions. Using the wrong one is how a step gets
 declared finished while broken.
@@ -2515,7 +2843,7 @@ atlas that changes draw order without meaning to is exactly that failure.
 
 ---
 
-## 8. Order of record
+## 9. Order of record
 
 ```
 B0  golden frames                      ← done
@@ -2529,17 +2857,31 @@ B7  :gl Gradle module                  ← done
 B8  GlTarget + GlRenderer              ← done (2.59/255 worst, 3356 ops → 68 draws)
 B9  backend selection + fallback       ← done (ServiceLoader SPI; GLFW owns the
                                               window when GL wins; both launch)
-B10 re-profile, decide                 ← M1 Air measured: 16.83 ms → 6.94 ms of
-                                         work, scene 9.77 → 3.92, −1.0% headroom
-                                         → +58.3%. Job B delivered.
-                                       ← REMAINING: re-run both profiles on the
-                                         build that fixes GlBatch, and confirm
-                                         the numbers stand. Desktop deliberately
-                                         skipped; the Air was the machine over
+B8a fix GlBatch growing mid-triangle   ← done (found by playing, not by testing)
+B10 re-profile, decide                 ← done. M1 Air, 4 runs, 2 builds: scene
+                                         9.77/9.42 → 3.92/3.65 ms (−61%), work
+                                         → 6.7 ms, headroom → +58-60%.
+                                         JOB B DELIVERED. Desktop skipped by
+                                         decision — the Air was the machine over
                                          budget and therefore the one that decides.
+B11 macOS first-thread relaunch        ← done. The GL jar could not open a window
+                                         when double-clicked; only the Gradle
+                                         tasks passed -XstartOnFirstThread.
       │
-      ├─ A1  scene renders to an FBO
-      │  A2  GlShaderChain ping-pong
+      ├─ D0  measure the HiDPI shimmer  ← done. GL at 2x is PIXEL-IDENTICAL
+      │        to Java2D upscaled, at every camera position. The rasteriser
+      │        does not shimmer; §7.1's hypothesis was wrong.
+      │  D1  vsync on by default        ← done. B9 had turned it off. The
+      │        remaining candidate, awaiting eyes on the Air.
+      │  D2  GlHiDpiParityTest          ← done. First parity test at scale 2.
+      │
+      ├─ A1  scene renders to a texture ← done. Offscreen when a chain has
+      │        passes; straight at the window otherwise, because the resolve
+      │        costs 14-19 ms/frame on a software rasteriser and buys nothing
+      │        until A2. JUSTIFIED by 5.460 ms/frame of CPU shaders at 2x
+      │        HiDPI, and the GL backend runs NEITHER pass today — a GPU
+      │        build has no day/night at all. See §5.0-5.1.
+      │  A2  GlShaderChain ping-pong    ← START HERE
       │  A3  uniform binding
       │  A4  LightingPass
       │  A5  keep + test the CPU chain
@@ -2555,7 +2897,19 @@ B10 re-profile, decide                 ← M1 Air measured: 16.83 ms → 6.94 ms
          C8  the snap animation
          C9  editor + save format
          C10 multiplayer consistency
+
 ```
+
+D is first because a shimmering world is a defect the player sees every second
+and GPU post-processing optimises a stage that currently costs the GL backend
+nothing. D1 builds the offscreen surface A1 then hangs the shader chain off, so
+the two share a step rather than competing for it — see §7.0.
+
+**The simulation stall is not in this plan.** `update` spikes to 15–21 ms at p99
+against a 0.6–0.8 ms median, identically on both backends, and no renderer work
+will touch it. It now has a plan of its own: **[`SIM_PLAN.md`](SIM_PLAN.md)**,
+whose first step is making the update stage as legible as the scene stage
+already is.
 
 A and C are independent of each other once B10 passes. A is much smaller and its
 risk is already retired, so it is the natural next one — but nothing forces that

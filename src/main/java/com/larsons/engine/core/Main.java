@@ -47,6 +47,13 @@ public class Main {
     public static final String LEVEL = "levels/sample_level.json";
 
     public static void main(String[] args) {
+        // Before anything else, including the share-jar build below: on macOS a
+        // GPU backend can only open a window on the process's first thread, and
+        // a jar's manifest cannot ask for one. This relaunches the game there
+        // when it is needed, and returns true only if the whole game has
+        // already been played out in that child process.
+        if (MacGlLauncher.relaunchIfNeeded(args)) return;
+
         // Development convenience only: launching from IntelliJ leaves a
         // ready-to-send copy of the game (plus empty texture and sound packs
         // to fill) in share/, built in the background. A shipped jar builds nothing —
