@@ -75,6 +75,14 @@ public final class FrameReport {
         out.append("frames   : %d in window (%d total), target %d FPS (%.2f ms budget)%n"
                 .formatted(snapshot.windowFrames(), snapshot.totalFrames(),
                         snapshot.targetFps(), snapshot.budgetMs()));
+        if (snapshot.externallyPaced()) {
+            // Without this line the next reader sees `idle` near zero and
+            // concludes the headroom has gone. It has not: the wait moved into
+            // `present`, because the display is doing the waiting. Two profiles
+            // paced differently cannot be compared, so each one says which it is.
+            out.append("pacing   : the display (vsync) — the frame limiter stands aside, "
+                    + "so the wait is in `present` rather than in `idle`\n");
+        }
         out.append('\n');
 
         out.append(table("Frame stages", snapshot.stages(), snapshot));

@@ -64,6 +64,35 @@ public interface Renderer {
     /** Flip/show the completed frame to the screen. */
     void present();
 
+    /**
+     * Whether {@link #present()} already waits for the display, so the game
+     * loop's own frame limiter must not wait as well.
+     *
+     * <p><b>Two pacers is not twice as accurate, it is slower and less even
+     * than either.</b> A profile from an M1 Air with vsync on measured
+     * {@code present} at a p99 of <b>16.752 ms</b> — one refresh period at
+     * 60 Hz, so the swap really was blocking — and {@code idle} at a p50 of
+     * <b>11.975 ms</b> on top, which is the software limiter waiting for a
+     * deadline of its own. Frame time came out at 21.5 ms against a 16.67 ms
+     * budget: the loop was running at <b>46 FPS while asking for 60</b>, and
+     * the frames it did deliver landed at whatever phase the two schedules
+     * happened to be in. A rigidly-drawn world delivered at uneven times looks
+     * like a world that is not rigid, which is what a player calls a shimmer.
+     *
+     * <p>The mechanism is worth stating because it is not obvious that two
+     * correct pacers compose badly. The limiter schedules on an absolute
+     * timeline from {@code System.nanoTime}; the display refreshes on its own,
+     * unrelated one. Whenever the limiter's deadline falls just after a refresh
+     * boundary, that frame's swap misses the boundary and blocks for a whole
+     * further period — so the loop alternates between one refresh and two, and
+     * the apparent motion of everything on screen alternates with it.
+     *
+     * <p>Default {@code false}, which is right for every backend that presents
+     * without waiting: the limiter is then the only thing pacing frames, which
+     * is what it was written to be.
+     */
+    default boolean presentationIsPaced() { return false; }
+
     int getWidth();
 
     int getHeight();

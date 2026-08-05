@@ -144,6 +144,26 @@ public final class FrameProfiler {
 
     public int targetFps() { return targetFps; }
 
+    /**
+     * Whether the renderer's present already waits for the display, which
+     * changes what {@code idle} means and therefore how a report must be read.
+     *
+     * <p><b>Recorded because otherwise the next profile looks like a
+     * regression.</b> When the game loop paces frames, the wait shows up as
+     * {@code idle} and headroom is the share of the budget nobody used. When the
+     * display paces them, the same wait moves into {@code present} and
+     * {@code idle} falls to nearly nothing — the same machine doing the same
+     * work, reported in a different place. Two profiles that disagree about
+     * which is which cannot be compared, and a reader with no way to tell would
+     * reasonably conclude the headroom had vanished.
+     */
+    public void setExternallyPaced(boolean paced) { this.externallyPaced = paced; }
+
+    /** See {@link #setExternallyPaced}. */
+    public boolean externallyPaced() { return externallyPaced; }
+
+    private volatile boolean externallyPaced;
+
     /** Discard the current window and start measuring afresh. */
     public void reset() {
         for (long[] row : samples) Arrays.fill(row, 0L);
@@ -333,7 +353,8 @@ public final class FrameProfiler {
                 List.copyOf(stageStats), List.copyOf(passStats),
                 List.copyOf(sectionStats),
                 new Draws(mean(drawOps), mean(drawBatches),
-                        mean(drawImages), mean(drawGlyphs)));
+                        mean(drawImages), mean(drawGlyphs)),
+                externallyPaced);
     }
 
     /**
@@ -413,10 +434,10 @@ public final class FrameProfiler {
      */
     public record Snapshot(int windowFrames, long totalFrames, int targetFps,
                            double budgetMs, List<Stats> stages, List<Stats> passes,
-                           List<Stats> sections, Draws draws) {
+                           List<Stats> sections, Draws draws, boolean externallyPaced) {
 
         public static final Snapshot EMPTY = new Snapshot(0, 0, 120, 1000.0 / 120,
-                List.of(), List.of(), List.of(), Draws.NONE);
+                List.of(), List.of(), List.of(), Draws.NONE, false);
 
         public boolean isEmpty() { return windowFrames == 0; }
 

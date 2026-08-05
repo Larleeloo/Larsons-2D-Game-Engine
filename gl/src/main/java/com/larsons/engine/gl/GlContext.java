@@ -228,6 +228,33 @@ public final class GlContext implements AutoCloseable {
         GL.setCapabilities(capabilities);
         boundTo = me;
         if (drawable == 0L) drawable = GlDrawableLock.current();
+        // The swap interval belongs to the context that is current on the
+        // thread asking for it, and the thread that asks is not the thread that
+        // swaps: GlWindow sets it during construction, on the engine's thread,
+        // and the render thread takes the context afterwards. Most drivers keep
+        // it as a property of the context and that is enough; the one this was
+        // profiled on presents through Metal, where it is worth not relying on.
+        // Re-stated here on the thread whose swaps it governs, once.
+        if (swapInterval >= 0) glfwSwapInterval(swapInterval);
+    }
+
+    /**
+     * The swap interval to (re-)apply whenever this context becomes current on
+     * a thread, or {@code -1} for "leave it alone".
+     */
+    private volatile int swapInterval = -1;
+
+    /**
+     * Present on every {@code interval}-th refresh, from now on and on whatever
+     * thread next takes this context.
+     *
+     * <p>Applied here as well as at the window because vsync only does its job
+     * on the thread that calls {@code glfwSwapBuffers}, and in this engine that
+     * is never the thread that created the window.
+     */
+    public void setSwapInterval(int interval) {
+        this.swapInterval = Math.max(0, interval);
+        if (ready && boundTo == Thread.currentThread()) glfwSwapInterval(swapInterval);
     }
 
     /**

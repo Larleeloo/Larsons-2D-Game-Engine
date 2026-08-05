@@ -48,3 +48,9 @@ bin/
 
 ### Mac OS ###
 .DS_Store
+### Player-owned settings, written at runtime ###
+# Chosen on the machine they are on: which renderer, which keys. Copyable
+# between machines by hand (that is the point of them being plain files), but
+# not part of the source tree.
+/src/main/resources/config/render.json
+/src/main/resources/config/keybinds.json

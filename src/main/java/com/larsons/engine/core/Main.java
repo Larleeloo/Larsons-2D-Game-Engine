@@ -47,6 +47,13 @@ public class Main {
     public static final String LEVEL = "levels/sample_level.json";
 
     public static void main(String[] args) {
+        // Before the relaunch, because on macOS the answer decides whether a
+        // first-thread child process is spawned at all — and before anything
+        // goes headless, because the question is asked with a Swing dialog and a
+        // headless process has none. Asked once and remembered; an explicit
+        // -Dlarsons.render.backend always wins. See BackendChooser.
+        new BackendChooser().apply();
+
         // Before anything else, including the share-jar build below: on macOS a
         // GPU backend can only open a window on the process's first thread, and
         // a jar's manifest cannot ask for one. This relaunches the game there
@@ -66,7 +73,11 @@ public class Main {
         // Java2D, and Java2D is AWT. MacGlLauncher.keepAwtOffTheFirstThread has
         // the crash report that made this necessary — without it the window's
         // close button does nothing.
-        MacGlLauncher.keepAwtOffTheFirstThread();
+        // Two calls, and the second is why the first returns a boolean: settling
+        // AWT's headless state is irreversible, so the decision is kept pure and
+        // testable and the side effect happens here, once, in a process that is
+        // about to be a game rather than a test.
+        if (MacGlLauncher.keepAwtOffTheFirstThread()) MacGlLauncher.settleHeadlessNow();
 
         // Development convenience only: launching from IntelliJ leaves a
         // ready-to-send copy of the game (plus empty texture and sound packs

@@ -51,6 +51,24 @@ public final class GameLoop implements Runnable {
     private volatile double fps;
 
     /**
+     * Whether the renderer's {@code present()} already waits for the display.
+     * See {@link #setExternallyPaced}.
+     */
+    private volatile boolean externallyPaced;
+
+    /**
+     * The cap the limiter falls back to when something else is pacing frames.
+     *
+     * <p>Not a frame rate anyone is aiming for — a runaway guard. A driver that
+     * reports vsync and does not actually block would otherwise leave the loop
+     * with nothing limiting it at all, spinning a core and running the
+     * simulation's catch-up path against a frame time of nearly zero. Far above
+     * any refresh rate this will meet, so on a display that really is pacing the
+     * frames this is never reached.
+     */
+    private static final int PACED_SAFETY_FPS = 240;
+
+    /**
      * Optional frame instrumentation. The loop owns the two stages nobody else
      * can see: the fixed-step simulation, and the time the limiter spends
      * waiting — the headroom that says whether a frame had anything to spare.
@@ -114,6 +132,44 @@ public final class GameLoop implements Runnable {
         if (p != null) p.setTargetFps(this.targetFps);
     }
 
+    /**
+     * Tell the loop that the renderer's {@code present()} already waits for the
+     * display, so this limiter must stand down.
+     *
+     * <p><b>Two pacers is the whole bug, and it measured as a third of the
+     * frame rate the game was asking for.</b> With vsync on, an M1 Air profile
+     * put {@code present} at a p99 of 16.752 ms — one refresh period, so the
+     * swap was blocking — and this limiter's {@code idle} at a p50 of 11.975 ms
+     * on top of it. 21.5 ms a frame against a 16.67 ms budget: <b>46 FPS while
+     * asking for 60</b>, delivered at whatever phase two unrelated schedules
+     * drifted into. See {@link com.larsons.engine.graphics.Renderer#presentationIsPaced()}
+     * for why two correct pacers compose badly.
+     *
+     * <p>Standing down is not the same as doing nothing. The cap becomes
+     * {@link #PACED_SAFETY_FPS} rather than infinity, because a driver that
+     * claims vsync and does not honour it would otherwise leave the loop
+     * unlimited — and an unlimited loop is not merely wasteful here, it feeds
+     * the fixed-step simulation frame times near zero and puts it in the
+     * catch-up path permanently. The guard is far above any refresh rate this
+     * will meet, so where the display really is pacing frames it never engages.
+     *
+     * <p>{@code targetFps} is deliberately left alone: it is what the player
+     * asked for and what {@link FrameProfiler} measures headroom against, and a
+     * report whose budget silently changed to something nobody chose is a report
+     * that cannot be compared with the one before it.
+     */
+    public void setExternallyPaced(boolean paced) {
+        this.externallyPaced = paced;
+    }
+
+    /** Whether something other than this limiter is pacing frames. */
+    public boolean isExternallyPaced() { return externallyPaced; }
+
+    /** The cap the limiter is actually enforcing, which is not always {@link #getTargetFps()}. */
+    public int effectiveCap() {
+        return externallyPaced ? Math.max(targetFps, PACED_SAFETY_FPS) : targetFps;
+    }
+
     @Override
     public void run() {
         final double nsPerUpdate = 1_000_000_000.0 / updateRate;
@@ -160,8 +216,9 @@ public final class GameLoop implements Runnable {
             }
 
             // Frame limiter, recomputed each iteration so the cap can change at
-            // runtime.
-            long nsPerFrame = (long) (1_000_000_000.0 / targetFps);
+            // runtime — and so that a backend which starts pacing frames itself
+            // (vsync) takes effect on the next frame rather than the next run.
+            long nsPerFrame = (long) (1_000_000_000.0 / effectiveCap());
             nextFrame += nsPerFrame;
             long now = System.nanoTime();
             if (nextFrame <= now) {
