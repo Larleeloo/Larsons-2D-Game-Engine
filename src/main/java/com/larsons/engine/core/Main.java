@@ -73,11 +73,20 @@ public class Main {
         // Java2D, and Java2D is AWT. MacGlLauncher.keepAwtOffTheFirstThread has
         // the crash report that made this necessary — without it the window's
         // close button does nothing.
-        // Two calls, and the second is why the first returns a boolean: settling
-        // AWT's headless state is irreversible, so the decision is kept pure and
-        // testable and the side effect happens here, once, in a process that is
-        // about to be a game rather than a test.
-        if (MacGlLauncher.keepAwtOffTheFirstThread()) MacGlLauncher.settleHeadlessNow();
+        // Two calls, and they are separate because settling AWT's headless
+        // state is irreversible: the decision stays a pure function the tests
+        // can exercise, and the side effect happens here, once, in a process
+        // that is about to be a game rather than a test.
+        //
+        // Unconditional on the second, and the first version was not — which
+        // left the warning it was added to remove. The relaunched child is told
+        // `-Djava.awt.headless=true` on its command line, so it never takes the
+        // branch that sets the property, so it never settled it early, so AWT
+        // settled it late — after the backend probe had started a Cocoa
+        // application — and said so on stderr. `settleHeadlessNow` checks
+        // whether headless is in force rather than who put it there.
+        MacGlLauncher.keepAwtOffTheFirstThread();
+        MacGlLauncher.settleHeadlessNow();
 
         // Development convenience only: launching from IntelliJ leaves a
         // ready-to-send copy of the game (plus empty texture and sound packs

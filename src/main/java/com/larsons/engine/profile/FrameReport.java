@@ -87,8 +87,29 @@ public final class FrameReport {
 
         out.append(table("Frame stages", snapshot.stages(), snapshot));
 
-        if (!snapshot.sections().isEmpty()) {
-            out.append('\n').append(table("Scene breakdown", snapshot.sections(), snapshot));
+        List<Stats> updatePhases = snapshot.sections(Stage.UPDATE);
+        if (!updatePhases.isEmpty()) {
+            out.append('\n').append(table("Update breakdown", updatePhases, snapshot));
+        }
+        if (!snapshot.steps().isEmpty()) {
+            // SIM_PLAN S1: a 21 ms update stage is one slow step or eight
+            // ordinary ones, and until this line existed the report could not
+            // say which. The per-step cost is the number that separates an
+            // expensive operation from a catch-up cascade.
+            FrameProfiler.Steps steps = snapshot.steps();
+            out.append('\n');
+            out.append("Simulation steps per frame\n");
+            out.append("-".repeat(64)).append('\n');
+            out.append("mean %.2f   p50 %d   p95 %d   max %d   (cap 8)%n"
+                    .formatted(steps.mean(), steps.p50(), steps.p95(), steps.max()));
+            out.append("cost per step : %.3f ms   (update stage / steps)%n"
+                    .formatted(steps.msPerStep(
+                            snapshot.stage(Stage.UPDATE).meanMs())));
+        }
+
+        List<Stats> sceneSections = snapshot.sections(Stage.SCENE);
+        if (!sceneSections.isEmpty()) {
+            out.append('\n').append(table("Scene breakdown", sceneSections, snapshot));
         }
 
         if (!snapshot.passes().isEmpty()) {

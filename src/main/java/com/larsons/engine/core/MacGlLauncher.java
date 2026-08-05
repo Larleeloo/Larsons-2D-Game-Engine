@@ -158,6 +158,11 @@ public final class MacGlLauncher {
      * through a launch.
      */
     public static void settleHeadlessNow() {
+        // Only when headless is actually in force. Asking the question at all
+        // settles it, and settling it as "not headless" in the parent process
+        // would start an AWT application there — a second Dock icon in front of
+        // a game that has not launched yet.
+        if (!Boolean.getBoolean(HEADLESS_PROPERTY)) return;
         try {
             java.awt.GraphicsEnvironment.isHeadless();
         } catch (Throwable ignored) {

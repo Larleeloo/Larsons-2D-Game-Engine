@@ -546,11 +546,68 @@ class FrameProfilerTest {
         profiler.recordSection("entities", agoMs(3));
         profiler.endFrame();
 
-        List<Stats> sections = profiler.snapshot().sections();
+        // Asked per owning stage: since SIM_PLAN S1 the simulation names its
+        // phases too, and a `terrain` phase of the scene and one of the
+        // simulation must not share a bucket.
+        List<Stats> sections = profiler.snapshot().sections(Stage.SCENE);
         assertEquals(2, sections.size());
         assertEquals("terrain", sections.get(0).name(), "sections keep draw order");
         assertAbout(6, sections.get(0).meanMs(), "terrain");
         assertAbout(3, sections.get(1).meanMs(), "entities");
+    }
+
+    /**
+     * SIM_PLAN S1: the simulation's phases are timed the way the scene's are,
+     * and the two namespaces do not collide.
+     *
+     * <p>The collision is the whole reason sections are stored per owner. Both
+     * halves of a frame have something reasonably called {@code terrain} — the
+     * scene draws it, the simulation rebuilds it — and a flat namespace would
+     * have summed them into one row that belongs to neither.
+     */
+    @Test
+    void theSimulationNamesItsPhasesWithoutColldingWithTheScenes() {
+        FrameProfiler profiler = enabled();
+
+        profiler.recordSection(Stage.SCENE, "terrain", agoMs(6));
+        profiler.recordSection(Stage.UPDATE, "terrain", agoMs(2));
+        profiler.recordSection(Stage.UPDATE, "liquids", agoMs(9));
+        profiler.endFrame();
+
+        List<Stats> scene = profiler.snapshot().sections(Stage.SCENE);
+        List<Stats> update = profiler.snapshot().sections(Stage.UPDATE);
+
+        assertEquals(1, scene.size(), "the scene picked up the simulation's phases");
+        assertAbout(6, scene.get(0).meanMs(), "scene terrain");
+
+        assertEquals(2, update.size());
+        assertEquals("terrain", update.get(0).name());
+        assertAbout(2, update.get(0).meanMs(), "update terrain — not summed with the scene's");
+        assertAbout(9, update.get(1).meanMs(), "liquids");
+    }
+
+    /**
+     * SIM_PLAN S1's other half: how many fixed steps a frame ran, which decides
+     * between one slow step and eight ordinary ones.
+     */
+    @Test
+    void theStepCountPerFrameIsRecorded() {
+        FrameProfiler profiler = enabled();
+
+        profiler.recordUpdateSteps(2);
+        profiler.record(Stage.UPDATE, agoMs(4));
+        profiler.endFrame();
+        profiler.recordUpdateSteps(8);
+        profiler.record(Stage.UPDATE, agoMs(16));
+        profiler.endFrame();
+
+        FrameProfiler.Steps steps = profiler.snapshot().steps();
+        assertEquals(8, steps.max(), "the catch-up frame was not recorded");
+        assertEquals(5.0, steps.mean(), 0.001);
+        // The number that separates an expensive step from a cascade of cheap
+        // ones: 10 ms of update over 5 steps a frame is 2 ms a step.
+        assertAbout(2, steps.msPerStep(
+                profiler.snapshot().stage(Stage.UPDATE).meanMs()), "cost per step");
     }
 
     @Test
@@ -561,7 +618,8 @@ class FrameProfilerTest {
         profiler.recordSection("decor", agoMs(3));
         profiler.endFrame();
 
-        assertAbout(5, profiler.snapshot().sections().get(0).meanMs(), "summed decor");
+        assertAbout(5, profiler.snapshot().sections(Stage.SCENE).get(0).meanMs(),
+                "summed decor");
     }
 
     @Test

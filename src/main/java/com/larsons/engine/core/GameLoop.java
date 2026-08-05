@@ -193,7 +193,9 @@ public final class GameLoop implements Runnable {
             FrameProfiler prof = profiler;
 
             int maxUpdates = 8; // cap catch-up to avoid a spiral of death
+            int stepsThisFrame = 0;
             while (accumulator >= nsPerUpdate && maxUpdates-- > 0) {
+                stepsThisFrame++;
                 // Every catch-up step is timed; they sum into one frame's
                 // update cost, which is what a frame actually paid.
                 long updateStart = prof == null ? 0L : prof.begin();
@@ -204,6 +206,10 @@ public final class GameLoop implements Runnable {
                 }
                 accumulator -= nsPerUpdate;
             }
+            // SIM_PLAN S1: without this, a 21 ms update stage is either one slow
+            // step or eight ordinary ones and the report cannot say which —
+            // which is a different bug with a different fix in each case.
+            if (prof != null) prof.recordUpdateSteps(stepsThisFrame);
 
             double alpha = Math.max(0.0, Math.min(1.0, accumulator / nsPerUpdate));
             render.render(alpha);

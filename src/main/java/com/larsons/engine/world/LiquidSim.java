@@ -2,10 +2,11 @@ package com.larsons.engine.world;
 
 import com.larsons.engine.level.Level;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -118,7 +119,8 @@ public final class LiquidSim {
         // below allocate whole-grid BFS buffers and rescan the map several
         // times each — on a big custom level that regularly blew the 60 Hz
         // multiplayer server's tick budget and stuttered everyone's game.
-        Set<Integer> present = presentTileIds(level, cells);
+        Survey survey = survey(level, cells);
+        Set<Integer> present = survey.ids();
         boolean anyFalling = false;
         for (int id : present) {
             Block b = blocks.get(id);
@@ -130,7 +132,7 @@ public final class LiquidSim {
         if (gravityOn && anyFalling) fallBlocks(level, cells, changes);
         if (containsAny(blocks, present, "lava", "lava_flow")
                 && containsAny(blocks, present, "water", "water_flow")) {
-            quenchLava(level, cells, changes);
+            quenchLava(level, cells, survey, changes);
         }
         // One pass per distinct liquid family that has a flow twin and is
         // actually on the map.
@@ -138,25 +140,90 @@ public final class LiquidSim {
             if (b.liquid() && !b.isFlow() && blocks.flowFor(b) != null
                     && (present.contains(b.id())
                     || present.contains(blocks.flowFor(b).id()))) {
-                flowFamily(level, cells, b, gravityOn, changes);
+                flowFamily(level, cells, b, gravityOn, survey, changes);
             }
         }
     }
 
-    /** The distinct non-empty tile ids in the liquid layer (one fast scan). */
-    private static Set<Integer> presentTileIds(Level level, Cells cells) {
+    /**
+     * What is in the liquid layer and where — one scan, used by everything
+     * after it.
+     *
+     * <p><b>This used to be four scans and a fifth per liquid family, and that
+     * is what put a heap dump in a bug report.</b> Every pass below walked the
+     * whole grid: the presence check, the drain, the grow, the quench, and the
+     * reachability BFS's own source hunt. On a large dense level that is five
+     * or more passes over millions of cells every 0.22 s, and the BFS on top
+     * allocated an {@code int[3]} per queue entry and an {@code int[width *
+     * height]} per family per tick. It ran out of a two-gigabyte heap:
+     *
+     * <pre>
+     * Exception in thread "game-loop" java.lang.OutOfMemoryError: Java heap space
+     *   at com.larsons.engine.world.LiquidSim.reachable(LiquidSim.java:262)
+     *   at com.larsons.engine.world.LiquidSim.flowFamily(LiquidSim.java:209)
+     * </pre>
+     *
+     * <p>The work was never proportional to the liquid — it was proportional to
+     * the <em>level</em>, and a pond in the corner of a big map cost exactly as
+     * much as a flooded one. So this scan now also records where each tile id
+     * actually is, and every pass after it works inside that box. One scan
+     * stays; the rest become proportional to the water.
+     */
+    private record Survey(Set<Integer> ids, Map<Integer, int[]> boxes) {
+
+        /** The bounding box of {@code id}, or {@code null} if it is not present. */
+        int[] box(int id) { return boxes.get(id); }
+
+        /**
+         * The two ids' boxes together, grown by the margin anything can move in
+         * one tick and clipped to the level — or {@code null} when neither is
+         * present.
+         *
+         * <p>Conservative by construction: a cell can only change this tick if
+         * it already holds the family or sits within one step of a cell that
+         * does, and the margins below are larger than one step in every
+         * direction the simulation can travel. Cells outside cannot change, so
+         * a reachability figure that is wrong out there cannot be read by
+         * anything.
+         */
+        int[] region(int a, int b, int level_w, int level_h, int marginX, int marginY) {
+            int[] one = box(a), two = box(b);
+            if (one == null && two == null) return null;
+            int[] u = one == null ? two.clone() : one.clone();
+            if (one != null && two != null) {
+                u[0] = Math.min(u[0], two[0]);
+                u[1] = Math.min(u[1], two[1]);
+                u[2] = Math.max(u[2], two[2]);
+                u[3] = Math.max(u[3], two[3]);
+            }
+            u[0] = Math.max(0, u[0] - marginX);
+            u[1] = Math.max(0, u[1] - marginY);
+            u[2] = Math.min(level_w - 1, u[2] + marginX);
+            u[3] = Math.min(level_h - 1, u[3] + marginY);
+            return u;
+        }
+    }
+
+    /** The distinct non-empty tile ids in the liquid layer, and where each one is. */
+    private static Survey survey(Level level, Cells cells) {
         Set<Integer> present = new HashSet<>();
-        int last = 0;
+        Map<Integer, int[]> boxes = new HashMap<>();
         for (int r = 0; r < level.height; r++) {
             for (int c = 0; c < level.width; c++) {
                 int id = cells.get(c, r);
-                if (id != 0 && id != last) {
-                    present.add(id);
-                    last = id;
+                if (id == 0) continue;
+                if (present.add(id)) {
+                    boxes.put(id, new int[]{c, r, c, r});
+                } else {
+                    int[] box = boxes.get(id);
+                    if (c < box[0]) box[0] = c;
+                    if (r < box[1]) box[1] = r;
+                    if (c > box[2]) box[2] = c;
+                    if (r > box[3]) box[3] = r;
                 }
             }
         }
-        return present;
+        return new Survey(present, boxes);
     }
 
     private static boolean containsAny(BlockRegistry blocks, Set<Integer> present,
@@ -199,19 +266,27 @@ public final class LiquidSim {
     }
 
     private void flowFamily(Level level, Cells cells, Block source, boolean gravityOn,
-                            List<Change> changes) {
+                            Survey survey, List<Change> changes) {
         BlockRegistry blocks = level.blocks;
         Block flow = blocks.flowFor(source);
         int w = level.width, h = level.height;
         int srcId = source.id(), flowId = flow.id();
         int range = spreadRange(source);
 
-        int[] best = reachable(level, cells, srcId, flowId, range, gravityOn);
+        // The region anything in this family can change this tick: where it
+        // already is, plus the furthest one tick can carry it. See Survey.
+        int[] region = survey.region(srcId, flowId, w, h,
+                range + 2, Math.max(FALL_ROUNDS, 1) + 2);
+        if (region == null) return;
+        int c0 = region[0], r0 = region[1], c1 = region[2], r1 = region[3];
+        int bw = c1 - c0 + 1;
+
+        int[] best = reachable(cells, srcId, flowId, range, gravityOn, c0, r0, c1, r1);
 
         // Drain: flow cells no longer fed by a source disappear at once.
-        for (int r = 0; r < h; r++) {
-            for (int c = 0; c < w; c++) {
-                if (cells.get(c, r) == flowId && best[r * w + c] < 0) {
+        for (int r = r0; r <= r1; r++) {
+            for (int c = c0; c <= c1; c++) {
+                if (cells.get(c, r) == flowId && best[(r - r0) * bw + (c - c0)] < 0) {
                     setCell(cells, c, r, 0, changes);
                 }
             }
@@ -223,9 +298,9 @@ public final class LiquidSim {
         int rounds = gravityOn ? FALL_ROUNDS : 1;
         for (int round = 0; round < rounds; round++) {
             List<int[]> adds = new ArrayList<>();
-            for (int r = 0; r < h; r++) {
-                for (int c = 0; c < w; c++) {
-                    if (cells.get(c, r) != 0 || best[r * w + c] < 0) continue;
+            for (int r = r0; r <= r1; r++) {
+                for (int c = c0; c <= c1; c++) {
+                    if (cells.get(c, r) != 0 || best[(r - r0) * bw + (c - c0)] < 0) continue;
                     boolean fed;
                     if (gravityOn) {
                         // Each round fills air under a liquid cell; the first
@@ -256,51 +331,92 @@ public final class LiquidSim {
      * diamond around each source. Cells are "passable" when they are air or
      * already hold this liquid family.
      */
-    private static int[] reachable(Level level, Cells cells, int srcId, int flowId,
-                                   int range, boolean gravityOn) {
-        int w = level.width, h = level.height;
-        int[] best = new int[w * h];
+    private static int[] reachable(Cells cells, int srcId, int flowId,
+                                   int range, boolean gravityOn,
+                                   int c0, int r0, int c1, int r1) {
+        int bw = c1 - c0 + 1, bh = r1 - r0 + 1;
+        int[] best = new int[bw * bh];
         java.util.Arrays.fill(best, -1);
-        ArrayDeque<int[]> queue = new ArrayDeque<>();
-        for (int r = 0; r < h; r++) {
-            for (int c = 0; c < w; c++) {
+
+        // A primitive queue holding cell indices, not an ArrayDeque of int[3].
+        // The budget is read from `best` at poll time rather than carried:
+        // relaxation only ever improves a cell, so a value that has improved
+        // since the cell was queued is the value the original would have
+        // reached on a later pass. The fixpoint is the same one — which is what
+        // determinism requires here, and it is the whole reason this is safe to
+        // change at all (SIM_PLAN invariant 1).
+        int[] queue = new int[Math.max(64, Math.min(bw * bh, 1 << 12))];
+        int head = 0, tail = 0;
+
+        for (int r = r0; r <= r1; r++) {
+            for (int c = c0; c <= c1; c++) {
                 if (cells.get(c, r) == srcId) {
-                    best[r * w + c] = range;
-                    queue.add(new int[]{c, r, range});
+                    int i = (r - r0) * bw + (c - c0);
+                    best[i] = range;
+                    if (tail == queue.length) queue = grow(queue);
+                    queue[tail++] = i;
                 }
             }
         }
-        while (!queue.isEmpty()) {
-            int[] cur = queue.poll();
-            int c = cur[0], r = cur[1], b = cur[2];
+        while (head < tail) {
+            int cur = queue[head++];
+            int c = c0 + cur % bw, r = r0 + cur / bw;
+            int b = best[cur];
             if (gravityOn) {
-                boolean belowOpen = r + 1 < h && passable(cells, c, r + 1, srcId, flowId);
-                if (belowOpen && best[(r + 1) * w + c] < range) {
-                    best[(r + 1) * w + c] = range;
-                    queue.add(new int[]{c, r + 1, range});
+                boolean belowOpen = r + 1 <= r1 && passable(cells, c, r + 1, srcId, flowId);
+                if (belowOpen && best[cur + bw] < range) {
+                    best[cur + bw] = range;
+                    if (tail == queue.length) queue = grow(queue);
+                    queue[tail++] = cur + bw;
                 }
                 if (belowOpen || b <= 0) continue;
                 for (int dc = -1; dc <= 1; dc += 2) {
                     int nc = c + dc;
-                    if (nc < 0 || nc >= w) continue;
-                    if (passable(cells, nc, r, srcId, flowId) && best[r * w + nc] < b - 1) {
-                        best[r * w + nc] = b - 1;
-                        queue.add(new int[]{nc, r, b - 1});
+                    if (nc < c0 || nc > c1) continue;
+                    int ni = cur + dc;
+                    if (passable(cells, nc, r, srcId, flowId) && best[ni] < b - 1) {
+                        best[ni] = b - 1;
+                        if (tail == queue.length) queue = grow(queue);
+                        queue[tail++] = ni;
                     }
                 }
             } else {
                 if (b <= 0) continue;
                 for (int[] d : PLANE_NEIGHBOURS) {
                     int nc = c + d[0], nr = r + d[1];
-                    if (nc < 0 || nc >= w || nr < 0 || nr >= h) continue;
-                    if (passable(cells, nc, nr, srcId, flowId) && best[nr * w + nc] < b - 1) {
-                        best[nr * w + nc] = b - 1;
-                        queue.add(new int[]{nc, nr, b - 1});
+                    if (nc < c0 || nc > c1 || nr < r0 || nr > r1) continue;
+                    int ni = (nr - r0) * bw + (nc - c0);
+                    if (passable(cells, nc, nr, srcId, flowId) && best[ni] < b - 1) {
+                        best[ni] = b - 1;
+                        if (tail == queue.length) queue = grow(queue);
+                        queue[tail++] = ni;
                     }
                 }
             }
         }
         return best;
+    }
+
+    /**
+     * A bigger queue with the same contents at the same indices.
+     *
+     * <p><b>Deliberately not compacting</b>, and the first version of this did.
+     * Compaction moves the live entries to the front, which invalidates the
+     * caller's {@code head} and {@code tail} — and the caller holds those in
+     * locals, so it carried on indexing past the end. It threw
+     * {@code ArrayIndexOutOfBoundsException: Index 4096 out of bounds} on the
+     * first level big enough to need a second growth, which is the only kind of
+     * level that would ever have reached it in the field.
+     *
+     * <p>Plain doubling is bounded by the search, not by the level: a cell is
+     * queued once per improvement to its budget and budgets run 0..range, so
+     * total enqueues cannot exceed {@code (range + 1)} per cell <em>of the
+     * box</em>. That is the whole point of having a box.
+     */
+    private static int[] grow(int[] queue) {
+        int[] bigger = new int[queue.length * 2];
+        System.arraycopy(queue, 0, bigger, 0, queue.length);
+        return bigger;
     }
 
     /** The four plan-view spread directions (no "down" to pour along). */
@@ -317,7 +433,7 @@ public final class LiquidSim {
     }
 
     /** Water beside/above lava: flowing lava → stone, source lava → obsidian. */
-    private void quenchLava(Level level, Cells cells, List<Change> changes) {
+    private void quenchLava(Level level, Cells cells, Survey survey, List<Change> changes) {
         BlockRegistry blocks = level.blocks;
         Block water = blocks.get("water");
         Block waterFlow = blocks.get("water_flow");
@@ -332,9 +448,15 @@ public final class LiquidSim {
         int lavaId = lava.id();
         int lavaFlowId = lavaFlow != null ? lavaFlow.id() : -1;
 
+        // Only where the lava is. Quenching needs water beside a lava cell, so
+        // a cell outside the lava's own box plus one step cannot be a hit.
+        int[] region = survey.region(lavaId, lavaFlowId, w, h, 1, 1);
+        if (region == null) return;
+        int c0 = region[0], r0 = region[1], c1 = region[2], r1 = region[3];
+
         List<int[]> hits = new ArrayList<>();
-        for (int r = 0; r < h; r++) {
-            for (int c = 0; c < w; c++) {
+        for (int r = r0; r <= r1; r++) {
+            for (int c = c0; c <= c1; c++) {
                 int id = cells.get(c, r);
                 if (id != lavaId && id != lavaFlowId) continue;
                 boolean touched = touches(cells, c, r, waterId)
