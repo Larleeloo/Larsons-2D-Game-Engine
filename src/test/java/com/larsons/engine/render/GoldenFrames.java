@@ -565,7 +565,8 @@ public final class GoldenFrames {
                 List.of(new FrameProfiler.Stats("bloom", 600, 0.62, 0.60, 0.80, 0.91, 1.02),
                         new FrameProfiler.Stats("vignette", 600, 0.14, 0.13, 0.19, 0.22, 0.30)),
                 List.of(),
-                new FrameProfiler.Draws(4820, 611, 1240, 380), false);
+                new FrameProfiler.Draws(4820, 611, 1240, 380), false,
+                new FrameProfiler.Steps(2.0, 2, 4, 8));
 
         DeviceProfile device = new DeviceProfile("Mac OS X", "14.4", "aarch64", 8,
                 4096, "21.0.10", "Eclipse Adoptium", "Metal", 2560, 1600, 60, 2.0);

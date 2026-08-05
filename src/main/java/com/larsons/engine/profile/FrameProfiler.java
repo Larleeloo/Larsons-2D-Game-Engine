@@ -119,6 +119,13 @@ public final class FrameProfiler {
     private final int[] drawImages = new int[WINDOW];
     private final int[] drawGlyphs = new int[WINDOW];
 
+    /**
+     * Fixed-step simulation steps run in each frame — SIM_PLAN S1's second
+     * measurement. See {@link #recordUpdateSteps}.
+     */
+    private final int[] updateSteps = new int[WINDOW];
+    private int updateStepsPending;
+
     private int cursor;      // next ring slot to write
     private int recorded;    // frames written, saturating at WINDOW
     private long totalFrames;
@@ -172,6 +179,8 @@ public final class FrameProfiler {
         Arrays.fill(drawBatches, 0);
         Arrays.fill(drawImages, 0);
         Arrays.fill(drawGlyphs, 0);
+        Arrays.fill(updateSteps, 0);
+        updateStepsPending = 0;
         passSamples.clear();
         passPending.clear();
         sectionSamples.clear();
@@ -264,10 +273,52 @@ public final class FrameProfiler {
      * naming and leave the rest as the remainder.
      */
     public void recordSection(String sectionName, long startNanos) {
-        if (!enabled || startNanos == 0L || sectionName == null) return;
+        recordSection(Stage.SCENE, sectionName, startNanos);
+    }
+
+    /**
+     * The same, for a phase of any stage — SIM_PLAN's S1.
+     *
+     * <p><b>One mechanism, two owners, and the asymmetry it removes was the
+     * reason a whole plan could not start.</b> {@code scene} has had a six-way
+     * breakdown since B0 and {@code update} was one number, so a profile could
+     * say the simulation stalled and could not say what in it stalled. That is
+     * why {@code RENDER_PLAN}'s Job B could be planned from measurements and
+     * {@code SIM_PLAN} could not: the instrument answered one of the two
+     * questions.
+     *
+     * <p>Sections are stored under their owning stage rather than in a flat
+     * namespace, so a {@code terrain} phase of the scene and a {@code terrain}
+     * phase of the simulation could coexist without either quietly absorbing
+     * the other's samples — which is exactly the kind of thing that produces a
+     * confident wrong answer.
+     */
+    public void recordSection(Stage owner, String sectionName, long startNanos) {
+        if (!enabled || startNanos == 0L || sectionName == null || owner == null) return;
         long elapsed = System.nanoTime() - startNanos;
         if (elapsed <= 0) return;
-        sectionPending.merge(sectionName, elapsed, Long::sum);
+        sectionPending.merge(owner.label() + SECTION_SEPARATOR + sectionName, elapsed, Long::sum);
+    }
+
+    /** Separates a section's owning stage from its own name in the stored key. */
+    public static final String SECTION_SEPARATOR = "/";
+
+    /**
+     * How many fixed-step simulation steps this frame ran.
+     *
+     * <p><b>The measurement that resolves SIM_PLAN's second ambiguity, and it
+     * is the one nobody could reason their way past.</b> The loop simulates at
+     * 120 Hz against a 60 Hz render cap, so an ordinary frame runs two steps
+     * and a frame that has fallen behind runs up to eight. {@link Stage#UPDATE}
+     * sums them. So a 21 ms update is either <b>one</b> step that took 21 ms or
+     * <b>eight</b> ordinary ones — a single expensive operation, or a feedback
+     * failure where one slow frame makes the next frame pay for it several
+     * times over. Those have different causes and different fixes, and no
+     * amount of staring at a single number distinguishes them.
+     */
+    public void recordUpdateSteps(int steps) {
+        if (!enabled || steps < 0) return;
+        updateStepsPending += steps;
     }
 
     /**
@@ -283,6 +334,8 @@ public final class FrameProfiler {
         }
         rollNamed(passSamples, passPending);
         rollNamed(sectionSamples, sectionPending);
+        updateSteps[cursor] = updateStepsPending;
+        updateStepsPending = 0;
 
         cursor = (cursor + 1) % WINDOW;
         // The next slot is cleared as it is reached, so a frame that records
@@ -291,6 +344,7 @@ public final class FrameProfiler {
         drawBatches[cursor] = 0;
         drawImages[cursor] = 0;
         drawGlyphs[cursor] = 0;
+        updateSteps[cursor] = 0;
         if (recorded < WINDOW) recorded++;
         totalFrames++;
 
@@ -354,7 +408,20 @@ public final class FrameProfiler {
                 List.copyOf(sectionStats),
                 new Draws(mean(drawOps), mean(drawBatches),
                         mean(drawImages), mean(drawGlyphs)),
-                externallyPaced);
+                externallyPaced, stepsStats());
+    }
+
+    /** The window's step-count distribution. See {@link Steps}. */
+    private Steps stepsStats() {
+        if (recorded == 0) return Steps.NONE;
+        int[] sorted = Arrays.copyOf(updateSteps, recorded);
+        Arrays.sort(sorted);
+        long total = 0;
+        for (int v : sorted) total += v;
+        return new Steps(total / (double) recorded,
+                sorted[Math.min(recorded - 1, recorded / 2)],
+                sorted[Math.min(recorded - 1, (int) (recorded * 0.95))],
+                sorted[recorded - 1]);
     }
 
     /**
@@ -432,12 +499,66 @@ public final class FrameProfiler {
      * except the limiter's wait, i.e. what the machine actually had to do — and
      * {@link #headroomPct()}, how much of the frame budget was left over.
      */
+    /**
+     * How many fixed-step simulation steps a frame ran, over the window.
+     *
+     * <p><b>SIM_PLAN S1's second measurement, and the one that decides between
+     * two completely different bugs.</b> {@link Stage#UPDATE} sums every
+     * catch-up step in a frame, so a 21 ms update is either one step that took
+     * 21 ms or eight ordinary ones. The first is an expensive operation; the
+     * second is a feedback failure, where one slow frame leaves the accumulator
+     * behind and the next frame pays for it several times over. {@link #msPerStep}
+     * is the number that tells them apart at a glance.
+     *
+     * @param mean   steps per frame, averaged over the window
+     * @param p50    the median frame's step count
+     * @param p95    the 95th percentile — the catch-up tail
+     * @param max    the worst frame in the window; equal to the loop's own cap
+     *               when the loop has been in catch-up
+     */
+    public record Steps(double mean, int p50, int p95, int max) {
+        public static final Steps NONE = new Steps(0, 0, 0, 0);
+
+        public boolean isEmpty() { return max == 0; }
+
+        /**
+         * The cost of one simulation step, given the frame's total update time.
+         *
+         * <p>A per-frame update cost conflates "how expensive is a step" with
+         * "how many did this frame run". This separates them, and it is the
+         * first question S2 has to answer.
+         */
+        public double msPerStep(double updateMeanMs) {
+            return mean <= 0 ? 0 : updateMeanMs / mean;
+        }
+    }
+
     public record Snapshot(int windowFrames, long totalFrames, int targetFps,
                            double budgetMs, List<Stats> stages, List<Stats> passes,
-                           List<Stats> sections, Draws draws, boolean externallyPaced) {
+                           List<Stats> sections, Draws draws, boolean externallyPaced,
+                           Steps steps) {
 
         public static final Snapshot EMPTY = new Snapshot(0, 0, 120, 1000.0 / 120,
-                List.of(), List.of(), List.of(), Draws.NONE, false);
+                List.of(), List.of(), List.of(), Draws.NONE, false, Steps.NONE);
+
+        /**
+         * The sections belonging to one stage, with the owning prefix stripped.
+         *
+         * <p>Sections are stored under their stage so that a phase named
+         * {@code terrain} in the scene and one named {@code terrain} in the
+         * simulation cannot silently share a bucket. Readers ask per stage.
+         */
+        public List<Stats> sections(Stage owner) {
+            String prefix = owner.label() + SECTION_SEPARATOR;
+            List<Stats> out = new ArrayList<>();
+            for (Stats s : sections) {
+                if (s.name().startsWith(prefix)) {
+                    out.add(new Stats(s.name().substring(prefix.length()), s.samples(),
+                            s.meanMs(), s.p50Ms(), s.p95Ms(), s.p99Ms(), s.maxMs()));
+                }
+            }
+            return out;
+        }
 
         public boolean isEmpty() { return windowFrames == 0; }
 

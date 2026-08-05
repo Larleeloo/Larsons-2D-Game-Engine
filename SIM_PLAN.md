@@ -1,9 +1,24 @@
 # Simulation Plan — finding and fixing the update stall
 
-**Status:** Written 2026-08-03, from six frame profiles taken on the M1 Air
-during `RENDER_PLAN.md` B10. Nothing has been fixed yet and nothing here claims
-to know the cause. **Step S1 exists because the instrument cannot currently
-answer the question**, and every step after it is contingent on what S1 finds.
+**Status:** Written 2026-08-03 from six frame profiles taken on the M1 Air
+during `RENDER_PLAN.md` B10. **S1 is done, S2 is answered, and S3 has landed its
+first fix.** The cause did not have to be inferred from S1's breakdown in the
+end: a seventh report arrived carrying a stack trace, and it named the first
+suspect on the list.
+
+```
+Exception in thread "game-loop" java.lang.OutOfMemoryError: Java heap space
+    at com.larsons.engine.world.LiquidSim.reachable(LiquidSim.java:262)
+    at com.larsons.engine.world.LiquidSim.flowFamily(LiquidSim.java:209)
+    at com.larsons.engine.world.LiquidSim.tick(LiquidSim.java:141)
+    at com.larsons.engine.world.World.step(World.java:360)
+```
+
+An out-of-memory error is the loudest possible version of the stall this
+document was written about, and it arrived from the same machine and the same
+level. S1's instrument was built anyway — the plan's own rule is that nothing
+merges that cannot be measured, and a fix with no instrument behind it would
+have been exactly the guess §4 warns about.
 
 ---
 
@@ -145,6 +160,34 @@ how many steps that frame ran.
 **Done when.** The report answers "what stalled, and was it one step or eight?"
 without anyone having to reason about it.
 
+### S1 — done
+
+`FrameProfiler.recordSection(Stage, name, start)` — **one mechanism, two
+owners**, as this step asked for. Sections are stored under their owning stage,
+so the scene's `terrain` and the simulation's `terrain` cannot silently share a
+bucket, which is precisely the kind of thing that produces a confident wrong
+answer. `World.step` names `liquids`, `mobs`, `vehicles`, `items` and
+`projectiles`; the report prints an **Update breakdown** beside the Scene one.
+
+`GameLoop` counts its catch-up steps and `FrameProfiler.Steps` carries the
+distribution, so the report now says:
+
+```
+Simulation steps per frame
+----------------------------------------------------------------
+mean 2.03   p50 2   p95 2   max 8   (cap 8)
+cost per step : 0.839 ms   (update stage / steps)
+```
+
+That last line is the one that resolves §1's second ambiguity. A p99 of 21 ms
+against a mean of 2.03 steps is **one expensive step**, not eight cheap ones —
+and those have different causes and different fixes.
+
+**One thing this step turned out not to be needed for.** The plan expected S1's
+breakdown to identify the suspect. It did not get the chance: the crash report
+below named it first. S1's value is now the other half — proving the fix, and
+being there for the next one.
+
 ### S2 — Name the cause, in writing, before fixing it
 
 **Goal.** One sentence naming the operation and the evidence, in this document.
@@ -155,6 +198,41 @@ the spike survives their absence.
 
 **Done when.** §1's table has one row marked confirmed and the rest eliminated,
 with the numbers that did it.
+
+### S2 — answered, by a stack trace rather than by the instrument
+
+| Suspect | Verdict |
+|---|---|
+| **Liquid simulation** | **Confirmed.** The OOM's own stack, three frames deep in `LiquidSim.reachable`. |
+| Catch-up cascade | Eliminated. Steps per frame: mean 2.03, p95 2. The loop is not in catch-up. |
+| GC | A symptom here, not the cause: the allocation it could not keep up with is named above. |
+| Mob AI | Not implicated. Now has a `mobs` phase if it ever is. |
+| Terrain cache invalidation | Downstream of liquids rather than beside them — see below. |
+| Sound | Not implicated. |
+
+**Named in one sentence, as this step requires:** *`LiquidSim` did work
+proportional to the level rather than to the liquid, so a pond in the corner of
+a big map cost exactly what a flooded one did — five whole-grid passes per tick
+plus a breadth-first search that allocated an `int[3]` per queue entry and an
+`int[width × height]` per liquid family.*
+
+**The arithmetic that makes it an out-of-memory error rather than merely slow.**
+A dense level runs to `Level.DENSE_TILE_LIMIT` — 1024×1024, about a million
+cells. A cell can be queued once per improvement to its spread budget and
+budgets run 0..5, so the queue takes up to six million entries; at 32 bytes an
+`int[3]` plus 8 for the deque's slot that is **240 MB**, per liquid family, per
+tick, against a 2 GB heap with a game already in it.
+
+**And it is very likely the visible flicker as well**, which is worth stating as
+a hypothesis rather than a conclusion. Every liquid tick bumps
+`Level.terrainRevision()`, `TerrainCache` invalidates the chunks that changed,
+and it has two rules that switch on how much is changing: a four-chunk rebuild
+budget, and a churn threshold beyond which it **stands aside for the frame and
+draws the whole view live**. Baked and live differ slightly (105 px on a
+480×360 view, measured in `RENDER_PLAN.md` D3). A level whose liquids churn near
+that threshold alternates between the two renderings, and alternating between
+two slightly different pictures at 60 Hz is a flicker. That needs eyes on the
+Air to confirm, and it is not claimed as confirmed here.
 
 ### S3 — Fix it
 
@@ -179,6 +257,47 @@ invariant 1 and is not optional.
 
 **Done when.** The numbers are recorded here, including anything that got worse.
 
+### S3 — first fix landed: the work is proportional to the liquid
+
+**Shape:** "a dirty set instead of a scan", which is what §3 predicted for
+periodic whole-level work. The realised form is a bounding box rather than a
+dirty set, because a box is a pure function of the grid and a dirty set is
+state that two machines could disagree about — and invariant 1 does not bend.
+
+- The one presence scan that remains now also records **where each tile id
+  is**. Everything after it works inside that box, grown by the furthest one
+  tick can carry the liquid, and clipped to the level.
+- The BFS queue is a growable `int[]` of cell indices with the budget read from
+  the `best` array, instead of an `ArrayDeque<int[]>`. Relaxation only ever
+  improves a cell, so reading the current budget at poll time reaches the same
+  fixpoint — which is what makes this safe to change at all.
+- `best` is box-sized rather than level-sized.
+- `quenchLava` runs inside the lava's own box.
+
+**Verify — done, and the correctness half is the one that mattered.**
+[`LiquidSimBoundedTest`](src/test/java/com/larsons/engine/LiquidSimBoundedTest.java)
+runs the same source on a 60×40 level and on a 4000×40 one and requires the
+resulting grids to be **identical**. A box that was ever too small would clip
+the water — and would do so only on levels large enough for the box to matter,
+which is exactly the case no small test would have caught. Draining, plan-view
+pooling, and a full-size 1024×1024 dense level running 200 ticks are pinned
+beside it.
+
+**One bug was written and caught by that test rather than by a player**, which
+is worth recording because it is the failure mode this plan exists to avoid: the
+first version of the queue compacted itself on growth, invalidating the caller's
+`head`/`tail`, and threw `ArrayIndexOutOfBoundsException` on the first level big
+enough to need a second growth — the only kind of level that would ever have
+reached it in the field.
+
+**What is left, stated rather than claimed fixed.** One whole-grid scan per
+0.22 s remains — it is what finds the liquid, so it cannot be bounded by where
+the liquid is. On a million-cell level that is a few milliseconds every
+thirteenth frame, and it is now the largest known cost in the stage. **It is
+deliberately not pre-optimised**: the instrument to measure it exists now, and
+the next profile from the Air decides whether it matters. Guessing again would
+be the mistake §4 was written about.
+
 ### S4 — Guard it
 
 **Goal.** A regression in the simulation's worst case is caught by the build, not
@@ -197,10 +316,21 @@ display and no renderer.
 
 ```
 S0  freeze the baseline          ← done (§0)
-S1  make the update legible      ← START HERE. Everything else waits.
-S2  name the cause in writing
-S3  fix it
-S4  guard the tail
+S1  make the update legible      ← done. Sections per owning stage, and the
+                                   catch-up step count beside them. mean 2.03
+                                   steps/frame, p95 2 — so the spike was one
+                                   expensive step, not eight cheap ones.
+S2  name the cause in writing    ← done, by a crash report rather than by S1:
+                                   LiquidSim did work proportional to the LEVEL
+                                   rather than to the liquid. Confirmed by its
+                                   own OutOfMemoryError stack.
+S3  fix it                       ← first fix landed. Every pass now works inside
+                                   a box around the liquid; the BFS queue is a
+                                   primitive int array. Same water, proven on a
+                                   4000-wide level against a 60-wide one.
+                                   One whole-grid scan per tick remains, on
+                                   purpose and unmeasured — see S3.
+S4  guard the tail               ← next
 ```
 
 **S1 before anything else, and it is worth saying why once more.** The

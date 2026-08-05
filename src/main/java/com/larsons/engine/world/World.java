@@ -7,6 +7,7 @@ import com.larsons.engine.combat.MeleeAction;
 import com.larsons.engine.combat.MeleeProfile;
 import com.larsons.engine.combat.MeleeProfiles;
 import com.larsons.engine.config.GameProfile;
+import com.larsons.engine.profile.FrameProfiler;
 import com.larsons.engine.entity.DroppedItem;
 import com.larsons.engine.entity.Inventory;
 import com.larsons.engine.entity.ItemDef;
@@ -346,6 +347,44 @@ public final class World {
                 || vehicles.removeIf(v -> v.id == id);
     }
 
+    /**
+     * Where the simulation reports its own phases, or {@code null} when nobody
+     * is measuring — the headless server, and every test.
+     *
+     * <p><b>SIM_PLAN S1.</b> The scene has had a six-way breakdown since B0 and
+     * this had none, so six profiles could say the update stage spiked to 15-21
+     * ms and not one of them could say what in it spiked. That asymmetry is the
+     * reason Job B could be planned from measurements and SIM_PLAN could not
+     * start at all.
+     */
+    private FrameProfiler profiler;
+
+    /** Report this simulation's phase timings here. */
+    public void setProfiler(FrameProfiler profiler) {
+        this.profiler = profiler;
+    }
+
+    /**
+     * Time one named phase of the step into {@link FrameProfiler.Stage#UPDATE}.
+     *
+     * <p>Phases do not have to add up to the stage: naming the ones worth
+     * naming and leaving the rest as the remainder is what lets a suspect be
+     * eliminated without first accounting for everything.
+     */
+    private void phase(String name, Runnable work) {
+        FrameProfiler p = profiler;
+        if (p == null) {
+            work.run();
+            return;
+        }
+        long started = p.begin();
+        try {
+            work.run();
+        } finally {
+            p.recordSection(FrameProfiler.Stage.UPDATE, name, started);
+        }
+    }
+
     /** Advance everything one tick. Dead mobs drop loot and are removed. */
     public void step(double dt, List<PlayerState> players, GameProfile profile) {
         if (profile.dayNightCycle && profile.lightingEnabled) {
@@ -357,9 +396,23 @@ public final class World {
         // side-scroller has a "down" for things to fall toward.
         boolean gravityOn = profile.gravityEnabled && level.format().gravity();
 
-        blockChanges.addAll(liquids.step(level, gravityOn, dt));
+        phase("liquids", () -> blockChanges.addAll(liquids.step(level, gravityOn, dt)));
 
-        if (profile.mobsEnabled) {
+        if (profile.mobsEnabled) phase("mobs", () -> stepMobs(dt, players, gravityOn, profile));
+
+        phase("vehicles", () -> stepVehicles(dt, gravityOn, players, profile));
+
+        if (profile.itemsEnabled) phase("items", () -> stepItems(players, gravityOn, dt));
+
+        if (!projectiles.isEmpty()) {
+            phase("projectiles", () -> stepProjectiles(dt, gravityOn, players, profile));
+        }
+        stepRest(dt, players, profile, gravityOn);
+    }
+
+    private void stepMobs(double dt, List<PlayerState> players, boolean gravityOn,
+                          GameProfile profile) {
+        {
             Iterator<Mob> it = mobs.iterator();
             List<Mob> died = null;
             while (it.hasNext()) {
@@ -390,10 +443,11 @@ public final class World {
             }
             resolvePendingBursts(players, profile);
         }
+    }
 
-        stepVehicles(dt, gravityOn, players, profile);
+    private void stepItems(List<PlayerState> players, boolean gravityOn, double dt) {
 
-        if (profile.itemsEnabled) {
+        {
             Iterator<DroppedItem> it = items.iterator();
             while (it.hasNext()) {
                 DroppedItem item = it.next();
@@ -410,10 +464,10 @@ public final class World {
             }
         }
 
-        if (!projectiles.isEmpty()) {
-            stepProjectiles(dt, gravityOn, players, profile);
-        }
+    }
 
+    private void stepRest(double dt, List<PlayerState> players, GameProfile profile,
+                          boolean gravityOn) {
         // Players: hazard blocks burn, clamp health, respawn on death (at a
         // painted multiplayer spawn point when the level has them). A carried
         // Phoenix Feather burns up instead: the player revives in place.

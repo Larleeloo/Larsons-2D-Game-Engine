@@ -363,6 +363,7 @@ public class PlayScene extends AbstractScene {
             // type's profile as-is.
             ctx.applyLevelSettings(level.settings);
             world = new World(level);
+            world.setProfiler(ctx.profiler());
             world.populateFromLevel(profile());
             world.setPickupListener((player, key, count) -> {
                 inventory.add(key, count);
@@ -842,6 +843,7 @@ public class PlayScene extends AbstractScene {
         // before anything is built against them.
         ctx.applyLevelSettings(level.settings);
         world = new World(level);
+        world.setProfiler(ctx.profiler());
         world.populateFromLevel(p);
         world.setPickupListener((player, key, count) -> {
             inventory.add(key, count);
