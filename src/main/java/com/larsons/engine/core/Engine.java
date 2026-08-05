@@ -143,6 +143,14 @@ public class Engine {
         this.lastHeight = config.height;
 
         this.loop = new GameLoop(config.updateRate, config.targetFps, this::tick, this::draw);
+        // A backend that waits for the panel is already pacing frames, and a
+        // second pacer beside it costs a third of the frame rate — measured, and
+        // written up on Renderer.presentationIsPaced().
+        boolean paced = renderer.presentationIsPaced();
+        this.loop.setExternallyPaced(paced);
+        // And the report says so, because `idle` means something different
+        // under each pacer and two profiles that disagree cannot be compared.
+        this.profiler.setExternallyPaced(paced);
 
         this.renderer.setProfiler(profiler);
         this.shaders.setProfiler(profiler);

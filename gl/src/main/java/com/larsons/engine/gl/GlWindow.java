@@ -65,11 +65,26 @@ import static org.lwjgl.glfw.GLFW.*;
  * pixels per one-pixel pan. Nothing about the picture moves; only when it
  * reaches the panel does.
  *
+ * <p><b>Turning it on was half a fix, and the other half took a second report to
+ * find.</b> D1 set the swap interval and left the game loop's frame limiter
+ * capping frames beside it — two pacers on unrelated schedules. Measured on the
+ * Air: {@code present} at a p99 of 16.752 ms (one refresh period, so the swap
+ * really was blocking) <em>plus</em> {@code idle} at a p50 of 11.975 ms, for a
+ * 21.5 ms frame against a 16.67 ms budget — 46 FPS while asking for 60,
+ * delivered at whatever phase the two schedules had drifted into. See
+ * {@link GlRenderer#presentationIsPaced()} and {@code RENDER_PLAN.md} D5.
+ *
+ * <p>The interval is applied through {@link GlContext#setSwapInterval} rather
+ * than called here directly, because it governs the thread that <em>swaps</em>
+ * and that is never this one: this window is constructed on the engine's thread
+ * and the render thread takes the context afterwards.
+ *
  * <p>{@code -Dlarsons.render.vsync=off} restores the old behaviour, which is
  * what an uncapped benchmark wants. <b>It changes what a frame profile means:</b>
  * with vsync on, {@code swapBuffers} blocks until the refresh, so the wait moves
  * out of the limiter's {@code idle} stage and into {@code present}. A profile
- * taken with it on is not comparable to B10's without saying so.
+ * taken with it on is not comparable to B10's without saying so — which the
+ * report now says for itself, on a {@code pacing} line.
  */
 public final class GlWindow implements BackendWindow {
 
@@ -104,7 +119,10 @@ public final class GlWindow implements BackendWindow {
         // Present on the panel's refresh unless someone is benchmarking. See
         // the class note for why this changed after B10 and what it does to a
         // frame profile.
-        glfwSwapInterval(vsyncRequested() ? 1 : 0);
+        // Through the context, so it is re-applied on the render thread when it
+        // takes over — vsync governs the thread that swaps, and that is not
+        // this one. See GlContext.setSwapInterval.
+        context.setSwapInterval(vsyncRequested() ? 1 : 0);
         measure();
         installCallbacks();
 

@@ -3350,11 +3350,87 @@ steps, and the two backends required to disturb the *same* amount of the frame
 rather than to draw the same frame — because at a fractional zoom they
 legitimately do not, GL being sharper by about 2.6 of 255.
 
-**Job D is closed by three separate fixes, and it took four hypotheses to get
-there.** D1 (vsync, presentation), D3 (`Camera`, projection, both backends), D4
-(the sampler, GL only). The lesson the section keeps: *"the shimmer" was never
-one defect*, and every instrument that said "no shimmer here" was answering a
-narrower question than the one being asked.
+### D5 — done. Two pacers, and the loop was running at 46 FPS while asking for 60
+
+**Reported after D4 shipped:** *"the shimmer is still happening. It is subtle but
+noticeable."* And, when bloom was suspected: *"it's not bloom, at least I can turn
+it off and the shimmer still happens."*
+
+**So the picture was eliminated before the cause was looked for.** Four
+measurements, each on the configuration the player is actually in — a real
+`Camera` at `zoom = 1.7`, crept a quarter-pixel at a time:
+
+| what moved beyond the camera's own shift | GL |
+|---|---:|
+| the scene, no chain | **0 px/step** |
+| the scene, `lighting` | **0** |
+| the scene, `bloom` | **0** |
+| the scene, `lighting` + `bloom` | **0** |
+| the terrain, through the cache | **0** |
+| the terrain, live sweep | **0** |
+| vertical camera motion | **0** |
+| diagonal camera motion | **0** |
+
+*(An early run of the bloom figure showed 336 px/step and was the test's own
+fault: the comparison window was 12 px from the edge and bloom's ring reaches
+14. At an honest margin it is zero. Recorded because it was very nearly reported
+as a defect.)*
+
+**The engine's output is rigid. So the defect is not in the picture — it is in
+when the picture arrives.** And the profile that came with the report contains
+it:
+
+```
+present   p99  16.752 ms      <- one refresh period at 60 Hz: the swap blocks
+idle      p50  11.975 ms      <- the frame limiter, waiting as well
+work/frame     11.333 ms
+work + idle    21.549 ms      -> 46 FPS, against a target of 60
+```
+
+**D1 turned vsync on and left the software limiter running beside it.** That is
+the whole bug, and it is not obvious, because both pacers are individually
+correct. The limiter schedules on an absolute timeline from `System.nanoTime`;
+the panel refreshes on an unrelated one. The phase between them drifts. Whenever
+the limiter's deadline lands just after a refresh boundary, that frame's swap
+misses the boundary and blocks a whole further period — so the loop alternates
+between one refresh and two, and the apparent motion of everything on screen
+alternates with it. **A world drawn rigidly and delivered unevenly looks like a
+world that is not rigid.** That is why this is filed under D and not under
+performance.
+
+**The fix.** `Renderer.presentationIsPaced()` says whether `present()` already
+waits for the display; `GlRenderer` answers yes when vsync is on; `GameLoop`
+stands its limiter down when told so. Standing down is not doing nothing — the
+cap becomes 240 FPS rather than infinity, because a driver that reports vsync
+and does not honour it would otherwise leave the loop unlimited, and an
+unlimited loop feeds the fixed-step simulation frame times near zero and parks
+it in the catch-up path for good. On a display that really is pacing, that guard
+is never reached.
+
+**Two smaller things went with it.** The swap interval is now re-applied
+whenever the context becomes current on a thread — it governs the thread that
+*swaps*, and in this engine that is never the thread that created the window,
+which is where it was being set. And **the frame report now says which pacer is
+in charge**, because `idle` means something different under each: when the loop
+paces, the wait is `idle`; when the display paces, the same wait is inside
+`present` and `idle` falls to nearly nothing. Two profiles that disagree about
+which is which cannot be compared, and a reader with no way to tell would
+reasonably conclude the headroom had vanished.
+
+**What this does not claim.** It is a fix derived from a measurement in the
+player's own profile, not one confirmed on the player's own machine — nobody
+here has a 60 Hz panel and an M1. If a shimmer survives it, the next suspect is
+already named and is not in this plan: `update` still spikes to **15.040 ms** at
+p99 against a **0.579 ms** median in that same profile, which is one frame in
+twenty with no budget left, and it is [`SIM_PLAN.md`](SIM_PLAN.md)'s S1.
+
+**Job D took five fixes and five hypotheses.** D1 (tearing, presentation), D3
+(`Camera`, projection, both backends), D4 (the sampler, GL only), D5 (pacing,
+temporal) — and D0, which found nothing and was right to. The lesson the section
+keeps: *"the shimmer" was never one defect*, every instrument that said "no
+shimmer here" was answering a narrower question than the one being asked, and
+the last of them was answered by eliminating the picture entirely rather than by
+finding one more thing wrong with it.
 
 ---
 
@@ -3429,6 +3505,15 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
       │  D1  vsync on by default        ← done. B9 had turned it off. A real
       │        GL-only fix for tearing, and NOT the shimmer — see D3.
       │  D2  GlHiDpiParityTest          ← done. First parity test at scale 2.
+      │  D5  two pacers, not one       ← done. D1 turned vsync on and left
+      │        the frame limiter running beside it. present p99 = 16.752 ms
+      │        (one refresh: the swap blocks) PLUS idle p50 = 11.975 ms (the
+      │        limiter waiting too) = 21.5 ms/frame: 46 FPS while asking for
+      │        60, delivered at whatever phase two unrelated schedules drifted
+      │        into. The picture was eliminated first — scene, cache, chain,
+      │        lighting, bloom, vertical, diagonal: 0 px/step on every one.
+      │        A rigid world delivered unevenly looks like a world that is
+      │        not rigid. JOB D DELIVERED, by five fixes.
       │  D4  the GL sampler            ← done, and D3 was not enough on its
       │        own: "the shimmer still happens with every block". A 16-texel
       │        block drawn 54.4 px wide puts texel boundaries exactly on
@@ -3436,7 +3521,7 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
       │        last bits of an interpolated float — which move when the quad
       │        does. Java2D moved 0 px a step; GL moved up to 169, all of
       │        them inside tiles and none at a tile edge. Now 0.
-      │        JOB D DELIVERED, by three fixes and four hypotheses.
+      │        Necessary and not sufficient either — see D5 above.
       │  D3  the shimmer, actually found ← done. Camera rounded
       │        (world - camera) * zoom in ONE step, so every object crossed
       │        its rounding boundary at its own moment and neighbours slid

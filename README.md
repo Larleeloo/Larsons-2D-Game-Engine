@@ -318,8 +318,20 @@ Java2D, and the GL distribution finds one and probes it.
 -Dlarsons.render.gl.version=4.1   # ask for a different core profile (debugging)
 -Dlarsons.render.vsync=off        # present as fast as frames are made (benchmarking)
 -Dlarsons.render.gl.drawablelock=off   # macOS: draw without the resize lock (see below)
+-Dlarsons.render.chooser=always   # ask which renderer to use, even if it was answered
+-Dlarsons.render.chooser=never    # never ask (scripted runs)
 -Dlarsons.run.seconds=30          # quit after 30 s — how a launch is checked unattended
 ```
+
+**And for a player who double-clicks the jar, it is a question rather than a
+flag.** A manifest cannot carry JVM arguments, so the flag above is unreachable
+for exactly the person most likely to need it. The GL distribution therefore
+asks once, on first launch, which renderer to use, and writes the answer to
+`config/render.json` beside the key binds — after that it starts without a word.
+Delete that file, or launch with `-Dlarsons.render.chooser=always`, to change
+your mind. An explicit `-Dlarsons.render.backend` always wins over both, and the
+plain jar never asks at all, because it has one renderer and a menu with one item
+on it is worse than no menu.
 
 The engine prints one line at startup saying which backend it is on and why, and
 **every frame profile carries the same two facts at its head** — the backend and

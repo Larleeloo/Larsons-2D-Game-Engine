@@ -297,6 +297,21 @@ public final class GlRenderer implements Renderer {
 
     private boolean warnedPassesDropped;
 
+    /**
+     * With vsync on, {@code present()} waits for the panel, so the game loop's
+     * limiter must not wait as well.
+     *
+     * <p>This is the other half of D1. Turning the swap interval on fixed
+     * tearing and left the software limiter running beside it, and the two
+     * schedules are unrelated: a profile from the Air measured this class's
+     * {@code present} at a p99 of one whole refresh period and the limiter
+     * idling 11.975 ms on top, for a 21.5 ms frame against a 16.67 ms budget —
+     * <b>46 FPS while asking for 60</b>, arriving unevenly. See
+     * {@link com.larsons.engine.graphics.Renderer#presentationIsPaced()}.
+     */
+    @Override
+    public boolean presentationIsPaced() { return GlWindow.vsyncRequested(); }
+
     @Override public int getWidth() { return width; }
 
     @Override public int getHeight() { return height; }

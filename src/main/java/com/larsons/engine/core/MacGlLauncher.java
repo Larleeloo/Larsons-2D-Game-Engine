@@ -112,12 +112,58 @@ public final class MacGlLauncher {
      * command-line flag on the relaunched child, because a property set after
      * the toolkit has initialised is ignored in silence.
      */
-    public static void keepAwtOffTheFirstThread() {
-        if (!isMac()) return;
-        if (System.getProperty(HEADLESS_PROPERTY) != null) return;   // the operator decided
-        if (Backends.JAVA2D.equals(Backends.requested())) return;    // AWT is the renderer
-        if (Backends.discover().isEmpty()) return;                   // no GPU backend to run
+    public static boolean keepAwtOffTheFirstThread() {
+        if (!isMac()) return false;
+        if (System.getProperty(HEADLESS_PROPERTY) != null) return false;  // the operator decided
+        if (Backends.JAVA2D.equals(Backends.requested())) return false;   // AWT is the renderer
+        if (Backends.discover().isEmpty()) return false;                  // no GPU backend to run
         System.setProperty(HEADLESS_PROPERTY, "true");
+        return true;
+    }
+
+    /**
+     * Make AWT resolve its headless state here, while nothing has started a
+     * Cocoa application yet.
+     *
+     * <p><b>Separate from the decision above on purpose.</b> This one is
+     * irreversible — AWT caches the answer in a static the first time it is
+     * asked, and nothing can un-ask it — so a test that exercised the decision
+     * would pin the whole test JVM into headless mode as a side effect, and the
+     * suite that shares that fork renders real frames through Java2D. The
+     * decision is a pure function and is the part worth testing; this is the
+     * part {@link Main} calls once, in a process that is about to be a game.
+     *
+     * <p><b>Setting the property is not the same as it having taken effect, and
+     * the gap between the two prints this:</b>
+     *
+     * <pre>
+     * [JRSAppKitAWT markAppIsDaemon]: Process manager already initialized:
+     *     can't fully enable headless mode.
+     * </pre>
+     *
+     * <p>AWT settles the property the first time anything asks it a question,
+     * and on this path the first question arrives late — after the backend probe
+     * has called {@code glfwInit}, which creates the {@code NSApplication} and
+     * with it the process manager. AWT then finds the application already
+     * standing, cannot mark the process as a daemon, and says so. Nothing is
+     * broken by that — GLFW owns the application and is entitled to, and the
+     * part that matters (AWT not starting a run loop of its own) still holds —
+     * but a line on stderr that says "can't fully enable" is not something to
+     * leave a player reading, and the fix is to ask the question earlier.
+     *
+     * <p>{@code GraphicsEnvironment.isHeadless()} is the cheapest question that
+     * settles it, and settling it is the point rather than the answer, which is
+     * why the answer is discarded. It also pins the decision: a later change to
+     * the property cannot quietly move the engine to a different mode halfway
+     * through a launch.
+     */
+    public static void settleHeadlessNow() {
+        try {
+            java.awt.GraphicsEnvironment.isHeadless();
+        } catch (Throwable ignored) {
+            // A JDK with no AWT at all is not a reason to fail to launch, and
+            // the property is set either way.
+        }
     }
 
     /**
