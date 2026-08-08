@@ -17,6 +17,15 @@ public final class PlayerState {
     public String name = "";
     public double x, y;
     public double vy;
+
+    /**
+     * Where this body stood one fixed step ago, so a frame can be drawn between
+     * two steps rather than on top of the latest one — see
+     * {@link StepInterpolation} for what that fixes and why the simulation is
+     * unaffected by it. Never read by the simulation, never replicated: a
+     * renderer's memory of the step before, kept on the body it belongs to.
+     */
+    public double prevX, prevY, prevZ;
     public boolean facingLeft;
     public boolean moving;
     /**
@@ -321,6 +330,27 @@ public final class PlayerState {
         s.guardHits = num(m.get("gh"), 0);
         return s;
     }
+
+    // --- render interpolation (see StepInterpolation) ----------------------------
+
+    /**
+     * Remember where this body is, immediately before a fixed step moves it.
+     * Called by whoever owns the step — the scene that is going to draw the
+     * result — rather than by {@link PlayerPhysics}, which is shared with a
+     * headless server that draws nothing.
+     */
+    public void beginStep() {
+        prevX = x;
+        prevY = y;
+        prevZ = z;
+    }
+
+    /** Where to draw this body, {@code alpha} of the way through the last step. */
+    public double renderX(double alpha) { return StepInterpolation.at(prevX, x, alpha); }
+
+    public double renderY(double alpha) { return StepInterpolation.at(prevY, y, alpha); }
+
+    public double renderZ(double alpha) { return StepInterpolation.at(prevZ, z, alpha); }
 
     private static int num(Object o, int def) {
         return o instanceof Number n ? n.intValue() : def;

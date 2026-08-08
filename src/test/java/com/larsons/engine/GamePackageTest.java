@@ -107,8 +107,13 @@ class GamePackageTest {
         assertFalse(imported.mobsEnabled);
 
         LevelStore levels = new LevelStore(dstLv.toString(), "My Platformer");
-        assertEquals(List.of("custom", "doors", "level_one", "level_two"), levels.list(),
-                "levels + meta files land in the game type's folder");
+        // The sidecars land in the same folder and are checked for below — what
+        // this asserts is that they are not reported as levels. It used to expect
+        // ["custom", "doors", "level_one", "level_two"], which pinned the bug that
+        // put a game type's characters.json into lastLevelPath and left every
+        // launch printing "Level is missing a 'tiles' array".
+        assertEquals(List.of("level_one", "level_two"), levels.list(),
+                "only the levels are levels");
         Level one = levels.load("level_one");
         assertEquals(1, one.tileAt(2, 3), "level tile data survives the round trip");
 

@@ -668,7 +668,13 @@ public class CreativeScene extends AbstractScene {
         try {
             return LevelLoader.load(last);
         } catch (RuntimeException e) {
-            System.err.println("CreativeScene: failed to load " + last + ": " + e.getMessage());
+            // Cleared rather than retried, for the reason PlayScene.loadOfflineLevel
+            // states: a pointer that cannot load will never start loading, and
+            // retrying it makes the failure permanent and unclearable.
+            System.err.println("CreativeScene: failed to load " + last + ": " + e.getMessage()
+                    + " — forgetting it and starting a fresh canvas");
+            profile().lastLevelPath = "";
+            ctx.save();
             return null;
         }
     }
@@ -905,6 +911,12 @@ public class CreativeScene extends AbstractScene {
 
     @Override
     public void update(double dt, InputManager input) {
+        // Unconditionally, before any branch below can skip the play-test's
+        // simulation: render() blends from "one step ago" to "now", so a tick
+        // that moves nothing must leave the two equal. See
+        // PlayScene.holdInterpolationStill for the argument in full.
+        if (testMe != null) testMe.beginStep();
+        if (testWorld != null) testWorld.beginStep();
         if (statusTime > 0) statusTime -= dt;
         animClock += dt;
         mouseX = input.getMouseX();
@@ -959,6 +971,13 @@ public class CreativeScene extends AbstractScene {
         }
 
         // --- pan & zoom ---
+        // Panned on the fixed step and drawn without interpolation, on purpose.
+        // The play-test above gets the shimmer fix because it is play; the
+        // editor's camera answers a held key rather than a simulated body, and
+        // blending it would put every placed block a fraction of a step away
+        // from where the cursor was when the click landed. An editor that draws
+        // exactly where it will paint is worth more than one that scrolls
+        // slightly more smoothly while doing it.
         double pan = PAN_SPEED * dt / camera.zoom;
         // The camera pans on the movement binds; Ctrl is held for the editor's
         // own shortcuts (save), so panning stands still while it is down.
@@ -5600,9 +5619,34 @@ public class CreativeScene extends AbstractScene {
      */
     private final TerrainCache terrainCache = new TerrainCache();
 
+    /**
+     * How far past the last fixed simulation step this frame is being drawn,
+     * 0..1 — the loop's {@code alpha}, held for the frame the way
+     * {@link #animClock} is. See
+     * {@link com.larsons.engine.sim.StepInterpolation}.
+     */
+    private double renderAlpha;
+
+    /** The play-test player's drawn position this frame: interpolated, not stepped. */
+    private double testDrawX() { return testMe.renderX(renderAlpha); }
+
+    private double testDrawY() { return testMe.renderY(renderAlpha); }
+
+    private double testDrawZ() { return testMe.renderZ(renderAlpha); }
+
     @Override
     public void render(DrawTarget target, float alpha) {
+        renderAlpha = alpha;
         GameProfile p = profile();
+        // The play-test scrolls a level the same way playing it does, so it gets
+        // the same fix: the camera is placed on the interpolated player before
+        // anything projects through it. Editing does not — the editor's camera is
+        // panned by hand and its own note says why that is left alone.
+        if (testing && testMe != null
+                && (cutsceneDirector == null || cutsceneDirector.active() == null)) {
+            camera.centerOn(testDrawX() + p.playerSize / 2.0,
+                    testDrawY() + p.playerSize / 2.0);
+        }
         feedLighting(p);
 
         target.fillRect(0, 0, viewportWidth, viewportHeight, level.background);
@@ -5631,7 +5675,7 @@ public class CreativeScene extends AbstractScene {
         drawSpawnMarker(target);
         if (!testing) drawCutsceneMarkers(target);
         if (testing && testMe != null) {
-            standing.at(footDepth(testMe.x, testMe.y, profile().playerSize),
+            standing.at(footDepth(testDrawX(), testDrawY(), profile().playerSize),
                     () -> drawTestPlayer(target));
         }
         standing.flush();
@@ -5888,17 +5932,21 @@ public class CreativeScene extends AbstractScene {
             drawMiniGameMarkers(target);
         }
         if (testing && testWorld != null) {
+            double a = renderAlpha;
             for (DroppedItem item : testWorld.items()) {
-                into.at(footDepth(item.x, item.y, DroppedItem.SIZE), () ->
-                        drawItemAt(target, items.get(item.key), item.x, item.y));
+                double ix = item.renderX(a), iy = item.renderY(a);
+                into.at(footDepth(ix, iy, DroppedItem.SIZE), () ->
+                        drawItemAt(target, items.get(item.key), ix, iy));
             }
             for (Mob m : testWorld.mobs()) {
-                into.at(footDepth(m.x, m.y, m.def.size()), () ->
-                        drawMobAt(target, m.def, m.x, m.y, m.facing, mobStateKey(m),
+                double mx = m.renderX(a), my = m.renderY(a);
+                into.at(footDepth(mx, my, m.def.size()), () ->
+                        drawMobAt(target, m.def, mx, my, m.facing, mobStateKey(m),
                                 m.weaponKey(), m.melee.action(), m.meleeProgress()));
             }
             for (Projectile pr : testWorld.projectiles()) {
-                into.at(footDepth(pr.x, pr.y, 0), () -> drawProjectileAt(target, pr));
+                into.at(footDepth(pr.renderX(a), pr.renderY(a), 0),
+                        () -> drawProjectileAt(target, pr));
             }
             return;
         }
@@ -6298,13 +6346,14 @@ public class CreativeScene extends AbstractScene {
         PlayerSprites.Frame sprite = MeleeSprites.playerFrame(
                 testMe.characterKey, testMeleeItem, testAnimState, testMe.facing,
                 testAnimClock, testMelee.progress(), (int) size, testCharacter.body);
-        camera.worldToScreen(testMe.x + size / 2.0, testMe.y + size, pcorner);
+        double px = testDrawX(), py = testDrawY(), pz = testDrawZ();
+        camera.worldToScreen(px + size / 2.0, py + size, pcorner);
         int w = (int) Math.round(size * camera.zoom);
         int h = w;
         int dx = pcorner[0] - w / 2;
-        int lift = (int) Math.round(testMe.z * camera.zoom * PlayerPhysics.HOP_DRAW_SCALE);
+        int lift = (int) Math.round(pz * camera.zoom * PlayerPhysics.HOP_DRAW_SCALE);
         if (lift > 0) {
-            double shrink = Math.max(0.35, 1 - testMe.z / (size * 3));
+            double shrink = Math.max(0.35, 1 - pz / (size * 3));
             int sw = (int) (w * 0.7 * shrink), sh = Math.max(2, (int) (w * 0.25 * shrink));
             target.fillOval(pcorner[0] - sw / 2, pcorner[1] - sh / 2, sw, sh,
                     new Color(0, 0, 0, (int) (90 * shrink)));

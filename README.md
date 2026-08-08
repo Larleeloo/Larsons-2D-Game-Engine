@@ -634,7 +634,31 @@ com.larsons.engine
   independent. Catch-up updates per frame are capped to avoid a "spiral of
   death" after a hitch.
 - **Render** runs up to `targetFps` (default 120) and receives an interpolation
-  `alpha` for smooth motion when the two rates differ.
+  `alpha` — how far past the last completed step real time has got — which the
+  play scene and the creative play-test **use** to draw between two steps rather
+  than on top of the latest one.
+
+**That last word is load-bearing, and it was not true for most of the engine's
+life.** A frame never contains a whole number of fixed steps: the step is 8.33 ms
+and a 60 Hz refresh is 16.67 ms, so a frame nominally owes two but the remainder
+in the accumulator wanders and some frames owe one or three. Drawing the last
+completed step whole therefore scrolled the world by 1.8, 3.7 or 5.5 px on
+successive frames where 3.7 was due — the shimmer players reported as "the blocks
+are shaking", most visibly in a side-scroller, which is the format that pans
+continuously along one axis for seconds at a time. On a 144 Hz display, where a
+120 Hz simulation simply cannot keep up, better than one frame in four was a
+duplicate of the one before it.
+[`StepInterpolation`](src/main/java/com/larsons/engine/sim/StepInterpolation.java)
+holds the argument and the numbers; the drawn position is now provably a linear
+function of real time, one step behind it, whatever number of steps a frame ran.
+Nothing about the simulation changes — the blend reads two positions and returns a
+third for drawing, so a headless server calls none of it and two machines still
+agree.
+
+The accumulator arithmetic itself lives in
+[`FrameCadence`](src/main/java/com/larsons/engine/core/FrameCadence.java), apart
+from the loop's threading, so the decision that produces `alpha` can be measured
+without a clock.
 
 This structure is what online play (requirement #3) is built on: the server
 ticks the same fixed-step simulation clients predict with, so both sides agree

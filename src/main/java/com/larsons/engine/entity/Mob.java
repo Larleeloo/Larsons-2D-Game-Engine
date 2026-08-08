@@ -136,6 +136,12 @@ public final class Mob {
     public final int id;
     public final MobDef def;
     public double x, y;        // top-left, world px
+    /**
+     * Where this mob stood one fixed step ago, for the renderer only. See
+     * {@link com.larsons.engine.sim.StepInterpolation}; captured for every mob
+     * in one place, at the top of {@code World.step}.
+     */
+    public double prevX, prevY;
     public double vy;
     public boolean facingLeft;
     /**
@@ -375,6 +381,23 @@ public final class Mob {
         double[] fx = pendingBlinkFx;
         pendingBlinkFx = null;
         return fx;
+    }
+
+    // --- render interpolation (see com.larsons.engine.sim.StepInterpolation) ------
+
+    /** Remember where this mob is, immediately before a fixed step moves it. */
+    public void beginStep() {
+        prevX = x;
+        prevY = y;
+    }
+
+    /** Where to draw this mob, {@code alpha} of the way through the last step. */
+    public double renderX(double alpha) {
+        return com.larsons.engine.sim.StepInterpolation.at(prevX, x, alpha);
+    }
+
+    public double renderY(double alpha) {
+        return com.larsons.engine.sim.StepInterpolation.at(prevY, y, alpha);
     }
 
     /** Pre-projectile-awareness signature, for callers without a live world. */

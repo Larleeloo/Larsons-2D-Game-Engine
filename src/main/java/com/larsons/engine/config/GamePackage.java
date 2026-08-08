@@ -132,15 +132,19 @@ public final class GamePackage {
         return jsonName.substring(0, jsonName.length() - ".json".length()) + EXTENSION;
     }
 
-    /** Every level in the game type, keyed by file stem (doors/custom excluded). */
+    /**
+     * Every level in the game type, keyed by file stem. What counts as a level
+     * in that folder is {@link LevelStore#isLevelFile}'s answer rather than a
+     * second copy of the rule here — see the note on {@code LevelStore}'s
+     * sidecar list for what having two of them cost.
+     */
     private static Map<String, Object> collectLevels(LevelStore levels) {
         Map<String, Object> out = new LinkedHashMap<>();
         Path dir = levels.directory();
         if (!Files.isDirectory(dir)) return out;
         try (Stream<Path> files = Files.list(dir)) {
             List<Path> sorted = files
-                    .filter(p -> p.toString().endsWith(".json"))
-                    .filter(p -> !isMetaFile(p))
+                    .filter(LevelStore::isLevelFile)
                     .sorted()
                     .toList();
             for (Path p : sorted) {
@@ -152,13 +156,6 @@ public final class GamePackage {
             throw new UncheckedIOException(e);
         }
         return out;
-    }
-
-    /** Files that live beside the levels but aren't levels themselves. */
-    private static boolean isMetaFile(Path p) {
-        String f = p.getFileName().toString();
-        return f.equals(DoorDirectory.FILE_NAME) || f.equals(CustomContentStore.FILE_NAME)
-                || f.equals(CharacterStore.FILE_NAME);
     }
 
     // --- import -------------------------------------------------------------------

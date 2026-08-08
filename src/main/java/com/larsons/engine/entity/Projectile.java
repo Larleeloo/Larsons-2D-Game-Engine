@@ -47,6 +47,12 @@ public final class Projectile {
      */
     public double z;
     public double vx, vy, vz;
+    /**
+     * Where this shot was one fixed step ago, for the renderer only. See
+     * {@link com.larsons.engine.sim.StepInterpolation}; captured for every shot
+     * in one place, at the top of {@code World.step}.
+     */
+    public double prevX, prevY, prevZ;
     /** Damage dealt on hit: the firing weapon's, or the def's default. */
     public double damage;
 
@@ -113,6 +119,28 @@ public final class Projectile {
     /** Whether this shot is still above the floor, and so over the level. */
     public boolean airborne() {
         return z > 0;
+    }
+
+    // --- render interpolation (see com.larsons.engine.sim.StepInterpolation) ------
+
+    /** Remember where this shot is, immediately before a fixed step moves it. */
+    public void beginStep() {
+        prevX = x;
+        prevY = y;
+        prevZ = z;
+    }
+
+    /** Where to draw this shot, {@code alpha} of the way through the last step. */
+    public double renderX(double alpha) {
+        return com.larsons.engine.sim.StepInterpolation.at(prevX, x, alpha);
+    }
+
+    public double renderY(double alpha) {
+        return com.larsons.engine.sim.StepInterpolation.at(prevY, y, alpha);
+    }
+
+    public double renderZ(double alpha) {
+        return com.larsons.engine.sim.StepInterpolation.at(prevZ, z, alpha);
     }
 
     /**

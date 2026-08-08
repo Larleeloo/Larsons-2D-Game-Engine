@@ -28,6 +28,12 @@ public final class DroppedItem {
     public int count;
     public double x, y;        // top-left of a small square (world px)
     public double vx, vy;
+    /**
+     * Where this drop was one fixed step ago, for the renderer only. See
+     * {@link com.larsons.engine.sim.StepInterpolation}; captured for every drop
+     * in one place, at the top of {@code World.step}.
+     */
+    public double prevX, prevY;
     public static final double SIZE = 14;
 
     /** Seconds before it may be picked up (so mined drops don't teleport in). */
@@ -42,6 +48,23 @@ public final class DroppedItem {
         this.count = Math.max(1, count);
         this.x = x;
         this.y = y;
+    }
+
+    // --- render interpolation (see com.larsons.engine.sim.StepInterpolation) ------
+
+    /** Remember where this drop is, immediately before a fixed step moves it. */
+    public void beginStep() {
+        prevX = x;
+        prevY = y;
+    }
+
+    /** Where to draw this drop, {@code alpha} of the way through the last step. */
+    public double renderX(double alpha) {
+        return com.larsons.engine.sim.StepInterpolation.at(prevX, x, alpha);
+    }
+
+    public double renderY(double alpha) {
+        return com.larsons.engine.sim.StepInterpolation.at(prevY, y, alpha);
     }
 
     /** Toss with a small random-ish kick, like blocks breaking in the original. */
