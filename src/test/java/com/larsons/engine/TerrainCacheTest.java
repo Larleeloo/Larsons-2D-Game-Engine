@@ -3,6 +3,8 @@ package com.larsons.engine;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.DepthPass;
 import com.larsons.engine.graphics.Perspective;
+import com.larsons.engine.graphics.SkinDef;
+import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.TerrainCache;
 import com.larsons.engine.graphics.TerrainPainter;
 import com.larsons.engine.graphics.draw.Java2DTarget;
@@ -11,11 +13,14 @@ import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.world.Block;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.io.IOException;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -56,6 +61,21 @@ class TerrainCacheTest {
 
     /** One terrain pass into an image, optionally through the cache. */
     private static BufferedImage paint(Level lvl, Camera cam, TerrainCache cache, int[] b) {
+        return paint(lvl, cam, cache, b, 0.0);
+    }
+
+    /**
+     * The same, at a stated point on the animation clock.
+     *
+     * <p><b>Every test in this class before the ones at the bottom passes zero,
+     * and that is exactly why the vibration lived here for so long.</b> The cache
+     * put the animation frame number into every chunk's validity key, so a level
+     * with nothing animated in it had its whole screen invalidated twelve times a
+     * second — and twenty tests of the cache, all of them at {@code animClock = 0},
+     * could not see it, because at a frozen clock the frame number never changes.
+     */
+    private static BufferedImage paint(Level lvl, Camera cam, TerrainCache cache, int[] b,
+                                       double animClock) {
         BufferedImage img = new BufferedImage(W, H, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -64,7 +84,8 @@ class TerrainCacheTest {
         g.setColor(new Color(24, 28, 38));
         g.fillRect(0, 0, W, H);
         DepthPass pass = DepthPass.of(lvl.perspective);
-        TerrainPainter.draw(Java2DTarget.unsized(g), lvl, cam, b, 0.0, pass, null, null, cache);
+        TerrainPainter.draw(Java2DTarget.unsized(g), lvl, cam, b, animClock, pass, null, null,
+                cache);
         pass.flush();
         g.dispose();
         return img;
@@ -499,5 +520,247 @@ class TerrainCacheTest {
         assertEquals(0, target.count("fillPolygon"),
                 "no cell is filled on the screen target — they went into the chunk images");
         assertEquals(9, target.count("drawImage"), "three by three chunks, one blit each");
+    }
+
+    // --- as time passes, which is what nothing above asked ------------------------
+
+    /**
+     * <b>The vibration, and the one assertion that sees it.</b> A static level,
+     * the camera not moving, two seconds of frames: every frame must be
+     * pixel-identical to the one before it.
+     *
+     * <p>Before the fix, 71 of 119 frames were not — in a level with no animated
+     * textures anywhere, with nothing in the world moving and the player standing
+     * still. The animation frame number was in every chunk's validity key, so all
+     * twelve visible chunks went stale together twelve times a second; the
+     * four-per-frame rebuild budget could not keep up; and the overflow was drawn
+     * <em>live</em> while the rest was blitted from baked images. Baked and live
+     * are not pixel-identical, so a shifting two thirds of the terrain flipped
+     * between two renderings and back, on a 12 Hz beat, for as long as the game
+     * ran. The frames it produced went, at 1280x720 and zoom 1.7:
+     *
+     * <pre>
+     * frame | from cache | re-baked | drawn LIVE
+     *     0 |          0 |        4 |  8
+     *     1 |          4 |        4 |  4
+     *     2 |          8 |        4 |  0
+     *     3 |         12 |        0 |  0
+     *     4 |         12 |        0 |  0
+     *     5 |          0 |        4 |  8   <- and again, every 83 ms
+     * </pre>
+     *
+     * <p>The first frames are allowed to differ: nothing is baked before the first
+     * one, so the view is swept live until the budget has caught up, and the
+     * hand-over from swept to baked is one visible transition of about 0.05% of
+     * pixels. It happens once, on entering a level. What must not happen is a
+     * second one.
+     */
+    @Test
+    void aStillLevelIsPixelIdenticalFrameAfterFrameAsTimePasses() {
+        Level lvl = level(LevelFormat.SIDE_SCROLLER, 40, 30);
+        Camera cam = camera(lvl);
+        cam.zoom = 1.7;                       // a fractional zoom, as the game leaves it
+        TerrainCache cache = new TerrainCache();
+        int[] b = bounds(lvl);
+
+        // Let the cold cache hand over from the live sweep to baked chunks.
+        for (int i = 0; i < 30; i++) paint(lvl, cam, cache, b, i / 60.0);
+
+        BufferedImage prev = paint(lvl, cam, cache, b, 30 / 60.0);
+        for (int f = 31; f < 150; f++) {
+            BufferedImage cur = paint(lvl, cam, cache, b, f / 60.0);
+            assertEquals(0, differingPixels(prev, cur),
+                    "frame " + f + " of a static level differs from the frame before it. "
+                            + "Nothing in the world moved and the camera did not either, so "
+                            + "the terrain is switching between two renderings of itself — "
+                            + "which is what a player sees as the blocks vibrating");
+            prev = cur;
+        }
+    }
+
+    /**
+     * And the mechanism, stated directly: time passing does not invalidate a
+     * chunk of static blocks.
+     */
+    @Test
+    void theAnimationClockDoesNotInvalidateAChunkWithNothingAnimatedInIt() {
+        Level lvl = level(LevelFormat.SIDE_SCROLLER, 32, 24);
+        Camera cam = camera(lvl);
+        TerrainCache cache = new TerrainCache();
+        int[] b = bounds(lvl);
+
+        for (int i = 0; i < 40; i++) paint(lvl, cam, cache, b, i / 60.0);
+        cache.resetCounters();
+        // Ten seconds of clock — a hundred and twenty animation frames' worth.
+        for (int f = 0; f < 600; f++) paint(lvl, cam, cache, b, 100 + f / 60.0);
+
+        assertEquals(0, cache.rebuilds(),
+                "ten seconds of clock rebuilt " + cache.rebuilds() + " chunks in a level "
+                        + "with no animated textures in it; the frame number belongs to the "
+                        + "chunks that actually animate");
+        assertTrue(cache.hits() > 0, "and every chunk should have been served from cache");
+    }
+
+    /**
+     * A frame is never half baked and half swept.
+     *
+     * <p>This class's own measurement is that mixing costs more than either
+     * extreme — 22 ms against 16 ms all-live and 2 ms all-cached — and the churn
+     * threshold was written to prevent it. The rebuild budget then produced one
+     * anyway whenever more chunks went stale than it could rebake, which is the
+     * defect above. So the invariant is asserted rather than described: on every
+     * frame of a walk across a level, either every visible chunk came from the
+     * cache (with any stale ones rebaked first) or none of them did.
+     */
+    @Test
+    void noFrameMixesBakedBlitsWithLiveFills() {
+        Level lvl = level(LevelFormat.SIDE_SCROLLER, 200, 30);
+        TerrainCache cache = new TerrainCache();
+
+        for (int f = 0; f < 400; f++) {
+            Camera cam = new Camera(lvl.perspective, W, H);
+            cam.tileSize = TILE;
+            cam.zoom = 1.7;
+            cam.centerOn(600 + f * (220.0 / 60.0), lvl.height * TILE / 2.0);
+            int[] b = visible(lvl, cam);
+            int chunks = chunkCount(b);
+
+            cache.resetCounters();
+            paint(lvl, cam, cache, b, f / 60.0);
+            int blits = cache.blits();
+
+            assertTrue(blits == 0 || blits == chunks,
+                    "frame " + f + " blitted " + blits + " of " + chunks + " visible chunks "
+                            + "from the cache and drew the rest live. A half-and-half frame is "
+                            + "both the slowest rendering available and a picture that differs "
+                            + "from its neighbours in a shifting patch of the screen");
+        }
+    }
+
+    /**
+     * Running water does not flip the whole view to a live sweep on the liquid's
+     * own beat.
+     *
+     * <p>{@code LiquidSim} ticks about every 0.22 s, and each tick rewrites cells.
+     * The old rule counted <em>cells</em> changed per frame and swept the entire
+     * view when the count passed a threshold — so a pond pouring through a gap in
+     * the floor produced one all-live frame every thirteenth frame with all-baked
+     * frames either side of it, and the seams flickered across the whole screen at
+     * about 4.6 Hz. Thirty cells inside three chunks is three cheap rebakes, and
+     * that is what the frame now asks: do the chunks that need rebaking fit in the
+     * budget?
+     */
+    @Test
+    void aFlowingLiquidRebakesItsOwnChunksRatherThanSweepingTheView() {
+        Level lvl = level(LevelFormat.SIDE_SCROLLER, 60, 40);
+        Block water = null;
+        for (Block block : lvl.blocks.all()) {
+            if (block.liquid()) { water = block; break; }
+        }
+        org.junit.jupiter.api.Assumptions.assumeTrue(water != null,
+                "the block registry has no liquid to flow");
+
+        Camera cam = camera(lvl);
+        cam.zoom = 1.7;
+        // Bounds as the play scene computes them — the viewport, not the level.
+        // Handing the cache a region far bigger than the screen asks it to keep
+        // forty chunks fresh on a budget sized for six, which is not a thing the
+        // game ever does.
+        int[] b = visible(lvl, cam);
+        int chunks = chunkCount(b);
+        // A small pool in view, sitting on a floor with a gap for it to pour
+        // through, so it keeps flowing rather than settling in a tick or two.
+        int midCol = (b[0] + b[2]) / 2, midRow = (b[1] + b[3]) / 2;
+        for (int c = b[0]; c <= b[2]; c++) lvl.setTile(c, midRow + 2, lvl.tileAt(c, midRow + 2));
+        for (int r = midRow - 2; r <= midRow; r++) {
+            for (int c = midCol - 2; c <= midCol + 2; c++) lvl.setTile(c, r, water.id());
+        }
+        lvl.setTile(midCol, midRow + 1, 0);
+        lvl.setTile(midCol, midRow + 2, 0);
+
+        TerrainCache cache = new TerrainCache();
+        for (int i = 0; i < 40; i++) paint(lvl, cam, cache, b, i / 60.0);
+
+        com.larsons.engine.world.LiquidSim liquids = new com.larsons.engine.world.LiquidSim();
+        int sweptFrames = 0;
+        for (int f = 0; f < 300; f++) {
+            liquids.step(lvl, true, 1.0 / 60.0);
+            cache.resetCounters();
+            paint(lvl, cam, cache, b, f / 60.0);
+            if (cache.blits() == 0) sweptFrames++;
+        }
+
+        // The pool's first spread genuinely rewrites a lot at once and may cost a
+        // frame or two; what must not happen is a sweep on the liquid's own beat.
+        // The old cell-counting rule produced one every thirteenth frame — about
+        // twenty-three of these three hundred.
+        assertTrue(sweptFrames <= 3,
+                sweptFrames + " frames of a level with a pool in it threw the whole "
+                        + "cache away and swept " + chunks + " chunks live. A liquid that "
+                        + "rewrites a handful of cells should rebake the chunks holding them");
+    }
+
+    /**
+     * The other direction, which the fix must not break: a chunk that really does
+     * hold an animated texture still refreshes as the clock advances.
+     *
+     * <p>Taking the frame number out of the validity key for every chunk would be
+     * a fix that froze tile animation, and freezing it would be invisible in every
+     * other test here — they all run at a stopped clock. So the animated case is
+     * pinned beside the static one.
+     */
+    @Test
+    void aChunkHoldingAnAnimatedTextureStillRefreshes(@TempDir Path dir) throws IOException {
+        Level lvl = level(LevelFormat.SIDE_SCROLLER, 32, 24);
+        // Two visibly different frames at 8 fps on whatever block sits at (0,0).
+        Block block = lvl.blockAt(0, 0);
+        org.junit.jupiter.api.Assumptions.assumeTrue(block != null, "no block at (0,0)");
+        BufferedImage sheet = new BufferedImage(64, 32, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D sg = sheet.createGraphics();
+        sg.setColor(Color.RED);
+        sg.fillRect(0, 0, 32, 32);
+        sg.setColor(Color.BLUE);
+        sg.fillRect(32, 0, 32, 32);
+        sg.dispose();
+        Path file = dir.resolve("flow.png");
+        javax.imageio.ImageIO.write(sheet, "png", file.toFile());
+        String key = block.textureKey();
+        try {
+            Skins.put(new SkinDef(key, file.toString(), 32, 32, 2, 8));
+            assertTrue(Skins.animated(key), "the sheet just installed should read as animated");
+
+            Camera cam = camera(lvl);
+            TerrainCache cache = new TerrainCache();
+            int[] b = bounds(lvl);
+            for (int i = 0; i < 60; i++) paint(lvl, cam, cache, b, i / 60.0);
+
+            cache.resetCounters();
+            // One second of clock is twelve of the cache's animation frames.
+            for (int f = 0; f < 60; f++) paint(lvl, cam, cache, b, 10 + f / 60.0);
+
+            assertTrue(cache.rebuilds() > 0,
+                    "a chunk holding a two-frame sheet at 8 fps was never rebuilt over a "
+                            + "second of clock, so its animation is frozen on screen");
+        } finally {
+            Skins.remove(key);
+        }
+    }
+
+    /** The tile bounds a camera can actually see, as the play scene computes them. */
+    private static int[] visible(Level lvl, Camera cam) {
+        double[] tl = cam.screenToWorld(0, 0);
+        double[] br = cam.screenToWorld(W, H);
+        return new int[]{
+                Math.max(0, (int) Math.floor(tl[0] / TILE) - 1),
+                Math.max(0, (int) Math.floor(tl[1] / TILE) - 1),
+                Math.min(lvl.width - 1, (int) Math.floor(br[0] / TILE) + 1),
+                Math.min(lvl.height - 1, (int) Math.floor(br[1] / TILE) + 1)};
+    }
+
+    /** How many chunks those bounds cover — what a whole frame's worth of blits is. */
+    private static int chunkCount(int[] b) {
+        int c0 = Math.max(0, b[0] / TerrainCache.CHUNK);
+        int r0 = Math.max(0, b[1] / TerrainCache.CHUNK);
+        return (b[2] / TerrainCache.CHUNK - c0 + 1) * (b[3] / TerrainCache.CHUNK - r0 + 1);
     }
 }

@@ -3613,11 +3613,166 @@ measurement was never going to look, because the code all appeared to be there.
 
 ---
 
+### D7 — done. The cache threw its whole screen away twelve times a second
+
+**Reported after D6 shipped, from two machines:** *"the block shaking in
+side-scroller games is still there. The blocks look like they are vibrating."*
+
+**"Vibrating" is a frequency, and that is what finally made this findable.** D6
+had removed a defect that fired on about 2.5% of frames — irregular, not
+rhythmic. Vibration is periodic. So the question stopped being "what moves?" and
+became "what happens on a fixed beat?", and every instrument in this project was
+blind to it for one reason: **they all render two or three frames at a stopped
+animation clock.** `CameraStabilityTest` creeps a camera and holds `animClock`
+at 0. All twenty tests in `TerrainCacheTest` pass `0.0`. D5's exoneration of the
+picture was measured the same way. Nothing in the build had ever asked what the
+renderer does over *seconds of time passing*.
+
+Asked, over 119 frames of a static side-scroller level with the camera **not
+moving at all**, it answers: 71 of them differ from the frame before. And the
+pattern is exact:
+
+```
+++..+++..+++...+++.+++..+++..     (. identical, + differs)
+```
+
+A five-frame cycle at 60 fps. **12 Hz.**
+
+#### The cause
+
+`TerrainCache.Key` carried `animFrame` — the animation clock quantised to 12
+FPS — for **every chunk, unconditionally.** The field's own javadoc said "a chunk
+holding an animated texture rebuilds at this rate"; nothing checked whether the
+chunk held one. So in a level with no animated textures anywhere, every chunk on
+screen went stale together twelve times a second.
+
+`MAX_REBUILDS_PER_FRAME` was 4, against 12 visible chunks at 720p. The overflow
+was drawn **live**, and that is the frame this class has a measured opinion about
+— `MIN_CHURN_TO_STAND_ASIDE`'s note records **22 ms** for a half-and-half frame
+against 16 ms all-live and 2 ms all-baked, and says in as many words that "the
+decision belongs to the frame". The rebuild budget had been quietly overriding
+that on two frames in every five, for ever:
+
+| frame | from cache | re-baked | drawn LIVE | terrain pass |
+|---:|---:|---:|---:|---:|
+| 0 | 0 | 4 | 8 | **16.2 ms** |
+| 1 | 4 | 4 | 4 | 11.3 ms |
+| 2 | 8 | 4 | 0 | 10.3 ms |
+| 3 | 12 | 0 | 0 | 2.5 ms |
+| 4 | 12 | 0 | 0 | 2.4 ms |
+| 5 | 0 | 4 | 8 | **15.0 ms** |
+
+**So this was never a drawing defect, and that is why five previous fixes did not
+touch it.** The terrain pass alone oscillated between 2.4 ms and 16.2 ms on a
+12 Hz beat against a 16.67 ms whole-frame budget — two frames in five with
+nothing left for the rest of the frame, delivered late, while the other three
+arrived on time. **D5 wrote the rule that names it:** *a world drawn rigidly and
+delivered unevenly looks like a world that is not rigid.* D5 fixed the pacer, D6
+fixed the sampling, and the terrain pass was making the frame time itself vibrate.
+
+Over 600 frames of walking, 1280x720, zoom 1.7:
+
+| | mean | p50 | p95 | chunk re-bakes/sec |
+|---|---:|---:|---:|---:|
+| before | 8.19 ms | 9.36 | 15.43 | **152** |
+| after | **1.84 ms** | 1.63 | 2.08 | **3.6** |
+
+152 re-bakes a second, each a 435x435 image re-rendered cell by cell and — on the
+GL backend — re-uploaded to the GPU. 3.6 is the number a walk genuinely reveals.
+
+#### Why only side-scrollers, which is what the report kept saying
+
+In a side-scroller `Level.layered()` is false, so **the cached floor *is* the
+blocks**: the entire visible world sits on the layer that was thrashing. A plan
+view draws its stacked blocks and their shadows live in the depth pass over the
+floor, so a large share of the screen is live-drawn anyway and the beat is buried
+under it. Isometric is not cached at all (`faithfulIn`). The one format where the
+cache owns the whole picture is the one format where the report came from.
+
+#### The fix, in two parts, both of which are policy the class already had
+
+1. **`animFrame` moved out of the `Key` and onto the `Entry`,** consulted only for
+   a chunk that actually baked an animated texture. `ChunkRenderer` now returns
+   whether it resolved one, because the painter is what resolves texture keys and
+   the cache never sees them. A chunk of static blocks does not become wrong
+   because time passed. `Skins.animated(key)` is the same test `SkinDef.frameAt`
+   already used to decide whether to advance a sheet.
+
+2. **The frame's decision is made once, before anything is drawn.** Count the
+   visible chunks that cannot be served; if they fit the budget, rebake them and
+   every chunk on screen is a blit; if they do not, sweep the whole view live in
+   one uniform pass and spend the budget baking for a later frame. A frame is now
+   all of one thing, so two consecutive frames can differ only by the camera's
+   shift. That is exactly what `MIN_CHURN_TO_STAND_ASIDE` was written to
+   guarantee and what the budget had been violating.
+
+**Two things fell out of getting the policy right.**
+
+- **The budget is sized off the viewport rather than being a constant.** A fixed 4
+  could not absorb what one frame can newly reveal — crossing a chunk boundary
+  uncovers a column, which is 3 chunks at 720p and 6 at 1440p — so on a tall
+  display the frame took the live sweep and the next went back to blits, once per
+  crossing. Measured at 2560x1440 while walking: 11 frames in 299 differed from
+  their predecessor, in clusters 1.16 s apart, which is exactly how long 8 tiles
+  take at 220 px/s. It is now one column plus one row, floored at 4 and capped at
+  16, read from the window rather than from `bounds` — a caller may legitimately
+  ask for a region far bigger than the screen and a budget scaled to the request
+  would bake the screenful the cap exists to prevent. Now 1 frame in 299, the cold
+  start.
+
+- **The churn threshold stopped answering the wrong question.** It counted changed
+  *cells* and swept the whole view past a threshold, which is a bad proxy for "how
+  much rebaking does this frame owe": a liquid tick that rewrites thirty cells
+  inside three chunks is three cheap rebakes. Because `LiquidSim` ticks every
+  0.22 s, that produced a full-view live sweep every thirteenth frame in **any
+  side-scroller with running water** — `...BBBBBBBBBBB L r BBBBBBBBBBB L r...` —
+  a second rhythmic flip, at 4.6 Hz, on a beat set by the water. **`SIM_PLAN.md`
+  S2 named this as a suspected flicker and marked it unconfirmed; it is now
+  confirmed and fixed.** The cell count is kept for the one thing chunk counting
+  cannot see — whether baking is *futile* because the ground is genuinely being
+  rewritten faster than it can be baked — and decides only whether the live sweep
+  bothers to bake.
+
+#### What was measured that turned out not to matter
+
+**The pixel disagreement between baked and live is zero on a textured level.**
+`TilePainter`'s axis-aligned blit has an integer, camera-free destination
+rectangle, so the two renderings are identical: 0 differing pixels of 921,600
+with a 16-pixel texture on every block. The 0.05% figure quoted in D3 and here
+belongs to the *procedural* path, where a cell is a filled polygon plus an
+antialiased darker outline, and at a chunk edge that outline blends against its
+neighbour live and against transparency in a chunk image. Nearly half of it sits
+within two pixels of a chunk boundary.
+
+That matters because it was the first hypothesis, and it was the weaker one. The
+flip-flop's visible cost is almost entirely **temporal**, not spatial — which is
+why a player on a texture pack and a player on the default procedural art both
+reported the same thing.
+
+#### What is left
+
+One transition per cache-warm: nothing is baked before the first frame, so the
+view is swept live until the budget catches up, and the hand-over is a single
+frame differing by 0.05% of pixels on procedural art and 0 on textured. It
+happens on entering a level. Baking everything on the first frame instead would
+trade it for the 13 ms spike the budget exists to prevent, and a level entry is
+the one moment a hitch is least visible — so it is a real choice either way, and
+it is recorded here rather than made silently.
+
+**Job D is now seven fixes**, and the section's lesson holds for the seventh
+time: *"the shimmer" was never one defect.* What this one adds is a sharper
+version of it. Every instrument that said "no shimmer here" was answering a
+narrower question than the one being asked — and D7's narrowness was not the
+scene, or the backend, or the zoom. It was **time**. A renderer measured only
+across two consecutive frames cannot see anything that happens on a beat.
+
+---
+
 ---
 
 ## 8. What each instrument proves
 
-Seven instruments, seven distinct questions. Using the wrong one is how a step
+Eight instruments, eight distinct questions. Using the wrong one is how a step
 gets declared finished while broken.
 
 | Instrument | Question it answers | Where it lives |
@@ -3638,6 +3793,7 @@ gets declared finished while broken.
 | **`CameraStabilityTest`** | Does the world hold still relative to *itself* while the camera moves? Every parity test compares two backends and is therefore blind to a defect they share — which D3 was | `CameraStabilityTest.java`, D3 |
 | **`GlSubPixelStabilityTest`** | Does the *GL backend* hold still, at a fractional zoom and a fractional camera step? The two questions above are asked at whole-pixel sizes, where the defect cannot occur | `gl/…/GlSubPixelStabilityTest.java`, D4 |
 | **`StepInterpolationTest`** | Is the world *sampled* evenly in time? Every instrument above asks about the picture, and this one is about when the picture is taken — a rigid sheet sampled unevenly is indistinguishable from a sheet that is not rigid | `StepInterpolationTest.java`, D6 |
+| **`TerrainCacheTest`, the tests at the bottom** | Does the renderer hold still over *seconds*, rather than over two frames? Every other instrument here runs at a stopped `animClock`, which is why a 12 Hz flip-flop survived six fixes | `TerrainCacheTest.java`, D7 |
 | **`GlScreenSpaceTest`** | Does a shader know which way up the frame is? The chain's parity harness uploads and reads back with two flips that cancel, so it cannot | `gl/…/GlScreenSpaceTest.java`, A7 |
 
 **`DrawStats` and `GlParityTest` answer different questions and B8 measured the
@@ -3731,7 +3887,31 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
       │        The engine had already found this bug for NETWORK entities
       │        and written the comment explaining it; the offline path is a
       │        120 Hz broadcast into a 60 Hz display and had no equivalent.
-      │        JOB D DELIVERED, by six fixes.
+      │        Necessary and not sufficient — see D7 below.
+      │  D7  the cache's own 12 Hz beat ← done, from "the blocks look like they
+      │        are VIBRATING", on two machines. Vibration is a frequency, and
+      │        that is what made it findable: TerrainCache.Key carried the
+      │        12 FPS animation frame number for EVERY chunk, animated or not,
+      │        so every chunk on screen went stale together twelve times a
+      │        second. The 4-per-frame rebuild budget could not keep up and drew
+      │        the overflow LIVE — the half-and-half frame this class measures
+      │        at 22 ms against 16 all-live and 2 all-baked. So the terrain pass
+      │        oscillated 2.4 -> 16.2 ms on a 12 Hz beat against a 16.67 ms
+      │        budget: not a drawing defect at all, a DELIVERY one, which is
+      │        D5's own rule coming back. Static level, camera not moving:
+      │        71 of 119 frames differed from the one before. Mean pass
+      │        8.19 -> 1.84 ms; re-bakes 152/s -> 3.6/s. Side-scroller-only
+      │        because layered() is false there, so the cached floor IS the
+      │        blocks and the whole picture sits on the thrashing layer.
+      │        Two more flips went with it: the budget is now sized off the
+      │        viewport (a fixed 4 could not absorb a revealed column, so a
+      │        1440p walk flipped once per crossing), and the churn rule stopped
+      │        counting cells — thirty cells in three chunks is three rebakes,
+      │        and counting cells swept the whole view every 13th frame in any
+      │        level with running water, which is SIM_PLAN S2's unconfirmed
+      │        suspicion, now confirmed. Invisible to twenty cache tests
+      │        because every one of them passes animClock = 0.
+      │        JOB D DELIVERED, by seven fixes.
       │
       ├─ A1  scene renders to a texture ← done. Offscreen when a chain has
       │        passes; straight at the window otherwise, because the resolve
