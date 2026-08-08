@@ -29,6 +29,38 @@ public final class LevelStore {
     /** Default on-disk location, under the project's resources folder. */
     public static final String DEFAULT_DIR = "src/main/resources/levels";
 
+    /**
+     * The files that live in a game type's folder without being levels.
+     *
+     * <p><b>This list existed in one place and was needed in two, and the place
+     * it was missing from is the one every menu reads.</b> A game type's folder
+     * holds its levels plus the sidecars that wire them together —
+     * {@code doors.json}, {@code custom.json}, {@code characters.json} — and
+     * {@link #list()} answered "every {@code .json} in here", so a type with
+     * character profiles reported a level called {@code characters}. Selecting
+     * it wrote the sidecar's path into {@link
+     * com.larsons.engine.config.GameProfile#lastLevelPath}, and the next launch
+     * printed
+     *
+     * <pre>
+     * PlayScene: failed to load src/main/resources/levels/test_3/characters.json:
+     *     Level is missing a 'tiles' array
+     * </pre>
+     *
+     * <p>which is the loader correctly refusing a roster of characters. The
+     * export path had the same question to answer and answered it properly, so
+     * a packaged game type never contained the phantom level that the menu
+     * offered — the two disagreed, and the folder's owner is the one that should
+     * be believed. It lives here now and the exporter asks.
+     *
+     * <p>Matched case-insensitively, because the folder may sit on a
+     * case-insensitive filesystem where {@code Characters.json} is the same file.
+     */
+    private static final java.util.Set<String> SIDECARS = java.util.Set.of(
+            DoorDirectory.FILE_NAME,
+            com.larsons.engine.config.CustomContentStore.FILE_NAME,
+            com.larsons.engine.character.CharacterStore.FILE_NAME);
+
     private final Path root;
     private final String gameType; // sanitized folder name
 
@@ -46,13 +78,28 @@ public final class LevelStore {
         return root.resolve(gameType);
     }
 
+    /**
+     * Whether a file in a game type's folder is one of its levels — a
+     * {@code .json} that is not one of the {@link #SIDECARS}.
+     *
+     * <p>Public because the exporter has to make the same judgement about the
+     * same folder, and two implementations of it is how the folder came to
+     * contain a level that could not be loaded.
+     */
+    public static boolean isLevelFile(Path file) {
+        String f = file.getFileName().toString();
+        return f.length() > ".json".length()
+                && f.toLowerCase(java.util.Locale.ROOT).endsWith(".json")
+                && !SIDECARS.contains(f.toLowerCase(java.util.Locale.ROOT));
+    }
+
     /** Level names (file stems) saved for this game type, sorted. */
     public List<String> list() {
         List<String> names = new ArrayList<>();
         Path dir = directory();
         if (!Files.isDirectory(dir)) return names;
         try (Stream<Path> files = Files.list(dir)) {
-            files.filter(p -> p.toString().endsWith(".json"))
+            files.filter(LevelStore::isLevelFile)
                     .sorted()
                     .forEach(p -> {
                         String f = p.getFileName().toString();

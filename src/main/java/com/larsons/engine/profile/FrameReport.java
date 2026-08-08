@@ -100,8 +100,9 @@ public final class FrameReport {
             out.append('\n');
             out.append("Simulation steps per frame\n");
             out.append("-".repeat(64)).append('\n');
-            out.append("mean %.2f   p50 %d   p95 %d   max %d   (cap 8)%n"
-                    .formatted(steps.mean(), steps.p50(), steps.p95(), steps.max()));
+            out.append("mean %.2f   p50 %d   p95 %d   max %d   (cap %d)%n"
+                    .formatted(steps.mean(), steps.p50(), steps.p95(), steps.max(),
+                            com.larsons.engine.core.GameLoop.MAX_CATCH_UP_STEPS));
             out.append("cost per step : %.3f ms   (update stage / steps)%n"
                     .formatted(steps.msPerStep(
                             snapshot.stage(Stage.UPDATE).meanMs())));

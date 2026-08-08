@@ -385,8 +385,66 @@ public final class World {
         }
     }
 
-    /** Advance everything one tick. Dead mobs drop loot and are removed. */
+    /**
+     * Remember where every body in this world currently is, so a renderer can
+     * draw the next frame between this step and the one before it rather than on
+     * top of whichever finished last — see
+     * {@link com.larsons.engine.sim.StepInterpolation}.
+     *
+     * <p>Called by {@link #step} so that no caller can forget it, and public
+     * because a scene that <em>skips</em> a step (paused, a cutscene running, a
+     * character choice open) has to record the standstill itself: the blend runs
+     * on every frame whether or not the simulation did, and two positions left
+     * straddling a step that was never taken would show as the world sliding back
+     * and forth while nothing is happening.
+     *
+     * <p>Costs four field copies per body and allocates nothing, which is why it
+     * is unconditional rather than gated on whether anything is going to move.
+     */
+    public void beginStep() {
+        for (Mob m : mobs) m.beginStep();
+        for (DroppedItem i : items) i.beginStep();
+        for (Projectile p : projectiles) p.beginStep();
+        for (Vehicle v : vehicles) v.beginStep();
+        stepCaptured = true;
+    }
+
+    /**
+     * Whether {@link #beginStep()} has already run for the tick {@link #step}
+     * is about to take, so that {@code step} does not take a second capture.
+     *
+     * <p><b>This latch is load-bearing and the bug without it is a quiet one.</b>
+     * A scene captures at the top of its tick — it has to, so that a tick it
+     * skips still holds the picture still — and then does work that moves bodies
+     * <em>before</em> calling {@code step}: driving a ridden vehicle is the case
+     * that exists. A second capture inside {@code step} would overwrite "where it
+     * was at the top of the tick" with "where the drive already took it", so the
+     * blend would span only the part of the tick that happened after {@code step}
+     * was called. The ridden vehicle would then sit a fraction of a step away from
+     * the rider glued to its saddle, which is a shimmer between two things that
+     * are supposed to be one thing.
+     */
+    private boolean stepCaptured;
+
+    /**
+     * Advance everything one tick. Dead mobs drop loot and are removed.
+     *
+     * <p>Opens with {@link #beginStep()}, which is where the set of bodies is
+     * known and so the only place a capture cannot miss one. Bodies the profile
+     * has switched off are captured anyway — they are not stepped, so their
+     * remembered position equals their current one and the blend is a no-op on
+     * them.
+     *
+     * <p>The {@code players} are deliberately <em>not</em> captured there. They
+     * are advanced by their owning scene before this is called (locally) or by
+     * the server's own input pass, so capturing them now would remember a
+     * position they have already left.
+     */
     public void step(double dt, List<PlayerState> players, GameProfile profile) {
+        // Only if the caller has not already taken this tick's capture; see the
+        // note on stepCaptured for why a second one is wrong rather than merely
+        // redundant. Cleared at the end, so the next tick captures again.
+        if (!stepCaptured) beginStep();
         if (profile.dayNightCycle && profile.lightingEnabled) {
             timeOfDay += dt / DAY_LENGTH;
             timeOfDay -= Math.floor(timeOfDay);
@@ -408,6 +466,7 @@ public final class World {
             phase("projectiles", () -> stepProjectiles(dt, gravityOn, players, profile));
         }
         stepRest(dt, players, profile, gravityOn);
+        stepCaptured = false; // the next tick takes its own capture
     }
 
     private void stepMobs(double dt, List<PlayerState> players, boolean gravityOn,

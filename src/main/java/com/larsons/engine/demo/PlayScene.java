@@ -461,13 +461,29 @@ public class PlayScene extends AbstractScene {
         mgView = MiniGameView.fromMap(localMinigame.toWireMap());
     }
 
+    /**
+     * The level to play offline: whatever "Load Level" pointed at last, falling
+     * back to the bundled sample.
+     *
+     * <p><b>A pointer that does not load is cleared rather than retried.</b> It
+     * used to be retried, so a profile that had once been aimed at something
+     * that is not a level printed the same failure on every launch and every
+     * return to the menu, forever, with no way for a player to clear it. (The
+     * way it got aimed there was {@code LevelStore.list()} offering a sidecar as
+     * a level — fixed at the source, but a profile written before that fix still
+     * carries the bad path.) Forgetting it turns a permanent error into one line
+     * seen once.
+     */
     private Level loadOfflineLevel() {
         String last = profile().lastLevelPath;
         if (last != null && !last.isEmpty() && Files.exists(Path.of(last))) {
             try {
                 return LevelLoader.load(last);
             } catch (RuntimeException e) {
-                System.err.println("PlayScene: failed to load " + last + ": " + e.getMessage());
+                System.err.println("PlayScene: failed to load " + last + ": " + e.getMessage()
+                        + " — forgetting it and loading " + levelPath);
+                profile().lastLevelPath = "";
+                ctx.save();
             }
         }
         return LevelLoader.load(levelPath);
@@ -479,8 +495,35 @@ public class PlayScene extends AbstractScene {
         if (camera != null) camera.setViewport(w, h);
     }
 
+    /**
+     * Collapse the interpolation to a standstill: every body's "one step ago"
+     * becomes its position now.
+     *
+     * <p>Called at the top of every tick. On a tick that goes on to simulate,
+     * {@code PlayerPhysics.step} and {@code World.step} then move the bodies away
+     * from what was just recorded and the blend spans the real step. On a tick
+     * that returns early it is the whole story, and the picture stands still
+     * instead of oscillating inside a step nothing took.
+     */
+    private void holdInterpolationStill() {
+        if (me != null) me.beginStep();
+        if (world != null) world.beginStep();
+        // The client-predicted vehicle is not in the world's lists, so it is not
+        // covered by world.beginStep(). It has to be: the rider is glued to its
+        // saddle and the rider is interpolated, so a raw vehicle would shimmer
+        // against the player sitting on it.
+        if (predictedVehicle != null) predictedVehicle.beginStep();
+    }
+
     @Override
     public void update(double dt, InputManager input) {
+        // Unconditionally, before anything below can decide to skip the
+        // simulation. render() blends from "one step ago" to "now", so a tick
+        // that moves nothing has to leave those two equal — otherwise the frames
+        // of a pause, a character choice or a cutscene would slide the world back
+        // and forth inside a step that never happened, which is the very artefact
+        // the blending exists to remove. See StepInterpolation.
+        holdInterpolationStill();
         if (leaving) return; // session torn down; waiting out the scene fade
         if (net != null && !net.client().isConnected()) {
             if (KeyBinds.pressed(input, GameAction.MENU_SELECT)
@@ -667,6 +710,11 @@ public class PlayScene extends AbstractScene {
         // step below is what carries them out.
         stepMelee(p, in, simPerspective != Perspective.SIDE_SCROLL || !p.gravityEnabled, dt);
         prevVy = me.vy;
+        // No interpolation capture here: holdInterpolationStill() already took
+        // this tick's, at the top, before anything in the tick could move the
+        // body. Capturing again would shorten the interval the blend spans to
+        // less than the one the world's bodies use, and the two have to match or
+        // the player drifts against the level by the difference.
         double preX = me.x, preY = me.y;
         boolean riding = stepRiding(in, p, dt);
         if (!riding) {
@@ -770,6 +818,13 @@ public class PlayScene extends AbstractScene {
         if (p.particlesEnabled) particles.update(dt);
 
         double size = ps();
+        // On the simulation's own position, and render() moves it again onto the
+        // interpolated one. Both are wanted: everything in update() that maps
+        // between the screen and the world — a mining click, a placed block, the
+        // aim of a shot, the audio listener's reach — has to agree with the
+        // authoritative step rather than with a frame drawn between two of them,
+        // and the shimmer is a property of what was *drawn*. See
+        // StepInterpolation, and render() for the other half.
         camera.centerOn(me.x + size / 2.0, me.y + size / 2.0);
         // A mounted player sits (idle art); otherwise classify the action so
         // the matching skin animation plays, restarting on state changes.
@@ -1936,6 +1991,25 @@ public class PlayScene extends AbstractScene {
      */
     private final TerrainCache terrainCache = new TerrainCache();
 
+    /**
+     * How far past the last fixed simulation step this frame is being drawn,
+     * 0..1 — the loop's {@code alpha}, held for the frame so the world-drawing
+     * helpers can read it without every one of them taking a parameter, exactly
+     * as {@link #animClock} is held.
+     *
+     * <p>See {@link com.larsons.engine.sim.StepInterpolation}: this is the number
+     * that turns a world sampled at an uneven cadence — the shimmer — into one
+     * that scrolls by the same amount every frame.
+     */
+    private double renderAlpha;
+
+    /** The local player's drawn position this frame: interpolated, not stepped. */
+    private double drawX() { return me.renderX(renderAlpha); }
+
+    private double drawY() { return me.renderY(renderAlpha); }
+
+    private double drawZ() { return me.renderZ(renderAlpha); }
+
     @Override
     public void render(DrawTarget target, float alpha) {
         if (leaving) {
@@ -1945,7 +2019,19 @@ public class PlayScene extends AbstractScene {
                     level != null ? level.background : Color.BLACK);
             return;
         }
+        renderAlpha = alpha;
         GameProfile p = profile();
+        // The camera is placed for this frame before anything projects through
+        // it — including the lighting pass, which converts world positions to
+        // screen ones. update() left it on the last simulation step; this moves
+        // it to where the player is at *this frame's* moment in time, which is
+        // what makes the world scroll evenly instead of in the 1/2/3-step jumps
+        // the accumulator hands out. A running cutscene owns the camera and is
+        // left alone: its director drives it from a timeline of its own.
+        if (cutscenes == null || cutscenes.active() == null) {
+            double size = ps();
+            camera.centerOn(drawX() + size / 2.0, drawY() + size / 2.0);
+        }
         feedLighting(p);
 
         target.fillRect(0, 0, viewportWidth, viewportHeight, level.background);
@@ -1978,17 +2064,20 @@ public class PlayScene extends AbstractScene {
         if (mgView != null) MiniGameHud.drawWorld(target, camera, level, mgView, animClock);
         if (net != null) drawRemotePlayers(target, standing);
         if (mgView != null) {
-            MiniGameHud.drawTeamRing(target, camera, me.x + ps() / 2, me.y + ps(),
+            MiniGameHud.drawTeamRing(target, camera, drawX() + ps() / 2, drawY() + ps(),
                     ps(), mgView.teamOf(me.id), camera.zoom);
         }
         // The local player, wearing whatever the object in their hands says
         // they should look like while doing this (see MeleeSprites), with the
-        // object itself drawn in hand on top.
-        standing.at(footDepth(me.x, me.y), () -> {
-            drawPlayer(target, me.x, me.y, me.z, MeleeSprites.playerFrame(
+        // object itself drawn in hand on top. Drawn at the same interpolated
+        // position the camera was centred on, so the two cannot drift against
+        // each other by the step the interpolation is spanning.
+        double meX = drawX(), meY = drawY(), meZ = drawZ();
+        standing.at(footDepth(meX, meY), () -> {
+            drawPlayer(target, meX, meY, meZ, MeleeSprites.playerFrame(
                     me.characterKey, meleeItem, animState, me.facing, animStateClock,
                     melee.progress(), (int) ps(), character.body), null);
-            drawHeldObject(target, me.x, me.y, me.z, ps(), me.facing, meleeItem,
+            drawHeldObject(target, meX, meY, meZ, ps(), me.facing, meleeItem,
                     melee.action(), melee.progress(), meleeProfile(p));
         });
         // The depth queue is where the plan views actually pay: everything
@@ -2176,7 +2265,10 @@ public class PlayScene extends AbstractScene {
         // terrain it flies over (and bloom, if enabled, blooms it).
         if (net == null) {
             for (Projectile pr : world.projectiles()) {
-                addProjectileLight(lighting, pr.def, pr.x, pr.y, ts);
+                // At the interpolated position, so a fireball's glow travels with
+                // the fireball rather than a step ahead of it.
+                addProjectileLight(lighting, pr.def, pr.renderX(renderAlpha),
+                        pr.renderY(renderAlpha), ts);
             }
         } else {
             Snapshot snap = net.client().latest();
@@ -2187,7 +2279,7 @@ public class PlayScene extends AbstractScene {
             }
         }
         // Player glow.
-        camera.worldToScreen(me.x + ps() / 2, me.y + ps() / 2, corner);
+        camera.worldToScreen(drawX() + ps() / 2, drawY() + ps() / 2, corner);
         lighting.addLight(corner[0], corner[1], 2.5 * ts * camera.zoom,
                 new Color(255, 240, 210));
     }
@@ -2550,29 +2642,45 @@ public class PlayScene extends AbstractScene {
         }
     }
 
-    /** Mobs + items + projectiles + vehicles: the offline world's, or the snapshot's. */
+    /**
+     * Mobs + items + projectiles + vehicles: the offline world's, or the
+     * snapshot's.
+     *
+     * <p>Both branches now interpolate, against their own clock. The replicated
+     * branch has always straddled the two buffered snapshots either side of
+     * render time, because drawing the raw latest one "read as constant stutter"
+     * — see the comment where it does it. The offline branch drew the raw latest
+     * <em>simulation step</em>, which is the same mistake against a 120 Hz
+     * broadcast instead of a 30 Hz one, and is now blended with the loop's own
+     * {@code alpha}. See {@link com.larsons.engine.sim.StepInterpolation}.
+     */
     private void drawWorldEntities(DrawTarget target, GameProfile p, DepthPass into) {
         if (net == null) {
+            double a = renderAlpha;
             for (Vehicle v : world.vehicles()) {
-                into.at(footDepth(v.x, v.y, v.def.size()), () ->
-                        drawVehicleSprite(target, v.def, v.x, v.y, v.facingLeft));
+                double vx = v.renderX(a), vy = v.renderY(a);
+                into.at(footDepth(vx, vy, v.def.size()), () ->
+                        drawVehicleSprite(target, v.def, vx, vy, v.facingLeft));
             }
             for (DroppedItem item : world.items()) {
-                into.at(footDepth(item.x, item.y, DroppedItem.SIZE), () ->
-                        drawItemSprite(target, item.key, item.x, item.y, item.count));
+                double ix = item.renderX(a), iy = item.renderY(a);
+                into.at(footDepth(ix, iy, DroppedItem.SIZE), () ->
+                        drawItemSprite(target, item.key, ix, iy, item.count));
             }
             for (Mob m : world.mobs()) {
                 // A mob mid-move draws that move, on its weapon's own sheets.
                 String state = m.meleeAction().isEmpty()
                         ? stateKeyFor(m.state.ordinal(), m.hurting()) : m.meleeAction();
-                into.at(footDepth(m.x, m.y, m.def.size()), () ->
-                        drawMobSprite(target, m.def, m.x, m.y, m.facing, m.health, m.hurting(),
+                double mx = m.renderX(a), my = m.renderY(a);
+                into.at(footDepth(mx, my, m.def.size()), () ->
+                        drawMobSprite(target, m.def, mx, my, m.facing, m.health, m.hurting(),
                                 state, m.statusBits(), m.weaponKey(),
                                 m.melee.action(), m.meleeProgress()));
             }
             for (Projectile pr : world.projectiles()) {
-                into.at(footDepth(pr.x, pr.y, 0), () ->
-                        drawProjectileSprite(target, pr.def.key(), pr.x, pr.y, pr.z, pr.vx, pr.vy));
+                double px = pr.renderX(a), py = pr.renderY(a), pz = pr.renderZ(a);
+                into.at(footDepth(px, py, 0), () ->
+                        drawProjectileSprite(target, pr.def.key(), px, py, pz, pr.vx, pr.vy));
             }
         } else {
             // Replicated entities interpolate between the two buffered
@@ -2598,10 +2706,13 @@ public class PlayScene extends AbstractScene {
                 }
             }
             if (predictedVehicle != null) {
-                into.at(footDepth(predictedVehicle.x, predictedVehicle.y,
-                        predictedVehicle.def.size()), () ->
-                        drawVehicleSprite(target, predictedVehicle.def, predictedVehicle.x,
-                                predictedVehicle.y, predictedVehicle.facingLeft));
+                // From our own prediction rather than the snapshot, so it never
+                // lags the player glued to its saddle — and interpolated on the
+                // same alpha as that player, for the same reason.
+                Vehicle mount = predictedVehicle;
+                double mx = mount.renderX(renderAlpha), my = mount.renderY(renderAlpha);
+                into.at(footDepth(mx, my, mount.def.size()), () ->
+                        drawVehicleSprite(target, mount.def, mx, my, mount.facingLeft));
             }
             old = viewsById(from.items());
             for (EntityView item : to.items()) {
@@ -2813,7 +2924,7 @@ public class PlayScene extends AbstractScene {
     /** A short arc in front of the player while a mining or firing stroke plays. */
     private void drawSwing(DrawTarget target) {
         double size = ps();
-        camera.worldToScreen(me.x + size / 2, me.y + size / 2, corner);
+        camera.worldToScreen(drawX() + size / 2, drawY() + size / 2, corner);
         int r = (int) (size * camera.zoom * 0.9);
         int start = me.facingLeft ? 120 : -60;
         target.drawArc(corner[0] - r, corner[1] - r, r * 2, r * 2, start, 120,
@@ -2828,7 +2939,7 @@ public class PlayScene extends AbstractScene {
      */
     private void drawMeleeArc(DrawTarget target, MeleeProfile profile) {
         double size = ps();
-        camera.worldToScreen(me.x + size / 2, me.y + size / 2, corner);
+        camera.worldToScreen(drawX() + size / 2, drawY() + size / 2, corner);
         int r = (int) Math.round(profile.reach() * camera.zoom);
         MeleeAction action = melee.action();
         double t = melee.progress();

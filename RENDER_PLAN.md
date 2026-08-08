@@ -3432,12 +3432,193 @@ shimmer here" was answering a narrower question than the one being asked, and
 the last of them was answered by eliminating the picture entirely rather than by
 finding one more thing wrong with it.
 
+### D6 — done. The `alpha` every scene was handed and none of them read
+
+**Reported after D5 shipped, of a GL profile run:** *"the shimmer or block
+shaking only seems to happen in side-scroller games."*
+
+**That sentence is the finding, and the operative word is "only".** D3 and D4
+were defects in the *picture*, and a defect in the picture cannot be
+format-specific: `Camera` projects all three formats through the same `place`,
+`GlTarget` rasterises all three through the same quad. Nothing in the drawing
+path knows which format it is drawing. So whatever was left had to be in
+something a side-scroller does and the plan views do not — and what a
+side-scroller does is **pan continuously along one axis, at a constant speed, for
+as long as a run key is held.**
+
+That is not a hint about geometry. It is a hint about *time*, and D5 had already
+named the shape of it without finding this instance: *a world drawn rigidly and
+delivered unevenly looks like a world that is not rigid.* D5 fixed the delivery
+(two pacers). What was still uneven was the **sampling**.
+
+#### The defect, and it is a promise the engine made and never kept
+
+`GameLoop` runs the simulation in fixed `1/updateRate` steps and renders
+separately, handing each frame an interpolation factor:
+
+```java
+double alpha = Math.max(0.0, Math.min(1.0, accumulator / nsPerUpdate));
+render.render(alpha);
+```
+
+`Scene.render(DrawTarget, float alpha)` documents it — *"interpolation factor in
+[0,1] between sim steps"*. `GameLoop`'s class note promises motion *"stays smooth
+when render and update rates differ"*. `EngineConfig` explains that the fixed
+rate is *"decoupled from rendering"*.
+
+**No scene has ever read it.** `PlayScene.render` took the parameter and shadowed
+the name with a local `int alpha` for a HUD colour. Every frame drew the last
+completed 120 Hz simulation step, whole, while the display presented frames on an
+entirely unrelated clock.
+
+#### Why that is a shimmer rather than a latency
+
+A frame does not contain a whole number of simulation steps and cannot be made
+to. The step is 8.333 ms and a 60 Hz refresh is 16.667 ms, so a frame nominally
+owes exactly two — but the two clocks are unrelated, the remainder in the
+accumulator random-walks, and whenever it crosses a boundary the frame runs three
+steps or one. The world then scrolls **1.8 px, 3.7 px or 5.5 px on successive
+frames where it should scroll 3.7 px every time**, and the camera follows the
+player, so every static tile on screen carries that unevenness with it. The
+blocks are not moving relative to each other at all — they are rigid, and D3
+proved it. The whole sheet is being sampled at the wrong moments.
+
+Measured over 20,000 frames against the loop's own arithmetic, with **0.2 ms** of
+jitter on the frame clock — a well-behaved machine, not a struggling one — at
+220 px/s and zoom 1.7:
+
+| clock | steps per frame | scroll, px/frame | uneven | worst |
+|---|---|---|---:|---:|
+| 60 Hz display, before | 1: 209 · 2: 19577 · 3: 214 | −10:78 −9:136 −7:4567 −6:15009 −4:22 −3:187 | **3.62%** | **7 px** |
+| 60 Hz display, after | *(unchanged)* | −7:4684 −6:15314 −5:1 | 0.01% | 2 px |
+| 144 Hz display, before | 0: 3329 · 1: 16671 | — | **27.63%** | 2 px |
+| 144 Hz display, after | *(unchanged)* | — | 0.00% | 1 px |
+
+Roughly **one frame in forty, twice a second**, the world jumped. And the 144 Hz
+row is the one not to miss: a 120 Hz simulation cannot feed a faster display, so
+**better than one frame in four contained no new step at all** and repeated the
+one before it. That is the same defect at its most severe, on the monitor a
+player is most likely to be pleased with.
+
+#### Why the plan views hid it
+
+Three things compound, and none of them is about the projection:
+
+- **Sustained single-axis motion is what makes it legible.** Holding → in a
+  side-scroller pans the view at a constant 220 px/s for seconds. Plan-view play
+  is short two-axis bursts, where an uneven step reads as part of the input
+  rather than as the world shaking.
+- **A side-scroller is the only format that draws the parallax backdrop**, whose
+  slow layers give the eye a near-static reference to measure the world's motion
+  against.
+- **Isometric halves the horizontal rate** per unit of world movement, so the
+  same error is a smaller fraction of a smaller number.
+
+#### The engine had already found this bug once, on the other side of the wire
+
+`PlayScene.drawWorldEntities` interpolates *replicated* entities between the two
+buffered snapshots straddling render time, and says why:
+
+> *drawing the raw latest snapshot stepped everything at the 30 Hz broadcast
+> rate, which read as constant stutter next to the 120 fps local player.*
+
+That is this defect, diagnosed correctly, and fixed for network state only. The
+offline simulation is a 120 Hz broadcast into a 60 Hz display and had no
+equivalent. **The comment was right and its scope was the bug.**
+
+#### The fix
+
+Keep the promise. `StepInterpolation` holds the argument; every body that moves
+keeps the position it held one step ago; a frame draws at
+`prev + (cur - prev) * alpha`.
+
+- **The camera focus first, before anything projects through it** — including the
+  lighting pass, which converts world positions to screen ones. `update()` still
+  centres the camera on the *simulated* position, because everything that maps
+  between screen and world in `update` (a mining click, a placed block, a shot's
+  aim, the audio listener's reach) has to agree with the authoritative step
+  rather than with a frame drawn between two of them. `render()` moves it onto
+  the interpolated one. Both are wanted, and the shimmer is a property of what
+  was drawn.
+- **The local player on the same alpha as the camera**, so the two cannot drift
+  against each other by the step being spanned. Then mobs, dropped items,
+  projectiles, vehicles, and the client-predicted mount a rider is glued to.
+- **`FrameCadence`** — the accumulator arithmetic, lifted out of `GameLoop` so it
+  can be measured without a clock or a thread. Same split `FramePacingTest`
+  already makes: *what is checked is the decision, not the timing*.
+
+**Interpolating rather than extrapolating, deliberately.** Predicting
+`cur + alpha*(cur - prev)` removes even the one step of lag, and overshoots every
+time the simulation changes its mind — the frame a jump peaks on, the frame a
+runner meets a wall, the frame a shot lands. Those are the frames the eye is
+watching. 8.3 ms of constant lag is invisible; a pop there is not.
+
+**One guard covers every relocation.** A spawn, a respawn, a door warp, a level
+load, a server correction: each moves a body an arbitrary distance with no
+simulation in between, and blending across one would slide the sprite over the map
+for a frame. Rather than annotate every call site that can do it — and miss the
+next one — the arithmetic notices: movement in one fixed step is bounded by the
+fastest thing in the game (under 8 px at 120 Hz), and beyond 64 px it is not
+movement. That also covers a body whose previous position was never captured at
+all, which is why no constructor has to remember to prime it.
+
+**Nothing here touches the simulation**, which is `SIM_PLAN` invariant 1 and is
+not optional: the blend reads two positions and returns a third for drawing. A
+server that renders nothing calls none of it, and a client's simulated result is
+bit-identical with it and without it. `askingWhereToDrawABodyDoesNotMoveIt` pins
+that.
+
+#### What is proved, and what is not
+
+`StepInterpolationTest` makes the strong claim rather than "it looks smoother":
+**the interpolated position of a body moving at constant speed is a linear
+function of elapsed real time, one fixed step behind it, whatever number of steps
+each frame ran.** Let a frame end having run `N` steps with `a` of a step left in
+the accumulator; the drawn position is `(N−1)·s + a·s = s·(N + a − 1)`, and real
+elapsed time measured in steps is exactly `N + a` — that is what the accumulator
+holding the remainder *means*. So drawn position is `s·(t − 1)`: no dependence on
+the step count at all. The test asserts it to 1e-6 on every one of 20,000 frames.
+
+Together with `CameraStabilityTest` — rigid in space — that is the whole of
+"smooth": a rigid sheet, sampled evenly.
+
+**Two things are deliberately left, stated rather than discovered later.**
+
+- **Particles are not interpolated.** They advance per step and are drawn raw, so
+  they carry their own step of judder. They are small, short-lived and fast, and
+  the eye does not track one. If a player reports otherwise, the mechanism is the
+  same and the plumbing is a `prevX/prevY` on the emitter's array.
+- **The editor's camera is not interpolated either**, and that is a choice rather
+  than an omission: it is panned by a held key rather than by a simulated body,
+  and blending it would put every placed block a fraction of a step from where
+  the cursor was when the click landed. An editor that draws exactly where it
+  will paint is worth more than one that scrolls slightly more smoothly. The
+  play-test inside the editor *is* interpolated, because that is play.
+
+**And what the 1 px in the table is.** A 220 px/s pan at zoom 1.7 is 6.23 px a
+frame, and an integer lattice can only render that as an alternation of 6 and 7.
+That alternation is regular, and regular quantisation is what the eye reads as
+smooth motion — it is the same staircase every pixel-snapped 2D game draws, and
+it is the price of the rigid lattice D3 bought. Removing it means a fractional
+global translate at present time and bilinear resampling of every sprite, which
+trades a defect nobody can see for blurred pixel art everybody can. Not done, and
+not a defect.
+
+**Job D took six fixes.** D0 (nothing, correctly), D1 (presentation), D3
+(projection), D4 (the GL sampler), D5 (pacing), D6 (sampling). The lesson the
+section keeps is unchanged and now has one more instance: *"the shimmer" was never
+one defect.* This one hid behind a parameter that was computed, documented,
+passed to every scene, and read by none of them — which is the one place a
+measurement was never going to look, because the code all appeared to be there.
+
+---
+
 ---
 
 ## 8. What each instrument proves
 
-Six instruments, six distinct questions. Using the wrong one is how a step gets
-declared finished while broken.
+Seven instruments, seven distinct questions. Using the wrong one is how a step
+gets declared finished while broken.
 
 | Instrument | Question it answers | Where it lives |
 |-----------|---------------------|----------------|
@@ -3456,6 +3637,7 @@ declared finished while broken.
 | **`GlResizeTest`** | Does the backend survive the window *changing size*? Every other instrument here renders at a fixed size for the whole of its life | `gl/…/GlResizeTest.java`, §10 |
 | **`CameraStabilityTest`** | Does the world hold still relative to *itself* while the camera moves? Every parity test compares two backends and is therefore blind to a defect they share — which D3 was | `CameraStabilityTest.java`, D3 |
 | **`GlSubPixelStabilityTest`** | Does the *GL backend* hold still, at a fractional zoom and a fractional camera step? The two questions above are asked at whole-pixel sizes, where the defect cannot occur | `gl/…/GlSubPixelStabilityTest.java`, D4 |
+| **`StepInterpolationTest`** | Is the world *sampled* evenly in time? Every instrument above asks about the picture, and this one is about when the picture is taken — a rigid sheet sampled unevenly is indistinguishable from a sheet that is not rigid | `StepInterpolationTest.java`, D6 |
 | **`GlScreenSpaceTest`** | Does a shader know which way up the frame is? The chain's parity harness uploads and reads back with two flips that cancel, so it cannot | `gl/…/GlScreenSpaceTest.java`, A7 |
 
 **`DrawStats` and `GlParityTest` answer different questions and B8 measured the
@@ -3513,7 +3695,7 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
       │        into. The picture was eliminated first — scene, cache, chain,
       │        lighting, bloom, vertical, diagonal: 0 px/step on every one.
       │        A rigid world delivered unevenly looks like a world that is
-      │        not rigid. JOB D DELIVERED, by five fixes.
+      │        not rigid. Necessary and not sufficient — see D6 below.
       │  D4  the GL sampler            ← done, and D3 was not enough on its
       │        own: "the shimmer still happens with every block". A 16-texel
       │        block drawn 54.4 px wide puts texel boundaries exactly on
@@ -3532,6 +3714,24 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
       │        arithmetic is exactly right. Fixed with TerrainCache's own
       │        lattice, moved down into Camera so everything gets it.
       │        Necessary and not sufficient — see D4 above.
+      │  D6  the alpha nobody read      ← done, and it was reported as
+      │        "only in side-scroller games", which is what named it: a
+      │        defect in the PICTURE cannot be format-specific, so what was
+      │        left had to be in something only a side-scroller does, and
+      │        that is pan continuously along one axis for seconds at a
+      │        time. GameLoop computed an interpolation alpha, Scene.render
+      │        documented it, EngineConfig explained it, and no scene ever
+      │        read one: every frame drew the last completed 120 Hz step
+      │        whole. A frame holds no whole number of steps, so 2.46% of
+      │        them scrolled by the wrong amount on a 60 Hz panel (worst:
+      │        7 px where 6 was due) and 27.63% on a 144 Hz one, where a
+      │        120 Hz simulation cannot keep up and one frame in four was a
+      │        duplicate. Now blended: the drawn position is provably linear
+      │        in real time, one step behind, whatever the step count was.
+      │        The engine had already found this bug for NETWORK entities
+      │        and written the comment explaining it; the offline path is a
+      │        120 Hz broadcast into a 60 Hz display and had no equivalent.
+      │        JOB D DELIVERED, by six fixes.
       │
       ├─ A1  scene renders to a texture ← done. Offscreen when a chain has
       │        passes; straight at the window otherwise, because the resolve

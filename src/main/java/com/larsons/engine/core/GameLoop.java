@@ -69,6 +69,13 @@ public final class GameLoop implements Runnable {
     private static final int PACED_SAFETY_FPS = 240;
 
     /**
+     * Simulation steps one frame may run to catch up — the spiral-of-death cap.
+     * Named because {@link FrameCadence} enforces it and {@code FrameProfiler}
+     * reports against it, and three copies of the number is two too many.
+     */
+    public static final int MAX_CATCH_UP_STEPS = 8;
+
+    /**
      * Optional frame instrumentation. The loop owns the two stages nobody else
      * can see: the fixed-step simulation, and the time the limiter spends
      * waiting — the headroom that says whether a frame had anything to spare.
@@ -172,10 +179,12 @@ public final class GameLoop implements Runnable {
 
     @Override
     public void run() {
-        final double nsPerUpdate = 1_000_000_000.0 / updateRate;
+        // The accumulator arithmetic lives in its own class so it can be
+        // measured without a clock or a thread — see FrameCadence, and
+        // StepInterpolation for what rides on the alpha it produces.
+        final FrameCadence cadence = new FrameCadence(updateRate);
 
         long lastTime = System.nanoTime();
-        double accumulator = 0;
 
         long fpsTimer = System.nanoTime();
         int frames = 0;
@@ -187,15 +196,13 @@ public final class GameLoop implements Runnable {
 
         while (running) {
             long frameStart = System.nanoTime();
-            accumulator += (frameStart - lastTime);
+            long elapsed = frameStart - lastTime;
             lastTime = frameStart;
 
             FrameProfiler prof = profiler;
 
-            int maxUpdates = 8; // cap catch-up to avoid a spiral of death
-            int stepsThisFrame = 0;
-            while (accumulator >= nsPerUpdate && maxUpdates-- > 0) {
-                stepsThisFrame++;
+            int stepsThisFrame = cadence.stepsFor(elapsed, MAX_CATCH_UP_STEPS);
+            for (int i = 0; i < stepsThisFrame; i++) {
                 // Every catch-up step is timed; they sum into one frame's
                 // update cost, which is what a frame actually paid.
                 long updateStart = prof == null ? 0L : prof.begin();
@@ -204,15 +211,13 @@ public final class GameLoop implements Runnable {
                 } finally {
                     if (prof != null) prof.record(FrameProfiler.Stage.UPDATE, updateStart);
                 }
-                accumulator -= nsPerUpdate;
             }
             // SIM_PLAN S1: without this, a 21 ms update stage is either one slow
             // step or eight ordinary ones and the report cannot say which —
             // which is a different bug with a different fix in each case.
             if (prof != null) prof.recordUpdateSteps(stepsThisFrame);
 
-            double alpha = Math.max(0.0, Math.min(1.0, accumulator / nsPerUpdate));
-            render.render(alpha);
+            render.render(cadence.alpha());
 
             frames++;
             if (frameStart - fpsTimer >= 1_000_000_000L) {

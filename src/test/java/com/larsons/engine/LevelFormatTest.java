@@ -1,5 +1,7 @@
 package com.larsons.engine;
 
+import com.larsons.engine.character.CharacterStore;
+import com.larsons.engine.config.CustomContentStore;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.config.GameTypeStore;
@@ -8,6 +10,7 @@ import com.larsons.engine.entity.Mob;
 import com.larsons.engine.entity.MobDef;
 import com.larsons.engine.entity.MobRegistry;
 import com.larsons.engine.graphics.Perspective;
+import com.larsons.engine.level.DoorDirectory;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelGenerator;
@@ -104,6 +107,45 @@ class LevelFormatTest {
             assertEquals(1, ofFormat.size(), format + " should have one level");
             assertEquals(format, store.formatOf(ofFormat.get(0)));
         }
+    }
+
+    /**
+     * The sidecars that live beside a game type's levels are not levels.
+     *
+     * <p><b>This is the bug that reached a player, and the shape of it is worth
+     * recording.</b> A game type's folder holds its levels plus {@code doors.json},
+     * {@code custom.json} and {@code characters.json}, and {@code LevelStore.list}
+     * answered "every {@code .json} in here". So a game type with character
+     * profiles offered a level called {@code characters} in the level menu;
+     * selecting it wrote that path into {@code lastLevelPath}; and every launch
+     * afterwards printed
+     *
+     * <pre>
+     * PlayScene: failed to load src/main/resources/levels/test_3/characters.json:
+     *     Level is missing a 'tiles' array
+     * </pre>
+     *
+     * <p>The loader was right and the listing was wrong. The exporter had already
+     * got this right with a rule of its own — two answers to one question, and the
+     * one every menu read was the bad one. Both now ask {@code LevelStore}.
+     */
+    @Test
+    void theFilesThatLiveBesideALevelAreNotOfferedAsLevels(@TempDir Path dir) throws Exception {
+        LevelStore store = new LevelStore(dir.toString(), "test_3");
+        store.save(LevelFormat.SIDE_SCROLLER.starterLevel("cavern", 24, 16, 32));
+        java.nio.file.Files.writeString(
+                store.directory().resolve(CharacterStore.FILE_NAME), "{\"profiles\":[]}");
+        java.nio.file.Files.writeString(
+                store.directory().resolve(DoorDirectory.FILE_NAME), "{\"doors\":[]}");
+        java.nio.file.Files.writeString(
+                store.directory().resolve(CustomContentStore.FILE_NAME), "{\"blocks\":[]}");
+
+        assertEquals(List.of("cavern"), store.list(),
+                "a sidecar was offered as a level — selecting it is what put "
+                        + "characters.json into lastLevelPath");
+        assertEquals(List.of("cavern"), store.list(LevelFormat.SIDE_SCROLLER),
+                "and the by-format listing agrees, without opening a sidecar to "
+                        + "guess its format");
     }
 
     // --- loading a level loads its format ----------------------------------------

@@ -151,11 +151,30 @@ public final class MacGlLauncher {
      * but a line on stderr that says "can't fully enable" is not something to
      * leave a player reading, and the fix is to ask the question earlier.
      *
-     * <p>{@code GraphicsEnvironment.isHeadless()} is the cheapest question that
-     * settles it, and settling it is the point rather than the answer, which is
-     * why the answer is discarded. It also pins the decision: a later change to
-     * the property cannot quietly move the engine to a different mode halfway
-     * through a launch.
+     * <p><b>{@code GraphicsEnvironment.isHeadless()} was the question asked here
+     * first, and it is the wrong one — which is why the warning survived the fix
+     * that was supposed to remove it.</b> That call resolves and caches
+     * {@code GraphicsEnvironment}'s own idea of headlessness, and it does so
+     * entirely in Java: it reads the system property and returns. It never loads
+     * the platform toolkit, so on macOS it never reaches
+     * {@code +[AWTStarter starter:headless:]}, which is the code that calls
+     * {@code markAppIsDaemon} and the only code that can print the line above.
+     * Settling the property is therefore not the same as settling <em>AWT</em>,
+     * and only the second one races GLFW.
+     *
+     * <p>{@link java.awt.Toolkit#getDefaultToolkit()} is the call that does it.
+     * It is what forces {@code sun.lwawt.macosx.LWCToolkit} to load, and loading
+     * it is what runs the starter — in headless mode, marking the process as a
+     * daemon instead of standing up a run loop. Called here, before the backend
+     * probe has had a chance to {@code glfwInit}, there is no {@code
+     * NSApplication} yet, the mark succeeds, and nothing is printed. Called
+     * implicitly later, by the first font metric or image the game asks for,
+     * there is one, and the warning is AWT telling the truth about a race it
+     * lost.
+     *
+     * <p>{@code isHeadless()} is still asked, first, because it also pins the
+     * decision: a later change to the property cannot quietly move the engine to
+     * a different mode halfway through a launch.
      */
     public static void settleHeadlessNow() {
         // Only when headless is actually in force. Asking the question at all
@@ -165,9 +184,15 @@ public final class MacGlLauncher {
         if (!Boolean.getBoolean(HEADLESS_PROPERTY)) return;
         try {
             java.awt.GraphicsEnvironment.isHeadless();
+            // The one that actually loads the macOS toolkit, and so the one that
+            // has to win the race against glfwInit. See the note above.
+            java.awt.Toolkit.getDefaultToolkit();
         } catch (Throwable ignored) {
             // A JDK with no AWT at all is not a reason to fail to launch, and
-            // the property is set either way.
+            // the property is set either way. Neither is a toolkit that declines
+            // to load: the game draws through Java2D's software pipeline, which
+            // is what the headless mode this method exists to establish keeps
+            // available.
         }
     }
 

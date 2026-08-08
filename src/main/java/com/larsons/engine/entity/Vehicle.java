@@ -36,6 +36,12 @@ public final class Vehicle {
     public final VehicleDef def;
     public double x, y;        // top-left, world px
     public double vx, vy;
+    /**
+     * Where this vehicle was one fixed step ago, for the renderer only. See
+     * {@link com.larsons.engine.sim.StepInterpolation}; captured for every
+     * vehicle in one place, at the top of {@code World.step}.
+     */
+    public double prevX, prevY;
     public boolean facingLeft;
     /** Riding player id, or -1 when empty. */
     public int riderId = -1;
@@ -53,6 +59,23 @@ public final class Vehicle {
 
     public boolean ridden() {
         return riderId >= 0;
+    }
+
+    // --- render interpolation (see com.larsons.engine.sim.StepInterpolation) ------
+
+    /** Remember where this vehicle is, immediately before a fixed step moves it. */
+    public void beginStep() {
+        prevX = x;
+        prevY = y;
+    }
+
+    /** Where to draw this vehicle, {@code alpha} of the way through the last step. */
+    public double renderX(double alpha) {
+        return com.larsons.engine.sim.StepInterpolation.at(prevX, x, alpha);
+    }
+
+    public double renderY(double alpha) {
+        return com.larsons.engine.sim.StepInterpolation.at(prevY, y, alpha);
     }
 
     /** Whether the armament may fire now (and restart the cooldown if so). */

@@ -34,6 +34,16 @@ public interface Scene {
      * to describe how to do that, and counted the scenes still doing it, went
      * away with the last of them in B3.
      *
+     * <p><b>{@code alpha} is not optional for a scene that scrolls.</b> It is how
+     * far past the last completed fixed step real time has got, and a frame does
+     * not contain a whole number of steps — so a scene that ignores it draws the
+     * world 1.8, 3.7 or 5.5 px along on successive frames where 3.7 was due, and
+     * a player calls that the blocks shaking. Every scene here was handed this
+     * parameter and none of them read it for most of the engine's life; see
+     * {@link com.larsons.engine.sim.StepInterpolation} for the measurements and
+     * the fix. A scene with a fixed camera and nothing moving under it may
+     * ignore it, and should say so where it does.
+     *
      * @param target the drawing surface for this frame
      * @param alpha  interpolation factor in [0,1] between sim steps
      */
