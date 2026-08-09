@@ -111,6 +111,26 @@ public final class Skins {
     }
 
     /**
+     * Whether {@code key}'s skin actually changes with time — more than one
+     * frame, played at a positive rate. A key with no skin, a single-frame
+     * sheet, or a sheet at zero fps is <em>static</em>: {@link #frame} returns
+     * the same image at every {@code seconds}.
+     *
+     * <p><b>Asked because "might be animated" and "is animated" are different
+     * questions and one of them was being used as the other.</b>
+     * {@link TerrainCache} put the animation frame number into every chunk's
+     * validity key, so every chunk in every level was thrown away twelve times a
+     * second whether or not it held anything that moved — see that class for what
+     * that looked like on screen. The condition here is the same one
+     * {@link SkinDef#frameAt} uses to decide whether to advance, so a key this
+     * calls static cannot produce a different image on a later frame.
+     */
+    public static synchronized boolean animated(String key) {
+        SkinDef def = effective(key);
+        return def != null && def.frameCount > 1 && def.fps > 0;
+    }
+
+    /**
      * The frame of {@code key}'s skin playing at {@code seconds}, or
      * {@code null} when the key has no (working) skin — the caller's cue to
      * draw its procedural default.

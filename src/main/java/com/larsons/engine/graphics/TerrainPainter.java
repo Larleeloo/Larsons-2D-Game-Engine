@@ -234,6 +234,18 @@ public final class TerrainPainter {
         private final int[] faceY = new int[4];
         /** Per-frame cache: texture key -> frame (absent value = procedural). */
         private final Map<String, BufferedImage> skins = new HashMap<>();
+        /**
+         * Per-frame cache of {@link Skins#animated}, and the flag the current
+         * sweep sets when it resolves one.
+         *
+         * <p>{@link TerrainCache} needs to know whether a region it just baked can
+         * go stale as time passes, and the painter is the only thing that knows —
+         * the cache never sees a texture key. Assuming "maybe" for every chunk is
+         * what had every chunk in every level invalidated twelve times a second;
+         * see that class's note on {@code ANIM_FPS}.
+         */
+        private final Map<String, Boolean> animatedKeys = new HashMap<>();
+        private boolean sawAnimated;
 
         Pass(DrawTarget target, Level level, Camera camera, double animClock,
              CellDecorator decor) {
@@ -325,17 +337,23 @@ public final class TerrainPainter {
          * screen. Swapping the target for the duration is what lets one
          * implementation serve both.
          */
-        private void renderChunk(DrawTarget into, Camera with,
-                                 int col0, int row0, int col1, int row1) {
+        private boolean renderChunk(DrawTarget into, Camera with,
+                                    int col0, int row0, int col1, int row1) {
             DrawTarget previousTarget = target;
             Camera previousCamera = camera;
+            boolean previouslySaw = sawAnimated;
             target = into;
             camera = with;
+            sawAnimated = false;
             try {
                 sweepFloor(new int[]{col0, row0, col1, row1}, null);
+                return sawAnimated;
             } finally {
                 target = previousTarget;
                 camera = previousCamera;
+                // Restore rather than clear: a sweep nested inside another one
+                // must not tell the outer sweep it saw nothing.
+                sawAnimated = previouslySaw || sawAnimated;
             }
         }
 
@@ -460,6 +478,12 @@ public final class TerrainPainter {
 
         /** The frame of a texture key, resolved at most once per frame. */
         private BufferedImage skin(String key) {
+            Boolean animated = animatedKeys.get(key);
+            if (animated == null) {
+                animated = Skins.animated(key);
+                animatedKeys.put(key, animated);
+            }
+            if (animated) sawAnimated = true;
             if (skins.containsKey(key)) return skins.get(key);
             BufferedImage img = Skins.frame(key, animClock);
             skins.put(key, img);

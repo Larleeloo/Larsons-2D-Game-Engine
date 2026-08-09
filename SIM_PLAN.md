@@ -223,8 +223,16 @@ budgets run 0..5, so the queue takes up to six million entries; at 32 bytes an
 `int[3]` plus 8 for the deque's slot that is **240 MB**, per liquid family, per
 tick, against a 2 GB heap with a game already in it.
 
-**And it is very likely the visible flicker as well**, which is worth stating as
-a hypothesis rather than a conclusion. Every liquid tick bumps
+**And it is very likely the visible flicker as well** — **confirmed, and fixed;
+see `RENDER_PLAN.md` D7.** The mechanism below was right in outline and wrong
+about which rule did it: the churn threshold counted changed *cells*, so a liquid
+tick rewriting thirty cells inside three chunks swept the entire view live, once
+every thirteenth frame, on a beat set by the water. The threshold now decides only
+whether baking is futile; whether to sweep is decided by how many chunks need
+rebaking, which is the quantity that was always meant. It was found alongside a
+larger instance of the same flip-flop — the animation frame number was in every
+chunk's validity key — and both are gone. What follows is the original hypothesis,
+kept because it was the right suspicion. Every liquid tick bumps
 `Level.terrainRevision()`, `TerrainCache` invalidates the chunks that changed,
 and it has two rules that switch on how much is changing: a four-chunk rebuild
 budget, and a churn threshold beyond which it **stands aside for the frame and

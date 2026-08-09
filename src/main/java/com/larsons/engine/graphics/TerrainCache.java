@@ -68,6 +68,19 @@ import java.util.Map;
  * so cells just past the requested bounds are drawn, which fills the screen edge
  * rather than cutting it.
  *
+ * <p><b>They are also procedural-only, which is worth knowing before reading any
+ * figure quoted for them.</b> A textured level goes through {@code TilePainter}'s
+ * axis-aligned blit, whose destination rectangle is integer and camera-free, so
+ * baked and live come out <b>pixel-identical</b> — measured at 0 differing pixels
+ * of 921,600 on a 1280x720 view at zoom 1.7 with a 16-pixel texture on every
+ * block. The residual 0.05% belongs to the procedural path, where a cell is a
+ * filled polygon plus a darker outline drawn with antialiasing on: at a chunk edge
+ * that outline blends against the neighbour in the live sweep and against
+ * transparency in a chunk image, and compositing afterwards does not reproduce the
+ * blend. Nearly half of the disagreement sits within two pixels of a chunk
+ * boundary for that reason. It is the same argument {@link #faithfulIn} makes
+ * about isometric, at a hundredth of the magnitude.
+ *
  * <p>{@code -Dlarsons.terrain.cache=false} turns the whole thing off and
  * restores the live sweep exactly.
  */
@@ -81,6 +94,62 @@ public final class TerrainCache {
      * A chunk holding an animated texture rebuilds at this rate instead of at
      * the frame rate — twelve rebuilds a second rather than a hundred and
      * twenty, and the eye cannot tell the difference on a tile animation.
+     *
+     * <p><b>"A chunk holding an animated texture" is what this always said and was
+     * not what it did, and the gap between the two is the vibration players kept
+     * reporting in side-scrollers.</b> The frame number went into every chunk's
+     * validity {@link Key} unconditionally, so a level with no animated textures
+     * anywhere still had every chunk on screen invalidated twelve times a second.
+     * With {@link #MAX_REBUILDS_PER_FRAME} at four against a dozen or more visible
+     * chunks, the cache could not rebake them in the frame they went stale, and
+     * the overflow was drawn <em>live</em> — the half-and-half frame that
+     * {@link #MIN_CHURN_TO_STAND_ASIDE}'s note measures at <b>22 ms against 16 ms
+     * all-live and 2 ms all-baked</b>. So the cache spent two frames in every five
+     * in the most expensive rendering it has, for ever. Measured on a 1280x720
+     * view at zoom 1.7, walking a static procedurally-drawn level:
+     *
+     * <pre>
+     * frame | from cache | re-baked | drawn LIVE | terrain pass
+     *     0 |          0 |        4 |  8         | 16.2 ms   &lt;- animFrame ticked
+     *     1 |          4 |        4 |  4         | 11.3 ms
+     *     2 |          8 |        4 |  0         | 10.3 ms
+     *     3 |         12 |        0 |  0         |  2.5 ms
+     *     4 |         12 |        0 |  0         |  2.4 ms
+     *     5 |          0 |        4 |  8         | 15.0 ms   &lt;- and again, 83 ms later
+     * </pre>
+     *
+     * <p><b>That is the defect, and it is a timing defect rather than a drawing
+     * one.</b> The terrain pass alone oscillated between 2.4 ms and 16.2 ms on a
+     * 12 Hz beat, against a whole-frame budget of 16.67 ms — so two frames in five
+     * had no budget left for anything else and were delivered late while the other
+     * three arrived on time. {@code RENDER_PLAN.md} D5 wrote the rule that names
+     * this: <i>a world drawn rigidly and delivered unevenly looks like a world that
+     * is not rigid.</i> The world was rigid (D3), the pacing had been fixed (D5)
+     * and the sampling had been fixed (D6); this was the terrain pass making the
+     * frame time itself vibrate at 12 Hz.
+     *
+     * <p>Over 600 frames of walking, the pass measured <b>mean 8.19 ms, p50 9.36,
+     * p95 15.43</b> and <b>152 chunk re-bakes per second</b> — each one a 435x435
+     * image re-rendered cell by cell and, on the GL backend, re-uploaded to the
+     * GPU. Afterwards: <b>mean 1.84 ms, p50 1.63, p95 2.08</b> and <b>3.6 re-bakes
+     * per second</b>, which are the chunks a walk genuinely reveals.
+     *
+     * <p><b>Why a side-scroller and not the plan views.</b> In a side-scroller
+     * {@code Level.layered()} is false, so the cached floor <em>is</em> the blocks
+     * — the whole visible world sits on the layer that was thrashing. A plan view
+     * draws its stacked blocks and their shadows live in the depth pass on top of
+     * the floor, so much of the screen is live-drawn anyway and the beat is buried
+     * under it; and isometric is not cached at all ({@link #faithfulIn}).
+     *
+     * <p><b>And why twenty tests of this class could not see it.</b> Every one of
+     * them passes {@code animClock = 0}. At a stopped clock the frame number never
+     * changes, so the key that was wrong was never exercised. The tests at the
+     * bottom of {@code TerrainCacheTest} advance it.
+     *
+     * <p>The frame number now lives on the {@link Entry} rather than in the
+     * {@link Key}, and is consulted only for a chunk that actually baked an
+     * animated texture — which {@link ChunkRenderer} reports, because the painter
+     * resolves the texture keys and is the only thing that knows.
      */
     private static final double ANIM_FPS = 12.0;
 
@@ -93,38 +162,137 @@ public final class TerrainCache {
      * <p>Walking into unseen ground on a large level asks for a whole screen of
      * chunks at once, and baking them together turned a 0.8 ms median terrain
      * pass into a 13 ms spike — a visible hitch every time the view crossed
-     * into new territory. Over the budget, a chunk is drawn the slow way for
-     * that frame and baked in a later one, which spreads the same total work
-     * across frames instead of landing it on one.
+     * into new territory. Over the budget, baking is deferred to a later frame,
+     * which spreads the same total work across frames instead of landing it on
+     * one.
+     *
+     * <p><b>What "over the budget" does was the second half of the vibration,
+     * and it contradicted this class's own policy.</b> It used to draw the
+     * overflowing chunks live and blit the rest — which is precisely the
+     * half-and-half frame that {@link #MIN_CHURN_TO_STAND_ASIDE} exists to
+     * prevent, and whose note records that mixing measured <b>22 ms</b> against
+     * 16 ms for an all-live frame and 2 ms for an all-baked one. So the budget
+     * was reaching for the most expensive rendering available, and — because
+     * baked and live are not pixel-identical — was also making consecutive frames
+     * differ in a shifting patch of the screen.
+     *
+     * <p>The rule is now the same one the churn threshold states: <b>the decision
+     * belongs to the frame.</b> If the stale chunks fit in the budget they are
+     * rebaked and every chunk on screen is a blit; if they do not, the whole view
+     * is swept live in one uniform pass and the budget is spent baking for a later
+     * frame instead. Either way a frame is all of one thing, so two consecutive
+     * frames can only differ by the camera's shift.
+     *
+     * <p>This is the <em>floor</em> of the budget rather than the whole of it; see
+     * {@link #budgetFor}.
      */
     private static final int MAX_REBUILDS_PER_FRAME = 4;
 
     /**
-     * Share of the visible chunks that may be stale before the cache stands
-     * aside for the frame entirely.
+     * Cell changes per frame past which baking is not worth attempting, because
+     * anything baked would be stale before it was ever blitted.
      *
-     * <p>Caching is a bet that ground stays still, and some ground does not:
-     * water flows every tick, a meteor rewrites a crater, a player mines a
-     * seam. The interesting part is <em>why</em> a half-cached frame is bad,
-     * because it is worse than either extreme. Measured on a churning view,
-     * drawing every chunk live cost 16 ms and serving every chunk from cache
-     * cost 2 ms — but doing half of each cost 22 ms, more than the slower of
-     * the two. Alternating image blits with per-cell fills makes Java2D switch
-     * between two quite different kinds of work all the way down the frame, and
-     * the switching costs more than the drawing it saves.
+     * <p><b>This used to decide whether the cache stood aside for the frame, and
+     * that was the wrong question for it to answer.</b> The reason a half-cached
+     * frame must not happen is real and measured: on a churning view, drawing
+     * every chunk live cost 16 ms and serving every chunk from cache cost 2 ms,
+     * but doing half of each cost <b>22 ms</b> — more than the slower of the two,
+     * because alternating image blits with per-cell fills makes Java2D switch
+     * between two quite different kinds of work all the way down the frame.
+     * (Per-chunk cleverness — rebuild budgets, decaying strike counts, hysteresis
+     * — was tried first and made it worse, because every one of those schemes
+     * still produces a mixed frame, which is the thing that is slow.) So the
+     * decision belongs to the frame, and it still does.
      *
-     * <p>Per-chunk cleverness (rebuild budgets, decaying strike counts,
-     * hysteresis) was tried first and made it worse, because every one of those
-     * schemes still produces a mixed frame — the exact thing that is slow. The
-     * decision belongs to the frame: mostly-still ground is cached, mostly-torn
-     * ground is swept, and neither pays for the other.
+     * <p>What changed is <em>which</em> number decides it. Counting changed cells
+     * is a proxy for "how much rebaking does this frame owe", and it is a bad one:
+     * a liquid tick that rewrites thirty cells inside three chunks is three cheap
+     * rebakes, and this rule swept the whole view for it. Because
+     * {@code LiquidSim} ticks about every 0.22 s, that produced a full-view live
+     * sweep every thirteenth frame in any side-scroller with running water, with
+     * all-baked frames either side of it — and baked and live are not
+     * pixel-identical. Measured on a 1280x720 view over a pond pouring through a
+     * gap in the floor, the frames came out
      *
-     * <p>The crossover was measured rather than guessed. Caching wins
-     * comfortably up to about five changed cells a frame (8 ms against 16 ms)
-     * and loses beyond roughly fifteen, so the threshold sits between: half the
-     * visible chunk count, and never less than this.
+     * <pre>
+     * ...BBBBBBBBBBB L r BBBBBBBBBBB L r BBBBBBBBBBB L r...
+     *                ^ the whole view swept live, ~4.6 times a second
+     * </pre>
+     *
+     * <p>so the seams flickered across the whole screen on a beat set by the water.
+     * {@code drawFloor} now asks the question directly — <b>do the chunks that need
+     * rebaking fit in this frame's budget?</b> — which is the same policy measured
+     * against the right quantity, and needs no threshold.
+     *
+     * <p>What is left for this number is the one thing chunk counting cannot see:
+     * whether baking is <em>futile</em>. On a view being swept live because it
+     * cannot keep up, the sweep also bakes a budget's worth each frame so that it
+     * converges; on ground genuinely being rewritten faster than it can be baked,
+     * those bakes are thrown away unused and are pure cost. Above this many cell
+     * changes in a frame, the sweep stops baking and simply draws.
      */
     private static final int MIN_CHURN_TO_STAND_ASIDE = 8;
+
+    /**
+     * Chunks this frame may bake, given how many are on screen.
+     *
+     * <p><b>A fixed four was too few to absorb what one frame can newly reveal,
+     * and the shortfall showed as a flicker on a tall display.</b> Crossing a
+     * chunk boundary while walking uncovers a whole column at once — three chunks
+     * on a 720p view, six on a 1440p one — and moving diagonally uncovers a column
+     * and a row together. When that exceeded four, the frame took the uniform live
+     * sweep above, and the frame after it went back to blits: a switch between two
+     * renderings that are not pixel-identical, once per chunk crossing, which at a
+     * walking pace is about once a second. Measured at 2560x1440, walking: 11
+     * frames in 299 differed from their predecessor by more than the camera's
+     * shift, in clusters spaced 1.16 s apart — exactly the time it takes to cross
+     * 8 tiles at 220 px/s. Standing still it was 1, the cold start.
+     *
+     * <p>So the budget is what a frame can actually be asked for: one column plus
+     * one row of chunks. That is bounded by the <em>edge</em> of the view rather
+     * than by its area, which is the distinction the fixed number was reaching
+     * for — the 13 ms spike it was written against came from baking a whole
+     * <em>screen</em> of chunks on first entry, and that path is unchanged: first
+     * entry needs far more than this, and still sweeps live while baking a
+     * budget's worth per frame until it has caught up.
+     *
+     * <p>And at a crossing it is cheaper than what it replaces, not more
+     * expensive: the alternative was a live sweep of <em>every</em> visible chunk
+     * plus four bakes, and this bakes a column and blits the rest.
+     *
+     * <p><b>Measured off the viewport and not off {@code bounds}, which is not a
+     * detail.</b> A caller may legitimately ask for a region far larger than the
+     * screen — {@code TerrainCacheTest} hands over a whole 120x80 level — and a
+     * budget derived from the request rather than from the display would scale
+     * with it and bake exactly the screenful this cap exists to prevent. What one
+     * frame can newly reveal is a property of the window, so the window is what
+     * it is read from.
+     *
+     * <p>The ceiling is four times the floor. Past that the view is asking for
+     * more baking per frame than the spike this budget was written against, and
+     * the uniform live sweep is the better answer — a level zoomed far enough out
+     * that fifty chunk columns fit on screen should be swept, not baked. That is
+     * then what happens, and it is the right outcome rather than a fallback.
+     *
+     * <p><b>What a crossing now costs, stated rather than left to be found.</b>
+     * Rebaking a column in one frame takes that frame's terrain pass to about
+     * 8.6 ms against a 1.6 ms baseline, roughly once a second at a walking pace.
+     * That stays inside a 16.67 ms budget alongside the ~7 ms the rest of the frame
+     * costs, so no frame is dropped — and the alternative is not cheaper: spreading
+     * it produces the mixed frame, which measures 22 ms and blows the budget
+     * outright. One frame doing slightly more work beats two frames doing the
+     * expensive kind.
+     */
+    private static int budgetFor(Camera camera) {
+        double chunkPx = CHUNK * camera.tileSize * camera.zoom;
+        if (chunkPx <= 0) return MAX_REBUILDS_PER_FRAME;
+        // +1 on each axis because a view straddles one more chunk than it spans.
+        long across = (long) Math.ceil(camera.viewportWidth / chunkPx) + 1;
+        long down = (long) Math.ceil(camera.viewportHeight / chunkPx) + 1;
+        long edge = across + down;
+        return (int) Math.max(MAX_REBUILDS_PER_FRAME,
+                Math.min(MAX_REBUILDS_PER_FRAME * 4L, edge));
+    }
 
     private static final boolean ENABLED =
             !"false".equalsIgnoreCase(System.getProperty("larsons.terrain.cache"));
@@ -136,7 +304,8 @@ public final class TerrainCache {
      * lattice that does not involve the camera at all — see
      * {@link #drawFloor} for why that matters.
      */
-    private record Entry(BufferedImage image, int latticeX, int latticeY, Key key) {}
+    private record Entry(BufferedImage image, int latticeX, int latticeY, Key key,
+                        boolean animated, long animFrame) {}
 
     /**
      * Everything a cached chunk depends on. Any change means a rebuild.
@@ -149,7 +318,7 @@ public final class TerrainCache {
      * rather than edited.
      */
     private record Key(long generation, long revision, double zoom,
-                       Perspective perspective, int tileSize, long animFrame) {}
+                       Perspective perspective, int tileSize) {}
 
     private final Map<Long, Entry> chunks = new HashMap<>();
 
@@ -160,6 +329,20 @@ public final class TerrainCache {
 
     private int hits;
     private int rebuilds;
+
+    /**
+     * Chunk images actually blitted to the screen since the counters were reset.
+     *
+     * <p>Separate from {@link #hits} because {@link #rebuilds} is not "chunks
+     * drawn from cache": the uniform live sweep bakes a budget's worth of chunks
+     * for a later frame without blitting any of them. So neither counter, nor
+     * their sum, can say whether a frame was all blits or all live — and that is
+     * the invariant worth asserting, since a frame that is half of each is both
+     * the slowest rendering available and a picture that differs from its
+     * neighbours in a shifting patch of the screen. This counter can: over one
+     * frame it is either zero or the number of visible chunks, never in between.
+     */
+    private int blits;
 
     /** The level's change count at the previous frame, to measure churn. */
     private long lastRevision = -1;
@@ -212,7 +395,7 @@ public final class TerrainCache {
         long animFrame = (long) (animClock * ANIM_FPS);
 
         // The camera enters the terrain's position exactly once, here. Every
-        // chunk is then placed by integer arithmetic off this one value, so the
+        // chunk is then placed from this one value by integer arithmetic, so the
         // whole floor moves as one rigid sheet.
         int baseX = (int) Math.round(camera.viewportWidth / 2.0 - camera.x * camera.zoom);
         int baseY = (int) Math.round(camera.viewportHeight / 2.0 - camera.y * camera.zoom);
@@ -234,35 +417,74 @@ public final class TerrainCache {
         long revision = level.terrainRevision();
         long changedSinceLastFrame = lastRevision < 0 ? 0 : revision - lastRevision;
         lastRevision = revision;
+        boolean churning =
+                changedSinceLastFrame > Math.max(MIN_CHURN_TO_STAND_ASIDE, visible / 2);
 
-        if (changedSinceLastFrame > Math.max(MIN_CHURN_TO_STAND_ASIDE, visible / 2)) {
-            // Too torn up to be worth baking. One plain sweep of the whole
-            // view, with no blits mixed into it.
+        // Which chunks cannot be served from cache this frame — decided before
+        // anything is drawn, because the answer decides how the whole frame is
+        // drawn. See the note on MAX_REBUILDS_PER_FRAME for why this cannot be a
+        // per-chunk decision taken as the sweep goes along.
+        int needed = 0;
+        for (int cr = r0; cr <= r1; cr++) {
+            for (int cc = c0; cc <= c1; cc++) {
+                Key key = keyFor(level, cc, cr, generation, zoom, perspective);
+                if (cached(chunkKey(cc, cr), key, animFrame) == null) needed++;
+            }
+        }
+
+        int budget = budgetFor(camera);
+        if (needed > budget) {
+            // One plain sweep of the whole view, with no blits mixed into it.
             renderChunk.render(target, camera, bounds[0], bounds[1], bounds[2], bounds[3]);
+            // The chunks in view are still wanted; without this, endFrame()
+            // evicts every one of them and the cache restarts from cold after a
+            // single swept frame.
+            for (int cr = r0; cr <= r1; cr++) {
+                for (int cc = c0; cc <= c1; cc++) live.add(chunkKey(cc, cr));
+            }
+            // Bake a few anyway, unless the level itself is being rewritten (in
+            // which case anything baked is stale before it is used). Without this
+            // a view that needs more than a frame's budget would sweep live for
+            // ever, because nothing would ever reduce the count that sent it here.
+            // This is the only thing the cell-churn signal now decides; see
+            // MIN_CHURN_TO_STAND_ASIDE.
+            if (!churning) {
+                int left = budget;
+                for (int cr = r0; cr <= r1 && left > 0; cr++) {
+                    for (int cc = c0; cc <= c1 && left > 0; cc++) {
+                        long id = chunkKey(cc, cr);
+                        Key key = keyFor(level, cc, cr, generation, zoom, perspective);
+                        if (cached(id, key, animFrame) != null) continue;
+                        Entry built = build(level, camera, cc, cr, key, animFrame,
+                                renderChunk, chunks.get(id));
+                        if (built == null) continue;
+                        chunks.put(id, built);
+                        left--;
+                        rebuilds++;
+                    }
+                }
+            }
             return;
         }
 
-        int budget = MAX_REBUILDS_PER_FRAME;
+        // Every chunk on screen ends up a baked blit: the few that were stale are
+        // rebaked first, and the frame is then uniform.
         for (int cr = r0; cr <= r1; cr++) {
             for (int cc = c0; cc <= c1; cc++) {
                 long id = chunkKey(cc, cr);
-                Key key = keyFor(level, cc, cr, generation, zoom, perspective, animFrame);
-                Entry entry = cached(id, key);
+                Key key = keyFor(level, cc, cr, generation, zoom, perspective);
+                Entry entry = cached(id, key, animFrame);
                 if (entry == null) {
-                    if (budget <= 0) {
-                        drawChunkLive(level, camera, cc, cr, bounds, renderChunk, target);
-                        live.add(id);
-                        continue;
-                    }
-                    entry = build(level, camera, cc, cr, key, renderChunk, chunks.get(id));
+                    entry = build(level, camera, cc, cr, key, animFrame, renderChunk,
+                            chunks.get(id));
                     if (entry == null) continue;
-                    budget--;
                     rebuilds++;
                     chunks.put(id, entry);
                 } else {
                     hits++;
                 }
                 live.add(id);
+                blits++;
                 target.drawImage(entry.image(), baseX + entry.latticeX(),
                         baseY + entry.latticeY());
             }
@@ -271,16 +493,26 @@ public final class TerrainCache {
 
     /** Everything a chunk's validity depends on. */
     private static Key keyFor(Level level, int chunkCol, int chunkRow, long generation,
-                              double zoom, Perspective perspective, long animFrame) {
+                              double zoom, Perspective perspective) {
         return new Key(generation,
                 level.terrainRevisionAt(chunkCol * CHUNK, chunkRow * CHUNK),
-                zoom, perspective, level.tileSize, animFrame);
+                zoom, perspective, level.tileSize);
     }
 
-    /** The cached chunk if it is still valid, else {@code null}. */
-    private Entry cached(long id, Key key) {
+    /**
+     * The cached chunk if it is still valid, else {@code null}.
+     *
+     * <p>The animation frame is checked <em>only</em> for a chunk that baked an
+     * animated texture, which is the whole of the fix described on
+     * {@link #ANIM_FPS}: a chunk of static blocks does not become wrong because
+     * time passed, and treating it as though it did is what put two thirds of the
+     * terrain on a live-drawn/baked flip-flop at 12 Hz.
+     */
+    private Entry cached(long id, Key key, long animFrame) {
         Entry existing = chunks.get(id);
-        return existing != null && existing.key().equals(key) ? existing : null;
+        if (existing == null || !existing.key().equals(key)) return null;
+        if (existing.animated() && existing.animFrame() != animFrame) return null;
+        return existing;
     }
 
     /** Paint one chunk's cells straight at the screen, skipping the cache. */
@@ -322,6 +554,7 @@ public final class TerrainCache {
         live.clear();
         hits = 0;
         rebuilds = 0;
+        blits = 0;
     }
 
     /** Chunk blits served from cache since the counters were last read. */
@@ -330,9 +563,16 @@ public final class TerrainCache {
     /** Chunks rebuilt since the counters were last read. */
     public int rebuilds() { return rebuilds; }
 
+    /**
+     * Chunk images blitted since the counters were last read — see {@link #blits}
+     * for why this is the counter that says whether a frame was uniform.
+     */
+    public int blits() { return blits; }
+
     public void resetCounters() {
         hits = 0;
         rebuilds = 0;
+        blits = 0;
     }
 
     /**
@@ -347,7 +587,7 @@ public final class TerrainCache {
      * adjacent chunks abut exactly instead of leaving a seam.
      */
     private Entry build(Level level, Camera camera, int chunkCol, int chunkRow,
-                        Key key, ChunkRenderer renderChunk, Entry reusable) {
+                        Key key, long animFrame, ChunkRenderer renderChunk, Entry reusable) {
         int col0 = chunkCol * CHUNK;
         int row0 = chunkRow * CHUNK;
         int col1 = Math.min(level.width - 1, col0 + CHUNK - 1);
@@ -400,6 +640,7 @@ public final class TerrainCache {
                 ? reusable.image()
                 : new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
 
+        boolean animated;
         Graphics2D g = image.createGraphics();
         try {
             // Whatever was there is not this chunk any more.
@@ -413,7 +654,11 @@ public final class TerrainCache {
             // The chunk paints in screen coordinates; translating by its own
             // origin is what makes the same painter fill an image instead.
             g.translate(-originX, -originY);
-            renderChunk.render(Java2DTarget.unsized(g), bake,
+            // The painter reports whether anything it resolved in here actually
+            // animates. It is the only thing that knows: the cache does not see
+            // texture keys, and guessing "maybe" for every chunk is the defect
+            // described on ANIM_FPS.
+            animated = renderChunk.render(Java2DTarget.unsized(g), bake,
                     paintCol0, paintRow0, paintCol1, paintRow1);
         } finally {
             g.dispose();
@@ -428,7 +673,8 @@ public final class TerrainCache {
         // Where this image belongs relative to the frame's single camera
         // rounding: its lattice position, shifted by the margin it was drawn
         // with.
-        return new Entry(image, latticeX + originX, latticeY + originY, key);
+        return new Entry(image, latticeX + originX, latticeY + originY, key,
+                animated, animFrame);
     }
 
     /**
@@ -468,6 +714,15 @@ public final class TerrainCache {
      */
     @FunctionalInterface
     public interface ChunkRenderer {
-        void render(DrawTarget target, Camera camera, int col0, int row0, int col1, int row1);
+        /**
+         * @return whether any texture drawn in this region actually animates —
+         *         more than one frame at a positive rate. The cache uses it to
+         *         decide whether the region it just baked can go stale as time
+         *         passes, and a chunk of static blocks must answer {@code false}
+         *         or it is thrown away twelve times a second for nothing. See
+         *         the note on {@code ANIM_FPS}.
+         */
+        boolean render(DrawTarget target, Camera camera,
+                       int col0, int row0, int col1, int row1);
     }
 }
