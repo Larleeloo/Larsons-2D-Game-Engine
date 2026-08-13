@@ -114,6 +114,35 @@ public enum Facing {
         return of(dx, dy, fallback == null ? SOUTH : fallback);
     }
 
+    /**
+     * This world direction as a camera at {@code yaw} sees it — the compass
+     * point whose art should be drawn once the view has turned.
+     *
+     * <p><b>The facing stored on a player or a mob is a world direction and
+     * must stay one.</b> It is simulated, networked and shared between client
+     * prediction and the server; a camera heading is per-client view state that
+     * is deliberately never sent (C10). So the two are not the same quantity
+     * and this is where one becomes the other: at the moment a direction stops
+     * being something the character is doing and starts being a picture of it.
+     *
+     * <p>The arithmetic is the projection's, in eighths. At heading <i>h</i> the
+     * world direction <i>h</i> is the one pointing away from the viewer, so
+     * every direction appears rotated toward the top of the screen by the same
+     * amount — which on this enum, ordered anticlockwise from east, is an
+     * addition. A character walking world-north with the camera looking east
+     * appears to walk west, and is drawn from the side rather than from behind,
+     * which is what it looks like when you stand to someone's right and watch
+     * them walk away.
+     *
+     * <p>Mid-turn the heading is not a multiple of 45° and the nearest of the
+     * eight is taken. There are only eight sets of art; a snap animation is
+     * three or four frames long, and half of a sprite's own walk cycle.
+     */
+    public Facing asSeenFrom(double yaw) {
+        int eighths = (int) Math.round(yaw / (Math.PI / 4.0));
+        return values()[((ordinal() + eighths) % 8 + 8) % 8];
+    }
+
     /** Parse a {@link #key()} back into a direction, or {@code null}. */
     public static Facing byKey(String key) {
         if (key == null) return null;

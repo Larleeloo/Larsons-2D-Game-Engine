@@ -139,7 +139,7 @@ public final class TerrainCache {
      * — the whole visible world sits on the layer that was thrashing. A plan view
      * draws its stacked blocks and their shadows live in the depth pass on top of
      * the floor, so much of the screen is live-drawn anyway and the beat is buried
-     * under it; and isometric is not cached at all ({@link #faithfulIn}).
+     * under it; and isometric is not cached at rest at all ({@link #faithfulIn}).
      *
      * <p><b>And why twenty tests of this class could not see it.</b> Every one of
      * them passes {@code animClock = 0}. At a stopped clock the frame number never
@@ -316,9 +316,18 @@ public final class TerrainCache {
      * tick, so in a level with water the cache spent its life rebuilding.
      * {@code generation} is the separate wholesale counter, for a grid replaced
      * rather than edited.
+     *
+     * <p>{@code edgeDx/edgeDy} are where the projection sends one world tile
+     * along +x — the camera's heading, in the only form the baked pixels care
+     * about. A chunk baked looking north is a different picture from the same
+     * chunk baked looking east, and without this in the key it would be served
+     * for both. It is the projected edge rather than the angle so that a heading
+     * reached by turning right eight times is the heading it started from, and
+     * because it is what actually determines the pixels.
      */
     private record Key(long generation, long revision, double zoom,
-                       Perspective perspective, int tileSize) {}
+                       Perspective perspective, int tileSize,
+                       double edgeDx, double edgeDy) {}
 
     private final Map<Long, Entry> chunks = new HashMap<>();
 
@@ -351,32 +360,69 @@ public final class TerrainCache {
     public static boolean enabled() { return ENABLED; }
 
     /**
-     * Whether a baked floor is faithful in this projection.
+     * Whether a baked floor is faithful through this camera.
      *
-     * <p><b>Isometric is excluded, and the reason is antialiasing.</b> Its
-     * floor tiles are diamonds, so every edge between two tiles is diagonal and
-     * gets antialiased. Drawn live, a tile's edge blends against the neighbour
-     * already painted beside it. Baked into its own chunk image, the same edge
-     * blends against transparency, and compositing two such images afterwards
-     * does not reproduce the blend — it leaves a seam along every shared edge
-     * in the level. Measured on a 1280x720 isometric view, that was 16.7% of
-     * the frame's pixels: not a rounding difference, a visible artefact.
+     * <p><b>The rule is antialiasing, and it was written down as a rule about
+     * formats because until the camera could turn, the format decided it.</b>
+     * A tile edge that lands on a screen axis has nothing to antialias. A
+     * diagonal one does: drawn live, it blends against the neighbour already
+     * painted beside it; baked into its own chunk image, it blends against
+     * transparency, and compositing two such images afterwards does not
+     * reproduce the blend — it leaves a seam along every shared edge, with the
+     * background showing through.
      *
-     * <p>Painting a ring of neighbouring tiles into each chunk was tried and
-     * made it worse (19.8%), because the overlapping blits then overwrite real
-     * tiles with differently-composited copies of themselves.
+     * <p>So the question is not which format this is. It is <b>whether the
+     * projection puts both of a tile's edges on a screen axis</b>, which is
+     * what this measures — through {@link Camera#planarDelta}, so the answer
+     * follows the projection wherever it goes rather than being tabulated
+     * against the cases that existed when it was written. It reproduces the old
+     * answers exactly at rest (orthographic yes, isometric no) and gives four
+     * more, measured in C3:
      *
-     * <p>The orthographic formats have axis-aligned tile edges with nothing to
-     * antialias, and there the baked floor matches the live sweep to within
-     * 0.03% of pixels — chunk-edge rounding, invisible in motion.
+     * <table>
+     *   <caption>Seam, as a share of frame pixels, chunked against live</caption>
+     *   <tr><th>heading</th><th>0°</th><th>22.5°</th><th>45°</th><th>90°</th><th>135°</th><th>180°</th></tr>
+     *   <tr><td>top-down</td><td>0.055%</td><td>0.658%</td><td>0.542%</td><td>0.019%</td><td>0.511%</td><td>0.001%</td></tr>
+     *   <tr><td>isometric</td><td>0.622%</td><td>0.696%</td><td><b>0.039%</b></td><td>0.612%</td><td><b>0.027%</b></td><td>0.591%</td></tr>
+     * </table>
      *
-     * <p>Fixing isometric means one shared scroll buffer rather than
-     * per-chunk images, so that edges blend against their real neighbours. That
-     * is a larger change and is left until the formats that already work have
-     * proven the approach.
+     * <p>Two things fall out of that table. Rotation makes top-down behave
+     * exactly like isometric at the headings where its edges go diagonal — an
+     * order of magnitude worse than the same view at rest, and the same size as
+     * the artefact isometric was excluded for. And <b>isometric at 45° is as
+     * cacheable as top-down at 0°</b>: turning the grid an eighth of a turn puts
+     * the diamond's edges back on the screen axes. The floor is cacheable at
+     * four of the eight headings in either format — the other four in isometric
+     * than in top-down — and at none of the angles in between, which is where a
+     * snap animation spends its time.
+     *
+     * <p>Painting a ring of neighbouring tiles into each chunk was tried when
+     * this was a format rule and made it worse, because the overlapping blits
+     * then overwrite real tiles with differently-composited copies of
+     * themselves. Fixing the diagonal case properly means one shared scroll
+     * buffer rather than per-chunk images; that is a larger change, and it is
+     * now worth less than it was, because half the headings do not need it.
      */
-    public static boolean faithfulIn(Perspective perspective) {
-        return perspective != Perspective.ISOMETRIC;
+    public static boolean faithfulIn(Camera camera) {
+        return onAScreenAxis(camera.planarDelta(camera.tileSize, 0))
+                && onAScreenAxis(camera.planarDelta(0, camera.tileSize));
+    }
+
+    /**
+     * Whether a projected tile edge runs along a screen axis — one of its two
+     * components is zero, so the edge is exactly horizontal or exactly vertical
+     * and the rasteriser has no partial coverage to blend.
+     *
+     * <p>Compared against the edge's own length rather than an absolute
+     * epsilon, so the answer does not depend on the tile size or the zoom. At
+     * the headings the camera rests at, {@link Camera#setYaw} has already made
+     * the zero exact; the tolerance is for the arithmetic between them, not for
+     * a heading that is nearly right.
+     */
+    private static boolean onAScreenAxis(double[] edge) {
+        double scale = Math.abs(edge[0]) + Math.abs(edge[1]);
+        if (scale == 0) return true;   // a degenerate projection has no seams
+        return Math.abs(edge[0]) <= 1e-9 * scale || Math.abs(edge[1]) <= 1e-9 * scale;
     }
 
     /**
@@ -392,13 +438,21 @@ public final class TerrainCache {
         long generation = level.terrainGeneration();
         double zoom = camera.zoom;
         Perspective perspective = camera.getPerspective();
+        // The heading, as the key needs it: where one tile along +x lands.
+        double[] edge = camera.planarDelta(level.tileSize, 0);
         long animFrame = (long) (animClock * ANIM_FPS);
 
         // The camera enters the terrain's position exactly once, here. Every
         // chunk is then placed from this one value by integer arithmetic, so the
         // whole floor moves as one rigid sheet.
-        int baseX = (int) Math.round(camera.viewportWidth / 2.0 - camera.x * camera.zoom);
-        int baseY = (int) Math.round(camera.viewportHeight / 2.0 - camera.y * camera.zoom);
+        //
+        // Through planar(), because this has to be the same offset Camera.place
+        // adds — the projected focus, not the world one. They were the same
+        // number until the camera could turn (C1), and at a turned heading the
+        // difference is the whole floor blitted somewhere the live sweep is not.
+        double[] focus = camera.planar(camera.x, camera.y);
+        int baseX = (int) Math.round(camera.viewportWidth / 2.0 - focus[0] * camera.zoom);
+        int baseY = (int) Math.round(camera.viewportHeight / 2.0 - focus[1] * camera.zoom);
 
         int c0 = Math.max(0, bounds[0] / CHUNK);
         int r0 = Math.max(0, bounds[1] / CHUNK);
@@ -427,7 +481,7 @@ public final class TerrainCache {
         int needed = 0;
         for (int cr = r0; cr <= r1; cr++) {
             for (int cc = c0; cc <= c1; cc++) {
-                Key key = keyFor(level, cc, cr, generation, zoom, perspective);
+                Key key = keyFor(level, cc, cr, generation, zoom, perspective, edge);
                 if (cached(chunkKey(cc, cr), key, animFrame) == null) needed++;
             }
         }
@@ -453,7 +507,7 @@ public final class TerrainCache {
                 for (int cr = r0; cr <= r1 && left > 0; cr++) {
                     for (int cc = c0; cc <= c1 && left > 0; cc++) {
                         long id = chunkKey(cc, cr);
-                        Key key = keyFor(level, cc, cr, generation, zoom, perspective);
+                        Key key = keyFor(level, cc, cr, generation, zoom, perspective, edge);
                         if (cached(id, key, animFrame) != null) continue;
                         Entry built = build(level, camera, cc, cr, key, animFrame,
                                 renderChunk, chunks.get(id));
@@ -472,7 +526,7 @@ public final class TerrainCache {
         for (int cr = r0; cr <= r1; cr++) {
             for (int cc = c0; cc <= c1; cc++) {
                 long id = chunkKey(cc, cr);
-                Key key = keyFor(level, cc, cr, generation, zoom, perspective);
+                Key key = keyFor(level, cc, cr, generation, zoom, perspective, edge);
                 Entry entry = cached(id, key, animFrame);
                 if (entry == null) {
                     entry = build(level, camera, cc, cr, key, animFrame, renderChunk,
@@ -493,10 +547,10 @@ public final class TerrainCache {
 
     /** Everything a chunk's validity depends on. */
     private static Key keyFor(Level level, int chunkCol, int chunkRow, long generation,
-                              double zoom, Perspective perspective) {
+                              double zoom, Perspective perspective, double[] edge) {
         return new Key(generation,
                 level.terrainRevisionAt(chunkCol * CHUNK, chunkRow * CHUNK),
-                zoom, perspective, level.tileSize);
+                zoom, perspective, level.tileSize, edge[0], edge[1]);
     }
 
     /**
@@ -682,9 +736,10 @@ public final class TerrainCache {
      * {@code round(w * zoom) - lattice}.
      *
      * <p>Derived by solving the projection {@code (w - x) * zoom + viewport/2}
-     * for the {@code x} that makes the camera term vanish. Only the orthographic
-     * formats are cached ({@link #faithfulIn}), so the diamond case does not
-     * arise.
+     * for the {@code x} that makes the camera term vanish. It holds for any
+     * projection {@link Camera#planar} can make, which C3 needs: the diamond
+     * case now does arise, because isometric turned an eighth is cached
+     * ({@link #faithfulIn}).
      *
      * <p><b>The focus that solves it is a point in <em>projected</em> space, so
      * it is carried back through the inverse projection rather than assigned

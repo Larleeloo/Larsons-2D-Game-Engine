@@ -1088,9 +1088,12 @@ The GL backend that consumes all of this exists and is selected at startup where
 a driver answers, and it now runs the shader chain as well as the scene. The
 sub-pixel stability question at HiDPI is closed too, by seven separate fixes —
 "the shimmer" turned out never to be one defect. What remains of the renderer
-work is camera rotation: the camera has a heading and the projection turns with
-it, and what is left is turning the grid, the faces, the sprites and the input
-under it. [`RENDER_PLAN.md`](RENDER_PLAN.md) is the plan of record.
+work is camera rotation, and it is half done: the camera has a heading, the
+grid, the block faces and the characters' sprites all turn with it, and the
+floor cache knows which headings it can still bake — which turns out to be four
+of the eight in either plan view, including four in isometric it could never
+bake before. What is left is the input, the snap animation, the editor and the
+save format. [`RENDER_PLAN.md`](RENDER_PLAN.md) is the plan of record.
 
 Whether any of it was worth doing stayed a question about measurements rather
 than architecture. The

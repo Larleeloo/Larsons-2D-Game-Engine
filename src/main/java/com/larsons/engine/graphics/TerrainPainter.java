@@ -219,11 +219,46 @@ public final class TerrainPainter {
         private Camera camera;
         private final double animClock;
         private final CellDecorator decor;
-        private final boolean iso;
+        /**
+         * Whether a tile's texture can be blitted as an upright rectangle
+         * instead of warped through its own edge vectors.
+         *
+         * <p>This was {@code !iso} — a proxy for "the projection is
+         * orthographic", which was the same thing for as long as the only
+         * non-upright projection was the diamond. A turned top-down view is
+         * orthographic and not upright, and the proxy would have blitted its
+         * ground textures unrotated: the geometry turns and the texture painted
+         * on it does not, so a road drawn on the floor would point the wrong
+         * way after a quarter turn while its tile turned correctly underneath
+         * it. Measured from the projection instead, and exact at rest, because
+         * {@link Camera#setYaw} makes the zeros exact.
+         */
+        private final boolean flatBlit;
         private final boolean layered;
         private final int tileSize;
         private final double lift;
         private final double shadowX, shadowY;
+        /**
+         * How far outside the viewport a cell may still reach into it.
+         *
+         * <p>A cell is rejected on its own projected corners, not on its centre,
+         * so this only has to cover what a cell draws <em>beyond</em> those
+         * corners: the lift a stacked block rises by, the offset its shadow
+         * falls at, and a tile's worth of slack for a decorator drawing over a
+         * top face. Being generous costs a few cells at the edge of the screen;
+         * being mean costs a wall that pops in when its base leaves the view.
+         */
+        private final int cullMargin;
+        /**
+         * Whether cells outside the viewport are skipped.
+         *
+         * <p>Off while baking a chunk, and that is not a detail: a bake projects
+         * through a camera positioned so the chunk lands on its own lattice
+         * rather than on the screen, so "outside the viewport" means nothing
+         * there. A chunk is also deliberately baked whole — see
+         * {@link TerrainCache} — which is the opposite of what culling is for.
+         */
+        private boolean culling = true;
 
         // Projected corners of the cell being drawn: top-left, top-right,
         // bottom-right, bottom-left — the order every texture path expects.
@@ -254,7 +289,10 @@ public final class TerrainPainter {
             this.camera = camera;
             this.animClock = animClock;
             this.decor = decor;
-            this.iso = camera.getPerspective() == Perspective.ISOMETRIC;
+            double[] alongX = camera.planarDelta(level.tileSize, 0);
+            double[] alongY = camera.planarDelta(0, level.tileSize);
+            this.flatBlit = alongX[1] == 0 && alongY[0] == 0
+                    && alongX[0] > 0 && alongY[1] > 0;
             this.layered = level.layered();
             this.tileSize = level.tileSize;
             // Height is drawn along whichever axis this space lifts things
@@ -274,12 +312,14 @@ public final class TerrainPainter {
             double[] offset = camera.planarDelta(awayX, awayY);
             this.shadowX = offset[0] * camera.zoom;
             this.shadowY = offset[1] * camera.zoom;
+            this.cullMargin = (int) Math.ceil(lift + Math.abs(shadowX) + Math.abs(shadowY)
+                    + tileSize * camera.zoom);
         }
 
         void run(int[] bounds, DepthPass raisedPass, Mining mining, TerrainCache cache) {
             Path2D.Double shadows = layered ? new Path2D.Double() : null;
             if (cache != null && TerrainCache.enabled()
-                    && TerrainCache.faithfulIn(camera.getPerspective())) {
+                    && TerrainCache.faithfulIn(camera)) {
                 // The floor comes out of the cache as a handful of blits. The
                 // shadows still have to be gathered live, because they are cast
                 // by blocks that are not in the cache and must land under the
@@ -314,6 +354,7 @@ public final class TerrainPainter {
                     int id = level.tileAt(c, r);
                     if (id <= 0) continue;
                     project(c, r);
+                    if (offScreen()) continue;
                     drawFloor(c, r, id);
                     if (shadows != null && level.upperAt(c, r) > 0) addShadow(shadows);
                 }
@@ -326,9 +367,41 @@ public final class TerrainPainter {
                 for (int c = bounds[0]; c <= bounds[2]; c++) {
                     if (level.tileAt(c, r) <= 0 || level.upperAt(c, r) <= 0) continue;
                     project(c, r);
+                    if (offScreen()) continue;
                     addShadow(shadows);
                 }
             }
+        }
+
+        /**
+         * Whether the cell just projected into {@link #xs}/{@link #ys} is far
+         * enough outside the viewport to draw nothing.
+         *
+         * <p><b>Why a per-cell test earns its keep only now.</b> The bounds a
+         * scene hands this painter are the axis-aligned box around the four
+         * viewport corners carried back into the world. Unturned, that box is
+         * the view: it holds 1.31× the cells actually on screen, which is the
+         * one-cell margin and not worth a test to save. Turned, the view is a
+         * rotated rectangle inside its own bounding box, and the box holds up to
+         * <b>2.47×</b> — measured at 45°, where nearly half of every terrain
+         * sweep was cells behind the player's shoulder. Isometric pays 2.28× of
+         * it at rest and always did.
+         *
+         * <p>It is also cheapest exactly where it is worth most: the headings
+         * with the worst ratio are the ones {@link TerrainCache#faithfulIn}
+         * refuses to bake, so the sweep it halves is the live one.
+         */
+        private boolean offScreen() {
+            if (!culling) return false;
+            int minX = xs[0], maxX = xs[0], minY = ys[0], maxY = ys[0];
+            for (int i = 1; i < 4; i++) {
+                if (xs[i] < minX) minX = xs[i];
+                if (xs[i] > maxX) maxX = xs[i];
+                if (ys[i] < minY) minY = ys[i];
+                if (ys[i] > maxY) maxY = ys[i];
+            }
+            return maxX < -cullMargin || minX > camera.viewportWidth + cullMargin
+                    || maxY < -cullMargin || minY > camera.viewportHeight + cullMargin;
         }
 
         /**
@@ -344,6 +417,7 @@ public final class TerrainPainter {
             boolean previouslySaw = sawAnimated;
             target = into;
             camera = with;
+            culling = false;
             sawAnimated = false;
             try {
                 sweepFloor(new int[]{col0, row0, col1, row1}, null);
@@ -351,6 +425,7 @@ public final class TerrainPainter {
             } finally {
                 target = previousTarget;
                 camera = previousCamera;
+                culling = true;
                 // Restore rather than clear: a sweep nested inside another one
                 // must not tell the outer sweep it saw nothing.
                 sawAnimated = previouslySaw || sawAnimated;
@@ -373,7 +448,7 @@ public final class TerrainPainter {
                     : layered ? face(block.topTextureKey(), block.textureKey())
                     : skin(block.textureKey());
             if (skin != null) {
-                TilePainter.drawTexture(target, skin, xs, ys, !iso);
+                TilePainter.drawTexture(target, skin, xs, ys, flatBlit);
             } else {
                 target.fillPolygon(xs, ys, 4, color);
                 if (block != null && block.liquid()) {
@@ -408,6 +483,8 @@ public final class TerrainPainter {
                     if (id <= 0 || level.tileAt(c, r) <= 0) continue;
                     Block block = level.blocks.get(id);
                     if (block == null) continue;
+                    project(c, r);
+                    if (offScreen()) continue;
                     int col = c, row = r;
                     raisedPass.at(baseDepth(col, row), () -> drawRaised(col, row, block));
                 }
@@ -419,25 +496,71 @@ public final class TerrainPainter {
             project(col, row);
             Color color = block.color();
             BufferedImage side = face(block.sideTextureKey(), block.textureKey());
-            if (iso) {
-                // The diamond's two lower edges face the viewer: the one from
-                // the right corner down to the bottom, and its mirror on the
-                // left. The upper two are turned away and never drawn.
-                drawFace(1, 2, side, color);
-                drawFace(3, 2, side, color);
-            } else {
-                // Straight down: only the southern face is ever in view.
-                drawFace(3, 2, side, color);
-            }
+            drawVisibleFaces(side, color);
             for (int i = 0; i < 4; i++) ys[i] -= (int) Math.round(lift);
             BufferedImage top = face(block.topTextureKey(), block.textureKey());
             if (top != null) {
-                TilePainter.drawTexture(target, top, xs, ys, !iso);
+                TilePainter.drawTexture(target, top, xs, ys, flatBlit);
             } else {
                 target.fillPolygon(xs, ys, 4, color);
                 target.drawPolygon(xs, ys, 4, color.darker());
             }
             if (decor != null) decor.afterTop(target, col, row, xs, ys, block, color);
+        }
+
+        /**
+         * The side faces of the block just projected into {@link #xs}/{@link #ys}
+         * that the camera can see, in whichever direction it is looking.
+         *
+         * <p><b>Derived from the projected quad, not from the heading.</b> The
+         * old code asked the perspective and named the faces: the diamond's two
+         * lower edges in isometric, the southern one straight down. Both answers
+         * are correct at rest and neither survives a turn, and the obvious
+         * repair — a table of which faces each of the eight headings shows —
+         * would need a row per heading per projection and would be wrong at
+         * every angle in between, which is where a snap animation lives.
+         *
+         * <p>What decides it is not the heading but where the extruded face
+         * ends up pointing, and the projected corners already know. A block
+         * stands <em>up</em> the screen, so a side face is turned toward the
+         * viewer exactly when its edge's outward normal points <em>down</em> the
+         * screen — an ordinary back-face cull, done in two dimensions because
+         * the extrusion is along a screen axis. It reproduces both old answers
+         * exactly: one face in an unturned plan view, two in a diamond, and two
+         * for a square tile turned an eighth, which is the same shape by then.
+         *
+         * <p><b>The quad's winding is assumed, and that assumption is the one
+         * thing here worth a test of its own.</b> The outward normal of an edge
+         * depends on which way round the quad reads on screen, and a normal
+         * derived from the wrong winding points into the block: it draws the
+         * faces turned away and hides the ones turned toward, which is the
+         * "world is inside out" failure C4 warns about. It was written the
+         * careful way first, measuring the winding per cell — and then measured
+         * to be unreachable. A rotation has determinant +1 and the isometric
+         * transform's is positive too, so no projection this camera can make
+         * turns the corners round the other way; forcing the winding to a
+         * constant passes every test in the suite. What guards it is therefore
+         * an assertion rather than a branch — {@code TurnedTerrainTest} checks
+         * every heading of both plan views winds the same way, so a projection
+         * that ever mirrors fails there and names this method.
+         */
+        private void drawVisibleFaces(BufferedImage side, Color color) {
+            for (int i = 0; i < 4; i++) {
+                int j = (i + 1) & 3;
+                // The y component of the edge's outward normal, (dy, -dx) for a
+                // quad that reads clockwise on a screen whose y grows downward.
+                if (-(xs[j] - xs[i]) <= 0) continue;
+                // Drawn from its higher end to its lower one, so the texture on
+                // it keeps one orientation across the faces of a block and
+                // across headings. This is the order the isometric and top-down
+                // cases were written with by hand, and it reproduces both.
+                boolean iFirst = ys[i] < ys[j] || (ys[i] == ys[j] && xs[i] < xs[j]);
+                if (iFirst) {
+                    drawFace(i, j, side, color);
+                } else {
+                    drawFace(j, i, side, color);
+                }
+            }
         }
 
         /**

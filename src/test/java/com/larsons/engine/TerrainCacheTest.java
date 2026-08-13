@@ -362,6 +362,140 @@ class TerrainCacheTest {
         }
     }
 
+    /**
+     * And it still matches at every heading it claims to be faithful at.
+     *
+     * <p>This is the assertion the rule above is worth having for. Saying a
+     * turned view is cacheable is a claim about pixels, and the cache had two
+     * places where a heading could go missing: the single camera offset every
+     * chunk is placed from, which was computed from the camera's <em>world</em>
+     * position rather than its projected one, and the validity key, which did
+     * not mention the heading at all and would have served a chunk baked
+     * looking north to a camera looking east. Neither is visible in a diff and
+     * both put the whole floor somewhere the live sweep is not.
+     *
+     * <p>Isometric is in the list, at the headings where the diamond is a
+     * square again — the first time this cache has ever baked a diamond
+     * projection, which is why the bake camera's derivation had to stop
+     * assuming it never would.
+     */
+    @Test
+    void theBakedFloorMatchesTheLiveSweepAtEveryHeadingItClaims() {
+        for (LevelFormat format : new LevelFormat[]{
+                LevelFormat.SIDE_SCROLLER, LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
+            for (int eighth = 0; eighth < 8; eighth++) {
+                double yaw = eighth * Camera.EIGHTH_TURN;
+                Level lvl = level(format, TerrainCache.CHUNK * 3, TerrainCache.CHUNK * 3);
+                Camera cam = camera(lvl);
+                cam.setYaw(yaw);
+                if (!TerrainCache.faithfulIn(cam)) continue;
+
+                TerrainCache cache = new TerrainCache();
+                warmUp(lvl, cam, cache);
+                assertTrue(cache.hits() > 0, format + " at " + eighth
+                        + "/8: nothing was served from the cache, so this proves nothing");
+
+                BufferedImage live = paint(lvl, cam, null, bounds(lvl));
+                BufferedImage cached = paint(lvl, cam, cache, bounds(lvl));
+
+                double best = 100;
+                int bestDx = 0, bestDy = 0;
+                for (int dy = -2; dy <= 2; dy++) {
+                    for (int dx = -2; dx <= 2; dx++) {
+                        double pct = 100.0 * shiftedDiff(live, cached, dx, dy) / (W * H);
+                        if (pct < best) { best = pct; bestDx = dx; bestDy = dy; }
+                    }
+                }
+                assertTrue(best < 1.0, format + " at " + eighth + "/8 of a turn: the baked "
+                        + "floor differs from the live sweep by " + best + "% even at its "
+                        + "best offset (" + bestDx + "," + bestDy + ")");
+            }
+        }
+    }
+
+    /**
+     * Turning the camera invalidates the floor, rather than serving the
+     * heading it was baked at.
+     *
+     * <p>C3 offered two ways to handle a turn — key every chunk by
+     * {@code (chunk, yaw)} at eight times the memory, or throw the cache away
+     * when the view turns — and recommended the second. It is the second, and
+     * it costs nothing to implement because it is what putting the heading in
+     * the validity key already does: a chunk baked looking north simply is not
+     * a valid chunk for a camera looking east, in the same way a chunk baked at
+     * one zoom is not valid at another.
+     *
+     * <p><b>This test exists because the negative control found nothing to
+     * fail.</b> Deleting the heading from the key left all twenty-eight of this
+     * class's other tests green: every one of them builds a cache, uses it at
+     * one heading, and throws it away. Nothing turned a camera that a cache was
+     * already warm for, which is the only way the defect can show — and it is
+     * what a player does every time they press the rotate key.
+     */
+    @Test
+    void turningTheCameraRebuildsTheFloorRatherThanServingTheOldHeading() {
+        Level lvl = level(LevelFormat.TOP_DOWN, TerrainCache.CHUNK * 3, TerrainCache.CHUNK * 3);
+        Camera cam = camera(lvl);
+        TerrainCache cache = new TerrainCache();
+        warmUp(lvl, cam, cache);
+
+        // A quarter turn: still cacheable, and a completely different picture.
+        cam.setYaw(2 * Camera.EIGHTH_TURN);
+        cache.resetCounters();
+        paint(lvl, cam, cache, bounds(lvl));
+        assertEquals(0, cache.hits(), "a chunk baked at another heading was reused");
+
+        warmUp(lvl, cam, cache);
+        BufferedImage live = paint(lvl, cam, null, bounds(lvl));
+        BufferedImage cached = paint(lvl, cam, cache, bounds(lvl));
+
+        double best = 100;
+        for (int dy = -2; dy <= 2; dy++) {
+            for (int dx = -2; dx <= 2; dx++) {
+                best = Math.min(best, 100.0 * shiftedDiff(live, cached, dx, dy) / (W * H));
+            }
+        }
+        assertTrue(best < 1.0, "after a quarter turn the cached floor differs from the "
+                + "live sweep by " + best + "% — the floor being drawn is the one baked "
+                + "at the heading before the turn");
+    }
+
+    /**
+     * A turn in flight draws live and leaves the cache alone, so the heading it
+     * came from is still warm when it arrives back.
+     *
+     * <p>The plan's recommendation was to lean on the existing frame-level
+     * stand-aside during a snap, and this is what that turned into: mid-turn
+     * the projection is not cacheable at all ({@code faithfulIn}), so the
+     * painter sweeps live and never reaches the cache. The chunks baked at the
+     * previous heading are therefore not evicted — {@code endFrame} is not
+     * called on a frame that did not use the cache — and turning back to a
+     * heading recently left is instant rather than a rebuild.
+     */
+    @Test
+    void aTurnInFlightSweepsLiveAndLeavesTheCacheWarmBehindIt() {
+        Level lvl = level(LevelFormat.TOP_DOWN, TerrainCache.CHUNK * 3, TerrainCache.CHUNK * 3);
+        Camera cam = camera(lvl);
+        TerrainCache cache = new TerrainCache();
+        warmUp(lvl, cam, cache);
+
+        for (double deg : new double[]{11, 23, 34, 45, 56, 67, 79}) {
+            cam.setYaw(Math.toRadians(deg));
+            cache.resetCounters();
+            paint(lvl, cam, cache, bounds(lvl));
+            assertEquals(0, cache.blits(), "mid-turn at " + deg + "° a chunk was blitted, "
+                    + "and a chunk baked at a heading is a seam at any other");
+            assertEquals(0, cache.rebuilds(), "mid-turn at " + deg + "° a chunk was baked, "
+                    + "which would be thrown away by the next degree of the turn");
+        }
+
+        cam.setYaw(0);
+        cache.resetCounters();
+        paint(lvl, cam, cache, bounds(lvl));
+        assertTrue(cache.hits() > 0, "coming back to the heading the turn started from "
+                + "found nothing warm — the turn evicted what it did not use");
+    }
+
     /** Pixels where {@code b} disagrees with {@code a} shifted by (dx, dy). */
     private static int shiftedDiff(BufferedImage a, BufferedImage b, int dx, int dy) {
         int n = 0;
@@ -379,9 +513,166 @@ class TerrainCacheTest {
     void isometricIsNotCachedBecauseItsEdgesAreAntialiased() {
         // Diamond tiles share diagonal edges; baked separately they blend
         // against transparency and every shared edge picks up a seam.
-        assertFalse(TerrainCache.faithfulIn(Perspective.ISOMETRIC));
-        assertTrue(TerrainCache.faithfulIn(Perspective.SIDE_SCROLL));
-        assertTrue(TerrainCache.faithfulIn(Perspective.TOP_DOWN));
+        assertFalse(TerrainCache.faithfulIn(unturned(Perspective.ISOMETRIC)));
+        assertTrue(TerrainCache.faithfulIn(unturned(Perspective.SIDE_SCROLL)));
+        assertTrue(TerrainCache.faithfulIn(unturned(Perspective.TOP_DOWN)));
+    }
+
+    /**
+     * What decides it is where the tile's edges land, not which format asked —
+     * so rotation moves both formats in and out of the answer, in opposite
+     * phase.
+     *
+     * <p>C3's precondition measurement, as a rule. A tile edge on a screen axis
+     * has no partial coverage to blend, so chunk images composite exactly; a
+     * diagonal one blends against transparency in its own image and leaves the
+     * background showing through along every shared edge. Top-down loses that
+     * property the moment it turns off a cardinal heading and isometric
+     * <em>gains</em> it at 45°, where an eighth of a turn puts the diamond's
+     * edges back on the axes. The seam measured 0.5–0.7% of frame pixels at
+     * every heading this says no to, and 0.001–0.055% at every heading it says
+     * yes to — an order of magnitude, either side of one rule.
+     */
+    @Test
+    void whatDecidesCacheabilityIsWhereTheTileEdgesLand() {
+        for (int eighth = 0; eighth < 8; eighth++) {
+            double yaw = eighth * Camera.EIGHTH_TURN;
+
+            // A side view has no heading to be at; it is always cacheable.
+            assertTrue(TerrainCache.faithfulIn(turned(Perspective.SIDE_SCROLL, yaw)),
+                    "a side-scroller at " + eighth + "/8 of a turn");
+
+            // Top-down keeps its axis-aligned edges only at the cardinals.
+            assertEquals(eighth % 2 == 0,
+                    TerrainCache.faithfulIn(turned(Perspective.TOP_DOWN, yaw)),
+                    "top-down at " + eighth + "/8 of a turn: cacheable exactly when its "
+                            + "tile edges are still on the screen axes");
+
+            // Isometric is the same rule in the opposite phase: the diamond is
+            // a square again at the diagonal headings.
+            assertEquals(eighth % 2 == 1,
+                    TerrainCache.faithfulIn(turned(Perspective.ISOMETRIC, yaw)),
+                    "isometric at " + eighth + "/8 of a turn: an eighth of a turn puts "
+                            + "the diamond's edges back on the screen axes");
+        }
+    }
+
+    /** Mid-snap, between two headings, nothing is cacheable in a plan view. */
+    @Test
+    void aTurnInFlightIsNotCacheableInEitherPlanView() {
+        for (double deg : new double[]{5, 22.5, 30, 67.5, 100}) {
+            double yaw = Math.toRadians(deg);
+            assertFalse(TerrainCache.faithfulIn(turned(Perspective.TOP_DOWN, yaw)),
+                    "top-down mid-turn at " + deg + "°");
+            assertFalse(TerrainCache.faithfulIn(turned(Perspective.ISOMETRIC, yaw)),
+                    "isometric mid-turn at " + deg + "°");
+        }
+    }
+
+    /**
+     * The rule matches the artefact it is about, measured every run.
+     *
+     * <p>Everything above takes {@code faithfulIn} at its word. This is the
+     * measurement the word is standing in for, and it is kept as a test rather
+     * than written down as a number because a number in a comment is a claim
+     * about a version of Java2D's rasteriser rather than about this one.
+     *
+     * <p>The floor is drawn twice: once whole, and once in chunk-sized pieces
+     * composited afterwards, both through the same camera so placement cannot
+     * enter into it and the only thing being measured is what compositing
+     * separately-antialiased edges does. The two agree to a few hundredths of a
+     * percent at every heading the rule allows and disagree by half a percent
+     * or more at every heading it refuses — an order of magnitude either side of
+     * one line, which is what makes it a rule rather than a threshold.
+     */
+    @Test
+    void theCacheabilityRuleMatchesTheSeamItIsAbout() {
+        for (LevelFormat format : new LevelFormat[]{LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
+            for (int eighth = 0; eighth < 8; eighth++) {
+                Level lvl = level(format, 24, 24);
+                Camera cam = camera(lvl);
+                cam.setYaw(eighth * Camera.EIGHTH_TURN);
+
+                double seam = seamPercent(lvl, cam);
+                boolean claimed = TerrainCache.faithfulIn(cam);
+
+                if (claimed) {
+                    assertTrue(seam < 0.2, format + " at " + eighth + "/8 of a turn is "
+                            + "claimed cacheable, and baking it in chunks leaves " + seam
+                            + "% of the frame different from the live sweep");
+                } else {
+                    assertTrue(seam > 0.2, format + " at " + eighth + "/8 of a turn is "
+                            + "refused, but baking it in chunks costs only " + seam
+                            + "% — the rule is turning down a view it could serve");
+                }
+            }
+        }
+    }
+
+    /**
+     * How much of the frame changes when the floor is drawn in chunk-sized
+     * pieces and composited, rather than swept whole.
+     *
+     * <p>Both layers land on an opaque backdrop before they are compared,
+     * because that is the whole mechanism: two half-covered edge pixels
+     * composited leave a quarter of the <em>background</em> showing through,
+     * and against a transparent base there is no background to show.
+     */
+    private static double seamPercent(Level lvl, Camera cam) {
+        int[] whole = {0, 0, lvl.width - 1, lvl.height - 1};
+        BufferedImage live = onBackdrop(layer(lvl, cam, whole));
+
+        BufferedImage pieces = new BufferedImage(W, H, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = pieces.createGraphics();
+        int across = (lvl.width + TerrainCache.CHUNK - 1) / TerrainCache.CHUNK;
+        int down = (lvl.height + TerrainCache.CHUNK - 1) / TerrainCache.CHUNK;
+        for (int cr = 0; cr < down; cr++) {
+            for (int cc = 0; cc < across; cc++) {
+                g.drawImage(layer(lvl, cam, new int[]{
+                        cc * TerrainCache.CHUNK, cr * TerrainCache.CHUNK,
+                        Math.min(lvl.width - 1, (cc + 1) * TerrainCache.CHUNK - 1),
+                        Math.min(lvl.height - 1, (cr + 1) * TerrainCache.CHUNK - 1)}), 0, 0, null);
+            }
+        }
+        g.dispose();
+        BufferedImage composited = onBackdrop(pieces);
+
+        return 100.0 * differingPixels(live, composited) / (W * H);
+    }
+
+    /** One terrain pass into a transparent layer of its own. */
+    private static BufferedImage layer(Level lvl, Camera cam, int[] bounds) {
+        BufferedImage img = new BufferedImage(W, H, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION,
+                RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR);
+        DepthPass pass = DepthPass.of(lvl.perspective);
+        TerrainPainter.draw(Java2DTarget.unsized(g), lvl, cam, bounds, 0.0, pass, null);
+        pass.flush();
+        g.dispose();
+        return img;
+    }
+
+    private static BufferedImage onBackdrop(BufferedImage layer) {
+        BufferedImage img = new BufferedImage(W, H, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        g.setColor(new Color(24, 28, 38));
+        g.fillRect(0, 0, W, H);
+        g.drawImage(layer, 0, 0, null);
+        g.dispose();
+        return img;
+    }
+
+    private static Camera unturned(Perspective perspective) {
+        return turned(perspective, 0);
+    }
+
+    private static Camera turned(Perspective perspective, double yaw) {
+        Camera cam = new Camera(perspective, W, H);
+        cam.tileSize = TILE;
+        cam.setYaw(yaw);
+        return cam;
     }
 
     @Test
