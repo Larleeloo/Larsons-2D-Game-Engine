@@ -62,15 +62,61 @@ package com.larsons.engine.graphics;
  * camera point separately and subtracted afterwards. A yaw belongs inside
  * {@code planar}, on both, and the arithmetic below does not change. This is not
  * snapping geometry to a screen-aligned grid, which would be wrong for a turned
- * view; it is quantising the world in its own space.
+ * view; it is quantising the world in its own space. That prediction is now
+ * discharged rather than hoped for: {@link #setYaw} puts the rotation inside
+ * {@code planar}, and {@code CameraYawTest} asserts the rigid-sheet property at
+ * all eight headings.
+ *
+ * <h2>Yaw</h2>
+ *
+ * <p>{@link #yaw()} is the compass heading the camera faces, in radians,
+ * <em>clockwise from world north</em> — north being −y, which is up the screen
+ * at heading zero. The projection therefore rotates the world by the
+ * <em>inverse</em>: turn the camera right and the world swings left, which is
+ * what a camera does. At {@code yaw = π/2} the camera looks east, so world east
+ * is the direction that now points up the screen.
+ *
+ * <p><b>Rotation belongs to the plan views only.</b> {@link Perspective#SIDE_SCROLL}
+ * ignores yaw entirely: the screen there <em>is</em> the vertical plane, +y is
+ * the direction gravity pulls rather than a ground-plane axis, and there is no
+ * vertical axis on screen to turn around. Rotating it would tip the world over
+ * rather than turn it. {@link Perspective#TOP_DOWN} and
+ * {@link Perspective#ISOMETRIC} rotate; the isometric case rotates the grid on
+ * the ground plane <em>first</em> and then views the result through the fixed
+ * diamond, because the camera turns around the world's vertical axis and not
+ * around the screen's.
  */
 public class Camera {
+    /**
+     * The angle between two adjacent compass points — 45° in radians, and one
+     * press of the rotate key once C8 binds it.
+     */
+    public static final double EIGHTH_TURN = Math.PI / 4;
+
     /** Focus position in world coordinates (the point centred on screen). */
     public double x, y;
     public double zoom = 1.0;
     public int viewportWidth, viewportHeight;
 
     private Perspective perspective;
+
+    /**
+     * The camera's heading, radians clockwise from world north; see the class
+     * note. Private rather than public like {@link #x} because the projection
+     * reads its cosine and sine on the hot path (four corners per tile) and
+     * {@link #setYaw} is what keeps those two in step with it.
+     */
+    private double yaw;
+    /**
+     * The heading the camera is turning towards. Nothing here animates: this is
+     * the goal C8's snap eases {@link #yaw} onto, and it is stored on the camera
+     * because it is view state — per client, never networked (C10).
+     */
+    private double targetYaw;
+
+    // cos/sin of yaw, maintained by setYaw. See snap() for why they are not
+    // simply Math.cos/Math.sin of it.
+    private double cosYaw = 1.0, sinYaw = 0.0;
 
     // Isometric projection parameters: one world tile (tileSize units on each
     // axis) projects to a diamond this many pixels wide/tall.
@@ -99,28 +145,98 @@ public class Camera {
         this.y = wy;
     }
 
-    /** Planar projection of a world point, before zoom/centering. */
-    private double[] planar(double wx, double wy) {
+    /** The camera's heading, radians clockwise from world north. */
+    public double yaw() { return yaw; }
+
+    /**
+     * Turn the camera to {@code radians}, clockwise from world north.
+     *
+     * <p>Has no effect on the picture in {@link Perspective#SIDE_SCROLL} — the
+     * value is still stored, so a camera can be carried between levels of
+     * different formats without a heading silently disappearing, but the
+     * projection ignores it. See the class note.
+     */
+    public void setYaw(double radians) {
+        this.yaw = radians;
+        this.cosYaw = snap(Math.cos(radians));
+        this.sinYaw = snap(Math.sin(radians));
+    }
+
+    /** The heading {@link #yaw} is easing towards; C8 drives it. */
+    public double targetYaw() { return targetYaw; }
+
+    /** Aim the camera at a heading. Nothing moves until something eases it. */
+    public void setTargetYaw(double radians) { this.targetYaw = radians; }
+
+    /** Whether yaw reaches the picture at all in this perspective. */
+    public boolean rotates() { return perspective != Perspective.SIDE_SCROLL; }
+
+    /**
+     * A cosine or sine rounded to the exact value the heading means.
+     *
+     * <p>{@code Math.cos(Math.PI / 2)} is 6.1e-17, not zero. Left alone, a
+     * quarter turn would be a rotation by 6.1e-17 radians rather than an exact
+     * axis swap, and the projection at the four cardinal headings would no
+     * longer be the unrotated one with its axes exchanged. That costs nothing
+     * visible — 6.1e-17 rad over a large level is 1e-11 px — but the exactness
+     * is worth having for the headings the camera actually rests at: it is what
+     * lets a golden frame at 90° be the transpose of one at 0°, and what keeps
+     * the world's pixel lattice (see the class note) exactly the lattice it was.
+     */
+    private static double snap(double v) {
+        if (Math.abs(v) < 1e-12) return 0.0;
+        if (Math.abs(v - 1.0) < 1e-12) return 1.0;
+        if (Math.abs(v + 1.0) < 1e-12) return -1.0;
+        return v;
+    }
+
+    /**
+     * Planar projection of a world point, before zoom/centering: the whole of
+     * the perspective and the yaw, and none of the camera, the zoom or the
+     * rounding.
+     *
+     * <p>Public because the rotated view needs it. The visible region of the
+     * world stops being a rectangle of cells the moment the camera turns, so
+     * anything deciding what to sweep has to project the corners itself.
+     */
+    public double[] planar(double wx, double wy) {
+        if (perspective == Perspective.SIDE_SCROLL) return new double[]{wx, wy};
+
+        // Yaw first, on the ground plane: the camera turns around the world's
+        // vertical axis, not around the screen's. The rotation is the inverse
+        // of the heading — the camera turns right, the world swings left.
+        double rx = wx * cosYaw + wy * sinYaw;
+        double ry = -wx * sinYaw + wy * cosYaw;
+
         if (perspective == Perspective.ISOMETRIC) {
-            double tx = wx / tileSize;
-            double ty = wy / tileSize;
+            double tx = rx / tileSize;
+            double ty = ry / tileSize;
             return new double[]{
                     (tx - ty) * (isoTileWidth / 2.0),
                     (tx + ty) * (isoTileHeight / 2.0)
             };
         }
-        return new double[]{wx, wy}; // SIDE_SCROLL / TOP_DOWN: orthographic
+        return new double[]{rx, ry}; // TOP_DOWN: orthographic, turned
     }
 
-    private double[] inversePlanar(double px, double py) {
+    /** The exact inverse of {@link #planar}, undone in the opposite order. */
+    public double[] inversePlanar(double px, double py) {
+        if (perspective == Perspective.SIDE_SCROLL) return new double[]{px, py};
+
+        double rx, ry;
         if (perspective == Perspective.ISOMETRIC) {
             double a = px / (isoTileWidth / 2.0);
             double b = py / (isoTileHeight / 2.0);
-            double tx = (a + b) / 2.0;
-            double ty = (b - a) / 2.0;
-            return new double[]{tx * tileSize, ty * tileSize};
+            rx = (a + b) / 2.0 * tileSize;
+            ry = (b - a) / 2.0 * tileSize;
+        } else {
+            rx = px;
+            ry = py;
         }
-        return new double[]{px, py};
+        return new double[]{
+                rx * cosYaw - ry * sinYaw,
+                rx * sinYaw + ry * cosYaw
+        };
     }
 
     public int worldToScreenX(double wx, double wy) {
@@ -169,19 +285,34 @@ public class Camera {
      */
     public void worldToScreen(double wx, double wy, int[] out) {
         double px, py, cx, cy;
-        if (perspective == Perspective.ISOMETRIC) {
-            double hw = isoTileWidth / 2.0, hh = isoTileHeight / 2.0;
-            double tx = wx / tileSize, ty = wy / tileSize;
-            px = (tx - ty) * hw;
-            py = (tx + ty) * hh;
-            double ctx = x / tileSize, cty = y / tileSize;
-            cx = (ctx - cty) * hw;
-            cy = (ctx + cty) * hh;
-        } else {
+        if (perspective == Perspective.SIDE_SCROLL) {
             px = wx;
             py = wy;
             cx = x;
             cy = y;
+        } else {
+            // The same two steps as planar(), inlined for both points at once.
+            // They must stay the same two steps: this is the tile path and
+            // planar() is the picking path, and a disagreement between them is
+            // a mouse click landing on the wrong block.
+            double rx = wx * cosYaw + wy * sinYaw;
+            double ry = -wx * sinYaw + wy * cosYaw;
+            double rcx = x * cosYaw + y * sinYaw;
+            double rcy = -x * sinYaw + y * cosYaw;
+            if (perspective == Perspective.ISOMETRIC) {
+                double hw = isoTileWidth / 2.0, hh = isoTileHeight / 2.0;
+                double tx = rx / tileSize, ty = ry / tileSize;
+                px = (tx - ty) * hw;
+                py = (tx + ty) * hh;
+                double ctx = rcx / tileSize, cty = rcy / tileSize;
+                cx = (ctx - cty) * hw;
+                cy = (ctx + cty) * hh;
+            } else {
+                px = rx;
+                py = ry;
+                cx = rcx;
+                cy = rcy;
+            }
         }
         out[0] = place(px, cx, viewportWidth);
         out[1] = place(py, cy, viewportHeight);
@@ -193,6 +324,10 @@ public class Camera {
      * floor keeps pointing the same way across the floor when the camera turns
      * the grid into a diamond, which is what a cast shadow or any other
      * ground-plane direction needs.
+     *
+     * <p>Yaw comes free here, and by construction rather than by luck: rotation
+     * is linear and fixes the origin, so a direction routed through this one
+     * swings with the camera without this method knowing a camera can turn.
      */
     public double[] planarDelta(double dx, double dy) {
         double[] a = planar(0, 0);

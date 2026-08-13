@@ -1,9 +1,11 @@
 # Render Plan — GPU Acceleration, End to End
 
 **Status:** Living document. Written 2026-08-02 against commit `85196b9` on
-`claude/gpu-acceleration-shaders-oqbx54`. **Jobs A and B are complete.** Job A
-closed 2026-08-04: the shipped GLSL runs on the GPU, matching the CPU chain pass
-for pass, and the GL backend has lighting again (§5, A2–A6).
+`claude/gpu-acceleration-shaders-oqbx54`. **Jobs A, B and D are complete; Job C
+is under way** — C1 and C2 are closed, C3 is next and has a measurement to take
+before it starts. Job A closed 2026-08-04: the shipped GLSL runs on the GPU,
+matching the CPU chain pass for pass, and the GL backend has lighting again
+(§5, A2–A6).
 
 **Job B delivered.**
 Measured on the M1 Air across four runs on two builds: the scene stage fell from
@@ -72,6 +74,19 @@ don't line up unless you're on the same vertical level as a block"* is a
 vertical mirror, and it was: the lighting pass read a texture coordinate as a
 screen row. The parity harness could not fail on it, because it uploaded and
 read back with two flips that cancelled. §5's A7.
+
+**Job C has started, and its first step found that its own verification cannot
+fail on the bug it was written for.** C1 put a heading on the camera and the
+rotation into all three projection paths; the round-trip property this plan
+specified as the proof passed a mirrored rotation, an unturned camera and a
+half-turned one, because an inverse derived from the same matrix inverts a wrong
+matrix exactly as happily as a right one. What does fail is a statement about
+direction rather than about information. C1 also fixed a second defect on the
+way past: `TerrainCache` solved for a bake focus in projected space and assigned
+it to a world coordinate, which was the same number until the camera could turn.
+C2 then found the accessor it was written to add already there under another
+name — and the obvious rule about it false, because a torch standing on a path
+is two blocks tall and you walk straight through it. §6.
 
 Also open: **B11** fixed a GL jar that could not open a window when
 double-clicked on macOS, the platform it had been profiled on for four steps. And
@@ -170,6 +185,9 @@ Everything in this table has been measured or executed, not assumed.
 | A pass's cost on a GPU is not what the submitting thread's clock says | A2 — `Stage.SHADERS` and the per-pass split come from `GL_TIME_ELAPSED` queries, collected a frame later; `FrameProfiler.recordElapsed` exists for measurements that are not wall time |
 | The chain measures in the same pixels the CPU chain does | A2 — `uResolution` is the logical frame size, checked at 2× against the Java2D frame upscaled, with the device-units mistake as the negative control |
 | Both backends run the whole game, not a test harness | B9 — `-Dlarsons.run.seconds` launches the real game on each and exits; both wrote a report under `xvfb-run`, `gl` at 0.631 ms scene against `java2d` at 1.591 ms on a software rasteriser |
+| **The camera turns, and all three projection paths turn with it** | C1 — `CameraYawTest` runs every case at all eight headings in both rotating formats: the round trip, the tile path against the picking path, the pixel round trip, and D3's rigid sheet **under rotation**, which `Camera`'s note predicted and could not check |
+| A projection can invert perfectly and still be mirrored | C1 — the round trip this plan specified as C1's verification passes a sign-flipped rotation, an unturned one, and a half-turned one. An inverse derived from the same matrix inverts a wrong matrix as happily as a right one; what fails is "at heading *h*, world direction *h* projects the way north projects at 0" |
+| The height axis exists and is not the walkability axis | C2 — `heightAt` is `Level.stackHeight`, asserted 0/1/2-and-never-3 in every format. A torch on a path is height **2** and still walkable, so C4's face visibility and collision read different questions of the same cell |
 
 **The honest summary:** Job A's *unknowns* are gone; only its plumbing remains,
 and the plumbing has a working prototype. Job B's migration is done and, as of
@@ -204,16 +222,22 @@ much faster it makes things.
    the Java2D path working and tested.
 3. **Pixel parity is the contract.** "Looks fine" is not a result. Every port
    step compares rendered output against a reference and states the error.
-4. **The suite stays green.** Last full run: **984 tests, 0 failures, 3 skipped**
-   under `xvfb-run` (was 810/0/3 when this was written; B0–B11, D0–D2 and
-   A1–A5 added the rest, twelve of them in Job A;
-   17 skip with no display at all). The skips are
-   environment-dependent and skip rather than fail by design — three need a
-   display, fourteen need a GL driver (seven in core, seven in `:gl`). Under
-   `xvfb-run` the same suite is **959/0/3**: the GL tests all run on a software
-   driver, and the three that do not are display tests losing a race with the
-   eleven classes that set `java.awt.headless=true` in the shared JVM (see B4).
-   A step ends with that or better.
+4. **The suite stays green.** Last full run, under `xvfb-run`: **990 tests,
+   0 failures, 3 skipped** in core plus **62/0/0** in `:gl` (was 810/0/3 when
+   this was written; B0–B11, D0–D7, A1–A7 and C1–C2 added the rest, twelve of
+   them in Job A and eleven in Job C so far). The three skips are the display
+   tests losing a race with the eleven classes that set
+   `java.awt.headless=true` in the shared JVM (see B4); with no display at all,
+   17 stand aside instead — fourteen of those need a GL driver, seven in core
+   and seven in `:gl`. Skipping rather than failing on a missing environment is
+   by design. A step ends with that or better.
+
+   **These figures are counted from `build/test-results`, and the 984 recorded
+   here at A5 does not reproduce against that count** — the same count read 979
+   immediately before C1 touched anything. Rather than carry a number nothing
+   reproduces, the number here is the counted one and the method is stated with
+   it, which is the rule B10 arrived at the hard way: a figure that cannot be
+   re-derived is not a result.
 5. **Nothing merges that cannot be measured.** If a change is supposed to make
    the frame faster, the profiler says so before it lands. This rule exists
    because it has already caught three things in this work that felt right and
@@ -2897,6 +2921,95 @@ yaws, `inversePlanar(planar(p))` returns `p` within floating-point tolerance.
 This is cheap and it catches the sign errors that otherwise show up as a world
 that rotates the wrong way at exactly two of the eight headings.
 
+#### C1 — done, and the step's own verification cannot fail on the bug it was written for
+
+`Camera` has a heading. `yaw` and `targetYaw` are there, the rotation is inside
+all three projection paths, and `CameraYawTest` holds nine properties across
+both rotating formats at all eight headings.
+
+**The convention, stated once so nothing has to guess it.** `yaw()` is the
+compass heading the camera *faces*, radians clockwise from world north — north
+being −y, up the screen at heading zero. The projection therefore applies the
+**inverse** rotation: turn the camera right and the world swings left, which is
+what a camera does and what *Don't Starve* does. At `yaw = π/2` the camera looks
+east, so world east is the direction that now points up the screen.
+
+Three decisions inside that, each of which could have gone the other way:
+
+- **Isometric rotates on the ground plane first, then goes through the fixed
+  diamond.** The camera turns around the world's vertical axis, not around the
+  screen's; rotating the projected diamond instead would tilt the horizon.
+- **`SIDE_SCROLL` stores a heading and ignores it.** §6.1's scope rule, and the
+  storage half matters: a camera carried into a side-scroller and back out again
+  must not silently forget where it was looking. `rotates()` says which it is.
+- **`planar` and `inversePlanar` are now public.** C3 needs them — the moment
+  the camera turns, the visible region stops being a rectangle of cells, so
+  whatever decides what to sweep has to project corners itself. They were
+  private because nothing outside had a reason to ask.
+
+`setYaw` keeps `cos`/`sin` beside the angle rather than calling `Math.cos` four
+times per tile, and **snaps them at the cardinal headings**: `Math.cos(π/2)` is
+6.1e-17, not zero, so left alone a quarter turn would be a rotation by 6.1e-17
+radians instead of an exact axis swap. The visible cost of that is 1e-11 px and
+the invisible cost is the property worth keeping — at the four headings the
+camera actually rests at, the turned projection is exactly the unturned one with
+its axes exchanged, so the world's pixel lattice (D3) survives a turn as itself.
+
+**The finding: the round trip this step specifies passes every version of the
+bug it was specified to catch.** The four negative controls below were each run
+against the whole test class:
+
+| The camera, broken | What `inversePlanar(planar(p))` said | What caught it |
+|---|---|---|
+| The rotation mirrored (sine sign flipped, on both sides) | **round trip green** | the heading test, and the cardinal axis swaps |
+| Yaw in `planar` but not in the inlined tile path | **round trip green** — `screenToWorld` failed, which pairs with `planar` | the tile-path/picking-path agreement test |
+| `cos`/`sin` left unsnapped | **round trip green** | the cardinal axis swaps, at 1e-17 |
+| `setYaw` stores the heading and the projection ignores it | **round trip green** | the heading test, and eight-distinct-positions |
+
+The reason is worth keeping because it generalises: **an inverse derived from
+the same matrix inverts a wrong matrix exactly as happily as a right one.** The
+round trip proves the projection loses no information. It says nothing at all
+about which way the world turned, and a mirrored rotation is a perfectly
+invertible one. It is still worth having — a projection that does not invert
+puts creative mode's strokes in the wrong cell — but it is not the sign check
+the step believed it was.
+
+What is: **at heading *h*, the world direction *h* must project exactly the way
+north projects at heading 0.** That is what "the camera faces *h*" means, said
+so it can fail, and it fails on all four controls that change the rotation.
+
+**And one correction to the step's arithmetic.** It says a sign error "shows up
+as a world that rotates the wrong way at exactly two of the eight headings". It
+is the other way round: a mirrored rotation is exactly *right* at 0° and 180°,
+where the sine is zero and the mirror is a no-op, and wrong at the other **six**.
+A test that samples two headings is therefore likelier to pass a mirrored world
+than to fail it, which is why every case in `CameraYawTest` runs all eight.
+
+**A second defect, in code this step did not plan to touch.**
+`TerrainCache.bakeCamera` derives the focus that makes the camera term vanish by
+solving `(w − x) · zoom + viewport/2`, and then assigns that solution — a point
+in *projected* space — straight to `x`/`y`, which are *world* coordinates. Those
+were the same number for as long as `planar` was the identity for the two
+formats the cache serves. They stop being the same number at any non-zero
+heading, and the chunk is then baked from a position the frame is not looking
+from: the shaking bug this class exists to fix, wearing a different hat, arriving
+the first time a player pressed the rotate key. It now carries the heading and
+routes the focus through `inversePlanar`. At heading 0 the inverse is the
+identity and the arithmetic is bit-for-bit what it was, which is what the
+unchanged goldens say.
+
+**Verified.** `CameraYawTest`, 9 tests: the round trip, the three-path agreement,
+the pixel round trip, the heading convention, eight distinct headings and an
+exact full turn, the cardinal axis swaps, D3's rigid sheet **at all eight
+headings** (`Camera`'s own note predicted rotation would survive the split
+rounding; it is checked now rather than predicted), the side-scroller's
+immunity, and `targetYaw`'s inertness. Suite **979 → 988 tests, 0 failures, 3
+skipped** in core, plus `:gl` at 62/0/0, under `xvfb-run`. Goldens unchanged, as
+a step that adds a heading nothing yet turns must leave them.
+
+*(The 984 in §3's invariant 4 does not reproduce against a count of the result
+XML at this commit, which is 979. The figures here are counted ones.)*
+
 ---
 
 ### C2 — Formalise the height axis
@@ -2913,6 +3026,46 @@ needs it addressed as one:
 
 **Verify.** `StackedBlockTest` extended to assert `heightAt` against the existing
 layer semantics.
+
+#### C2 — done. The accessor already existed, and the tidy rule about it is false
+
+**`heightAt` is `Level.stackHeight(col, row)`**, and it has been there since the
+plan views learned to stack: `0` bare ground, `1` a floor, `2` a wall. It was
+written for mining, which takes a stack apart from the top down, and rotation
+wants the same number for a different reason. So no accessor was added. A second
+name for one concept is a thing every later reader has to check the equivalence
+of, and this plan has already paid for that lesson twice (B6's `drawText`, B8's
+white texel): **the third of the plan's instructions to be measured, and the
+first to be measured as already satisfied rather than as wrong.**
+
+**The decision C2 asks to record: the stack stays two deep.** Two levels is the
+*Don't Starve* look, and a third reaches liquids (which pool in the upper
+layer), pathfinding, the editor palette and the save format. Revisit separately
+or not at all.
+
+What was actually missing is smaller than an accessor and more useful than one.
+
+- **The range was documented and never asserted.** `theHeightAxisIsZeroOneOrTwoAndNeverThree`
+  now walks a cell from hole to floor to wall in every format, asserts the cell
+  is then full (`placeLayer` returns −1, so nothing can answer 3), and checks
+  that off-grid cells answer 0 — which is what a rotated sweep meets first, when
+  its bounds stop being the grid's.
+- **A side-scroller tops out at 1**, because `setUpper` refuses an edit in an
+  unlayered format. That is §6.1's scope rule arriving from the other side: the
+  format with no second layer is exactly the format that does not rotate.
+- **"Height 2 means a wall" is false, and it was the natural thing to assert.**
+  A torch standing on a path is two blocks deep and you walk straight through
+  it: `walkable` asks the stacked block whether it is *solid*, and dressing is
+  not a barrier. **Height is geometry; walkability is solidity.** C4 derives
+  visible faces from height, so a torch has a side face to show when the camera
+  turns — and a test asserting the tidier rule would have passed today, because
+  nothing yet reads height for drawing, and would have made the torch
+  un-drawable the moment something did. `heightIsGeometryAndWalkabilityIsSolidity`
+  pins both halves.
+
+**Verified.** `StackedBlockTest` 12 → 14 tests, green in all three formats. Full
+suite after C1 and C2: **990 tests, 0 failures, 3 skipped** in core plus `:gl` at
+**62/0/0**, under `xvfb-run`.
 
 ---
 
@@ -3795,6 +3948,7 @@ gets declared finished while broken.
 | **`StepInterpolationTest`** | Is the world *sampled* evenly in time? Every instrument above asks about the picture, and this one is about when the picture is taken — a rigid sheet sampled unevenly is indistinguishable from a sheet that is not rigid | `StepInterpolationTest.java`, D6 |
 | **`TerrainCacheTest`, the tests at the bottom** | Does the renderer hold still over *seconds*, rather than over two frames? Every other instrument here runs at a stopped `animClock`, which is why a 12 Hz flip-flop survived six fixes | `TerrainCacheTest.java`, D7 |
 | **`GlScreenSpaceTest`** | Does a shader know which way up the frame is? The chain's parity harness uploads and reads back with two flips that cancel, so it cannot | `gl/…/GlScreenSpaceTest.java`, A7 |
+| **`CameraYawTest`** | Does the camera turn, the right way, in every path out of it? Three pieces of arithmetic say where a world point lands — the tile loop's inlined one, the picking path's, and the inverse creative mode paints with — and a yaw added to one of them renders a correct world that the mouse disagrees with, which no golden frame can see | `CameraYawTest.java`, C1 |
 
 **`DrawStats` and `GlParityTest` answer different questions and B8 measured the
 gap.** `DrawStats` models what a batching backend *could* merge given the draw
@@ -3956,8 +4110,30 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
       │        real size instead of round(logical x scale); GlResizeTest.
       │        Came from a crash report, not from this plan.
       │
-      └─ C1  camera yaw
-         C2  formalise the height axis
+      └─ C1  camera yaw               ← done. yaw = the compass heading the
+         │      camera FACES, clockwise from north; the projection applies the
+         │      inverse, so turning right swings the world left. Iso rotates the
+         │      ground plane and then goes through the fixed diamond — the axis
+         │      is the world's, not the screen's. cos/sin snapped at the four
+         │      cardinals so a quarter turn is an exact axis swap rather than a
+         │      rotation by 6.1e-17 rad. THE STEP'S OWN VERIFICATION CANNOT FAIL
+         │      ON THIS BUG: the round trip passed all four negative controls,
+         │      including a mirrored rotation and a camera that ignores yaw
+         │      entirely, because an inverse derived from the same matrix
+         │      inverts a wrong one just as happily. What fails is "at heading h
+         │      the world direction h projects the way north projects at 0".
+         │      And the step's arithmetic is backwards: a mirrored rotation is
+         │      right at 2 of the 8 headings and wrong at 6. Also fixed
+         │      TerrainCache.bakeCamera, which solved for a focus in PROJECTED
+         │      space and assigned it to a WORLD coordinate — identical until
+         │      the camera could turn, then the shaking bug again.
+         C2  formalise the height axis ← done. The accessor already existed:
+         │      Level.stackHeight, written for mining, 0 hole / 1 floor / 2 wall.
+         │      No second name for it. Stack limit STAYS AT TWO (recorded).
+         │      What was missing: the range was documented and never asserted,
+         │      and the tidy rule is false — a torch on a path is height 2 and
+         │      still WALKABLE. Height is geometry, walkability is solidity, and
+         │      C4 reads the first while collision reads the second.
          C3  rotate the grid (re-measure TerrainCache seams FIRST)
          C4  face visibility + depth order
          C5  billboards + directional frames
