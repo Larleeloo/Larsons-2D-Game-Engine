@@ -172,6 +172,20 @@ public class Camera {
     public boolean rotates() { return perspective != Perspective.SIDE_SCROLL; }
 
     /**
+     * The heading the picture is actually drawn at: {@link #yaw()} where the
+     * perspective turns, and zero where it does not.
+     *
+     * <p>What anything outside this class should ask when it wants to turn
+     * something with the camera — a sprite's apparent direction, an input
+     * vector, a ground-plane offset. {@link #yaw()} is what the camera was
+     * <em>told</em>, and a side-scroller can be told a heading it does not use;
+     * asking the wrong one of the two turns a side-scroller's sprites while its
+     * world stays put, which is the least obvious way to get this wrong and the
+     * easiest to write.
+     */
+    public double viewYaw() { return rotates() ? yaw : 0; }
+
+    /**
      * A cosine or sine rounded to the exact value the heading means.
      *
      * <p>{@code Math.cos(Math.PI / 2)} is 6.1e-17, not zero. Left alone, a

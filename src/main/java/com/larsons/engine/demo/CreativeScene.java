@@ -983,10 +983,21 @@ public class CreativeScene extends AbstractScene {
         // own shortcuts (save), so panning stands still while it is down.
         boolean ctrl = input.isKeyDown(KeyEvent.VK_CONTROL);
         if (!ctrl) {
-            if (KeyBinds.down(input, GameAction.MOVE_UP)) camera.y -= pan;
-            if (KeyBinds.down(input, GameAction.MOVE_DOWN)) camera.y += pan;
-            if (KeyBinds.down(input, GameAction.MOVE_LEFT)) camera.x -= pan;
-            if (KeyBinds.down(input, GameAction.MOVE_RIGHT)) camera.x += pan;
+            // Panning is a screen intent, exactly as walking is: "left" means
+            // toward the left of the picture, so it has to be rotated into the
+            // world before it moves the focus. Panning along the world's axes
+            // instead sends the view off diagonally at every heading but the
+            // one it was authored at, which is the same defect as C7's and in
+            // the tool the level is built with. PlayerInput does the arithmetic
+            // because it is the same arithmetic.
+            PlayerInput pan2d = new PlayerInput(
+                    KeyBinds.down(input, GameAction.MOVE_LEFT),
+                    KeyBinds.down(input, GameAction.MOVE_RIGHT),
+                    KeyBinds.down(input, GameAction.MOVE_UP),
+                    KeyBinds.down(input, GameAction.MOVE_DOWN), 0);
+            pan2d.yaw = camera.viewYaw();
+            camera.x += pan2d.moveX() * pan;
+            camera.y += pan2d.moveY() * pan;
         }
 
         boolean overSidebar = input.getMouseX() < SIDEBAR_W;
@@ -2544,6 +2555,9 @@ public class CreativeScene extends AbstractScene {
                 KeyBinds.down(input, GameAction.MOVE_DOWN),
                 ++inputSeq);
         in.sprint = KeyBinds.down(input, GameAction.SPRINT);
+        // The heading these keys were pressed at. It travels with the tick
+        // because the server has no camera to ask — see PlayerInput.yaw (C7).
+        in.yaw = camera.viewYaw();
         // Space jumps in play-test too; W/Up only ever steer (see PlayScene).
         in.jump = KeyBinds.pressed(input, GameAction.JUMP);
         testInv.applyPassivesTo(testMe, p.itemsEnabled);
@@ -6152,6 +6166,27 @@ public class CreativeScene extends AbstractScene {
      * what a player sees: this direction's sheet, its mirror twin, the state's
      * sheet, the idle sheet, then the pre-generated directional art.
      */
+    /**
+     * A world direction as this scene's camera currently sees it — the one
+     * conversion C5 needs, in the one place a world facing becomes art.
+     *
+     * <p>Every sprite here is a billboard: it faces the camera, and the
+     * direction it is <em>doing</em> is told by which of the eight sheets is
+     * drawn. So the sheet has to be chosen relative to the heading, or a
+     * character walking north goes on being drawn from behind after the camera
+     * has walked round to look at their side. The alternative — eight sets of
+     * art per direction — is eight times the drawing for no gameplay, in a
+     * project that ships none of it.
+     *
+     * <p>Deliberately one method rather than a conversion at each call site.
+     * A facing reaches art through the body sheet, the object in its hands and
+     * the arc its swing draws, and those three disagreeing is a player whose
+     * sword points somewhere their arm does not.
+     */
+    private Facing seen(Facing facing) {
+        return facing == null ? null : facing.asSeenFrom(camera.viewYaw());
+    }
+
     private void drawMobAt(DrawTarget target, MobDef def, double x, double y,
                            Facing facing, String state) {
         drawMobAt(target, def, x, y, facing, state,
@@ -6166,7 +6201,7 @@ public class CreativeScene extends AbstractScene {
     private void drawMobAt(DrawTarget target, MobDef def, double x, double y,
                            Facing facing, String state, String weapon,
                            MeleeAction move, double moveProgress) {
-        Facing dir = facing == null ? Facing.EAST : facing;
+        Facing dir = seen(facing == null ? Facing.EAST : facing);
         PlayerSprites.Frame resolved = MeleeSprites.mobFrame(def.key(), weapon, state,
                 dir, animClock, moveProgress);
         BufferedImage img = resolved == null ? null : resolved.image();
@@ -6344,7 +6379,7 @@ public class CreativeScene extends AbstractScene {
         // Whatever is in their hands gets first say over how they are drawn
         // doing this — the same resolution the play scene uses.
         PlayerSprites.Frame sprite = MeleeSprites.playerFrame(
-                testMe.characterKey, testMeleeItem, testAnimState, testMe.facing,
+                testMe.characterKey, testMeleeItem, testAnimState, seen(testMe.facing),
                 testAnimClock, testMelee.progress(), (int) size, testCharacter.body);
         double px = testDrawX(), py = testDrawY(), pz = testDrawZ();
         camera.worldToScreen(px + size / 2.0, py + size, pcorner);
@@ -6405,7 +6440,8 @@ public class CreativeScene extends AbstractScene {
         MeleeSprites.Hold hold = MeleeSprites.hold(action,
                 MeleeProfiles.ofKey(testMeleeItem), progress);
         int iw = Math.max(6, (int) Math.round(size * hold.scale() * camera.zoom * 0.7));
-        int flip = testMe.facing != null && testMe.facing.facingLeft() ? -1 : 1;
+        Facing held = seen(testMe.facing);
+        int flip = held != null && held.facingLeft() ? -1 : 1;
         double cx = pcorner[0] + flip * hold.offsetX() * size * camera.zoom;
         double cy = pcorner[1] - w / 2.0 - lift + hold.offsetY() * size * camera.zoom;
         AffineTransform swing = AffineTransform.getTranslateInstance(cx, cy);

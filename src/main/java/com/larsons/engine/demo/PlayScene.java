@@ -680,6 +680,9 @@ public class PlayScene extends AbstractScene {
                 KeyBinds.down(input, GameAction.MOVE_DOWN),
                 ++inputSeq);
         in.sprint = KeyBinds.down(input, GameAction.SPRINT);
+        // The heading these keys were pressed at. It travels with the tick
+        // because the server has no camera to ask — see PlayerInput.yaw (C7).
+        in.yaw = camera.viewYaw();
         // Space is the jump key, and the only one: W/Up steer, swim and climb.
         // A fresh press is what drives mid-air jumps (double jump and beyond),
         // so holding Space doesn't burn the whole allowance in one tick.
@@ -2075,9 +2078,9 @@ public class PlayScene extends AbstractScene {
         double meX = drawX(), meY = drawY(), meZ = drawZ();
         standing.at(footDepth(meX, meY), () -> {
             drawPlayer(target, meX, meY, meZ, MeleeSprites.playerFrame(
-                    me.characterKey, meleeItem, animState, me.facing, animStateClock,
+                    me.characterKey, meleeItem, animState, seen(me.facing), animStateClock,
                     melee.progress(), (int) ps(), character.body), null);
-            drawHeldObject(target, meX, meY, meZ, ps(), me.facing, meleeItem,
+            drawHeldObject(target, meX, meY, meZ, ps(), seen(me.facing), meleeItem,
                     melee.action(), melee.progress(), meleeProfile(p));
         });
         // The depth queue is where the plan views actually pay: everything
@@ -2846,7 +2849,7 @@ public class PlayScene extends AbstractScene {
                                Facing facing, double health, boolean hurt,
                                String state, int statusBits, String weapon,
                                MeleeAction move, double moveProgress) {
-        Facing dir = facing == null ? Facing.EAST : facing;
+        Facing dir = seen(facing == null ? Facing.EAST : facing);
         PlayerSprites.Frame resolved = MeleeSprites.mobFrame(def.key(), weapon, state,
                 dir, animClock, moveProgress);
         BufferedImage img = resolved == null ? null : resolved.image();
@@ -2937,6 +2940,27 @@ public class PlayScene extends AbstractScene {
      * shield in front of a raised guard, and a ring when a parry catches
      * something.
      */
+    /**
+     * A world direction as this scene's camera currently sees it — the one
+     * conversion C5 needs, in the one place a world facing becomes art.
+     *
+     * <p>Every sprite here is a billboard: it faces the camera, and the
+     * direction it is <em>doing</em> is told by which of the eight sheets is
+     * drawn. So the sheet has to be chosen relative to the heading, or a
+     * character walking north goes on being drawn from behind after the camera
+     * has walked round to look at their side. The alternative — eight sets of
+     * art per direction — is eight times the drawing for no gameplay, in a
+     * project that ships none of it.
+     *
+     * <p>Deliberately one method rather than a conversion at each call site.
+     * A facing reaches art through the body sheet, the object in its hands and
+     * the arc its swing draws, and those three disagreeing is a player whose
+     * sword points somewhere their arm does not.
+     */
+    private Facing seen(Facing facing) {
+        return facing == null ? null : facing.asSeenFrom(camera.viewYaw());
+    }
+
     private void drawMeleeArc(DrawTarget target, MeleeProfile profile) {
         double size = ps();
         camera.worldToScreen(drawX() + size / 2, drawY() + size / 2, corner);
@@ -2946,7 +2970,8 @@ public class PlayScene extends AbstractScene {
         // The sweep is brightest through the hit window and fades out with the
         // recovery, so what you see is what is actually dangerous.
         int alpha = (int) (200 * (melee.striking() ? 1 : 0.35));
-        double facingDeg = -Math.toDegrees(Math.atan2(me.facing.dy(), me.facing.dx()));
+        Facing aim = seen(me.facing);
+        double facingDeg = -Math.toDegrees(Math.atan2(aim.dy(), aim.dx()));
         switch (action) {
             case SWING, LUNGE -> {
                 double arc = action == MeleeAction.LUNGE
@@ -3045,12 +3070,12 @@ public class PlayScene extends AbstractScene {
             String state = ps.meleeAction.isEmpty()
                     ? (ps.moving ? "walk" : "idle") : ps.meleeAction;
             PlayerSprites.Frame sprite = MeleeSprites.playerFrame(
-                    ps.characterKey, ps.heldKey, state, ps.facing,
+                    ps.characterKey, ps.heldKey, state, seen(ps.facing),
                     animClock, ps.meleeProgress, (int) size, body);
             MeleeAction move = MeleeAction.byKey(ps.meleeAction);
             into.at(footDepth(x, y), () -> {
                 drawPlayer(target, x, y, ps.z, sprite, ps.name);
-                drawHeldObject(target, x, y, ps.z, size, ps.facing, ps.heldKey, move,
+                drawHeldObject(target, x, y, ps.z, size, seen(ps.facing), ps.heldKey, move,
                         ps.meleeProgress, MeleeProfiles.ofKey(ps.heldKey));
             });
         }

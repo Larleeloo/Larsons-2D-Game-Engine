@@ -148,11 +148,9 @@ public final class PlayerPhysics {
         if (sprinting) speed *= SPRINT_FACTOR;
         if (s.guarding) speed *= GUARD_SPEED_FACTOR;
         // Diagonals on a plane would otherwise travel √2 times as fast as the
-        // axes; normalizing the step keeps top-down/isometric speed uniform in
-        // every direction.
-        if (!sideScroll && (in.left ^ in.right) && (in.up ^ in.down)) {
-            speed *= Math.sqrt(0.5);
-        }
+        // axes. That is now PlayerInput's business rather than a special case
+        // here: it hands back a unit vector, so every direction is one step and
+        // the four diagonals stop being the only ones that needed saying.
 
         // A committed melee burst — a lunge or a dash — overrides steering for
         // as long as it lasts. It still collides with the world like any other
@@ -171,9 +169,17 @@ public final class PlayerPhysics {
         if (bursting) {
             dx = s.dashVx * dt;
             if (s.dashVx != 0) s.facingLeft = s.dashVx < 0;
-        } else {
+        } else if (sideScroll) {
+            // Edge-on, the keys are the axes: left is left and there is no
+            // heading to turn them by.
             if (in.left) { dx -= speed * dt; s.facingLeft = true; }
             if (in.right) { dx += speed * dt; s.facingLeft = false; }
+        } else {
+            // On a plane the keys are a screen intent and the world direction
+            // they mean depends on where the camera was pointing when they were
+            // pressed — which is why the heading rides the input rather than
+            // being asked of a camera the server does not have. C7.
+            dx = in.moveX() * speed * dt;
         }
         boolean moving = dx != 0;
         double steerY = 0; // plan-view vertical steering, for the facing below
@@ -236,13 +242,7 @@ public final class PlayerPhysics {
             s.z = 0;
             s.vz = 0;
         } else {
-            double dy = 0;
-            if (bursting) {
-                dy = s.dashVy * dt;
-            } else {
-                if (in.up) dy -= speed * dt;
-                if (in.down) dy += speed * dt;
-            }
+            double dy = bursting ? s.dashVy * dt : in.moveY() * speed * dt;
             s.y = slideY(level, s.x, s.y, size, size, dy);
             moving = moving || dy != 0;
             steerY = dy;
