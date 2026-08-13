@@ -1,6 +1,7 @@
 package com.larsons.engine;
 
 import com.larsons.engine.config.GameProfile;
+import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
@@ -9,7 +10,13 @@ import com.larsons.engine.sim.PlayerPhysics;
 import com.larsons.engine.sim.PlayerState;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -173,6 +180,240 @@ class PlayerPhysicsTest {
             PlayerPhysics.step(s, right, level, p, Perspective.TOP_DOWN, DT);
         }
         assertEquals(10 * 32 - 32, s.x, 1e-9, "right edge clamps to width - playerSize");
+    }
+
+    // --- C7: the keys are a screen intent, and the heading says what they mean ---
+
+    /**
+     * Pressing "up" walks away from the viewer at every heading, not toward
+     * world north.
+     *
+     * <p>This is the whole of C7 stated as one property. "Up" is a screen
+     * direction — the player means "away from me" — and which world direction
+     * that is depends on where the camera was pointing. The expected answer is
+     * taken from the camera rather than restated: the heading's own direction
+     * is by construction the one that projects to straight up the screen (C1),
+     * so it is what walking "up" has to produce.
+     */
+    @Test
+    void upWalksAwayFromTheViewerAtEveryHeading() {
+        Level level = floorLevel();
+        GameProfile p = profile();
+
+        for (int eighth = 0; eighth < 8; eighth++) {
+            double yaw = eighth * Camera.EIGHTH_TURN;
+            PlayerState s = new PlayerState(1, "t", 64, 64);
+            PlayerInput up = new PlayerInput(false, false, true, false, 1);
+            up.yaw = yaw;
+            PlayerPhysics.step(s, up, level, p, Perspective.TOP_DOWN, DT);
+
+            // The compass direction the camera faces, which C1 defines as the
+            // one pointing away from the viewer.
+            double step = PlayerPhysics.SPEED * DT;
+            double expectedX = 64 + Math.sin(yaw) * step;
+            double expectedY = 64 - Math.cos(yaw) * step;
+
+            assertEquals(expectedX, s.x, 1e-9, "at heading " + (eighth * 45)
+                    + "° pressing up moved to x=" + s.x + " rather than away from the "
+                    + "viewer, which is x=" + expectedX);
+            assertEquals(expectedY, s.y, 1e-9, "at heading " + (eighth * 45)
+                    + "° pressing up moved to y=" + s.y + " rather than y=" + expectedY);
+        }
+    }
+
+    /**
+     * A step is a step in every direction at every heading, and the four keys
+     * still walk four different ways.
+     *
+     * <p>The negative control for the test above: an input rotation that
+     * collapsed — always returning the same direction, or scaling with the
+     * heading — would satisfy a single case. Distance is asserted because
+     * rotating a vector must not change its length, which is exactly what a
+     * sign error in one term of the rotation does.
+     */
+    @Test
+    void everyKeyAtEveryHeadingIsOneStepAndFourDistinctDirections() {
+        Level level = floorLevel();
+        GameProfile p = profile();
+        double step = PlayerPhysics.SPEED * DT;
+
+        for (int eighth = 0; eighth < 8; eighth++) {
+            java.util.Set<String> headings = new java.util.HashSet<>();
+            for (int key = 0; key < 4; key++) {
+                PlayerState s = new PlayerState(1, "t", 96, 96);
+                PlayerInput in = new PlayerInput(key == 0, key == 1, key == 2, key == 3, 1);
+                in.yaw = eighth * Camera.EIGHTH_TURN;
+                PlayerPhysics.step(s, in, level, p, Perspective.TOP_DOWN, DT);
+
+                double moved = Math.hypot(s.x - 96, s.y - 96);
+                assertEquals(step, moved, 1e-9, "at heading " + (eighth * 45)
+                        + "° key " + key + " covered " + moved + " rather than one step — "
+                        + "turning a direction must not change how far it goes");
+                headings.add(Math.round((s.x - 96) * 1e6) + "," + Math.round((s.y - 96) * 1e6));
+            }
+            assertEquals(4, headings.size(), "at heading " + (eighth * 45)
+                    + "° the four movement keys walked " + headings.size()
+                    + " distinct ways, not 4");
+        }
+    }
+
+    /** A diagonal is still one step's distance once the view has turned. */
+    @Test
+    void aTurnedDiagonalIsStillOneStep() {
+        Level level = floorLevel();
+        GameProfile p = profile();
+
+        for (int eighth = 0; eighth < 8; eighth++) {
+            PlayerState s = new PlayerState(1, "t", 96, 96);
+            PlayerInput upRight = new PlayerInput(false, true, true, false, 1);
+            upRight.yaw = eighth * Camera.EIGHTH_TURN;
+            PlayerPhysics.step(s, upRight, level, p, Perspective.TOP_DOWN, DT);
+
+            assertEquals(PlayerPhysics.SPEED * DT, Math.hypot(s.x - 96, s.y - 96), 1e-9,
+                    "at heading " + (eighth * 45) + "° a diagonal is not one step");
+        }
+    }
+
+    /**
+     * A side-scroller ignores the heading on its inputs entirely.
+     *
+     * <p>§6.1's scope rule, arriving at the simulation. The keys mean different
+     * things edge-on — left and right walk, up and down swim and climb — so
+     * they are read as the separate booleans they are there, and a heading that
+     * somehow reached the input cannot bend a side-scroller's movement.
+     */
+    @Test
+    void aSideScrollerIgnoresTheHeadingOnItsInput() {
+        Level level = floorLevel();
+        GameProfile p = profile();
+
+        PlayerState plain = new PlayerState(1, "a", 64, 0);
+        PlayerState turned = new PlayerState(2, "b", 64, 0);
+        for (int i = 0; i < 120; i++) {
+            PlayerInput a = new PlayerInput(i % 40 < 20, i % 40 >= 20, i % 30 == 0, false, i);
+            PlayerInput b = new PlayerInput(a.left, a.right, a.up, a.down, i);
+            b.yaw = (i % 8) * Camera.EIGHTH_TURN;
+            PlayerPhysics.step(plain, a, level, p, Perspective.SIDE_SCROLL, DT);
+            PlayerPhysics.step(turned, b, level, p, Perspective.SIDE_SCROLL, DT);
+            assertEquals(plain.x, turned.x, 0.0, "x diverged at step " + i);
+            assertEquals(plain.y, turned.y, 0.0, "y diverged at step " + i);
+        }
+    }
+
+    /**
+     * The heading survives the wire, so a predicting client and the server step
+     * the same input.
+     *
+     * <p>C7 calls this a determinism boundary, and the boundary is the
+     * serialisation: prediction runs the input object it just built, and the
+     * server runs one rebuilt from a map of primitives. A field that is applied
+     * before the wire and dropped on it produces two simulations that disagree
+     * by the whole rotation — which the player sees as rubber-banding every
+     * time they turn the camera, and only while they are turning it, and only
+     * online.
+     */
+    @Test
+    void theHeadingSurvivesTheWireSoBothSidesStepTheSameInput() {
+        Level level = floorLevel();
+        GameProfile p = profile();
+        PlayerState predicted = new PlayerState(1, "client", 96, 96);
+        PlayerState authoritative = new PlayerState(1, "server", 96, 96);
+
+        for (int i = 0; i < 240; i++) {
+            PlayerInput local = new PlayerInput(i % 50 < 25, i % 50 >= 25,
+                    i % 30 < 15, i % 30 >= 15, i);
+            // A camera being turned while the player runs: the heading changes
+            // under them, tick by tick, which is the case that rubber-bands.
+            local.yaw = i * 0.01;
+
+            PlayerInput overTheWire = PlayerInput.fromMap(local.toMap());
+            assertEquals(local.yaw, overTheWire.yaw, 0.0,
+                    "the heading did not survive the wire at tick " + i);
+
+            PlayerPhysics.step(predicted, local, level, p, Perspective.TOP_DOWN, DT);
+            PlayerPhysics.step(authoritative, overTheWire, level, p, Perspective.TOP_DOWN, DT);
+            assertEquals(predicted.x, authoritative.x, 0.0,
+                    "prediction and authority disagree on x at tick " + i);
+            assertEquals(predicted.y, authoritative.y, 0.0,
+                    "prediction and authority disagree on y at tick " + i);
+        }
+        assertTrue(Math.hypot(predicted.x - 96, predicted.y - 96) > 1,
+                "the player never actually moved, so this compared two players "
+                        + "standing still");
+    }
+
+    /**
+     * An input from a build that had never heard of headings still means what
+     * it said.
+     *
+     * <p>The heading is absent on the wire when it is zero, which is every
+     * side-scroller and every plan view at rest, so the common message is the
+     * byte-for-byte one it always was and an older client's is read as heading
+     * zero rather than as garbage.
+     */
+    @Test
+    void anInputFromBeforeHeadingsReadsAsUnturned() {
+        java.util.Map<String, Object> old = new java.util.LinkedHashMap<>();
+        old.put("s", 7);
+        old.put("l", false);
+        old.put("r", true);
+        old.put("u", false);
+        old.put("d", false);
+
+        PlayerInput in = PlayerInput.fromMap(old);
+        assertEquals(0.0, in.yaw, 0.0, "a message with no heading is not unturned");
+        assertEquals(1.0, in.moveX(), 1e-9, "and right still means east");
+        assertEquals(0.0, in.moveY(), 1e-9);
+
+        PlayerInput unturned = new PlayerInput(false, true, false, false, 7);
+        assertFalse(unturned.toMap().containsKey("y"),
+                "an unturned input puts a heading on the wire for every tick of every "
+                        + "side-scroller ever played");
+    }
+
+    /**
+     * Every scene stamps the heading onto the input it builds.
+     *
+     * <p><b>The fourth time this job has needed saying.</b> Everything above
+     * exercises the rotation by setting {@code yaw} itself, so all of it passes
+     * on a build where no scene ever sets it and the whole feature is inert.
+     * The heading has exactly one source — the camera the player is looking
+     * through — and one place to be attached, which is the input command being
+     * built from that frame's keys. So the scan asks for it there.
+     *
+     * <p>It is anchored on <em>every</em> input built from the movement keys,
+     * not on the first one found. The first draft looked for one per scene and
+     * passed on a build where the play-test input was unstamped, because
+     * {@code CreativeScene}'s first use of the movement binds is the editor's
+     * camera pan several thousand lines earlier — which turned out to want the
+     * same rotation for the same reason, and is why the scan is written this
+     * way rather than tightened until it went quiet.
+     */
+    @Test
+    void everySceneStampsTheHeadingOnTheInputItSteps() throws IOException {
+        int checked = 0;
+        for (String scene : List.of("PlayScene", "CreativeScene")) {
+            String source = Files.readString(
+                    Path.of("src/main/java/com/larsons/engine/demo", scene + ".java"));
+            for (int at = source.indexOf("new PlayerInput("); at >= 0;
+                 at = source.indexOf("new PlayerInput(", at + 1)) {
+                String after = source.substring(at,
+                        Math.min(source.length(), at + 1200));
+                // Only the ones built from the movement binds: a scene also
+                // sends an empty input when it disconnects, and a heading on a
+                // tick with no movement in it is neither required nor wrong.
+                if (!after.contains("GameAction.MOVE_LEFT")) continue;
+                checked++;
+                assertTrue(after.contains("yaw = camera.viewYaw()"), scene + " builds an "
+                        + "input from the movement keys without stamping the heading on "
+                        + "it. Every test in this class sets the heading itself and would "
+                        + "still pass; what would not work is the game, where pressing up "
+                        + "walks north however the camera is turned");
+            }
+        }
+        assertTrue(checked >= 3, "the scan found only " + checked + " movement inputs "
+                + "across the two scenes, which is too few to be looking at the right "
+                + "thing");
     }
 
     @Test

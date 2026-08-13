@@ -983,10 +983,21 @@ public class CreativeScene extends AbstractScene {
         // own shortcuts (save), so panning stands still while it is down.
         boolean ctrl = input.isKeyDown(KeyEvent.VK_CONTROL);
         if (!ctrl) {
-            if (KeyBinds.down(input, GameAction.MOVE_UP)) camera.y -= pan;
-            if (KeyBinds.down(input, GameAction.MOVE_DOWN)) camera.y += pan;
-            if (KeyBinds.down(input, GameAction.MOVE_LEFT)) camera.x -= pan;
-            if (KeyBinds.down(input, GameAction.MOVE_RIGHT)) camera.x += pan;
+            // Panning is a screen intent, exactly as walking is: "left" means
+            // toward the left of the picture, so it has to be rotated into the
+            // world before it moves the focus. Panning along the world's axes
+            // instead sends the view off diagonally at every heading but the
+            // one it was authored at, which is the same defect as C7's and in
+            // the tool the level is built with. PlayerInput does the arithmetic
+            // because it is the same arithmetic.
+            PlayerInput pan2d = new PlayerInput(
+                    KeyBinds.down(input, GameAction.MOVE_LEFT),
+                    KeyBinds.down(input, GameAction.MOVE_RIGHT),
+                    KeyBinds.down(input, GameAction.MOVE_UP),
+                    KeyBinds.down(input, GameAction.MOVE_DOWN), 0);
+            pan2d.yaw = camera.viewYaw();
+            camera.x += pan2d.moveX() * pan;
+            camera.y += pan2d.moveY() * pan;
         }
 
         boolean overSidebar = input.getMouseX() < SIDEBAR_W;
@@ -2544,6 +2555,9 @@ public class CreativeScene extends AbstractScene {
                 KeyBinds.down(input, GameAction.MOVE_DOWN),
                 ++inputSeq);
         in.sprint = KeyBinds.down(input, GameAction.SPRINT);
+        // The heading these keys were pressed at. It travels with the tick
+        // because the server has no camera to ask — see PlayerInput.yaw (C7).
+        in.yaw = camera.viewYaw();
         // Space jumps in play-test too; W/Up only ever steer (see PlayScene).
         in.jump = KeyBinds.pressed(input, GameAction.JUMP);
         testInv.applyPassivesTo(testMe, p.itemsEnabled);

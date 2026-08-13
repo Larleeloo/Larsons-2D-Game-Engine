@@ -5,10 +5,13 @@ import com.larsons.engine.graphics.DepthPass;
 import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.TerrainPainter;
 import com.larsons.engine.graphics.draw.Java2DTarget;
+import com.larsons.engine.graphics.SurfaceDecorPainter;
+import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.graphics.draw.RecordingTarget;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.world.Block;
+import com.larsons.engine.world.SurfaceDecor;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -16,8 +19,10 @@ import java.awt.Color;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
+import java.util.ArrayList;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -259,6 +264,218 @@ class TurnedTerrainTest {
                         + "painted over the near one, which is the world inside out");
             }
         }
+    }
+
+    // --- C6: shadows, decor and liquids -----------------------------------------
+
+    /**
+     * A block's cast shadow swings with the world, not with the screen.
+     *
+     * <p>C6 calls this "the most visible possible bug and the easiest to
+     * introduce", and it is: the sun stands at a fixed bearing in the world, so
+     * when the camera turns, the shadow on screen must turn <em>with the
+     * ground</em> — a shadow that stays pointing down-right while the world
+     * rotates under it reads instantly as wrong, and a shadow that turns the
+     * opposite way reads as the light source orbiting the player.
+     *
+     * <p><b>The expected direction is carried, not recomputed.</b> Restating
+     * the sun-bearing formula here would test that it was copied correctly and
+     * nothing else. Instead the shadow's offset is measured square-on, carried
+     * back into the world through the camera's own inverse, and re-projected at
+     * each heading — so what is asserted is that one fixed world vector is what
+     * the shadow follows, which is the actual claim.
+     */
+    @Test
+    void aBlocksShadowSwingsWithTheWorldAtEveryHeading() {
+        for (LevelFormat format : new LevelFormat[]{LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
+            Level lvl = floor(format, 20, 20);
+            lvl.setUpper(10, 10, lvl.blocks.get("stone").id());
+
+            // The world vector the shadow runs along, recovered from the
+            // unturned frame rather than restated from the sun's formula.
+            Camera square = camera(lvl, 0);
+            double[] offsetAtRest = shadowOffset(lvl, square);
+            double[] sunward = square.inversePlanar(offsetAtRest[0] / square.zoom,
+                    offsetAtRest[1] / square.zoom);
+
+            for (int eighth = 1; eighth < 8; eighth++) {
+                Camera cam = camera(lvl, eighth * Camera.EIGHTH_TURN);
+                double[] expected = cam.planarDelta(sunward[0], sunward[1]);
+                double[] actual = shadowOffset(lvl, cam);
+
+                // Compared as a direction: the offset is rounded to whole
+                // pixels twice on its way here, and what the eye reads is which
+                // way the shadow points.
+                double cross = expected[0] * actual[1] - expected[1] * actual[0];
+                double dot = expected[0] * actual[0] + expected[1] * actual[1];
+                double degrees = Math.toDegrees(Math.atan2(Math.abs(cross), dot));
+                assertTrue(degrees < 12, format + " at " + eighth + "/8 of a turn: the "
+                        + "shadow points " + Math.round(degrees) + "° away from where the "
+                        + "sun puts it. It falls at (" + actual[0] + "," + actual[1] + ") "
+                        + "and the same world direction projects to (" + expected[0] + ","
+                        + expected[1] + ") — the shadow is not turning with the ground");
+            }
+        }
+    }
+
+    /**
+     * Surface decor stays on the block it grows on, at every heading.
+     *
+     * <p>{@code SurfaceDecorPainter}'s own note records this failing once
+     * already: styles written straight up the screen "tore every tuft off the
+     * block it belonged to as soon as the level was seen isometrically", and
+     * the fix was to write them along the face and out of it and let the camera
+     * decide where that lands. Rotation is a second camera to be right for, and
+     * the class has never been asked. Measured as the pixels the decor adds to
+     * a bare floor: their centre must sit within a tile of the block's own.
+     */
+    @Test
+    void surfaceDecorStaysOnTheSideOfItsBlockItBelongsTo() {
+        for (LevelFormat format : new LevelFormat[]{LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
+            Level bare = floor(format, 20, 20);
+
+            for (int eighth = 0; eighth < 8; eighth++) {
+                double yaw = eighth * Camera.EIGHTH_TURN;
+                Camera cam = camera(bare, yaw);
+                int[] host = new int[2];
+                cam.worldToScreen(10.5 * TILE, 10.5 * TILE, host);
+
+                for (SurfaceDecor.Face face : SurfaceDecor.Face.values()) {
+                    Level grown = floor(format, 20, 20);
+                    grown.surfaceDecor.add(new SurfaceDecor.Placement(10, 10, face,
+                            "grass_tuft", false, SurfaceDecor.Visibility.ALWAYS));
+
+                    double[] centre = inkCentre(renderDecor(bare, cam), renderDecor(grown, cam));
+                    assertTrue(centre != null, format + " at " + eighth + "/8, face "
+                            + face + ": the decoration drew nothing at all");
+
+                    // On its block at all: the loose half of the claim, and the
+                    // one the class note records failing once already, when
+                    // styles written straight up the screen tore every tuft off
+                    // the block it belonged to in isometric.
+                    double away = Math.hypot(centre[0] - host[0], centre[1] - host[1]);
+                    assertTrue(away < TILE * 1.5, format + " at " + eighth + "/8, face "
+                            + face + ": the decoration drew " + Math.round(away)
+                            + "px from the block it grows on, which is off it");
+
+                    // …and on the right side of it. A face is a world
+                    // direction, so which side of the block a tuft sits on has
+                    // to swing round as the view does — four tufts on one block
+                    // must still read as its north, south, east and west sides
+                    // after a turn, rather than all sliding to the same edge.
+                    double[] outward = cam.planarDelta(face.dc * TILE, face.dr * TILE);
+                    double dx = centre[0] - host[0], dy = centre[1] - host[1];
+                    // Only the part across the face direction is compared: a
+                    // plan view also lifts a standing tuft up the screen, which
+                    // is height rather than which side it is on.
+                    double along = (dx * outward[0] + dy * outward[1])
+                            / Math.hypot(outward[0], outward[1]);
+                    assertTrue(along > 0, format + " at " + eighth + "/8: the tuft on the "
+                            + face + " face of the block drew at (" + Math.round(dx) + ","
+                            + Math.round(dy) + ") from its centre, which is on the far side "
+                            + "of the block from where that face projects to ("
+                            + Math.round(outward[0]) + "," + Math.round(outward[1])
+                            + ") — the faces are not turning with the world");
+                }
+            }
+        }
+    }
+
+    /**
+     * A pool's bright surface line stays on the same rim of the pool when the
+     * view turns.
+     *
+     * <p>C6 says the liquid surface "needs no change, but verify rather than
+     * assume", and the verification is worth more than it looks: the line is
+     * drawn between two <em>named corners</em> of the cell, and a corner is a
+     * world position, so it turns with the world for free. What that sentence
+     * would look like if it were false is a bright line jumping to a different
+     * side of the pond every time the player pressed the rotate key. Asserted
+     * exactly — the line's endpoints are the projected world edge, to the
+     * pixel — because there is nothing here that needs a tolerance.
+     */
+    @Test
+    void aPoolsSurfaceLineStaysOnTheSameRimWhenTheViewTurns() {
+        for (LevelFormat format : new LevelFormat[]{LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
+            Level lvl = floor(format, 20, 20);
+            lvl.setTile(10, 10, lvl.blocks.get("water").id());
+
+            for (int eighth = 0; eighth < 8; eighth++) {
+                double yaw = eighth * Camera.EIGHTH_TURN;
+                Camera cam = camera(lvl, yaw);
+
+                List<int[]> lines = new ArrayList<>();
+                for (RecordingTarget.Cmd cmd : record(lvl, yaw).commands()) {
+                    if (cmd instanceof RecordingTarget.Cmd.Shape shape
+                            && shape.op().equals("drawLine")) {
+                        lines.add(shape.coords());
+                    }
+                }
+                assertEquals(1, lines.size(), format + " at " + eighth + "/8: a pool with "
+                        + "dry ground north of it draws exactly one surface line");
+
+                int[] from = new int[2], to = new int[2];
+                cam.worldToScreen(10 * TILE, 10 * TILE, from);
+                cam.worldToScreen(11 * TILE, 10 * TILE, to);
+                assertArrayEquals(new int[]{from[0], from[1], to[0], to[1]}, lines.get(0),
+                        format + " at " + eighth + "/8 of a turn: the surface line is not "
+                                + "on the pool's northern rim any more — it has moved to a "
+                                + "different side of the water");
+            }
+        }
+    }
+
+    /** The one shadow shape's centre, relative to the block casting it. */
+    private static double[] shadowOffset(Level lvl, Camera cam) {
+        int[] bounds = visibleBounds(lvl, cam);
+        RecordingTarget target = new RecordingTarget(W, H);
+        DepthPass pass = DepthPass.of(lvl.perspective);
+        TerrainPainter.draw(target, lvl, cam, bounds, 0.0, pass, null);
+        pass.flush();
+
+        int[] box = null;
+        for (RecordingTarget.Cmd cmd : target.commands()) {
+            if (cmd instanceof RecordingTarget.Cmd.Shape shape
+                    && shape.op().equals("fillShape")) {
+                box = shape.coords();
+            }
+        }
+        if (box == null) throw new IllegalStateException("no shadow was drawn at all");
+        int[] host = new int[2];
+        cam.worldToScreen(10.5 * TILE, 10.5 * TILE, host);
+        return new double[]{box[0] + box[2] / 2.0 - host[0], box[1] + box[3] / 2.0 - host[1]};
+    }
+
+    /** One surface-decor pass over a floor, into an image. */
+    private static BufferedImage renderDecor(Level lvl, Camera cam) {
+        BufferedImage img = new BufferedImage(W, H, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setColor(new Color(24, 28, 38));
+        g.fillRect(0, 0, W, H);
+        DrawTarget target = Java2DTarget.unsized(g);
+        DepthPass pass = DepthPass.of(lvl.perspective);
+        int[] bounds = visibleBounds(lvl, cam);
+        TerrainPainter.draw(target, lvl, cam, bounds, 0.0, pass, null);
+        SurfaceDecorPainter.draw(target, lvl, cam, bounds, false, 0.0, pass);
+        pass.flush();
+        g.dispose();
+        return img;
+    }
+
+    /** The centre of the pixels {@code with} has that {@code without} does not. */
+    private static double[] inkCentre(BufferedImage without, BufferedImage with) {
+        long sumX = 0, sumY = 0, n = 0;
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                if (without.getRGB(x, y) != with.getRGB(x, y)) {
+                    sumX += x;
+                    sumY += y;
+                    n++;
+                }
+            }
+        }
+        return n == 0 ? null : new double[]{sumX / (double) n, sumY / (double) n};
     }
 
     /** Where in the frame the top face of {@code argb}'s block was laid down. */

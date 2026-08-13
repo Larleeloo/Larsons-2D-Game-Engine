@@ -2,7 +2,7 @@
 
 **Status:** Living document. Written 2026-08-02 against commit `85196b9` on
 `claude/gpu-acceleration-shaders-oqbx54`. **Jobs A, B and D are complete; Job C
-is under way** — C1–C5 are closed, C6 is next. Job A closed 2026-08-04: the
+is under way** — C1–C7 are closed, C8 is next. Job A closed 2026-08-04: the
 shipped GLSL runs on the GPU, matching the CPU chain pass for pass, and the GL
 backend has lighting again (§5, A2–A6).
 
@@ -97,10 +97,22 @@ tile's edges on a screen axis**, which top-down loses when it turns and
 found the depth order it was sent to fix already correct, because the sort key
 was never the world row index the step assumed; what it did find was a proxy —
 `!iso` — quietly deciding two unrelated things, one of which would have blitted
-ground textures unrotated under a turned camera. **And three times in this job a
-negative control found a defect that the entire existing suite could not see**:
-a cache key that no test ever turned, a branch nothing could reach, and a
-conversion no scene would have called. §6.
+ground textures unrotated under a turned camera.
+
+**C6 came out with no diff at all, and the reason generalises.** Shadows, decor
+and liquids all turn already, because each was written when the isometric
+projection arrived — and a diamond is a projection that does not let a
+screen-space assumption survive. A camera that turns is a second such
+projection, so code the first one made honest was already honest for the
+second; the same sentence explains C3's visible bounds and C4's depth order.
+**C7 is where the work was**: the heading now rides the input command, because
+the keys are a screen intent and the camera that gives them meaning is
+per-client state the server is never sent — which makes the determinism
+boundary structural rather than careful, and which turned up a turned editor
+panning diagonally on the way past. **And four times in this job a negative
+control found a defect the entire existing suite could not see**: a cache key no
+test ever turned, a branch nothing could reach, a conversion no scene would have
+called, and a heading every physics test set for itself. §6.
 
 Also open: **B11** fixed a GL jar that could not open a window when
 double-clicked on macOS, the platform it had been profiled on for four steps. And
@@ -206,7 +218,10 @@ Everything in this table has been measured or executed, not assumed.
 | A cache can be right about every chunk and wrong about where the floor is | C3 — the single offset every chunk is placed from was the camera's *world* focus, not its projected one: 81.5% of the frame wrong at a quarter turn, and identical to the old arithmetic until C1 |
 | Which faces of a block the camera sees is a question the projected corners already answer | C4 — a two-dimensional back-face cull replaces "the diamond's two lower edges, or the southern one", reproduces both to the pixel, and gives every heading in between for nothing |
 | A sprite's direction is world state; the sheet drawn for it is not | C5 — `Facing` stays a networked world direction and `Facing.asSeenFrom(viewYaw)` is where it becomes a picture. 64 cases checked against `planarDelta`, not against the same index arithmetic |
-| **An unexercised path is where the defect is, three times in one job** | C3's cache key survived all 28 cache tests (none turns a warm camera); C4's winding measurement survived every test in the suite (nothing mirrors a quad, so the branch was unreachable); C5's conversion would have survived all 64 of its own cases while no scene called it |
+| Shadows, decor and liquids already turn, and the isometric projection is why | C6 — all three were written against `planarDelta` or against projected world vectors when the diamond arrived, and a diamond is a projection that does not let a screen-space assumption survive. Verified at eight headings; no diff |
+| A rotated camera pans an editor diagonally | C7 — `CreativeScene`'s pan keys moved `camera.x/y` along the world's axes. Found by anchoring the input scan on *every* movement-key input rather than the first, which is the draft that passed |
+| **The heading is part of what the player pressed, not of where they are now** | C7 — it rides `PlayerInput` over the wire, so prediction and authority step the same rotation bit-for-bit through 240 ticks of a camera turning under a running player. The server has no camera to ask, and C10 says it never will |
+| **An unexercised path is where the defect is, four times in one job** | C3's cache key survived all 28 cache tests (none turns a warm camera); C4's winding measurement survived every test in the suite (nothing mirrors a quad, so the branch was unreachable); C5's conversion would have survived all 64 of its own cases while no scene called it; C7's heading would have survived all of `PlayerPhysicsTest`, which sets it itself |
 
 **The honest summary:** Job A's *unknowns* are gone; only its plumbing remains,
 and the plumbing has a working prototype. Job B's migration is done and, as of
@@ -241,10 +256,10 @@ much faster it makes things.
    the Java2D path working and tested.
 3. **Pixel parity is the contract.** "Looks fine" is not a result. Every port
    step compares rendered output against a reference and states the error.
-4. **The suite stays green.** Last full run, under `xvfb-run`: **1,009 tests,
+4. **The suite stays green.** Last full run, under `xvfb-run`: **1,019 tests,
    0 failures, 3 skipped** in core plus **62/0/0** in `:gl` (was 810/0/3 when
-   this was written; B0–B11, D0–D7, A1–A7 and C1–C5 added the rest, twelve of
-   them in Job A and thirty in Job C so far). The three skips are the display
+   this was written; B0–B11, D0–D7, A1–A7 and C1–C7 added the rest, twelve of
+   them in Job A and forty in Job C so far). The three skips are the display
    tests losing a race with the eleven classes that set
    `java.awt.headless=true` in the shared JVM (see B4); with no display at all,
    17 stand aside instead — fourteen of those need a GL driver, seven in core
@@ -3394,6 +3409,56 @@ assume.
 the wrong way. A shadow rotating opposite to the world is the most visible
 possible bug and the easiest to introduce.
 
+#### C6 — done. Nothing needed changing, and why that is not luck
+
+All three of the things this step names were already right, and the
+verification is the whole deliverable. What each of them turned out to be:
+
+- **Shadows.** `TerrainPainter` already builds the sun's away-vector in world
+  units and routes it through `planarDelta` — the step's own instruction,
+  followed before there was a yaw to follow it for. The class comment even
+  says why: *"the bearing is a compass direction on the world plane, so it is
+  projected like anything else on that plane"*.
+- **Surface decor.** `SurfaceDecorPainter`'s anchor, its "out of the face"
+  direction and its "along the face" direction are all projections of world
+  vectors, so all three turn. The one screen-space direction in the class is
+  the **rise** — height, drawn straight up the screen — and that is correct
+  rather than overlooked: this camera yaws and never pitches, so the elevation
+  axis still points at the viewer whatever the heading. It is the same
+  reasoning the step applies to liquids, arriving at the same answer.
+- **The liquid surface line** is drawn between two *named corners* of a cell,
+  and a corner is a world position. It stays on the pool's northern rim
+  through a full turn, to the pixel.
+
+**The reason all three were already right is worth keeping, because it is
+transferable.** Every one of them was written or rewritten when the isometric
+projection arrived, and a diamond is a projection that does not let a
+screen-space assumption survive contact with it —
+`SurfaceDecorPainter`'s note records exactly that lesson being learned, when
+styles written straight up the screen "tore every tuft off the block it
+belonged to as soon as the level was seen isometrically". **A camera that turns
+is a second such projection, and code made honest by the first was already
+honest for the second.** That is why C6 is three tests and no diff, and it is
+the same reason C3's visible bounds and C4's depth order needed nothing.
+
+**One control did not fire, and it improved the test rather than the code.**
+Taking surface decor's "out of the face" direction as a screen axis passed
+every assertion — because in a plan view a grass tuft stands *up the screen*
+and spreads square to that, so `out` barely reaches its ink. The first version
+of that test claimed more than it could see. It now asserts the sharper thing:
+the four faces of one block stay on the block's four *world* sides through a
+turn, so a tuft on the north face is still on the north side after a quarter
+turn rather than sliding round to join the others.
+
+**Verified.** Three tests in `TurnedTerrainTest`, eight headings each, in both
+plan views. The shadow's expected direction is **carried, not restated** — the
+offset is measured square-on, carried back into the world through the camera's
+own inverse, and re-projected at each heading, so what is asserted is that one
+fixed world vector is what the shadow follows. Negative controls: the shadow
+offset taken as a screen direction (43° wrong at an eighth of a turn), and the
+face's lean taken as a screen offset (the tuft lands on the far side of its
+block).
+
 ---
 
 ### C7 — Input relative to yaw
@@ -3413,6 +3478,64 @@ rotate the camera.
 **Verify.** Extend `PlayerPhysicsTest` with yawed input. Extend the network
 tests: rotate the camera on a client during sustained movement and assert
 predicted and authoritative positions stay within the existing tolerance.
+
+#### C7 — done. The heading rides the input, because the server has no camera
+
+**`PlayerInput` carries the heading the keys were pressed at**, and that is the
+whole determinism argument in one sentence: the keys are a *screen* intent, the
+camera that gives them meaning is per-client view state that C10 forbids
+networking, so there is exactly one place the heading can come from — the input
+command itself, travelling with the tick it belongs to.
+
+The step says the yaw used must be the one the client had when the input was
+generated, and putting it on the input is what makes that structural rather
+than careful. Physics reads the heading from the input it is stepping, so
+prediction and authority cannot use different ones; and a player turning the
+camera while running does not have their in-flight inputs reinterpreted
+underneath them, which is the rubber-band the step warns about and which would
+have got worse the further behind the connection was.
+
+`PlayerInput.moveX()/moveY()` return the world direction the keys mean, as a
+unit vector. **The diagonal normalisation moved in with it**: physics had a
+`speed *= √0.5` beside a branch that noticed the two-key case, and a unit
+vector says the same thing once for every direction instead of for the four
+diagonals. Side-scrollers do not ask — edge-on the keys are the separate things
+they are there, left and right walking while up and down swim and climb, and
+there is no heading to turn them by.
+
+**The `Facing` that comes out the other side is still a world direction**,
+because the rotation happens on the way *in*: physics derives the facing from
+the movement it actually performed, which is a world movement. That is what C5
+requires of it, and the two steps meet exactly there — one turns a screen
+intent into the world, the other turns a world direction back into a picture,
+and the thing stored between them is neither.
+
+**The scan found a defect the step did not mention, in the tool the levels are
+built with.** A first draft of the wiring check looked for one stamped input per
+scene and passed; anchoring it on *every* input built from the movement binds
+showed that `CreativeScene`'s first use of them is not the play-test input at
+all — it is **the editor's camera pan**, several thousand lines earlier, moving
+`camera.x` and `camera.y` along the world's axes. Turned an eighth, pressing
+"left" in the editor sends the view off diagonally. It is C7's own defect in a
+place C7 does not look, and it now goes through the same arithmetic: the pan
+keys become a `PlayerInput`, and the heading rotates them. (It also picks up the
+normalisation, so a diagonal pan stops being √2 times as fast as a straight one.)
+
+**Verified.** `PlayerPhysicsTest` 8 → 15 tests: pressing up walks away from the
+viewer at all eight headings — with the expected direction taken from the
+camera's own definition rather than restated — every key at every heading being
+one step in one of four distinct directions, a turned diagonal still one step, a
+side-scroller unmoved by any heading on its input, an input from before headings
+existed still meaning what it said, and the determinism boundary itself: two
+hundred and forty ticks of a camera turning under a running player, prediction
+stepping the local input and authority stepping the same input rebuilt from its
+wire form, asserted **bit-identical**, not within a tolerance.
+
+Four negative controls: the rotation applied the wrong way round (fails at
+45°), the heading dropped from `toMap` (prediction and authority part company at
+tick 1), the side-scroller not exempted (its walk speed changes), and a scene
+forgetting to stamp the heading — which is the fourth time in this job that the
+defect nothing exercised was the one worth writing a test for.
 
 ---
 
@@ -4194,6 +4317,7 @@ gets declared finished while broken.
 | **`TurnedTerrainTest`** | What does the terrain do when the view turns — which cells are swept, which faces of a block are shown, which of two blocks is in front? Every other terrain instrument renders square-on to the world, where a tile is a rectangle and only one of its edges can face the viewer | `TurnedTerrainTest.java`, C3–C4 |
 | **`TerrainCacheTest`'s seam measurement** | Is the cacheability *rule* still the artefact it stands for? The rule is one line of arithmetic about tile edges; what it is really about is what Java2D's rasteriser does at a diagonal, which is not this project's to promise | `TerrainCacheTest.java`, C3 |
 | **`FacingUnderYawTest`** | Is a character drawn walking the way the world visibly moves them — and does any scene still hand a raw world facing to the art? The second question is the one that fails in practice: the conversion is correct and forgotten | `FacingUnderYawTest.java`, C5 |
+| **`PlayerPhysicsTest`'s C7 half** | Does a key press mean the same world movement on both sides of the wire, while the camera turns under the player? Every other determinism check in the project steps the *same object* twice; this one steps an input and its round-tripped twin, because the defect it is aimed at lives in the serialisation | `PlayerPhysicsTest.java`, C7 |
 
 **`DrawStats` and `GlParityTest` answer different questions and B8 measured the
 gap.** `DrawStats` models what a batching backend *could* merge given the draw
@@ -4422,8 +4546,39 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
          │      sheet, the held object and the swing arc, and the failure is
          │      forgetting one — so a scan rejects a raw facing reaching any of
          │      them, after the same gap was found by control twice already.
-         C6  shadows, decor, liquids
-         C7  yaw-relative input (determinism boundary)
+         C6  shadows, decor, liquids     ← done, with NO diff, and that is the
+         │      finding. All three were already written against the projection:
+         │      the shadow's bearing goes through planarDelta (the step's own
+         │      instruction, followed before there was a yaw), decor's anchor
+         │      and both of its face axes are projected world vectors, and the
+         │      liquid line runs between two named CORNERS of a cell. The one
+         │      screen-space direction left — decor's rise, and a block's lift —
+         │      is correct rather than missed: this camera yaws and never
+         │      pitches, so height still points at the viewer. Why none of it
+         │      needed changing is transferable: every one was written when the
+         │      ISOMETRIC projection arrived, and a diamond does not let a
+         │      screen-space assumption survive. A turning camera is a second
+         │      such projection. One control did not fire and improved the TEST
+         │      rather than the code — a wrong "out of the face" direction is
+         │      invisible to a tuft that stands up the screen, so the test now
+         │      asserts the four faces stay on the block's four world sides.
+         C7  yaw-relative input          ← done. PlayerInput carries the heading
+         │      its keys were pressed at, because the camera is per-client view
+         │      state C10 forbids networking, so the server has none to ask.
+         │      That makes the determinism boundary STRUCTURAL: physics reads
+         │      the heading off the input it is stepping, so prediction and
+         │      authority cannot use different ones, and a player turning while
+         │      running does not have in-flight inputs reinterpreted underneath
+         │      them. moveX/moveY return the world direction as a UNIT vector,
+         │      which absorbed the √0.5 diagonal special case physics used to
+         │      carry. Side-scroll exempt — edge-on the keys are separate things.
+         │      The Facing that comes out is still a WORLD direction, which is
+         │      exactly what C5 needs of it: one step rotates screen intent into
+         │      the world, the other rotates world direction back into a
+         │      picture, and what is stored between them is neither. The scan
+         │      found a defect the step does not mention: CreativeScene's EDITOR
+         │      PAN moved camera.x/y along the world's axes, so a turned editor
+         │      panned diagonally. Same arithmetic now.
          C8  the snap animation
          C9  editor + save format
          C10 multiplayer consistency

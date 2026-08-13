@@ -75,6 +75,27 @@ public final class PlayerInput {
     public boolean mine;
     public int mineCol, mineRow;
 
+    /**
+     * The camera heading the player was looking along when they pressed these
+     * keys, in radians — zero in a level that does not turn.
+     *
+     * <p><b>This rides the input command because it has to.</b> The keys above
+     * are screen directions: "up" means away from the viewer, and where that is
+     * in the world depends on where the camera was pointing. The camera is
+     * per-client view state and is deliberately never networked (C10), so the
+     * server has no camera to ask — which leaves exactly one place the heading
+     * can come from, and it is here, travelling with the tick it belongs to.
+     *
+     * <p>The alternative is worse than it looks. If prediction rotated the
+     * input and the server did not, every step would disagree; if the server
+     * used the client's <em>current</em> heading instead of the one this tick
+     * was pressed at, then a player turning the camera while running would have
+     * their in-flight inputs re-interpreted underneath them, and the further
+     * behind the connection was the more they would rubber-band. The yaw is
+     * part of what the player pressed, not part of where they are now.
+     */
+    public double yaw;
+
     public PlayerInput() {}
 
     public PlayerInput(boolean left, boolean right, boolean up, boolean down, int seq) {
@@ -83,6 +104,71 @@ public final class PlayerInput {
         this.up = up;
         this.down = down;
         this.seq = seq;
+    }
+
+    /**
+     * The world direction these keys mean, as a unit vector — {@link #moveX}
+     * across and {@link #moveY} down the world plane.
+     *
+     * <p>The keys are a screen intent; this is what the player was actually
+     * asking for. Two things happen here and both used to happen in
+     * {@link PlayerPhysics}:
+     *
+     * <ul>
+     *   <li><b>The diagonal is normalised.</b> Pressing two keys used to travel
+     *       √2 times as fast as pressing one, and the fix was a
+     *       {@code speed *= √0.5} beside the branch that noticed. A unit vector
+     *       says the same thing once, for every direction rather than for the
+     *       four diagonals.</li>
+     *   <li><b>The heading is applied</b>, by rotating the screen intent into
+     *       the world — the inverse of what the camera does to a world point on
+     *       its way to the screen. Press "up" with the camera looking east and
+     *       the character walks east, which is away from the viewer, which is
+     *       what "up" means.</li>
+     * </ul>
+     *
+     * <p>Only the plan views ask. A side-scroller reads the keys as the
+     * separate things they are there — left and right walk, up and down swim
+     * and climb — and has no heading to turn by in any case.
+     */
+    public double moveX() {
+        double len = intentLength();
+        if (len == 0) return 0;
+        return (intentX() * cosYaw() - intentY() * sinYaw()) / len;
+    }
+
+    public double moveY() {
+        double len = intentLength();
+        if (len == 0) return 0;
+        return (intentX() * sinYaw() + intentY() * cosYaw()) / len;
+    }
+
+    private double intentX() { return (right ? 1 : 0) - (left ? 1 : 0); }
+
+    private double intentY() { return (down ? 1 : 0) - (up ? 1 : 0); }
+
+    private double intentLength() { return Math.hypot(intentX(), intentY()); }
+
+    /**
+     * The heading's cosine and sine, rounded to the exact value at a compass
+     * point — {@code Math.cos(Math.PI / 2)} is 6.1e-17, not zero, and the
+     * camera rests at those four headings for nearly the whole of play.
+     * Without this, walking north with the camera looking east would creep
+     * sideways by 6e-17 of a step per tick: harmless in a position and not
+     * harmless in a test that asks whether pressing one key moves along one
+     * axis. {@code Camera.setYaw} does the same thing for the same reason, and
+     * the two are deliberately not shared — this package simulates and that one
+     * draws, and a heading is the only thing they have in common.
+     */
+    private double cosYaw() { return snap(Math.cos(yaw)); }
+
+    private double sinYaw() { return snap(Math.sin(yaw)); }
+
+    private static double snap(double v) {
+        if (Math.abs(v) < 1e-12) return 0.0;
+        if (Math.abs(v - 1.0) < 1e-12) return 1.0;
+        if (Math.abs(v + 1.0) < 1e-12) return -1.0;
+        return v;
     }
 
     public PlayerInput attackAt(double aimX, double aimY) {
@@ -114,6 +200,10 @@ public final class PlayerInput {
         }
         if (!melee.isEmpty()) m.put("ml", melee);
         if (shield) m.put("sd", true);
+        // Absent on the wire in a level that does not turn, which is every
+        // side-scroller and every plan view at rest — so the common case costs
+        // nothing and an older client's messages still mean what they said.
+        if (yaw != 0) m.put("y", yaw);
         return m;
     }
 
@@ -135,6 +225,7 @@ public final class PlayerInput {
         in.mineRow = m.get("mr") instanceof Number n ? n.intValue() : 0;
         in.melee = m.get("ml") instanceof String s ? s : "";
         in.shield = Boolean.TRUE.equals(m.get("sd"));
+        in.yaw = m.get("y") instanceof Number n ? n.doubleValue() : 0;
         return in;
     }
 }

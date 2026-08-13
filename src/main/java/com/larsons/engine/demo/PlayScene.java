@@ -680,6 +680,9 @@ public class PlayScene extends AbstractScene {
                 KeyBinds.down(input, GameAction.MOVE_DOWN),
                 ++inputSeq);
         in.sprint = KeyBinds.down(input, GameAction.SPRINT);
+        // The heading these keys were pressed at. It travels with the tick
+        // because the server has no camera to ask — see PlayerInput.yaw (C7).
+        in.yaw = camera.viewYaw();
         // Space is the jump key, and the only one: W/Up steer, swim and climb.
         // A fresh press is what drives mid-air jumps (double jump and beyond),
         // so holding Space doesn't burn the whole allowance in one tick.
