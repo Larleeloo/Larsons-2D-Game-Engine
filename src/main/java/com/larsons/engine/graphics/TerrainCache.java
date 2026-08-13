@@ -681,10 +681,19 @@ public final class TerrainCache {
      * A camera that projects world point {@code w} to
      * {@code round(w * zoom) - lattice}.
      *
-     * <p>Derived by solving the orthographic projection
-     * {@code (w - x) * zoom + viewport/2} for the {@code x} that makes the
-     * camera term vanish. Only the orthographic formats are cached
-     * ({@link #faithfulIn}), so the diamond case does not arise.
+     * <p>Derived by solving the projection {@code (w - x) * zoom + viewport/2}
+     * for the {@code x} that makes the camera term vanish. Only the orthographic
+     * formats are cached ({@link #faithfulIn}), so the diamond case does not
+     * arise.
+     *
+     * <p><b>The focus that solves it is a point in <em>projected</em> space, so
+     * it is carried back through the inverse projection rather than assigned
+     * straight to {@code x}/{@code y}.</b> Those were the same number until the
+     * camera could turn (C1); at any other heading, assigning the solution to a
+     * world coordinate that is about to be rotated again bakes the chunk from a
+     * position the frame is not looking from, which is the shaking bug this
+     * class was written to fix, wearing a different hat. At heading zero the
+     * inverse is the identity and the arithmetic is bit-for-bit what it was.
      */
     private static Camera bakeCamera(Camera camera, int latticeX, int latticeY) {
         Camera bake = new Camera(camera.getPerspective(),
@@ -693,8 +702,12 @@ public final class TerrainCache {
         bake.tileSize = camera.tileSize;
         bake.isoTileWidth = camera.isoTileWidth;
         bake.isoTileHeight = camera.isoTileHeight;
-        bake.x = (camera.viewportWidth / 2.0 + latticeX) / camera.zoom;
-        bake.y = (camera.viewportHeight / 2.0 + latticeY) / camera.zoom;
+        bake.setYaw(camera.yaw());
+        double[] focus = camera.inversePlanar(
+                (camera.viewportWidth / 2.0 + latticeX) / camera.zoom,
+                (camera.viewportHeight / 2.0 + latticeY) / camera.zoom);
+        bake.x = focus[0];
+        bake.y = focus[1];
         return bake;
     }
 

@@ -198,6 +198,95 @@ class StackedBlockTest {
         assertFalse(lvl.solidAt(15, 15), "and mining it leaves open air, not a hole");
     }
 
+    // --- the height axis, as rotation has to address it -------------------------
+
+    /**
+     * The stack, read as a height: 0 is a hole, 1 is floor, 2 is a wall, and
+     * there is no 3.
+     *
+     * <p>C2 of the render plan asks for "a {@code heightAt(col, row)} accessor
+     * returning 0/1/2" before the camera can rotate, because a rotated view has
+     * to know how tall a cell is to know which of its faces the camera can see.
+     * {@link Level#stackHeight} already is that accessor — it was written for
+     * mining, which takes a stack apart from the top down, and the two uses want
+     * the same number. What was missing is this: the range it may answer in was
+     * documented and never asserted, and C4 is about to depend on it. A cell
+     * that answered 3 would be a face-visibility bug rather than a level-format
+     * one, and it would surface as geometry drawn at the wrong height.
+     *
+     * <p><b>The ceiling of two is a decision, not a limit waiting to be
+     * raised</b> — recorded in the plan at C2. It is asserted here because a
+     * third layer would arrive as a silently taller answer from this method,
+     * long before anything drew it.
+     */
+    @Test
+    void theHeightAxisIsZeroOneOrTwoAndNeverThree() {
+        for (LevelFormat format : LevelFormat.values()) {
+            Level lvl = floored(format);
+            int stone = lvl.blocks.get("stone").id();
+
+            lvl.setTile(15, 15, 0);
+            assertEquals(0, lvl.stackHeight(15, 15), format + ": bare ground is a hole");
+
+            lvl.setTile(15, 15, lvl.blocks.get("stone_path").id());
+            assertEquals(1, lvl.stackHeight(15, 15), format + ": one layer is a floor");
+
+            // The side-scroller has nowhere to put a second block and refuses
+            // the edit, so its height axis tops out at 1. That is the §6.1 scope
+            // rule seen from the level format's side: the format with no second
+            // layer is exactly the format that does not rotate.
+            boolean stacked = lvl.setUpper(15, 15, stone);
+            assertEquals(lvl.layered(), stacked,
+                    format + ": only a layered format accepts a stacked block");
+            assertEquals(lvl.layered() ? 2 : 1, lvl.stackHeight(15, 15),
+                    format + ": two layers is a wall");
+
+            // Nothing can go on top of a full cell, so nothing can answer 3.
+            assertEquals(-1, lvl.placeLayer(15, 15), format + ": the cell is full");
+            assertTrue(lvl.stackHeight(15, 15) <= 2, format
+                    + ": the stack limit is two, and raising it is a decision C2 recorded "
+                    + "against — it reaches liquids, pathfinding, the palette and the "
+                    + "save format");
+
+            // Outside the level is a hole too, which is what the sweep meets
+            // first when the view turns and its bounds stop being the grid's.
+            assertEquals(0, lvl.stackHeight(-1, 15), format + ": off the west edge");
+            assertEquals(0, lvl.stackHeight(lvl.width, 15), format + ": off the east edge");
+        }
+    }
+
+    /**
+     * Height is geometry and walkability is solidity, and they are deliberately
+     * not the same question.
+     *
+     * <p>The obvious reading of "height 2 means a wall" is wrong, and it would
+     * have been a natural thing to assert. A torch standing on a path is two
+     * blocks deep and you can still walk through it — {@link Level#walkable}
+     * asks the stacked block whether it is solid, and dressing is not a barrier.
+     * That distinction matters to the step this one exists for: C4 derives
+     * <em>visible faces</em> from height, so a torch has a side face to show
+     * when the camera turns, while collision goes on asking {@code walkable} and
+     * gets a different answer for the same cell.
+     *
+     * <p>Written down here because a test asserting the tidier rule would have
+     * passed today — nothing yet reads height for drawing — and would have made
+     * the torch un-drawable the moment something did.
+     */
+    @Test
+    void heightIsGeometryAndWalkabilityIsSolidity() {
+        Level lvl = floored(LevelFormat.TOP_DOWN);
+
+        lvl.setUpper(15, 15, lvl.blocks.get("stone").id());
+        assertEquals(2, lvl.stackHeight(15, 15));
+        assertFalse(lvl.walkable(15, 15), "a stone block stood on a path is a wall");
+
+        lvl.setUpper(16, 15, lvl.blocks.get("torch").id());
+        assertEquals(2, lvl.stackHeight(16, 15),
+                "a torch stands on the floor, so the cell is two blocks deep");
+        assertTrue(lvl.walkable(16, 15),
+                "and you walk through it, because it is dressing rather than a barrier");
+    }
+
     /** A generated maze is built in the layers, walls standing on a floor. */
     @Test
     void theMazeGeneratorStandsItsWallsOnAFloor() {

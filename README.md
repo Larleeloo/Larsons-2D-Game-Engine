@@ -1085,9 +1085,12 @@ atlas gives it is the packing and the batch key a GPU backend will use.
 `-Dlarsons.render.glyphblit=true` makes Java2D draw from the pages as well.
 
 The GL backend that consumes all of this exists and is selected at startup where
-a driver answers, and it now runs the shader chain as well as the scene. What
-remains of the renderer work — camera rotation, and the sub-pixel stability
-question at HiDPI — is in [`RENDER_PLAN.md`](RENDER_PLAN.md).
+a driver answers, and it now runs the shader chain as well as the scene. The
+sub-pixel stability question at HiDPI is closed too, by seven separate fixes —
+"the shimmer" turned out never to be one defect. What remains of the renderer
+work is camera rotation: the camera has a heading and the projection turns with
+it, and what is left is turning the grid, the faces, the sprites and the input
+under it. [`RENDER_PLAN.md`](RENDER_PLAN.md) is the plan of record.
 
 Whether any of it was worth doing stayed a question about measurements rather
 than architecture. The
