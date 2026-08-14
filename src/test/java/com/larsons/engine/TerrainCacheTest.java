@@ -327,7 +327,7 @@ class TerrainCacheTest {
 
         long afterClear = lvl.terrainRevision();
         Block b = lvl.blocks.all().iterator().next();
-        lvl.setUpper(2, 2, b.id());
+        lvl.setTile(2, 2, Level.LAYER_UPPER, b.id());
         assertTrue(lvl.terrainRevision() > afterClear, "and so is stacking one");
     }
 

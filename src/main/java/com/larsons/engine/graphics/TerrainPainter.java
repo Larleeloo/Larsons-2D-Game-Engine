@@ -140,7 +140,8 @@ public final class TerrainPainter {
         double wx = col * (double) tileSize, wy = row * (double) tileSize;
         double[][] cs = {{wx, wy}, {wx + tileSize, wy},
                 {wx + tileSize, wy + tileSize}, {wx, wy + tileSize}};
-        int lift = level.upperAt(col, row) > 0 ? liftPixels(camera, tileSize) : 0;
+        int lift = level.tileAt(col, row, Level.LAYER_UPPER) > 0
+                ? liftPixels(camera, tileSize) : 0;
         int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
         long sumX = 0, sumY = 0;
@@ -398,7 +399,9 @@ public final class TerrainPainter {
                     project(c, r);
                     if (offScreen()) continue;
                     drawFloor(c, r, id);
-                    if (shadows != null && level.upperAt(c, r) > 0) addShadow(shadows);
+                    if (shadows != null && level.tileAt(c, r, Level.LAYER_UPPER) > 0) {
+                        addShadow(shadows);
+                    }
                 }
             }
         }
@@ -407,7 +410,8 @@ public final class TerrainPainter {
         private void gatherShadows(int[] bounds, Path2D.Double shadows) {
             for (int r = bounds[1]; r <= bounds[3]; r++) {
                 for (int c = bounds[0]; c <= bounds[2]; c++) {
-                    if (level.tileAt(c, r) <= 0 || level.upperAt(c, r) <= 0) continue;
+                    if (level.tileAt(c, r) <= 0
+                            || level.tileAt(c, r, Level.LAYER_UPPER) <= 0) continue;
                     project(c, r);
                     if (offScreen()) continue;
                     addShadow(shadows);
@@ -518,7 +522,7 @@ public final class TerrainPainter {
         private void queueRaised(int[] bounds, DepthPass raisedPass) {
             for (int r = bounds[1]; r <= bounds[3]; r++) {
                 for (int c = bounds[0]; c <= bounds[2]; c++) {
-                    int id = level.upperAt(c, r);
+                    int id = level.tileAt(c, r, Level.LAYER_UPPER);
                     if (id <= 0 || level.tileAt(c, r) <= 0) continue;
                     Block block = level.blocks.get(id);
                     if (block == null) continue;

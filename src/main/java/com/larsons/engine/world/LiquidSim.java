@@ -100,7 +100,7 @@ public final class LiquidSim {
      * plane instead, pooling around their source like water on a table.
      */
     public List<Change> step(Level level, boolean gravityOn, double dt) {
-        if (!level.registryTiles || level.tiles == null) return List.of();
+        if (!level.registryTiles || level.tiles() == null) return List.of();
         accumulator += dt;
         if (accumulator < TICK) return List.of();
         List<Change> changes = new ArrayList<>();

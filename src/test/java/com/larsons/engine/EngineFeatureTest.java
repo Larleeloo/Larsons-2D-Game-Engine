@@ -64,9 +64,9 @@ class EngineFeatureTest {
         assertEquals(1, lvl.tileAt(60000, 60000));
         assertTrue(lvl.setTile(3, 5, 2));
         // Only the touched chunks are resident.
-        assertTrue(lvl.chunked.loadedCount() <= 4,
+        assertTrue(lvl.chunkedTiles().loadedCount() <= 4,
                 "sparse storage should hold only touched chunks, had "
-                        + lvl.chunked.loadedCount());
+                        + lvl.chunkedTiles().loadedCount());
 
         // Snapshot/restore protects terrain across play-tests.
         Object snap = lvl.snapshotTiles();
@@ -95,7 +95,7 @@ class EngineFeatureTest {
         Level a = LevelGenerator.generate("A", 65536, 65536, 32, 12345);
         Level b = LevelGenerator.generate("B", 65536, 65536, 32, 12345);
         assertTrue(a.isChunked());
-        assertEquals(0, a.chunked.loadedCount(), "generation must be lazy");
+        assertEquals(0, a.chunkedTiles().loadedCount(), "generation must be lazy");
 
         // Sampling tiles materializes only the touched chunks, identically
         // for the same seed. Row ~80% down is always below the surface line.
@@ -107,7 +107,7 @@ class EngineFeatureTest {
             }
         }
         assertTrue(sawTerrain, "the deep sample region should contain terrain");
-        assertTrue(a.chunked.loadedCount() < 20, "only sampled chunks should load");
+        assertTrue(a.chunkedTiles().loadedCount() < 20, "only sampled chunks should load");
 
         // A save of an untouched generated world stays tiny and reloads with
         // the same generator.

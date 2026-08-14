@@ -1916,7 +1916,8 @@ public class CreativeScene extends AbstractScene {
      * path away, leaving the hole.
      */
     private int eraseLayer(int col, int row) {
-        return level.upperAt(col, row) > 0 ? Level.LAYER_UPPER : Level.LAYER_GROUND;
+        return level.tileAt(col, row, Level.LAYER_UPPER) > 0
+                ? Level.LAYER_UPPER : Level.LAYER_GROUND;
     }
 
     /** Erase the topmost block of one cell. */
@@ -5927,7 +5928,7 @@ public class CreativeScene extends AbstractScene {
 
     /** How high the top-most block at (col,row) is drawn — what a hover marks. */
     private int topBlockLift(int col, int row) {
-        return level.upperAt(col, row) > 0
+        return level.tileAt(col, row, Level.LAYER_UPPER) > 0
                 ? TerrainPainter.liftPixels(camera, level.tileSize) : 0;
     }
 
@@ -7005,8 +7006,8 @@ public class CreativeScene extends AbstractScene {
         int x0 = testing ? 0 : SIDEBAR_W;
         target.fillRect(x0, 0, viewportWidth - x0, 28, new Color(0, 0, 0, 150));
         String chunkInfo = level.isChunked()
-                ? " · chunked: " + level.chunked.loadedCount() + " loaded / "
-                + level.chunked.dirtyCount() + " edited"
+                ? " · chunked: " + level.chunkedTiles().loadedCount() + " loaded / "
+                + level.chunkedTiles().dirtyCount() + " edited"
                 : "";
         String bar;
         // The editor is one creative mode per level format, so the bar leads

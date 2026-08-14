@@ -97,7 +97,7 @@ class MeleeCombatTest {
         Level lvl = Level.empty("Flat", 40, 8, 32);
         int dirt = BlockRegistry.standard().get("dirt").id();
         for (int c = 0; c < lvl.width; c++) {
-            lvl.tiles[lvl.height - 1][c] = dirt;
+            lvl.tiles()[lvl.height - 1][c] = dirt;
         }
         lvl.spawnX = 64;
         lvl.spawnY = 128;

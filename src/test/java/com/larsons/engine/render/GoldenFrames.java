@@ -227,8 +227,8 @@ public final class GoldenFrames {
         level.setTile(10, 5, water);
         // A stacked wall, so the layered formats lift something and cast a
         // shadow — the only draw in the frame that is a filled Shape.
-        level.setUpper(3, 6, stone);
-        level.setUpper(4, 6, stone);
+        level.setTile(3, 6, Level.LAYER_UPPER, stone);
+        level.setTile(4, 6, Level.LAYER_UPPER, stone);
 
         level.entities.add(new Level.EntitySpawn(
                 DecorPainter.BACKGROUND_KIND, "pine_tree", 2 * 32, 5 * 32));

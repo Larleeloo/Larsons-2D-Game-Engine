@@ -37,7 +37,7 @@ class TerrainPainterDrawTest {
         for (int r = 0; r < lvl.height; r++) {
             for (int c = 0; c < lvl.width; c++) lvl.setTile(c, r, solid.id());
         }
-        if (stackOne) lvl.setUpper(1, 1, solid.id());
+        if (stackOne) lvl.setTile(1, 1, Level.LAYER_UPPER, solid.id());
         return lvl;
     }
 
@@ -84,9 +84,9 @@ class TerrainPainterDrawTest {
         // overlap and band the floor — the reason fillShape exists at all.
         Level lvl = level(LevelFormat.TOP_DOWN, false);
         Block solid = lvl.blocks.all().stream().filter(b -> !b.liquid()).findFirst().orElseThrow();
-        lvl.setUpper(1, 1, solid.id());
-        lvl.setUpper(2, 1, solid.id());
-        lvl.setUpper(1, 2, solid.id());
+        lvl.setTile(1, 1, Level.LAYER_UPPER, solid.id());
+        lvl.setTile(2, 1, Level.LAYER_UPPER, solid.id());
+        lvl.setTile(1, 2, Level.LAYER_UPPER, solid.id());
 
         RecordingTarget target = paint(lvl, null);
 

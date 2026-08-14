@@ -50,7 +50,7 @@ class MobExpansionTest {
         Level lvl = Level.empty("Flat", 60, 12, 32);
         int dirt = BlockRegistry.standard().get("dirt").id();
         for (int c = 0; c < lvl.width; c++) {
-            lvl.tiles[lvl.height - 1][c] = dirt;
+            lvl.tiles()[lvl.height - 1][c] = dirt;
         }
         return lvl;
     }

@@ -58,7 +58,7 @@ class RelicsTest {
         Level lvl = Level.empty("Flat", width, height, 32);
         int dirt = BlockRegistry.standard().get("dirt").id();
         for (int c = 0; c < lvl.width; c++) {
-            lvl.tiles[lvl.height - 1][c] = dirt;
+            lvl.tiles()[lvl.height - 1][c] = dirt;
         }
         return lvl;
     }
@@ -254,7 +254,7 @@ class RelicsTest {
         assertFalse(world.pollBlockChanges().isEmpty(), "the blast cratered the floor");
         boolean holed = false;
         for (int c = 0; c < lvl.width; c++) {
-            if (lvl.tiles[floorRow][c] == 0) holed = true;
+            if (lvl.tiles()[floorRow][c] == 0) holed = true;
         }
         assertTrue(holed, "floor tiles were destroyed");
 
@@ -269,7 +269,7 @@ class RelicsTest {
         assertNotNull(safeWorld.playerShoot(bomber, inv2, 300, floorRow * 32 + 16));
         stepUntilNoProjectiles(safeWorld, noEdit, bomber);
         for (int c = 0; c < safe.width; c++) {
-            assertTrue(safe.tiles[floorRow][c] != 0, "protected floor survives bombs");
+            assertTrue(safe.tiles()[floorRow][c] != 0, "protected floor survives bombs");
         }
     }
 

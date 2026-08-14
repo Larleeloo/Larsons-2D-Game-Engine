@@ -258,7 +258,7 @@ class CameraStabilityTest {
                 lvl.setTile(c, r, blocks.get(rnd.nextInt(blocks.size())).id());
                 // Every third cell carries a stacked block, which is what the
                 // depth pass draws live and what was reported as jittering.
-                if ((c + r) % 3 == 0) lvl.setUpper(c, r, blocks.get(rnd.nextInt(blocks.size())).id());
+                if ((c + r) % 3 == 0) lvl.setTile(c, r, Level.LAYER_UPPER, blocks.get(rnd.nextInt(blocks.size())).id());
             }
         }
         return lvl;

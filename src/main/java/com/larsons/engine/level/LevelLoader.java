@@ -111,17 +111,17 @@ public final class LevelLoader {
             // Giant chunked level: bounds + edited chunks + optional generator.
             lvl.width = intOf(root.get("width"), 1024);
             lvl.height = intOf(root.get("height"), 1024);
-            lvl.chunked = new ChunkedTiles(lvl.width, lvl.height);
+            ChunkedTiles floor = lvl.newChunkedLayer(Level.LAYER_GROUND);
             if (root.get("generatorSeed") instanceof Number seed) {
-                lvl.chunked.setGenerator("flat".equals(root.get("generator"))
+                floor.setGenerator("flat".equals(root.get("generator"))
                         ? Level.flatGenerator(seed.intValue())
                         : LevelGenerator.chunkGenerator(seed.longValue(),
                         lvl.width, lvl.height));
             }
-            readChunks(root.get("chunks"), lvl.chunked);
+            readChunks(root.get("chunks"), floor);
             if (root.get("upperChunks") instanceof Map<?, ?>) {
-                lvl.upperChunked = new ChunkedTiles(lvl.width, lvl.height);
-                readChunks(root.get("upperChunks"), lvl.upperChunked);
+                readChunks(root.get("upperChunks"),
+                        lvl.newChunkedLayer(Level.LAYER_UPPER));
             }
         } else if (root.get("tilesRle") instanceof List<?> rle) {
             // Run-length encoded grid (what Level.toMap writes): pairs of
@@ -131,11 +131,11 @@ public final class LevelLoader {
             if (width <= 0 || height <= 0) {
                 throw new IllegalArgumentException("RLE level needs width and height");
             }
-            lvl.tiles = readRle(rle, width, height);
             lvl.width = width;
             lvl.height = height;
+            lvl.setGrid(Level.LAYER_GROUND, readRle(rle, width, height));
             if (root.get("upperRle") instanceof List<?> upperRle) {
-                lvl.upper = readRle(upperRle, width, height);
+                lvl.setGrid(Level.LAYER_UPPER, readRle(upperRle, width, height));
             }
         } else {
             Object tilesObj = root.get("tiles");
@@ -153,9 +153,9 @@ public final class LevelLoader {
                 }
                 maxWidth = Math.max(maxWidth, row.size());
             }
-            lvl.tiles = tiles;
             lvl.height = root.containsKey("height") ? intOf(root.get("height"), rows.size()) : rows.size();
             lvl.width = root.containsKey("width") ? intOf(root.get("width"), maxWidth) : maxWidth;
+            lvl.setGrid(Level.LAYER_GROUND, tiles);
         }
 
         if (root.get("surface") instanceof List<?> sds) {

@@ -56,7 +56,7 @@ class VehicleTest {
         Level lvl = Level.empty("Flat", width, height, 32);
         int dirt = BlockRegistry.standard().get("dirt").id();
         for (int c = 0; c < lvl.width; c++) {
-            lvl.tiles[lvl.height - 1][c] = dirt;
+            lvl.tiles()[lvl.height - 1][c] = dirt;
         }
         return lvl;
     }
@@ -155,7 +155,7 @@ class VehicleTest {
         Level lvl = flatLevel(40, 12);
         int water = BlockRegistry.standard().get("water").id();
         for (int r = 6; r < lvl.height - 1; r++) {
-            for (int c = 5; c < 20; c++) lvl.tiles[r][c] = water;
+            for (int c = 5; c < 20; c++) lvl.tiles()[r][c] = water;
         }
         GameProfile p = profile();
         World world = new World(lvl);
@@ -189,7 +189,7 @@ class VehicleTest {
         int dirt = BlockRegistry.standard().get("dirt").id();
         // A solid wall ahead of the drill.
         for (int r = 4; r < lvl.height - 1; r++) {
-            for (int c = 14; c < 20; c++) lvl.tiles[r][c] = dirt;
+            for (int c = 14; c < 20; c++) lvl.tiles()[r][c] = dirt;
         }
         GameProfile p = profile();
         World world = new World(lvl);

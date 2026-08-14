@@ -1,11 +1,19 @@
 # Height Plan — the third axis, end to end
 
 **Status:** Written 2026-08-14 against commit `244762c` on
-`claude/vertical-stacking-walkable-blocks-bf522d`. **Nothing in it is done.**
-Baseline on this commit, `./gradlew test`: core **1051 tests, 0 failures, 10
-skipped**; `:gl` **62 tests, 0 failures, 34 skipped** (the GL tests that need a
-driver skip in a container — they are the D-series instruments and they run on
-a real machine).
+`claude/vertical-stacking-walkable-blocks-bf522d`. **V0 and V1 are done**;
+everything from V2 on is unstarted. Baseline at the time of writing,
+`./gradlew test`: core **1051 tests, 0 failures, 10 skipped**; `:gl` **62 tests,
+0 failures, 34 skipped** (the GL tests that need a driver skip in a container —
+they are the D-series instruments and they run on a real machine). After V1:
+core **1068/0/10**, `:gl` unchanged, all 32 golden frames byte-identical.
+
+**V0 could not be done as written and says so in place**: byte-identity had to
+be measured against the save's fixed point rather than against the bundled
+file, which is hand-authored in a shape the writer does not emit. **V1 found a
+lossy conversion nobody had a test for** — growing a level past the dense
+storage limit named its two layers one at a time, so a third would have been
+dropped by a size slider.
 
 This is the job `RENDER_PLAN.md` Appendix C recorded and deferred:
 
@@ -229,6 +237,34 @@ across a second pass.
 **Verify.** The new test passes on this commit, before anything else in V. A
 test that only passes after the change it guards is not a guard.
 
+#### V0 — done. Byte-identity had to be measured against the fixed point, not the file
+
+`LevelBytesTest`, **7 tests, green on the commit that introduced it** — which is
+the property the step exists for, and the one a reviewer should check first.
+
+**The instruction as written could not be satisfied, and the reason is worth
+keeping.** V0 asked that `parse(json) → toJson()` be byte-identical to `json`
+for the bundled level. It is not, and it should not be: `sample_level.json` is
+hand-authored in the legacy row-of-arrays shape, in palette mode, without a
+`format`, a `settings` block or a stacked layer. Saving it necessarily
+normalises it into the run-length form. A test demanding otherwise would have
+failed on this commit for reasons having nothing to do with height.
+
+What *can* be demanded, and what actually catches a reader and a writer that
+have drifted apart, is that **the second save equals the first**: one pass
+normalises and every pass after it is a no-op. A format that loses a field,
+reorders a map or re-encodes a number fails that on the first save after the
+defect rather than on the day a player's level will not open. That is the shape
+all four round-trip tests take.
+
+**The churn guard is a key list, not a byte comparison**, for the same reason:
+V3 is allowed to add keys to levels that use the extra depth and forbidden to
+add so much as an empty array to levels that do not. So
+`aTwoLayerLevelWritesExactlyTheKeysItWritesToday` spells both formats' key sets
+out longhand, and `nothingWritesAThirdLayerYet` asserts the absence of
+`layerRle`, `layerChunks` and `maxLayers` — trivially true today, and exactly
+the assertion that turns red if V3 writes a new key unconditionally.
+
 ### V1 — One layer list, and the second layer stops having a name of its own
 
 **Do.** Replace `Level.upper` / `Level.upperChunked` with an indexed list:
@@ -269,6 +305,51 @@ first (V6), compress only if the measurement asks for it.
 
 **Verify.** Full suite green with no test changed except the mechanical rename.
 All 32 golden frames byte-identical. `LevelBytesTest` (V0) green.
+
+#### V1 — done. The rename was the easy half; the drift it removed was the point
+
+**Core 1068 tests, 0 failures, 10 skipped; `:gl` 62/0/34 skipped** (the GL
+instruments need a driver and skip in a container). Baseline before Job V was
+1051, so the arithmetic is 1051 + 7 (V0) + 10 (this step) and **no existing test
+changed except mechanically**. All 32 golden frames byte-identical, which is
+what says a storage change stayed a storage change.
+
+`Level` now holds `List<int[][]> layers` / `List<ChunkedTiles> layerChunks`,
+private, reached through `tiles()`, `grid(layer)` and `chunks(layer)`. The
+fields `tiles`, `chunked`, `upper` and `upperChunked` are gone, and so are
+`upperAt`, `setUpper` and `upperBlockAt` — their 56 call sites now say
+`tileAt(col, row, LAYER_UPPER)` and `setTile(col, row, LAYER_UPPER, id)`, which
+is the same sentence with the layer where a reader can see it.
+
+**Three things this turned up that the step did not predict.**
+
+- **`tiles` had to stop being a field, not just move.** The plan said layer 0
+  "becomes `layers.get(0)`" and left open whether the field could stay as an
+  alias. It could not: `resize`, `restoreBounds` and the loader all *assign*
+  it, so an alias is two references that have to be re-pointed together, which
+  is the exact defect the list was meant to remove. It is a method now, and the
+  39 external `lvl.tiles` reads gained two characters.
+- **The conversion past the dense limit named its layers one at a time.**
+  `resize` read `upper == null ? null : toChunked(upper, …)` — correct for two
+  layers and silently lossy for a third. A size slider would have returned a
+  level looking right and missing its walls, at the one size nobody tests at.
+  `growingPastTheDenseLimitConvertsEveryLayerToChunks` now pins it, and it is
+  the reason that test is worth its runtime.
+- **`stackHeight` is now the contiguous run up from the floor**, rather than
+  "is there something in layer 1". Equivalent today, because clearing a floor
+  already clears the column — but it is the reading that stays honest when O1
+  lets a column have a gap in it, and it means `topBlockAt` answers `null` for
+  a block floating over a hole instead of answering the floating block. Nothing
+  in the engine can currently make that state; the loader could be handed one
+  by a hand-edited file, and answering "the top of a hole is nothing" is the
+  answer V4 is going to want.
+
+**The ceiling did not move.** `Level.layerLimit()` is 1 edge-on and 2 on a
+plane, exactly as before, and `LevelLayersTest.theCeilingIsOneLayerEdgeOnAndTwoOnAPlane`
+pins it there. Pinning a ceiling that the very next step raises is deliberate:
+**V2's diff should be `layerLimit()` and that test, and nothing else.** If V2
+needs edits anywhere but those two places, the storage is still deciding
+something it should not be deciding.
 
 ### V2 — A ceiling, per format and per level
 

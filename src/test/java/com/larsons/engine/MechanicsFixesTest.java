@@ -334,7 +334,7 @@ class MechanicsFixesTest {
         int chestId = maze.blocks.get("chest").id();
         for (int c = 0; c < maze.width && !chest; c++) {
             for (int r = 0; r < maze.height && !chest; r++) {
-                chest = maze.tileAt(c, r) == chestId || maze.upperAt(c, r) == chestId;
+                chest = maze.tileAt(c, r) == chestId || maze.tileAt(c, r, Level.LAYER_UPPER) == chestId;
             }
         }
         assertTrue(chest, "mazes should place at least the exit chest");
