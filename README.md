@@ -3410,6 +3410,20 @@ true before it starts and the instrument that proves it worked.
   once the scene is drawn by GL the finished frame is already a GPU texture, so
   this follows almost for free, whereas doing it first means building a
   per-frame upload path that the scene backend then makes redundant.
+- **The third axis — vertical stacking and walkable blocks.** The plan-view
+  formats already have a height axis with two values: one layer of block is
+  floor, two is a wall. Raising that ceiling to N, and then making the axis a
+  place a body can *stand* rather than only a thing that blocks it, is what
+  turns a plan view into a landscape — cliffs, terraces, towers, stairs, and a
+  player who climbs them. It has its own plan of record,
+  **[`HEIGHT_PLAN.md`](HEIGHT_PLAN.md)**, written the same way `RENDER_PLAN.md`
+  is: every step states what must be true before it starts and the instrument
+  that proves it worked. The measurement that opens it is that most of the
+  pieces are already here — the wire protocol already carries an arbitrary
+  layer index, `PlayerState` already has an elevation and already networks it,
+  and the terrain painter already derives visible faces from the projection
+  rather than from the heading — and that the one genuinely missing thing is
+  that a body's floor is the literal number zero, everywhere.
 - **Netcode next steps:** interest management for large worlds, lag
   compensation for hit detection.
 - **Deeper ports from the Side-Scroller engine:** alchemy/crafting recipes,
