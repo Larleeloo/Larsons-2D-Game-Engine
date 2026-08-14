@@ -39,6 +39,7 @@ import com.larsons.engine.entity.Projectile;
 import com.larsons.engine.entity.ProjectileDef;
 import com.larsons.engine.entity.ProjectileRegistry;
 import com.larsons.engine.fx.Particles;
+import com.larsons.engine.graphics.ActorPreview;
 import com.larsons.engine.graphics.AssetLoader;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.CutscenePainter;
@@ -81,6 +82,7 @@ import com.larsons.engine.minigame.Team;
 import com.larsons.engine.net.NetSession;
 import com.larsons.engine.net.Snapshot;
 import com.larsons.engine.scene.AbstractScene;
+import com.larsons.engine.sim.ActorSize;
 import com.larsons.engine.sim.PerspectiveSpace;
 import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerPhysics;
@@ -390,6 +392,9 @@ public class CreativeScene extends AbstractScene {
     private CharacterStore characterStore;
     // "+ New Character" fields: skin colours plus the traits a profile sets.
     private double cCharSpeed = 1.0, cCharJump = 1.0;
+    /** How large a new character is drawn, and how much floor it stands on, in blocks. */
+    private double cCharSprite = ActorSize.DEFAULT_TILES;
+    private double cCharHitbox = ActorSize.DEFAULT_TILES;
     private boolean cCharSprint = true;
     private int cCharAirJumps = 1;
     private int cCharHp = 100, cCharMana = 100, cCharStamina = 100;
@@ -416,7 +421,10 @@ public class CreativeScene extends AbstractScene {
     private int cDamage;
     private double cHardness = 1.0, cSizeTiles = 2.0;
     private int cToolIndex;                        // none/pickaxe/axe/shovel
-    private int cSize = 28, cSpeed = 60, cHp = 20, cMobDamage = 5;
+    private int cSpeed = 60, cHp = 20, cMobDamage = 5;
+    /** A new species' drawn size and its footprint, in blocks. */
+    private double cMobSprite = 0.875;
+    private double cMobHitbox = 0.875;
     private int cTemperIndex, cDetect = 220, cAttack = 34;
     private int cCategoryIndex, cRarityIndex, cMaxStack = 64, cHeal;
     private int cShapeIndex;
@@ -573,6 +581,19 @@ public class CreativeScene extends AbstractScene {
     }
 
     private GameProfile profile() { return ctx.profile(); }
+
+    /**
+     * How much floor the play-test body occupies, world pixels, and how large
+     * it is drawn — the chosen character's, or the game type's default. Two
+     * accessors because they are two questions; see
+     * {@link com.larsons.engine.sim.ActorSize}.
+     */
+    private double testHitSize() { return testMe.hitSize(profile().playerSize); }
+
+    private double testDrawSize() { return testMe.spriteSize(profile().playerSize); }
+
+    /** The tile size of the level being edited, world pixels. */
+    private double ts() { return level.tileSize; }
 
     /** The level being edited, exposed so tests can assert what an edit did. */
     public Level editing() { return level; }
@@ -2414,7 +2435,7 @@ public class CreativeScene extends AbstractScene {
     /** Make {@code p} the character the play-test runs as (traits and skin). */
     private void applyTestCharacter(CharacterProfile p) {
         testCharacter = p == null ? CharacterProfile.defaultProfile() : p;
-        testCharacter.applyTo(testMe);
+        testCharacter.applyTo(testMe, level.tileSize);
         ctx.setCharacter(testCharacter.key);
         prevHealth = testMe.health;
     }
@@ -2503,7 +2524,7 @@ public class CreativeScene extends AbstractScene {
                 particles.update(dt);
                 return;
             }
-            camera.centerOn(testMe.x + p.playerSize / 2.0, testMe.y + p.playerSize / 2.0);
+            camera.centerOn(testMe.x + testHitSize() / 2.0, testMe.y + testHitSize() / 2.0);
             return; // resume normal play next tick
         }
         if (KeyBinds.pressed(input, GameAction.MENU_BACK)
@@ -2661,7 +2682,7 @@ public class CreativeScene extends AbstractScene {
 
         if (swingTime > 0) swingTime -= dt;
         particles.update(dt);
-        camera.centerOn(testMe.x + p.playerSize / 2.0, testMe.y + p.playerSize / 2.0);
+        camera.centerOn(testMe.x + testHitSize() / 2.0, testMe.y + testHitSize() / 2.0);
 
         // Cutscene triggers watch the player: zones fire on entry, INTERACT
         // ones on E (doors and stations already had their chance above).
@@ -2669,7 +2690,7 @@ public class CreativeScene extends AbstractScene {
             boolean interact = KeyBinds.pressed(input, GameAction.INTERACT)
                     && craftingPanel == null && containerPanel == null;
             Cutscene started = cutsceneDirector.checkTriggers(
-                    testMe.x + p.playerSize / 2.0, testMe.y + p.playerSize / 2.0,
+                    testMe.x + testHitSize() / 2.0, testMe.y + testHitSize() / 2.0,
                     interact, level.tileSize, camera.x, camera.y);
             if (started != null) {
                 testWorld.cancelMining();
@@ -2716,8 +2737,8 @@ public class CreativeScene extends AbstractScene {
     /** Standing by a crafting table / alchemy station / chest, E opens its panel. */
     private void tryOpenStation(GameProfile p) {
         double ts = level.tileSize;
-        int pc = (int) Math.floor((testMe.x + p.playerSize / 2.0) / ts);
-        int pr = (int) Math.floor((testMe.y + p.playerSize / 2.0) / ts);
+        int pc = (int) Math.floor((testMe.x + testHitSize() / 2.0) / ts);
+        int pr = (int) Math.floor((testMe.y + testHitSize() / 2.0) / ts);
         for (int dr = -1; dr <= 1; dr++) {
             for (int dc = -2; dc <= 2; dc++) {
                 Block b = level.blockAt(pc + dc, pr + dr);
@@ -2840,8 +2861,8 @@ public class CreativeScene extends AbstractScene {
         double ts = level.tileSize;
         int col = (int) Math.floor(aim[0] / ts);
         int row = (int) Math.floor(aim[1] / ts);
-        boolean inReach = Math.hypot(aim[0] - (testMe.x + p.playerSize / 2.0),
-                aim[1] - (testMe.y + p.playerSize / 2.0)) <= 5 * ts;
+        boolean inReach = Math.hypot(aim[0] - (testMe.x + testHitSize() / 2.0),
+                aim[1] - (testMe.y + testHitSize() / 2.0)) <= 5 * ts;
         ItemDef held = p.itemsEnabled ? testInv.selectedDef() : null;
 
         // Hold-to-mine: durability progress while the button stays down.
@@ -3002,8 +3023,8 @@ public class CreativeScene extends AbstractScene {
         double ts = level.tileSize;
         int col = (int) Math.floor(aim[0] / ts);
         int row = (int) Math.floor(aim[1] / ts);
-        boolean inReach = Math.hypot(aim[0] - (testMe.x + p.playerSize / 2.0),
-                aim[1] - (testMe.y + p.playerSize / 2.0)) <= 5 * ts;
+        boolean inReach = Math.hypot(aim[0] - (testMe.x + testHitSize() / 2.0),
+                aim[1] - (testMe.y + testHitSize() / 2.0)) <= 5 * ts;
         if (!inReach) return;
         ItemDef def = p.itemsEnabled ? testInv.selectedDef() : null;
         if (p.itemsEnabled && (def == null || def.category() != ItemDef.Category.BLOCK)) return;
@@ -3017,7 +3038,7 @@ public class CreativeScene extends AbstractScene {
         if (b == null || layer < 0) return;
         // "Where I am" is the shape the physics step collided with — on a plane
         // the ground under the feet, not the body box the sprite's head fills.
-        boolean overlapsMe = PlayerPhysics.standingIn(level, testMe.x, testMe.y, p.playerSize,
+        boolean overlapsMe = PlayerPhysics.standingIn(level, testMe.x, testMe.y, testHitSize(),
                 PerspectiveSpace.of(level.perspective), col, row);
         // Flooring a hole under your own feet is not walling yourself in.
         boolean wouldClose = b.solid()
@@ -3036,7 +3057,7 @@ public class CreativeScene extends AbstractScene {
      * crafting stations).
      */
     private boolean tryDoorTravel() {
-        double half = profile().playerSize / 2.0;
+        double half = testHitSize() / 2.0;
         Level.EntitySpawn door = level.doorNear(testMe.x + half, testMe.y + half,
                 level.tileSize * 1.3);
         if (door == null) return false;
@@ -4588,6 +4609,7 @@ public class CreativeScene extends AbstractScene {
     private void buildCustomCharacterFields() {
         addColorSliders("Body colour", false);
         addColorSliders("Skin colour", true);
+        addSizeFields("Character");
         dialogForm.addDouble("Speed (× normal)", () -> cCharSpeed,
                 v -> cCharSpeed = v, 0.25, 3.0, 0.05);
         dialogForm.addToggle("Can sprint (Shift)", () -> cCharSprint, v -> cCharSprint = v);
@@ -4653,6 +4675,33 @@ public class CreativeScene extends AbstractScene {
                     : "This level offers " + level.characters.size() + " character(s)"
                     + " — save the level to keep the roster");
         });
+    }
+
+    /**
+     * The two sizes every actor has: how large it is drawn, and how much floor
+     * it occupies. Authored in blocks rather than pixels — "two blocks tall"
+     * means the same thing in a 16-pixel game type and a 96-pixel one, and it
+     * is the sentence a creator can picture. See
+     * {@link com.larsons.engine.sim.ActorSize}.
+     *
+     * <p>They are separate rows because they are separate decisions: a
+     * creator bringing 64&times;64 art raises the sprite until the character
+     * looks the size they drew, and leaves the footprint wherever the
+     * character should still <em>fit</em>. The preview beside the form is what
+     * makes that legible — the numbers alone are not something anyone can see.
+     */
+    private void addSizeFields(String what) {
+        boolean mob = "Mob".equals(what);
+        dialogForm.addDouble("Sprite size (blocks)",
+                () -> mob ? cMobSprite : cCharSprite,
+                v -> { if (mob) cMobSprite = v; else cCharSprite = v; },
+                ActorSize.MIN_TILES, ActorSize.MAX_TILES, 0.05);
+        dialogForm.addDouble("Hitbox size (blocks)",
+                () -> mob ? cMobHitbox : cCharHitbox,
+                v -> { if (mob) cMobHitbox = v; else cCharHitbox = v; },
+                ActorSize.MIN_TILES, ActorSize.MAX_TILES, 0.05);
+        dialogForm.addNote("How large it looks and how much floor it covers are "
+                + "separate: a giant can still fit down a one-block corridor.");
     }
 
     private void addColorSliders(String label, boolean accent) {
@@ -4738,7 +4787,7 @@ public class CreativeScene extends AbstractScene {
     private void buildCustomMobFields() {
         addColorSliders("Body", false);
         addColorSliders("Accent", true);
-        dialogForm.addSlider("Size (px)", () -> cSize, v -> cSize = v, 12, 96);
+        addSizeFields("Mob");
         dialogForm.addSlider("Speed (px/sec)", () -> cSpeed, v -> cSpeed = v, 10, 320);
         dialogForm.addSlider("Max health", () -> cHp, v -> cHp = v, 1, 500);
         dialogForm.addSlider("Damage", () -> cMobDamage, v -> cMobDamage = v, 0, 60);
@@ -4869,6 +4918,8 @@ public class CreativeScene extends AbstractScene {
                             CharacterStore.keyFor(name), name);
                     c.body = new Color(cR, cG, cB);
                     c.accent = new Color(cR2, cG2, cB2);
+                    c.spriteScale = cCharSprite;
+                    c.hitboxScale = cCharHitbox;
                     c.speed = cCharSpeed;
                     c.sprintEnabled = cCharSprint;
                     c.airJumps = cCharAirJumps;
@@ -4893,9 +4944,12 @@ public class CreativeScene extends AbstractScene {
                             k -> MobRegistry.standard().get(k) != null);
                     MobDef def = new MobDef(key, name,
                             new Color(cR, cG, cB), new Color(cR2, cG2, cB2),
-                            cSize, cSpeed, cHp, cMobDamage,
+                            ActorSize.pixels(cMobSprite, level.tileSize),
+                            ActorSize.pixels(cMobHitbox, level.tileSize),
+                            cSpeed, cHp, cMobDamage,
                             MobDef.Temperament.values()[cTemperIndex],
-                            cDetect, cAttack, cFlying);
+                            cDetect, cAttack, cFlying, null,
+                            MobDef.Ability.NONE, null, null);
                     customContent.addMob(def);
                     createdKind = "mob";
                     createdKey = key;
@@ -5677,8 +5731,8 @@ public class CreativeScene extends AbstractScene {
         // panned by hand and its own note says why that is left alone.
         if (testing && testMe != null
                 && (cutsceneDirector == null || cutsceneDirector.active() == null)) {
-            camera.centerOn(testDrawX() + p.playerSize / 2.0,
-                    testDrawY() + p.playerSize / 2.0);
+            camera.centerOn(testDrawX() + testHitSize() / 2.0,
+                    testDrawY() + testHitSize() / 2.0);
         }
         feedLighting(p);
 
@@ -5708,7 +5762,7 @@ public class CreativeScene extends AbstractScene {
         drawSpawnMarker(target);
         if (!testing) drawCutsceneMarkers(target);
         if (testing && testMe != null) {
-            standing.at(footDepth(testDrawX(), testDrawY(), profile().playerSize),
+            standingAt(standing, testDrawX(), testDrawY(), testHitSize(),
                     () -> drawTestPlayer(target));
         }
         standing.flush();
@@ -5800,8 +5854,8 @@ public class CreativeScene extends AbstractScene {
                         def.rarity().color);
             }
         }
-        camera.worldToScreen(testMe.x + profile().playerSize / 2.0,
-                testMe.y + profile().playerSize / 2.0, corner);
+        camera.worldToScreen(testMe.x + testHitSize() / 2.0,
+                testMe.y + testHitSize() / 2.0, corner);
         lighting.addLight(corner[0], corner[1], 2.5 * ts * camera.zoom,
                 new Color(255, 240, 210));
     }
@@ -5947,12 +6001,23 @@ public class CreativeScene extends AbstractScene {
 
     /**
      * The screen row a body standing at this world point puts its feet on —
-     * what everything sharing a {@link DepthPass} is ordered by. {@code x,y}
+     * the tie-breaker among everything sharing one tile's depth. {@code x,y}
      * is a sprite's top-left corner and {@code size} its world extent, the
      * way the level stores entities.
      */
     private int footDepth(double x, double y, double size) {
         return camera.worldToScreenY(x + size / 2, y + size);
+    }
+
+    /**
+     * Queue {@code sprite} where a body of {@code size} at (x,y) is standing:
+     * ordered by the tile its feet are on ({@link TerrainPainter#tileDepth},
+     * the same measure a raised block is sorted by), ties broken by where on
+     * that tile it stands.
+     */
+    private void standingAt(DepthPass into, double x, double y, double size, Runnable sprite) {
+        into.at(TerrainPainter.standingDepth(camera, level.tileSize, x + size / 2, y + size),
+                footDepth(x, y, size), sprite);
     }
 
     /** Painted mobs/items/doors/markers: level spawns offline, snapshots online. */
@@ -5968,17 +6033,17 @@ public class CreativeScene extends AbstractScene {
             double a = renderAlpha;
             for (DroppedItem item : testWorld.items()) {
                 double ix = item.renderX(a), iy = item.renderY(a);
-                into.at(footDepth(ix, iy, DroppedItem.SIZE), () ->
+                standingAt(into, ix, iy, DroppedItem.SIZE, () ->
                         drawItemAt(target, items.get(item.key), ix, iy));
             }
             for (Mob m : testWorld.mobs()) {
                 double mx = m.renderX(a), my = m.renderY(a);
-                into.at(footDepth(mx, my, m.def.size()), () ->
+                standingAt(into, mx, my, m.def.size(), () ->
                         drawMobAt(target, m.def, mx, my, m.facing, mobStateKey(m),
                                 m.weaponKey(), m.melee.action(), m.meleeProgress()));
             }
             for (Projectile pr : testWorld.projectiles()) {
-                into.at(footDepth(pr.renderX(a), pr.renderY(a), 0),
+                standingAt(into, pr.renderX(a), pr.renderY(a), 0,
                         () -> drawProjectileAt(target, pr));
             }
             return;
@@ -5987,13 +6052,13 @@ public class CreativeScene extends AbstractScene {
             Snapshot snap = net.client().latest();
             if (snap != null) {
                 for (EntityView e : snap.items()) {
-                    into.at(footDepth(e.x, e.y, DroppedItem.SIZE), () ->
+                    standingAt(into, e.x, e.y, DroppedItem.SIZE, () ->
                             drawItemAt(target, items.get(e.key), e.x, e.y));
                 }
                 for (EntityView e : snap.mobs()) {
                     MobDef def = mobs.get(e.key);
                     if (def != null) {
-                        into.at(footDepth(e.x, e.y, def.size()), () ->
+                        standingAt(into, e.x, e.y, def.size(), () ->
                                 drawMobAt(target, def, e.x, e.y, e.facing, "idle"));
                     }
                 }
@@ -6008,11 +6073,11 @@ public class CreativeScene extends AbstractScene {
                     // A painted-but-not-yet-live spawn faces the camera, so
                     // the editor shows the species rather than a profile.
                     if (def != null) {
-                        into.at(footDepth(e.x, e.y, def.size()), () ->
+                        standingAt(into, e.x, e.y, def.size(), () ->
                                 drawMobAt(target, def, e.x, e.y, Facing.SOUTH, "idle"));
                     }
                 }
-                case "item" -> into.at(footDepth(e.x, e.y, DroppedItem.SIZE), () ->
+                case "item" -> standingAt(into, e.x, e.y, DroppedItem.SIZE, () ->
                         drawItemAt(target, items.get(e.type), e.x, e.y));
                 default -> { /* doors/decor/markers drawn by their own passes */ }
             }
@@ -6323,12 +6388,14 @@ public class CreativeScene extends AbstractScene {
 
     /** Other players painting/playing in the same online world. */
     private void drawNetPlayers(DrawTarget target, Snapshot snap) {
-        int size = profile().playerSize;
         for (PlayerState ps : snap.players()) {
             if (ps.id == net.client().localId()) continue;
             Color body = Color.getHSBColor((ps.id * 0.6180339887f) % 1f, 0.6f, 0.85f);
-            camera.worldToScreen(ps.x + size / 2.0, ps.y + size, pcorner);
-            int w = Math.max(6, (int) Math.round(size * camera.zoom));
+            CharacterProfile theirs = Characters.getOrDefault(ps.characterKey);
+            double hit = ActorSize.pixels(theirs.hitboxScale, ts());
+            double draw = ActorSize.pixels(theirs.spriteScale, ts());
+            camera.worldToScreen(ps.x + hit / 2.0, ps.y + hit, pcorner);
+            int w = Math.max(6, (int) Math.round(draw * camera.zoom));
             target.fillRoundRect(pcorner[0] - w / 2, pcorner[1] - w, w, w, w / 4, w / 4, body);
             if (!ps.name.isEmpty()) {
                 target.drawText(ps.name, pcorner[0] - w / 2, pcorner[1] - w - 4, SMALL_FONT,
@@ -6394,21 +6461,23 @@ public class CreativeScene extends AbstractScene {
      * top-down level shows the jump exactly as a player will see it.
      */
     private void drawTestPlayer(DrawTarget target) {
-        double size = profile().playerSize;
+        double size = testDrawSize();
+        double hit = testHitSize();
         // Whatever is in their hands gets first say over how they are drawn
         // doing this — the same resolution the play scene uses.
         PlayerSprites.Frame sprite = MeleeSprites.playerFrame(
                 testMe.characterKey, testMeleeItem, testAnimState, seen(testMe.facing),
                 testAnimClock, testMelee.progress(), (int) size, testCharacter.body);
         double px = testDrawX(), py = testDrawY(), pz = testDrawZ();
-        camera.worldToScreen(px + size / 2.0, py + size, pcorner);
+        camera.worldToScreen(px + hit / 2.0, py + hit, pcorner);
         int w = (int) Math.round(size * camera.zoom);
         int h = w;
         int dx = pcorner[0] - w / 2;
         int lift = (int) Math.round(pz * camera.zoom * PlayerPhysics.HOP_DRAW_SCALE);
         if (lift > 0) {
+            int foot = (int) Math.round(hit * camera.zoom);
             double shrink = Math.max(0.35, 1 - pz / (size * 3));
-            int sw = (int) (w * 0.7 * shrink), sh = Math.max(2, (int) (w * 0.25 * shrink));
+            int sw = (int) (foot * 0.7 * shrink), sh = Math.max(2, (int) (foot * 0.25 * shrink));
             target.fillOval(pcorner[0] - sw / 2, pcorner[1] - sh / 2, sw, sh,
                     new Color(0, 0, 0, (int) (90 * shrink)));
         }
@@ -7069,7 +7138,7 @@ public class CreativeScene extends AbstractScene {
 
     /** "[E] Enter …" prompt while standing at a door in play-test. */
     private void drawDoorHint(DrawTarget target) {
-        double half = profile().playerSize / 2.0;
+        double half = testHitSize() / 2.0;
         Level.EntitySpawn door = level.doorNear(testMe.x + half, testMe.y + half,
                 level.tileSize * 1.3);
         if (door == null) return;
@@ -7186,8 +7255,56 @@ public class CreativeScene extends AbstractScene {
         target.fillRect(0, 0, viewportWidth, viewportHeight, new Color(8, 8, 14));
         target.popAlpha();
         dialogForm.render(target, viewportWidth, viewportHeight);
+        drawSizePreview(target);
         target.drawText("Enter activates · Esc cancels · type to edit text fields", 24,
                 viewportHeight - 16, SMALL_FONT, new Color(130, 130, 150));
+    }
+
+    /**
+     * The actor being sized, drawn as it will look in the level — beside the
+     * form that is deciding it, updating as the sliders move.
+     *
+     * <p>The form is a fixed column down the middle of the screen, so this
+     * takes the margin to its right and skips itself when there isn't one: a
+     * preview overlapping the rows it belongs to would be worse than none.
+     */
+    private void drawSizePreview(DrawTarget target) {
+        if (dialog != Dialog.CUSTOM) return;
+        boolean character = customCategory == Category.CHARACTERS;
+        if (!character && customCategory != Category.MOBS) return;
+
+        int formW = Math.min(640, viewportWidth - 80);
+        int right = (viewportWidth + formW) / 2 + 24;
+        int w = viewportWidth - right - 24;
+        if (w < 160) return;                    // no room; the rows still work
+        w = Math.min(w, 320);
+        int h = Math.min(w + 40, viewportHeight / 2);
+        int y = Math.max(80, viewportHeight / 4);
+
+        double sprite = character ? cCharSprite : cMobSprite;
+        double hitbox = character ? cCharHitbox : cMobHitbox;
+        Color body = new Color(cR, cG, cB);
+        BufferedImage art;
+        boolean mirrored = false;
+        if (character) {
+            // The character's own art, at the facing a plan view will show it
+            // from, so a creator sees the sheet they assigned rather than a
+            // stand-in that happens to be the same colour.
+            PlayerSprites.Frame f = PlayerSprites.directionalFrame("", "idle",
+                    seen(level.format() == LevelFormat.SIDE_SCROLLER
+                            ? Facing.EAST : Facing.SOUTH),
+                    0, Math.max(8, (int) ActorSize.pixels(sprite, level.tileSize)), body);
+            art = f == null ? null : f.image();
+            mirrored = f != null && f.mirrored();
+        } else {
+            art = EntitySprites.mob(new MobDef("preview", "preview", body,
+                    new Color(cR2, cG2, cB2), 32, cSpeed, cHp, cMobDamage,
+                    MobDef.Temperament.values()[cTemperIndex], cDetect, cAttack, cFlying),
+                    32, Facing.SOUTH);
+        }
+        ActorPreview.draw(target, right, y, w, h, level.format(), level.tileSize, level,
+                new ActorPreview.Actor(art, mirrored, body, sprite, hitbox),
+                ActorSize.label(sprite) + " tall · " + ActorSize.label(hitbox) + " of floor");
     }
 
     private void setStatus(String msg) {

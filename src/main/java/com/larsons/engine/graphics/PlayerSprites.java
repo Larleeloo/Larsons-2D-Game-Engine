@@ -120,7 +120,7 @@ public final class PlayerSprites {
      */
     public static String actionState(PlayerState s, Level level, GameProfile profile,
                                      Perspective perspective, boolean sprintHeld) {
-        double size = profile.playerSize;
+        double size = s.hitSize(profile.playerSize);
         double ts = level.tileSize;
         boolean inLiquid = level.liquidAt(
                 (int) Math.floor((s.x + size / 2.0) / ts),

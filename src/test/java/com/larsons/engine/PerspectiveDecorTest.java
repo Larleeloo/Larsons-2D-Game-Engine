@@ -7,6 +7,7 @@ import com.larsons.engine.graphics.DecorPainter;
 import com.larsons.engine.graphics.DepthPass;
 import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.SurfaceDecorPainter;
+import com.larsons.engine.graphics.TerrainPainter;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.sim.PerspectiveSpace;
@@ -304,9 +305,9 @@ class PerspectiveDecorTest {
             int[] feet = project(cam, 15.5 * TILE, 16 * TILE);
 
             // The same player, drawn over the same pixels, standing a little
-            // north of the boulder and then a little south of it.
-            int hidden = playerPixelsAmongScenery(lvl, cam, feet, feet[1] - 12);
-            int seen = playerPixelsAmongScenery(lvl, cam, feet, feet[1] + 12);
+            // north of the boulder's base and then a little south of it.
+            int hidden = playerPixelsAmongScenery(lvl, cam, feet, 15.5 * TILE, 16 * TILE - 4);
+            int seen = playerPixelsAmongScenery(lvl, cam, feet, 15.5 * TILE, 16 * TILE + 4);
             assertTrue(seen > 500, format + ": in front of it they are visible, " + seen);
             assertTrue(hidden < seen / 4, format
                     + ": behind it the boulder covers them, " + hidden + " vs " + seen);
@@ -326,8 +327,8 @@ class PerspectiveDecorTest {
 
         assertFalse(DepthPass.of(com.larsons.engine.graphics.Perspective.SIDE_SCROLL)
                 .isSorted(), "the side view draws straight through");
-        assertEquals(playerPixelsAmongScenery(lvl, cam, feet, feet[1] - 12),
-                playerPixelsAmongScenery(lvl, cam, feet, feet[1] + 12),
+        assertEquals(playerPixelsAmongScenery(lvl, cam, feet, 15.5 * TILE, 16 * TILE - 4),
+                playerPixelsAmongScenery(lvl, cam, feet, 15.5 * TILE, 16 * TILE + 4),
                 "which side of the boulder they stand on changes nothing");
     }
 
@@ -480,20 +481,27 @@ class PerspectiveDecorTest {
 
     /**
      * How much of a player-sized block of colour survives being drawn among a
-     * level's scenery at {@code depth} — the thing the scenes do when they
-     * hand the player and the trees to the same {@link DepthPass}. The marker
-     * covers the same pixels either way, so only its depth decides.
+     * level's scenery while standing at ({@code footX}, {@code footY}) — the
+     * thing the scenes do when they hand the player and the trees to the same
+     * {@link DepthPass}. The marker covers the same pixels wherever it is said
+     * to be standing, so only its depth decides.
+     *
+     * <p>The depth is taken the way the scenes take it rather than passed in as
+     * a screen row: it is two numbers now — which tile the feet are on, and
+     * where on it — and a test that spelled one of them out by hand would be
+     * asserting the convention instead of the behaviour.
      */
     private static int playerPixelsAmongScenery(Level lvl, Camera cam, int[] feet,
-                                                int depth) {
+                                                double footX, double footY) {
         BufferedImage canvas = new BufferedImage(CANVAS, CANVAS, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = canvas.createGraphics();
         DepthPass standing = DepthPass.of(lvl.perspective);
         scenery(g, lvl, cam, false, standing);
-        standing.at(depth, () -> {
-            g.setColor(PLAYER);
-            g.fillRect(feet[0] - 14, feet[1] - 28, 28, 28);
-        });
+        standing.at(TerrainPainter.standingDepth(cam, TILE, footX, footY),
+                cam.worldToScreenY(footX, footY), () -> {
+                    g.setColor(PLAYER);
+                    g.fillRect(feet[0] - 14, feet[1] - 28, 28, 28);
+                });
         standing.flush();
         g.dispose();
         return count(canvas, PLAYER, 0);

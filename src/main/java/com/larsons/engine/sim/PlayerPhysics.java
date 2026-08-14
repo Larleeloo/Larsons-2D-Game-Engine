@@ -152,7 +152,10 @@ public final class PlayerPhysics {
      */
     public static void step(PlayerState s, PlayerInput in, Level level, GameProfile profile,
                             Perspective perspective, double dt) {
-        double size = profile.playerSize;
+        // What collides is the body's own hitbox, not how large it is drawn:
+        // a character redrawn four times the size walks through the same gaps
+        // they always did. See ActorSize.
+        double size = s.hitSize(profile.playerSize);
         double ts = level.tileSize;
 
         boolean inLiquid = level.liquidAt(

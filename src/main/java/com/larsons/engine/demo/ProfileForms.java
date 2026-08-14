@@ -76,9 +76,12 @@ final class ProfileForms {
         form.addToggle("Particles", () -> p.particlesEnabled, v -> p.particlesEnabled = v);
         form.addToggle("Sound effects", () -> p.audioEnabled, v -> p.audioEnabled = v);
 
-        // The player hitbox stays slightly smaller than one block so it fits
-        // one-tile gaps; sizing the tiles sizes the player with them.
-        form.addInt("Tile size (player just under 1 block)", () -> p.tileSize,
+        // The game type's *default* player size stays slightly under one block
+        // so it fits one-tile gaps, and sizing the tiles sizes it with them. A
+        // character profile overrides both of its sizes independently — see
+        // com.larsons.engine.sim.ActorSize — so this is the fallback for a
+        // body that never chose, not a ceiling on anybody.
+        form.addInt("Tile size (default player size)", () -> p.tileSize,
                 v -> { p.tileSize = v; p.playerSize = GameProfile.playerSizeFor(v); }, 8, 256, 4);
         form.addInt("Default entity size", () -> p.defaultEntitySize, v -> p.defaultEntitySize = v, 8, 256, 4);
 

@@ -5,6 +5,7 @@ import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.PlayerSprites;
 import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.draw.DrawTarget;
+import com.larsons.engine.sim.ActorSize;
 import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.input.KeyBinds;
@@ -31,13 +32,29 @@ import java.util.List;
  */
 public final class CharacterPicker {
 
+    /**
+     * How small a card's art may shrink, as a share of its cell.
+     *
+     * <p>Cards draw their characters <em>to scale against each other</em>, so
+     * the row reads as a line-up and a roster with a giant in it looks like
+     * one. The scale is the roster's own tallest rather than a fixed size:
+     * against a fixed one, the ordinary case — a roster where everyone is the
+     * default — would draw every character at a fraction of their cell and
+     * look broken to a creator who had never touched a size at all.
+     *
+     * <p>The floor keeps the smallest character a recognisable figure rather
+     * than a smudge; the number on the card is what says exactly how small
+     * they are.
+     */
+    private static final double MIN_CARD_SHARE = 0.3;
+
     private static final Font TITLE_FONT = new Font("SansSerif", Font.BOLD, 26);
     private static final Font NAME_FONT = new Font("SansSerif", Font.BOLD, 16);
     private static final Font BODY_FONT = new Font("SansSerif", Font.PLAIN, 12);
     private static final Font HINT_FONT = new Font("SansSerif", Font.PLAIN, 13);
 
     private static final int CARD_W = 176;
-    private static final int CARD_H = 268;
+    private static final int CARD_H = 286;   // one row taller than it was: size joined the stats
     private static final int CARD_GAP = 16;
 
     // Hoisted: every card drew the same dozen colours and allocated all of
@@ -161,6 +178,7 @@ public final class CharacterPicker {
     }
 
     private void drawCard(DrawTarget target, CharacterProfile p, int x, int y, boolean picked) {
+        double tallest = tallest();
         target.fillRoundRect(x, y, CARD_W, CARD_H, 14, 14,
                 picked ? CARD_PICKED : CARD_PLAIN);
         target.drawRoundRect(x, y, CARD_W, CARD_H, 14, 14,
@@ -169,12 +187,22 @@ public final class CharacterPicker {
         // The character as they will actually look in-game: their assigned
         // sheet if they have one, else the pre-generated directional art —
         // walking on the highlighted card, standing still on the others.
-        int art = 84;
+        //
+        // Drawn to scale against each other, because size is now a trait a
+        // character has and a chooser that draws a giant and a sprite the same
+        // size is hiding the most visible difference between them. The cell is
+        // fixed and the art fills whatever share of it the character's own
+        // size claims, so the row reads as a line-up.
+        int cell = 84;
+        int art = Math.max(12, (int) Math.round(cell
+                * Math.max(MIN_CARD_SHARE, Math.min(1.0, p.spriteScale / tallest))));
         PlayerSprites.Frame frame = PlayerSprites.directionalFrame(p.key,
                 picked ? "walk" : "idle", Facing.SOUTH_EAST,
                 picked ? clock : 0, art, p.body);
         BufferedImage img = frame.image();
-        int ix = x + (CARD_W - art) / 2, iy = y + 14;
+        // Standing on the cell's floor rather than floating in the middle of
+        // it, so the line-up shares a ground line.
+        int ix = x + (CARD_W - art) / 2, iy = y + 14 + (cell - art);
         if (frame.mirrored()) {
             target.drawImage(img, ix + art, iy, -art, art);
         } else {
@@ -182,9 +210,10 @@ public final class CharacterPicker {
         }
 
         target.drawText(p.name, x + (CARD_W - target.textWidth(p.name, NAME_FONT)) / 2,
-                y + art + 34, NAME_FONT, TITLE);
+                y + cell + 34, NAME_FONT, TITLE);
 
-        int line = y + art + 56;
+        int line = y + cell + 56;
+        line = statLine(target, x, line, "Size", ActorSize.label(p.spriteScale));
         line = statLine(target, x, line, "Speed", (int) Math.round(p.speed * 100) + "%");
         line = statLine(target, x, line, "Health", String.valueOf((int) Math.round(p.maxHealth)));
         line = statLine(target, x, line, "Mana", String.valueOf((int) Math.round(p.maxMana)));
@@ -208,6 +237,17 @@ public final class CharacterPicker {
         target.drawText(ultName,
                 x + (CARD_W - target.textWidth(ultName, BODY_FONT)) / 2, ultY,
                 BODY_FONT, u != null ? u.color().getRGB() : NO_ULTIMATE);
+    }
+
+    /**
+     * The tallest sprite in the roster, never below the default — so a roster
+     * of ordinary characters draws them at full size, exactly as it did before
+     * characters had sizes at all.
+     */
+    private double tallest() {
+        double max = ActorSize.DEFAULT_TILES;
+        for (CharacterProfile p : roster) max = Math.max(max, p.spriteScale);
+        return max;
     }
 
     /** One "label   value" row; returns the next row's baseline. */

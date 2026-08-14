@@ -3,6 +3,8 @@ package com.larsons.engine.config;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.util.Json;
 
+import com.larsons.engine.sim.ActorSize;
+
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -20,11 +22,16 @@ import java.util.Map;
 public class GameProfile {
 
     /**
-     * The player hitbox as a fraction of a tile: slightly smaller than one
+     * The player size as a fraction of a tile: slightly smaller than one
      * block, so the player fits through one-tile gaps without pixel-perfect
      * alignment. {@link #normalize()} locks {@link #playerSize} to this.
+     *
+     * <p>This is the game type's <em>default</em>, and only that: a character
+     * profile says how large it is drawn and how much floor it occupies, each
+     * on its own ({@link com.larsons.engine.sim.ActorSize}), and a body that
+     * never chose falls back here.
      */
-    public static final double PLAYER_TILE_FRACTION = 0.9;
+    public static final double PLAYER_TILE_FRACTION = ActorSize.DEFAULT_TILES;
 
     public String name = "New Game Type";
 
@@ -377,9 +384,9 @@ public class GameProfile {
         if (soundPackDir == null) soundPackDir = "";
     }
 
-    /** The player hitbox for a tile size: {@link #PLAYER_TILE_FRACTION} of it. */
+    /** The default player size for a tile size: {@link #PLAYER_TILE_FRACTION} of it. */
     public static int playerSizeFor(int tileSize) {
-        return Math.max(1, (int) Math.floor(tileSize * PLAYER_TILE_FRACTION));
+        return (int) ActorSize.pixels(PLAYER_TILE_FRACTION, tileSize);
     }
 
     private static String str(Map<String, Object> m, String k, String def) {

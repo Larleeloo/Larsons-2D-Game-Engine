@@ -130,14 +130,111 @@ class StackedBlockTest {
             Camera cam = camera(lvl);
             int[] feet = project(cam, 15.5 * TILE, 16 * TILE);
 
-            // The same marker over the same pixels, standing a little north of
-            // the wall and then a little south of it.
-            int hidden = actorPixelsAmongTerrain(lvl, cam, feet, feet[1] - 16);
-            int seen = actorPixelsAmongTerrain(lvl, cam, feet, feet[1] + 16);
+            // The same marker over the same pixels, standing on the tile north
+            // of the wall and then on the tile south of it.
+            int hidden = actorPixelsAmongTerrain(lvl, cam, feet, 15.5 * TILE, 15 * TILE - 4);
+            int seen = actorPixelsAmongTerrain(lvl, cam, feet, 15.5 * TILE, 16 * TILE + 4);
             assertTrue(seen > 400, format + ": south of the wall they are visible, " + seen);
             assertTrue(hidden < seen / 2, format
                     + ": north of it the wall covers them, " + hidden + " vs " + seen);
         }
+    }
+
+    /**
+     * Standing against a wall's south face, an actor is never covered by it —
+     * wherever along the wall they are standing.
+     *
+     * <p>An actor's sprite is a billboard wider than the diamond of floor it
+     * stands on, so it reaches into the screen space of the tiles beside it.
+     * Sorted on the exact row its feet landed on, an actor pressed against a
+     * wall could score a pixel less than the block <em>diagonally</em> beside
+     * them — a different tile at the very same isometric depth — and be eaten
+     * by it: at worst a fifth of the character, and whatever they were holding.
+     * It came and went as they walked along the wall, which is the signature of
+     * a sort that turns over inside a single tile.
+     *
+     * <p>So the tiles are compared first and where-on-the-tile only breaks
+     * ties. This walks the whole face a sixteenth of a tile at a time, because
+     * the defect lived in a band a few pixels wide and a test that sampled one
+     * spot would have found the wall on its good side.
+     */
+    @Test
+    void nothingCoversAnActorStandingAgainstAWallsSouthFace() {
+        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+            Level lvl = floored(format);
+            int stone = lvl.blocks.get("stone").id();
+            for (int c = 13; c <= 17; c++) lvl.setUpper(c, 15, stone);
+            Camera cam = camera(lvl);
+
+            for (int step = 0; step <= 32; step++) {
+                double footX = 14 * TILE + step * (TILE / 16.0);
+                double footY = 16 * TILE + 1;   // pressed against the south face
+                int[] feet = project(cam, footX, footY);
+                int seen = actorPixelsAmongTerrain(lvl, cam, feet, footX, footY);
+                assertEquals(28 * 28, seen, format
+                        + ": standing against the wall at x=" + footX + " the block ate "
+                        + (28 * 28 - seen) + " px of them");
+            }
+        }
+    }
+
+    /**
+     * Sharing a tile, it is still where you stand that decides — the tie-break
+     * the second half of the depth key exists for.
+     *
+     * <p>Comparing tiles first would be no good if it were <em>all</em> a plan
+     * view compared: two actors on one tile, or an actor and the tree they are
+     * walking past, would fall back to whatever order the scene happened to
+     * queue them in, and a player would pop in front of a trunk they were still
+     * behind.
+     */
+    @Test
+    void withinOneTileTheExactPositionStillDecides() {
+        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+            Level lvl = floored(format);
+            Camera cam = camera(lvl);
+            // Two markers on the same tile, a few pixels apart along it.
+            double footX = 15.5 * TILE;
+            double north = 15 * TILE + 6, south = 15 * TILE + 26;  // one tile, 20px apart
+
+            assertEquals(28 * 28, secondOnTop(lvl, cam, footX, north, south), format
+                    + ": the southern of two actors on one tile is drawn in front");
+            assertEquals(0, secondOnTop(lvl, cam, footX, south, north), format
+                    + ": and the northern one stays behind");
+        }
+    }
+
+    /**
+     * Two markers standing at {@code aY} and {@code bY}, painted over exactly
+     * the same pixels so that only their depth can decide which survives.
+     * Returns how much of the second one is left.
+     */
+    private static int secondOnTop(Level lvl, Camera cam, double footX,
+                                   double aY, double bY) {
+        int[] at = project(cam, footX, 15.5 * TILE);
+        BufferedImage canvas = new BufferedImage(CANVAS, CANVAS, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = canvas.createGraphics();
+        Java2DTarget target = Java2DTarget.unsized(g);
+        DepthPass standing = DepthPass.of(lvl.perspective);
+        queueMarker(standing, target, cam, footX, aY, at, Color.WHITE);
+        queueMarker(standing, target, cam, footX, bY, at, ACTOR);
+        standing.flush();
+        g.dispose();
+        int seen = 0;
+        for (int y = 0; y < CANVAS; y++) {
+            for (int x = 0; x < CANVAS; x++) {
+                if (canvas.getRGB(x, y) == ACTOR.getRGB()) seen++;
+            }
+        }
+        return seen;
+    }
+
+    /** One marker, queued at the depth the scenes give a body standing there. */
+    private static void queueMarker(DepthPass into, Java2DTarget target, Camera cam,
+                                    double footX, double footY, int[] at, Color colour) {
+        into.at(TerrainPainter.standingDepth(cam, TILE, footX, footY),
+                cam.worldToScreenY(footX, footY),
+                () -> target.fillRect(at[0] - 14, at[1] - 28, 28, 28, colour));
     }
 
     // --- what the stack means ---------------------------------------------------
@@ -607,19 +704,26 @@ class StackedBlockTest {
 
     /**
      * How much of an actor-sized marker survives being drawn among the terrain
-     * at {@code depth} — what the scenes do when they hand the player and the
-     * stacked blocks to the same {@link DepthPass}.
+     * while standing at ({@code footX}, {@code footY}) — what the scenes do
+     * when they hand the player and the stacked blocks to the same
+     * {@link DepthPass}.
+     *
+     * <p>The depth is taken the way the scenes take it rather than handed in as
+     * a screen row: it is two numbers now — which tile the feet are on, and
+     * where on it — and a test spelling one of them out by hand would be
+     * asserting the convention instead of the behaviour.
      */
     private static int actorPixelsAmongTerrain(Level lvl, Camera cam, int[] feet,
-                                               int depth) {
+                                               double footX, double footY) {
         BufferedImage canvas = new BufferedImage(CANVAS, CANVAS, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = canvas.createGraphics();
         Java2DTarget target = Java2DTarget.unsized(g);
         DepthPass standing = DepthPass.of(lvl.perspective);
         TerrainPainter.draw(target, lvl, cam, new int[]{0, 0, lvl.width - 1, lvl.height - 1},
                 0.5, standing, null);
-        standing.at(depth, () ->
-                target.fillRect(feet[0] - 14, feet[1] - 28, 28, 28, ACTOR));
+        standing.at(TerrainPainter.standingDepth(cam, TILE, footX, footY),
+                cam.worldToScreenY(footX, footY), () ->
+                        target.fillRect(feet[0] - 14, feet[1] - 28, 28, 28, ACTOR));
         standing.flush();
         g.dispose();
         int seen = 0;

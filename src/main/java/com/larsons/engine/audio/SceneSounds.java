@@ -368,7 +368,7 @@ public final class SceneSounds {
 
     /** The block the player is standing on, or {@code null} over open air. */
     private static Block blockUnder(PlayerState me, Level level, GameProfile profile) {
-        double size = profile.playerSize;
+        double size = me.hitSize(profile.playerSize);
         int col = (int) Math.floor((me.x + size / 2.0) / level.tileSize);
         int row = (int) Math.floor((me.y + size + 2) / level.tileSize);
         return level.blockAt(col, row);
@@ -376,7 +376,7 @@ public final class SceneSounds {
 
     /** The liquid the player is in, or {@code null} when they are dry. */
     private static Block liquidAt(PlayerState me, Level level, GameProfile profile) {
-        double size = profile.playerSize;
+        double size = me.hitSize(profile.playerSize);
         return level.liquidAt((int) Math.floor((me.x + size / 2.0) / level.tileSize),
                 (int) Math.floor((me.y + size / 2.0) / level.tileSize));
     }

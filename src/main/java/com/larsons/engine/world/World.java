@@ -479,7 +479,7 @@ public final class World {
                 Mob m = it.next();
                 m.step(level, players, projectiles, gravityOn, profile.combatEnabled, dt);
                 drainMobActions(m, profile);
-                Block hazard = hazardAt(m.x + m.def.size() / 2, m.y + m.def.size() / 2);
+                Block hazard = hazardAt(m.x + m.def.hitbox() / 2, m.y + m.def.hitbox() / 2);
                 if (hazard != null) m.environmentDamage(hazard.damage() * dt);
                 if (m.dead()) {
                     if (died == null) died = new ArrayList<>();
@@ -495,8 +495,8 @@ public final class World {
                     Mob minion = spawnMob(s.key(), s.x(), s.y());
                     if (minion != null) {
                         impacts.add(new Impact("summon",
-                                minion.x + minion.def.size() / 2,
-                                minion.y + minion.def.size() / 2, false));
+                                minion.x + minion.def.hitbox() / 2,
+                                minion.y + minion.def.hitbox() / 2, false));
                     }
                 }
                 pendingSummons.clear();
@@ -531,8 +531,8 @@ public final class World {
         // Players: hazard blocks burn, clamp health, respawn on death (at a
         // painted multiplayer spawn point when the level has them). A carried
         // Phoenix Feather burns up instead: the player revives in place.
-        double size = profile.playerSize;
         for (PlayerState p : players) {
+            double size = body(p, profile);
             // Ultimates: charge the meter, keep a running one's effects live,
             // and resolve whatever a sustained ability does each tick.
             Ultimates.charge(p, dt);
@@ -577,7 +577,7 @@ public final class World {
         if (shot != null && profile.projectilesEnabled && m.def.projectile() != null) {
             ProjectileDef def = projectileTypes.get(m.def.projectile());
             if (def != null) {
-                double cx = m.x + m.def.size() / 2, cy = m.y + m.def.size() / 2;
+                double cx = m.x + m.def.hitbox() / 2, cy = m.y + m.def.hitbox() / 2;
                 double dx = shot[0] - cx, dy = shot[1] - cy;
                 double len = Math.max(0.001, Math.hypot(dx, dy));
                 // Mob-owned shots carry a negative owner id: never dodged by
@@ -597,8 +597,8 @@ public final class World {
         double[] blink = m.pollBlinkFx();
         if (blink != null) {
             impacts.add(new Impact("blink", blink[0], blink[1], false));
-            impacts.add(new Impact("blink", m.x + m.def.size() / 2,
-                    m.y + m.def.size() / 2, false));
+            impacts.add(new Impact("blink", m.x + m.def.hitbox() / 2,
+                    m.y + m.def.hitbox() / 2, false));
         }
     }
 
@@ -608,7 +608,7 @@ public final class World {
      * so chains of exploders resolve without re-entering the mob loop).
      */
     private void handleMobDeath(Mob m, boolean withLoot, GameProfile profile) {
-        double cx = m.x + m.def.size() / 2, cy = m.y + m.def.size() / 2;
+        double cx = m.x + m.def.hitbox() / 2, cy = m.y + m.def.hitbox() / 2;
         if (withLoot) dropMobLoot(m);
         switch (m.def.ability()) {
             case SPLIT -> {
@@ -616,13 +616,13 @@ public final class World {
                 if (m.def.abilityArg() != null
                         && (profile == null || profile.mobsEnabled)
                         && mobs.size() < MOB_CAP) {
-                    spawnMob(m.def.abilityArg(), m.x - m.def.size() * 0.3, m.y);
-                    spawnMob(m.def.abilityArg(), m.x + m.def.size() * 0.3, m.y);
+                    spawnMob(m.def.abilityArg(), m.x - m.def.hitbox() * 0.3, m.y);
+                    spawnMob(m.def.abilityArg(), m.x + m.def.hitbox() * 0.3, m.y);
                     impacts.add(new Impact("summon", cx, cy, false));
                 }
             }
             case DEATH_BURST -> {
-                double radius = Math.max(48, m.def.size() * 1.6);
+                double radius = Math.max(48, m.def.hitbox() * 1.6);
                 pendingBursts.add(new double[]{cx, cy, radius, m.def.damage() * 2});
                 String fxKey = m.def.abilityArg() != null ? m.def.abilityArg() : "fireball";
                 impacts.add(new Impact(fxKey, cx, cy, true));
@@ -644,9 +644,9 @@ public final class World {
             List<Mob> killed = null;
             for (Mob m : mobs) {
                 if (m.dead()) continue;
-                double d = Math.hypot(m.x + m.def.size() / 2 - bx,
-                        m.y + m.def.size() / 2 - by);
-                if (d > radius + m.def.size() / 2) continue;
+                double d = Math.hypot(m.x + m.def.hitbox() / 2 - bx,
+                        m.y + m.def.hitbox() / 2 - by);
+                if (d > radius + m.def.hitbox() / 2) continue;
                 double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
                 if (m.damage(dmg * falloff, bx, by, space())) {
                     if (killed == null) killed = new ArrayList<>();
@@ -660,8 +660,8 @@ public final class World {
                 }
             }
             // Mob-sourced blasts hurt every player caught in them.
-            double half = profile.playerSize / 2.0;
             for (PlayerState pl : players) {
+                double half = body(pl, profile) / 2.0;
                 double d = Math.hypot(pl.x + half - bx, pl.y + half - by);
                 if (d > radius + half) continue;
                 double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
@@ -745,13 +745,13 @@ public final class World {
         double bestD = Double.MAX_VALUE;
         for (Mob m : mobs) {
             if (m.dead()) continue;
-            double mx = m.x + m.def.size() / 2, my = m.y + m.def.size() / 2;
+            double mx = m.x + m.def.hitbox() / 2, my = m.y + m.def.hitbox() / 2;
             double d = Math.hypot(mx - hit[0], my - hit[1]);
-            if (d >= m.def.size() / 2 + 24 || d >= bestD) continue;
+            if (d >= m.def.hitbox() / 2 + 24 || d >= bestD) continue;
             // Anything already touching the fighter is in the arc by
             // definition; only reaching out has a direction to miss in.
             double toMob = Math.hypot(mx - cx, my - cy);
-            if (toMob > m.def.size() / 2 + 4
+            if (toMob > m.def.hitbox() / 2 + 4
                     && angleBetween(aimAngle, Math.atan2(my - cy, mx - cx)) > halfArc) {
                 continue;
             }
@@ -762,8 +762,8 @@ public final class World {
 
         if (best.tryParry()) {
             // Caught. The blade rings off the guard and the swing is wasted.
-            impacts.add(new Impact("parry", best.x + best.def.size() / 2,
-                    best.y + best.def.size() / 2, false));
+            impacts.add(new Impact("parry", best.x + best.def.hitbox() / 2,
+                    best.y + best.def.hitbox() / 2, false));
             return new MeleeHit(best, true, 0);
         }
         // Damage dealt is what fills an ultimate meter fastest, exactly
@@ -813,7 +813,7 @@ public final class World {
 
     /** An extra shove away from (fromX, fromY), along whatever axes exist here. */
     private void shove(Mob m, double fromX, double fromY, double amount) {
-        double half = m.def.size() / 2;
+        double half = m.def.hitbox() / 2;
         double dx = m.x + half - fromX, dy = m.y + half - fromY;
         double len = Math.hypot(dx, dy);
         if (len < 0.001) {
@@ -823,8 +823,8 @@ public final class World {
         }
         m.x += dx / len * amount;
         if (space().hasElevation()) m.y += dy / len * amount;
-        m.x = Math.max(0, Math.min(m.x, level.width * (double) level.tileSize - m.def.size()));
-        m.y = Math.max(0, Math.min(m.y, level.height * (double) level.tileSize - m.def.size()));
+        m.x = Math.max(0, Math.min(m.x, level.width * (double) level.tileSize - m.def.hitbox()));
+        m.y = Math.max(0, Math.min(m.y, level.height * (double) level.tileSize - m.def.hitbox()));
     }
 
     /** The smallest angle between two headings, in radians. */
@@ -998,7 +998,6 @@ public final class World {
      */
     private void stepProjectiles(double dt, boolean gravityOn,
                                  List<PlayerState> players, GameProfile profile) {
-        double playerRadius = profile.playerSize * 0.45;
         PerspectiveSpace space = space();
         Iterator<Projectile> it = projectiles.iterator();
         while (it.hasNext()) {
@@ -1042,7 +1041,7 @@ public final class World {
             }
             if (!p.dead() && profile.combatEnabled && (mobShot || pvpRule != null)) {
                 PlayerState hit = hittablePlayerAt(players, p.ownerId,
-                        p.x, p.y, p.def.radius() + playerRadius, profile);
+                        p.x, p.y, p.def.radius(), profile);
                 if (hit != null) {
                     p.kill();
                     impacts.add(new Impact(p.def.key(), p.x, p.y, p.def.explosionRadius() > 0));
@@ -1092,13 +1091,14 @@ public final class World {
             for (PlayerState pl : players) {
                 if (pl.id != p.ownerId) continue;
                 double ts = level.tileSize;
-                pl.x = Math.max(0, Math.min(p.x - profile.playerSize / 2,
-                        level.width * ts - profile.playerSize));
-                pl.y = Math.max(0, Math.min(p.y - profile.playerSize,
-                        level.height * ts - profile.playerSize));
+                double body = body(pl, profile);
+                pl.x = Math.max(0, Math.min(p.x - body / 2,
+                        level.width * ts - body));
+                pl.y = Math.max(0, Math.min(p.y - body,
+                        level.height * ts - body));
                 pl.vy = 0;
-                impacts.add(new Impact("warp", pl.x + profile.playerSize / 2,
-                        pl.y + profile.playerSize / 2, false));
+                impacts.add(new Impact("warp", pl.x + body(pl, profile) / 2,
+                        pl.y + body(pl, profile) / 2, false));
                 break;
             }
         }
@@ -1126,16 +1126,16 @@ public final class World {
                 double bestD = 110;
                 for (Mob m : mobs) {
                     if (m == hit || m.dead()) continue;
-                    double d = Math.hypot(m.x + m.def.size() / 2 - p.x,
-                            m.y + m.def.size() / 2 - p.y);
+                    double d = Math.hypot(m.x + m.def.hitbox() / 2 - p.x,
+                            m.y + m.def.hitbox() / 2 - p.y);
                     if (d < bestD) {
                         bestD = d;
                         chained = m;
                     }
                 }
                 if (chained != null) {
-                    impacts.add(new Impact("chain", chained.x + chained.def.size() / 2,
-                            chained.y + chained.def.size() / 2, false));
+                    impacts.add(new Impact("chain", chained.x + chained.def.hitbox() / 2,
+                            chained.y + chained.def.hitbox() / 2, false));
                     if (chained.damage(p.damage * 0.6, p.x)) {
                         mobs.remove(chained);
                         handleMobDeath(chained, true, profile);
@@ -1183,17 +1183,25 @@ public final class World {
      * Mob-owned shots (negative owner) may hurt anyone; player-owned shots go
      * through the {@link PvpRule}.
      */
+    /**
+     * The player a shot of {@code radius} at (x,y) strikes, if any.
+     *
+     * <p>{@code radius} is the <em>shot's</em> reach; each body adds its own,
+     * because how much of the world a player fills is now theirs to say and
+     * one radius for everybody would have a giant shot at like a sparrow.
+     */
     private PlayerState hittablePlayerAt(List<PlayerState> players, int ownerId,
                                          double x, double y, double radius,
                                          GameProfile profile) {
-        double half = profile.playerSize / 2.0;
         PlayerState best = null;
         double bestD = Double.MAX_VALUE;
         for (PlayerState pl : players) {
             if (pl.id == ownerId || pl.health <= 0) continue;
             if (ownerId >= 0 && (pvpRule == null || !pvpRule.canHurt(ownerId, pl))) continue;
+            double body = body(pl, profile);
+            double half = body / 2.0;
             double d = Math.hypot(pl.x + half - x, pl.y + half - y);
-            if (d < radius && d < bestD) {
+            if (d < radius + body * 0.45 && d < bestD) {
                 bestD = d;
                 best = pl;
             }
@@ -1211,8 +1219,8 @@ public final class World {
             // A mob's own blast never wounds the species that made it — a
             // pyromancer doesn't rout its own warband — but everyone else's do.
             if (mobShot && m.id == -p.ownerId) continue;
-            double d = Math.hypot(m.x + m.def.size() / 2 - p.x, m.y + m.def.size() / 2 - p.y);
-            if (d > radius + m.def.size() / 2) continue;
+            double d = Math.hypot(m.x + m.def.hitbox() / 2 - p.x, m.y + m.def.hitbox() / 2 - p.y);
+            if (d > radius + m.def.hitbox() / 2) continue;
             double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
             applyElementToMob(p, m, profile, false);
             if (m.damage(p.damage * falloff, p.x)) {
@@ -1228,9 +1236,9 @@ public final class World {
             }
         }
         if (mobShot || pvpRule != null) {
-            double half = profile.playerSize / 2.0;
             for (PlayerState pl : players) {
                 if (pl.id == p.ownerId || pl.health <= 0) continue;
+                double half = body(pl, profile) / 2.0;
                 if (!mobShot && !pvpRule.canHurt(p.ownerId, pl)) continue;
                 double d = Math.hypot(pl.x + half - p.x, pl.y + half - p.y);
                 if (d > radius + half) continue;
@@ -1247,8 +1255,8 @@ public final class World {
         double bestD = Double.MAX_VALUE;
         for (Mob m : mobs) {
             if (m.dead()) continue;
-            double d = Math.hypot(m.x + m.def.size() / 2 - x, m.y + m.def.size() / 2 - y);
-            if (d < m.def.size() / 2 + radius && d < bestD) {
+            double d = Math.hypot(m.x + m.def.hitbox() / 2 - x, m.y + m.def.hitbox() / 2 - y);
+            if (d < m.def.hitbox() / 2 + radius && d < bestD) {
                 bestD = d;
                 best = m;
             }
@@ -1283,7 +1291,7 @@ public final class World {
     public boolean useRelic(PlayerState p, String itemKey, GameProfile profile) {
         Double cost = relicManaCost(itemKey);
         if (cost == null || p.mana < cost) return false;
-        double cx = p.x + profile.playerSize / 2, cy = p.y + profile.playerSize / 2;
+        double cx = p.x + body(p, profile) / 2, cy = p.y + body(p, profile) / 2;
         switch (itemKey) {
             case "nova_crystal" -> {
                 if (!profile.combatEnabled) return false;
@@ -1292,9 +1300,9 @@ public final class World {
                 List<Mob> died = null;
                 for (Mob m : mobs) {
                     if (m.dead()) continue;
-                    double d = Math.hypot(m.x + m.def.size() / 2 - cx,
-                            m.y + m.def.size() / 2 - cy);
-                    if (d > radius + m.def.size() / 2) continue;
+                    double d = Math.hypot(m.x + m.def.hitbox() / 2 - cx,
+                            m.y + m.def.hitbox() / 2 - cy);
+                    if (d > radius + m.def.hitbox() / 2) continue;
                     double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
                     if (m.damage(22 * falloff, cx, cy, space())) {
                         if (died == null) died = new ArrayList<>();
@@ -1344,7 +1352,7 @@ public final class World {
     public boolean useUltimate(PlayerState p, double aimX, double aimY, GameProfile profile) {
         Ultimate u = Ultimates.of(p);
         if (u == null || !Ultimates.ready(p)) return false;
-        double half = profile.playerSize / 2.0;
+        double half = body(p, profile) / 2.0;
         double cx = p.x + half, cy = p.y + half;
         // Offensive abilities are combat; the terrain-wrecking one is block
         // editing. A game type with those off keeps its meter rather than
@@ -1375,10 +1383,10 @@ public final class World {
                 double lastX = p.x, lastY = p.y;
                 for (int i = 1; i <= steps; i++) {
                     double t = reach * i / steps;
-                    double nx = clampX(p.x + ux * t, profile.playerSize);
-                    double ny = clampY(p.y + uy * t, profile.playerSize);
+                    double nx = clampX(p.x + ux * t, body(p, profile));
+                    double ny = clampY(p.y + uy * t, body(p, profile));
                     // Stop at the first wall rather than teleporting through it.
-                    if (blockedBody(nx, ny, profile.playerSize)) break;
+                    if (blockedBody(nx, ny, body(p, profile))) break;
                     lastX = nx;
                     lastY = ny;
                     blastMobs(nx + half, ny + half, level.tileSize * 0.9,
@@ -1409,9 +1417,9 @@ public final class World {
                 // the same as an ice-hit one and needs no new status bit.
                 for (Mob m : mobs) {
                     if (m.dead()) continue;
-                    double d = Math.hypot(m.x + m.def.size() / 2 - cx,
-                            m.y + m.def.size() / 2 - cy);
-                    if (d <= u.radius() + m.def.size() / 2) {
+                    double d = Math.hypot(m.x + m.def.hitbox() / 2 - cx,
+                            m.y + m.def.hitbox() / 2 - cy);
+                    if (d <= u.radius() + m.def.hitbox() / 2) {
                         m.chillTime = Math.max(m.chillTime, u.duration());
                     }
                 }
@@ -1423,12 +1431,12 @@ public final class World {
                 // the caster, which reads as a shockwave in any perspective.
                 for (Mob m : mobs) {
                     if (m.dead()) continue;
-                    double mx = m.x + m.def.size() / 2, my = m.y + m.def.size() / 2;
+                    double mx = m.x + m.def.hitbox() / 2, my = m.y + m.def.hitbox() / 2;
                     double d = Math.hypot(mx - cx, my - cy);
-                    if (d > u.radius() + m.def.size() / 2 || d < 0.001) continue;
+                    if (d > u.radius() + m.def.hitbox() / 2 || d < 0.001) continue;
                     double push = level.tileSize * 1.4 * (1 - Math.min(1, d / u.radius()));
-                    m.x = clampX(m.x + (mx - cx) / d * push, m.def.size());
-                    m.y = clampY(m.y + (my - cy) / d * push, m.def.size());
+                    m.x = clampX(m.x + (mx - cx) / d * push, m.def.hitbox());
+                    m.y = clampY(m.y + (my - cy) / d * push, m.def.hitbox());
                 }
                 if (profile.blockEditingEnabled) {
                     breakTerrain(cx, cy, level.tileSize * 2.2, profile.itemsEnabled);
@@ -1456,7 +1464,7 @@ public final class World {
         if (p.ultActive <= 0) return;
         Ultimate u = Ultimates.get(p.ultActiveKey);
         if (u == null) return;
-        double half = profile.playerSize / 2.0;
+        double half = body(p, profile) / 2.0;
         double cx = p.x + half, cy = p.y + half;
         switch (u.kind()) {
             case BULWARK -> // Regenerate alongside the damage soak.
@@ -1467,9 +1475,9 @@ public final class World {
                 List<Mob> died = null;
                 for (Mob m : mobs) {
                     if (m.dead()) continue;
-                    double d = Math.hypot(m.x + m.def.size() / 2 - cx,
-                            m.y + m.def.size() / 2 - cy);
-                    if (d > u.radius() + m.def.size() / 2) continue;
+                    double d = Math.hypot(m.x + m.def.hitbox() / 2 - cx,
+                            m.y + m.def.hitbox() / 2 - cy);
+                    if (d > u.radius() + m.def.hitbox() / 2) continue;
                     double tick = u.power() * dt;
                     drained += tick;
                     if (m.damage(tick, cx, cy, space())) {
@@ -1504,9 +1512,9 @@ public final class World {
         List<Mob> died = null;
         for (Mob m : mobs) {
             if (m.dead()) continue;
-            double d = Math.hypot(m.x + m.def.size() / 2 - cx,
-                    m.y + m.def.size() / 2 - cy);
-            if (d > radius + m.def.size() / 2) continue;
+            double d = Math.hypot(m.x + m.def.hitbox() / 2 - cx,
+                    m.y + m.def.hitbox() / 2 - cy);
+            if (d > radius + m.def.hitbox() / 2) continue;
             double falloff = 1.0 - Math.min(1, d / radius) * 0.6;
             if (m.damage(damage * falloff, cx, cy, space())) {
                 if (died == null) died = new ArrayList<>();
@@ -1520,6 +1528,19 @@ public final class World {
                 killsByPlayers++;
             }
         }
+    }
+
+    /**
+     * How much floor a player occupies, world pixels: their character's own
+     * footprint, or the game type's default for a body that never chose one.
+     *
+     * <p>Everything in here that asks where a player <em>is</em> — a blast's
+     * reach, a shot's target, where a mount seats them, where a warp sets them
+     * down — asks this, and never how large they are drawn. See
+     * {@link com.larsons.engine.sim.ActorSize}.
+     */
+    private static double body(PlayerState p, GameProfile profile) {
+        return p.hitSize(profile.playerSize);
     }
 
     /**
@@ -1571,12 +1592,12 @@ public final class World {
     public boolean mount(PlayerState p, int vehicleId, GameProfile profile) {
         Vehicle v = vehicle(vehicleId);
         if (v == null || v.ridden() || p.riding >= 0) return false;
-        double d = Math.hypot(v.x + v.def.size() / 2 - (p.x + profile.playerSize / 2),
-                v.y + v.def.size() / 2 - (p.y + profile.playerSize / 2));
+        double d = Math.hypot(v.x + v.def.size() / 2 - (p.x + body(p, profile) / 2),
+                v.y + v.def.size() / 2 - (p.y + body(p, profile) / 2));
         if (d > MOUNT_RANGE * 1.5) return false;
         v.riderId = p.id;
         p.riding = v.id;
-        v.seat(p, profile.playerSize);
+        v.seat(p, body(p, profile));
         impacts.add(new Impact("mount", v.x + v.def.size() / 2, v.y, false));
         return true;
     }
@@ -1609,7 +1630,7 @@ public final class World {
             drillTerrain(v, in, profile, dt);
         }
         v.stepDriven(level, in, gravityOn, dt);
-        v.seat(rider, profile.playerSize);
+        v.seat(rider, body(rider, profile));
     }
 
     /** Grind the tiles the drill is driving into (ahead, and below when held). */
@@ -1663,8 +1684,8 @@ public final class World {
                 Mob hit = mobAt(v.x + v.def.size() / 2, v.y + v.def.size() / 2,
                         v.def.size() * 0.55);
                 if (hit != null && v.tryRam()) {
-                    impacts.add(new Impact("chain", hit.x + hit.def.size() / 2,
-                            hit.y + hit.def.size() / 2, false));
+                    impacts.add(new Impact("chain", hit.x + hit.def.hitbox() / 2,
+                            hit.y + hit.def.hitbox() / 2, false));
                     if (hit.damage(v.def.contactDamage(), v.x, v.y, space())) {
                         mobs.remove(hit);
                         handleMobDeath(hit, profile.itemsEnabled, profile);
@@ -1841,7 +1862,7 @@ public final class World {
             count = 1;
         }
         if (itemTypes.get(loot) != null) {
-            spawnItem(loot, count, m.x + m.def.size() / 2, m.y + m.def.size() / 2)
+            spawnItem(loot, count, m.x + m.def.hitbox() / 2, m.y + m.def.hitbox() / 2)
                     .toss(0, -200, tossGravity());
         }
     }
