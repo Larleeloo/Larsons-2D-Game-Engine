@@ -3015,9 +3015,10 @@ public class CreativeScene extends AbstractScene {
         // accept placement either way — covering water is how it's removed.
         int layer = level.placeLayer(col, row);
         if (b == null || layer < 0) return;
-        double size = p.playerSize;
-        boolean overlapsMe = testMe.x + size > col * ts && testMe.x < (col + 1) * ts
-                && testMe.y + size > row * ts && testMe.y < (row + 1) * ts;
+        // "Where I am" is the shape the physics step collided with — on a plane
+        // the ground under the feet, not the body box the sprite's head fills.
+        boolean overlapsMe = PlayerPhysics.standingIn(level, testMe.x, testMe.y, p.playerSize,
+                PerspectiveSpace.of(level.perspective), col, row);
         // Flooring a hole under your own feet is not walling yourself in.
         boolean wouldClose = b.solid()
                 && (!level.layered() || layer == Level.LAYER_UPPER);

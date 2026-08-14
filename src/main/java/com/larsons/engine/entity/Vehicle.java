@@ -1,6 +1,7 @@
 package com.larsons.engine.entity;
 
 import com.larsons.engine.level.Level;
+import com.larsons.engine.sim.PerspectiveSpace;
 import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerPhysics;
 import com.larsons.engine.sim.PlayerState;
@@ -22,7 +23,9 @@ import java.util.Map;
  * fliers sink gently to the floor, boats bob up to the surface of whatever
  * liquid they're in. Collision goes through the shared AABB helpers
  * ({@link PlayerPhysics#slideX}/{@code slideY}) so vehicles obey exactly the
- * wall/floor/ceiling rules players and mobs do.
+ * wall/floor/ceiling rules players and mobs do — including which shape those
+ * rules apply to, which on a plan view is the ground under the mount rather
+ * than its whole box ({@link PlayerPhysics#walkX}).
  */
 public final class Vehicle {
 
@@ -202,10 +205,15 @@ public final class Vehicle {
 
     private void move(Level level, double dt) {
         double size = def.size();
-        double nx = PlayerPhysics.slideX(level, x, y, size, size, vx * dt);
+        // A mount rolling across a floor collides with the ground it covers;
+        // one standing edge-on against the screen collides with all of itself.
+        boolean onFloor = PerspectiveSpace.of(level.format()).hasElevation();
+        double nx = onFloor ? PlayerPhysics.walkX(level, x, y, size, vx * dt)
+                : PlayerPhysics.slideX(level, x, y, size, size, vx * dt);
         if (nx == x && vx != 0) vx = 0; // hit a wall
         x = nx;
-        double ny = PlayerPhysics.slideY(level, x, y, size, size, vy * dt);
+        double ny = onFloor ? PlayerPhysics.walkY(level, x, y, size, vy * dt)
+                : PlayerPhysics.slideY(level, x, y, size, size, vy * dt);
         if (ny != y + vy * dt) vy = 0; // landed / bonked
         y = ny;
         x = Math.max(0, Math.min(x, level.width * (double) level.tileSize - size));

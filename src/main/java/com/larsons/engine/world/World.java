@@ -25,6 +25,7 @@ import com.larsons.engine.entity.VehicleRegistry;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.sim.PerspectiveSpace;
 import com.larsons.engine.sim.PlayerInput;
+import com.larsons.engine.sim.PlayerPhysics;
 import com.larsons.engine.sim.PlayerState;
 
 import java.util.ArrayDeque;
@@ -1521,19 +1522,17 @@ public final class World {
         }
     }
 
-    /** Whether a body of {@code size} at (x, y) overlaps solid terrain. */
+    /**
+     * Whether a body of {@code size} at (x, y) is standing in solid terrain —
+     * the same shape movement collides with, so a blink cannot land somewhere
+     * a walk could not have reached. On a plane that is the ground under the
+     * feet rather than the whole box, which is the difference between a dash
+     * stopping against a wall and stopping a body-length short of one.
+     */
     private boolean blockedBody(double x, double y, double size) {
-        double ts = level.tileSize;
-        int c0 = (int) Math.floor(x / ts);
-        int c1 = (int) Math.floor((x + size - 0.001) / ts);
-        int r0 = (int) Math.floor(y / ts);
-        int r1 = (int) Math.floor((y + size - 0.001) / ts);
-        for (int c = c0; c <= c1; c++) {
-            for (int r = r0; r <= r1; r++) {
-                if (level.solidAt(c, r)) return true;
-            }
-        }
-        return false;
+        return space().hasElevation()
+                ? PlayerPhysics.footBlocked(level, x, y, size)
+                : PlayerPhysics.blocked(level, x, y, size, size);
     }
 
     private double clampX(double x, double size) {

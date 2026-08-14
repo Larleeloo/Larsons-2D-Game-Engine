@@ -713,10 +713,8 @@ public class PlayScene extends AbstractScene {
             cancelPredictedMining();
         }
 
-        // Online, physics must not depend on the local camera view — the server
-        // simulates the level's own format, so prediction does too.
         // A mounted player drives their vehicle instead of walking.
-        Perspective simPerspective = net != null ? level.perspective : camera.getPerspective();
+        Perspective simPerspective = simPerspective();
         // The melee machine steps before the body does: a lunge's burst and a
         // raised guard's slowed footwork are both movement, and the physics
         // step below is what carries them out.
@@ -1326,11 +1324,12 @@ public class PlayScene extends AbstractScene {
         if (b == null || layer < 0) return;
         // Don't wall yourself in. Flooring a hole under your feet is not
         // walling yourself in — it is the opposite — so only a placement that
-        // would actually close the cell counts.
-        double ts = ts();
-        double size = ps();
-        boolean overlapsMe = me.x + size > col * ts && me.x < (col + 1) * ts
-                && me.y + size > row * ts && me.y < (row + 1) * ts;
+        // would actually close the cell counts. "Where I am" is the shape the
+        // step above collided with, which on a plane is the ground under the
+        // feet: measured on the body box instead, a plan-view player could
+        // never build on the cell their sprite's head reaches into.
+        boolean overlapsMe = PlayerPhysics.standingIn(level, me.x, me.y, ps(),
+                PerspectiveSpace.of(simPerspective()), col, row);
         boolean wouldClose = b.solid()
                 && (!level.layered() || layer == Level.LAYER_UPPER);
         if (wouldClose && overlapsMe) return;
@@ -3354,5 +3353,18 @@ public class PlayScene extends AbstractScene {
     private double ts() { return level.tileSize; }
 
     private double ps() { return profile().playerSize; }
+
+    /**
+     * The space the player's own body is simulated in.
+     *
+     * <p>Online, physics must not depend on the local camera view — the server
+     * simulates the level's own format, so prediction does too. Offline the
+     * camera may be switched in-game and the simulation follows it. Anything
+     * that has to agree with the step — the shape a placed block is tested
+     * against, for one — asks this rather than guessing at one of the two.
+     */
+    private Perspective simPerspective() {
+        return net != null ? level.perspective : camera.getPerspective();
+    }
 
 }

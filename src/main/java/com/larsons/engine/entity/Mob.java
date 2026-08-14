@@ -639,7 +639,16 @@ public final class Mob {
         boolean inLiquid = level.liquidAt((int) Math.floor((x + size / 2) / ts),
                 (int) Math.floor((y + size / 2) / ts)) != null;
 
-        double nx = PlayerPhysics.slideX(level, x, y, size, size, dx * dt);
+        // …including which shape collides. Edge-on the box is the body and all
+        // of it sweeps; walking a floor, the box is the patch of ground the
+        // sprite stands on, so what collides is the footprint under its feet
+        // (see PlayerPhysics.walkX). The projection answers this rather than
+        // the gravity toggle: a gravity-free side-scroller still stands its
+        // mobs against the screen, where the box really is the body.
+        boolean onFloor = planar && PerspectiveSpace.of(level.format()).hasElevation();
+
+        double nx = onFloor ? PlayerPhysics.walkX(level, x, y, size, dx * dt)
+                : PlayerPhysics.slideX(level, x, y, size, size, dx * dt);
         boolean blockedSideways = dx != 0 && nx == x;
         boolean movedShort = dx != 0 && Math.abs(nx - x) < Math.abs(dx * dt) - 0.0001;
         x = nx;
@@ -649,7 +658,8 @@ public final class Mob {
             // the same wall collision the first axis gets. This is where every
             // species ends up in these formats — there is no height to fly at
             // and no floor to fall to when the screen shows the ground.
-            double ny = PlayerPhysics.slideY(level, x, y, size, size, dyPlanar * dt);
+            double ny = onFloor ? PlayerPhysics.walkY(level, x, y, size, dyPlanar * dt)
+                    : PlayerPhysics.slideY(level, x, y, size, size, dyPlanar * dt);
             boolean blockedY = dyPlanar != 0 && ny == y;
             y = ny;
             if ((blockedSideways || blockedY) && state == AIState.WANDER) {

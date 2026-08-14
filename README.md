@@ -848,6 +848,22 @@ Walking north behind a wall puts the wall in front of you; walking south past
 it puts you in front of the wall — the same rule that already decided whether
 you pass in front of a tree.
 
+**What collides with a wall is the ground under your feet**, not the whole
+body box — on a plane, and only there. Edge-on, the box *is* the character and
+all of it sweeps. On a plane the box is a patch of floor and the character is a
+billboard standing on it: feet on the box's southern edge, head a whole body
+north of them. Colliding the whole box stopped you the moment your *head*
+reached a wall, which left your feet a full body-length south of it — an
+invisible barrier most of a tile deep along the south face of every stacked
+block, and nothing at all along the north face, where the same rule let your
+feet land exactly on it. So the plan views collide a footprint centred on the
+feet
+([`PlayerPhysics.walkX`](src/main/java/com/larsons/engine/sim/PlayerPhysics.java)),
+and you can walk up to a block and stand against it from any side, coming to
+rest the same sixth of a tile out whichever way you came. Players, mobs and
+mounts all obey it, and block placement measures "am I standing there?" the
+same way, so building on the cell your sprite's head reaches into still works.
+
 **Blocks stack by themselves.** Painting (in the editor) or placing (in play)
 drops the block on the floor when the cell is bare and *on top of what is
 already there* when it isn't — so building a wall is painting the same cell
