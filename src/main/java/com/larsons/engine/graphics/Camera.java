@@ -108,15 +108,43 @@ public class Camera {
      */
     private double yaw;
     /**
-     * The heading the camera is turning towards. Nothing here animates: this is
-     * the goal C8's snap eases {@link #yaw} onto, and it is stored on the camera
-     * because it is view state — per client, never networked (C10).
+     * The heading the camera is turning towards — the compass point {@link #turn}
+     * aimed it at, which {@link #stepYaw} eases {@link #yaw} onto. Stored on the
+     * camera because it is view state: per client, never networked (C10).
      */
     private double targetYaw;
 
     // cos/sin of yaw, maintained by setYaw. See snap() for why they are not
     // simply Math.cos/Math.sin of it.
     private double cosYaw = 1.0, sinYaw = 0.0;
+
+    /**
+     * The compass point the camera is settled on or turning to, 0–7.
+     *
+     * <p>Kept as a whole number rather than derived from {@link #targetYaw},
+     * because the alternative is adding 45° to a {@code double} once per press
+     * for the length of a session: after enough turns the "exact multiple of
+     * 45°" that {@link #setYaw}'s snapping depends on stops being exact, and
+     * the four cardinal headings quietly stop being axis swaps. An index cannot
+     * drift.
+     */
+    private int heading;
+
+    /** Where the snap in flight started and ends, as absolute angles. */
+    private double turnFrom, turnTo;
+    /** Seconds into the snap in flight, and whether there is one. */
+    private double turnElapsed;
+    private boolean turning;
+    /**
+     * One press taken during a snap, {@code -1}/{@code 0}/{@code +1} — the
+     * decision C8 asked to be made and recorded: <b>queue one, drop the
+     * rest</b>. A held key then turns the world one step at a time for as long
+     * as it is held, which reads as responsive; queueing every press instead
+     * would spin the world for seconds after the key came up, and blending two
+     * turns at once would leave the camera resting between compass points,
+     * which is the one thing an eight-point camera may never do.
+     */
+    private int queued;
 
     // Isometric projection parameters: one world tile (tileSize units on each
     // axis) projects to a diamond this many pixels wide/tall.
@@ -149,24 +177,141 @@ public class Camera {
     public double yaw() { return yaw; }
 
     /**
-     * Turn the camera to {@code radians}, clockwise from world north.
+     * Put the camera at {@code radians} immediately, clockwise from world
+     * north, cancelling any snap in flight.
      *
      * <p>Has no effect on the picture in {@link Perspective#SIDE_SCROLL} — the
      * value is still stored, so a camera can be carried between levels of
      * different formats without a heading silently disappearing, but the
      * projection ignores it. See the class note.
+     *
+     * <p>This is the teleport: loading a level at its authoring heading (C9),
+     * or a test placing the camera. {@link #turn} is what a player does, and
+     * the two must not be in flight at once — a set that left the animation
+     * running would be overwritten by it a frame later.
      */
     public void setYaw(double radians) {
+        placeYaw(radians);
+        this.targetYaw = radians;
+        this.heading = Math.floorMod((int) Math.round(radians / EIGHTH_TURN), 8);
+        this.turning = false;
+        this.queued = 0;
+    }
+
+    /** The heading itself, with none of the bookkeeping {@link #setYaw} does. */
+    private void placeYaw(double radians) {
         this.yaw = radians;
         this.cosYaw = snap(Math.cos(radians));
         this.sinYaw = snap(Math.sin(radians));
     }
 
-    /** The heading {@link #yaw} is easing towards; C8 drives it. */
+    /** The heading {@link #yaw} is easing towards. */
     public double targetYaw() { return targetYaw; }
 
-    /** Aim the camera at a heading. Nothing moves until something eases it. */
-    public void setTargetYaw(double radians) { this.targetYaw = radians; }
+    /** The compass point the camera is settled on or turning to, 0–7. */
+    public int heading() { return heading; }
+
+    /** Whether a snap is in flight — the camera is between compass points. */
+    public boolean turning() { return turning; }
+
+    /**
+     * How long one eighth-turn takes.
+     *
+     * <p>Short enough to feel like a response to a key rather than a cutscene,
+     * long enough to read as a camera turning rather than the world being
+     * replaced. The animation is the whole point of the step: without it an
+     * eight-point camera is a teleport, and a player loses track of which way
+     * they were facing.
+     */
+    public static final double SNAP_SECONDS = 0.22;
+
+    /**
+     * Turn one compass point — the press of a rotate key.
+     *
+     * <p>{@code eighths} is a direction rather than an amount: any positive
+     * value turns the camera one point clockwise (to the player's right, so the
+     * world swings left), any negative value one point anticlockwise. Pressing
+     * during a snap queues at most one more; see {@link #queued}.
+     */
+    public void turn(int eighths) {
+        if (!rotates() || eighths == 0) return;
+        int step = eighths > 0 ? 1 : -1;
+        if (turning) {
+            if (queued == 0) queued = step;
+            return;
+        }
+        beginTurn(step);
+    }
+
+    private void beginTurn(int step) {
+        heading = Math.floorMod(heading + step, 8);
+        targetYaw = heading * EIGHTH_TURN;
+        turnFrom = yaw;
+        // The angle actually eased to, which is not targetYaw when the turn
+        // crosses north: going clockwise from 315° the camera must travel
+        // forward to 360° and not backwards through seven eighths of a circle
+        // to 0°. They are the same heading and only one of them is the way
+        // round the player pressed for.
+        turnTo = yaw + step * EIGHTH_TURN;
+        turnElapsed = 0;
+        turning = true;
+    }
+
+    /**
+     * Advance the snap by {@code dt} seconds.
+     *
+     * <p><b>The heading is assigned rather than integrated at the end of a
+     * turn.</b> Easing toward a target and stopping when the difference is
+     * small enough leaves the camera resting a hair off a compass point, and
+     * that hair is the difference between {@code TerrainCache} baking the floor
+     * and refusing to (C3), between a tile texture being an upright blit and a
+     * warp (C4), and between the cardinal headings being exact axis swaps and
+     * being rotations by 6e-17 radians (C1). So the last frame of a snap sets
+     * {@code yaw} to the compass point itself, from the whole-number heading,
+     * and every consumer of "is this camera square to the world" gets an exact
+     * answer instead of a nearly one.
+     *
+     * <p><b>{@link #yaw()} can therefore step by a whole turn at the instant a
+     * snap settles, and the picture does not move.</b> Turning anticlockwise
+     * from north the animation runs 0° → −45°, and the heading it lands on is
+     * seven eighths, so the number jumps from −45° to 315° in the frame it
+     * arrives. They are the same direction; {@link #snap} gives them the same
+     * cosine and sine to the last bit, and everything downstream reads either
+     * those or the heading rounded to an eighth. It is the representation
+     * wrapping, not the camera — but anything measuring how far the camera
+     * turned by subtracting two yaws has to fold the difference into a half
+     * turn, and the alternative (letting the number run on unbounded) is what
+     * {@link #heading} exists to avoid.
+     */
+    public void stepYaw(double dt) {
+        if (!turning || dt <= 0) return;
+        turnElapsed += dt;
+        while (turning && turnElapsed >= SNAP_SECONDS) {
+            double carry = turnElapsed - SNAP_SECONDS;
+            placeYaw(heading * EIGHTH_TURN);
+            targetYaw = yaw;
+            turning = false;
+            if (queued != 0) {
+                int next = queued;
+                queued = 0;
+                beginTurn(next);
+                turnElapsed = carry;
+            }
+        }
+        if (turning) {
+            double t = turnElapsed / SNAP_SECONDS;
+            placeYaw(turnFrom + (turnTo - turnFrom) * ease(t));
+        }
+    }
+
+    /**
+     * Smoothstep: the turn starts and ends at rest. A linear sweep stops dead
+     * at the compass point and reads as the world being yanked; easing both
+     * ends is what makes it read as a camera someone is turning.
+     */
+    private static double ease(double t) {
+        return t * t * (3 - 2 * t);
+    }
 
     /** Whether yaw reaches the picture at all in this perspective. */
     public boolean rotates() { return perspective != Perspective.SIDE_SCROLL; }

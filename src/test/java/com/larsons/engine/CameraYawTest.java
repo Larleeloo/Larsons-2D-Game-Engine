@@ -163,6 +163,44 @@ class CameraYawTest {
         }
     }
 
+    /**
+     * A click lands on the cell it is over, at every heading.
+     *
+     * <p>C9's precondition, and a stronger claim than the round trip above: it
+     * is not enough for a screen pixel to map back to <em>near</em> the world
+     * point it came from, because a creative-mode stroke resolves that point to
+     * a whole cell and a half-pixel disagreement at a tile boundary paints the
+     * neighbour. Every cell in a spread is projected to the pixel its centre
+     * lands on, and that pixel has to resolve back to the cell it came from —
+     * which is exactly what an editor does with a cursor, at whatever heading
+     * the creator has turned to.
+     */
+    @Test
+    void aClickLandsOnTheCellItIsOverAtEveryHeading() {
+        for (Perspective perspective : ROTATING) {
+            for (double yaw : headings()) {
+                Camera cam = camera(perspective);
+                cam.setYaw(yaw);
+                cam.centerOn(10.5 * TILE, 10.5 * TILE);
+                int[] out = new int[2];
+
+                for (int row = 6; row <= 14; row++) {
+                    for (int col = 6; col <= 14; col++) {
+                        cam.worldToScreen((col + 0.5) * TILE, (row + 0.5) * TILE, out);
+                        double[] back = cam.screenToWorld(out[0], out[1]);
+                        int gotCol = (int) Math.floor(back[0] / TILE);
+                        int gotRow = (int) Math.floor(back[1] / TILE);
+                        assertEquals(col + "," + row, gotCol + "," + gotRow,
+                                perspective + " at " + degrees(yaw) + "°: the middle of "
+                                        + "cell (" + col + "," + row + ") draws at pixel ("
+                                        + out[0] + "," + out[1] + "), and a click there "
+                                        + "paints cell (" + gotCol + "," + gotRow + ")");
+                    }
+                }
+            }
+        }
+    }
+
     // --- it turns, and it turns the right way --------------------------------------
 
     /**
@@ -357,9 +395,10 @@ class CameraYawTest {
      * The heading the camera is at and the one it is turning towards are two
      * different numbers, and only the first reaches the picture.
      *
-     * <p>C8 eases one onto the other. Until it does, the field exists and is
-     * inert, and this is what says so — a {@code targetYaw} that quietly
-     * projected would make the snap animation impossible to write.
+     * <p>C8 eases one onto the other, and this is the property that makes the
+     * easing possible: a press aims the camera without moving it, and the
+     * picture only changes when time passes. A {@code targetYaw} that projected
+     * on its own would make a snap animation a teleport.
      */
     @Test
     void theHeadingBeingTurnedTowardsDoesNotItselfProject() {
@@ -368,14 +407,14 @@ class CameraYawTest {
         int[] out = new int[2];
         List<int[]> before = project(cam, out);
 
-        cam.setTargetYaw(3 * Camera.EIGHTH_TURN);
-        assertEquals(3 * Camera.EIGHTH_TURN, cam.targetYaw(), 0.0);
-        assertEquals(0.0, cam.yaw(), 0.0, "setting a target moved the camera");
+        cam.turn(1);
+        assertEquals(Camera.EIGHTH_TURN, cam.targetYaw(), 0.0, "the press aimed the camera");
+        assertEquals(0.0, cam.yaw(), 0.0, "and the press alone moved it");
 
         List<int[]> after = project(cam, out);
         for (int i = 0; i < before.size(); i++) {
             assertArrayEquals(before.get(i), after.get(i),
-                    "point " + i + " moved when only the target heading was set");
+                    "point " + i + " moved on the press rather than on the animation");
         }
     }
 

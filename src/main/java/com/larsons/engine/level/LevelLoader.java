@@ -72,6 +72,11 @@ public final class LevelLoader {
         }
         if (root.get("music") instanceof String track) lvl.music = track;
         if (root.get("lightAngle") instanceof Number a) lvl.lightAngle = a.doubleValue();
+        // Absent means square to the world, which is what every level written
+        // before this field existed meant and still means.
+        if (root.get("heading") instanceof Number h) {
+            lvl.authoredHeading = Math.floorMod(h.intValue(), 8);
+        }
         if (root.containsKey("tileSize")) lvl.tileSize = intOf(root.get("tileSize"), 32);
         if (root.get("background") instanceof String bg) lvl.background = parseColor(bg, lvl.background);
 
