@@ -650,6 +650,15 @@ public class PlayScene extends AbstractScene {
                     p);
         }
 
+        // The eight-point camera: a press aims it one compass point round and
+        // the animation carries it there over the next fifth of a second. Both
+        // are per-frame because a snap in flight has to keep going while the
+        // player is doing something else — and both are no-ops in a level whose
+        // projection does not turn. C8.
+        if (KeyBinds.pressed(input, GameAction.ROTATE_LEFT)) camera.turn(-1);
+        if (KeyBinds.pressed(input, GameAction.ROTATE_RIGHT)) camera.turn(1);
+        camera.stepYaw(dt);
+
         if (craftingPanel != null) {
             updateCrafting(input);
         } else if (containerPanel != null) {
@@ -2442,6 +2451,13 @@ public class PlayScene extends AbstractScene {
         camera.tileSize = level.tileSize;
         camera.setPerspective(basePerspective());
         camera.zoom = clampZoom(p.zoomEnabled ? camera.zoom : p.defaultZoom, p);
+        // A level opens looking the way it was built. It is a starting point
+        // and not a constraint: the player may turn from there whenever they
+        // like, and where they turn to is theirs alone — C10 keeps the heading
+        // off the wire, so two players may face different ways in one world.
+        // Walking through a door into a level authored from another heading
+        // lands settled on that one rather than sliding into it. C9.
+        camera.setYaw(level.authoredHeading * Camera.EIGHTH_TURN);
     }
 
     private double clampZoom(double z, GameProfile p) {

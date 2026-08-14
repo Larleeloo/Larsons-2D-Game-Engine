@@ -91,6 +91,31 @@ public class Level {
     /** The sun's default bearing: over the north-west shoulder. */
     public static final double DEFAULT_LIGHT_ANGLE = 315;
 
+    /**
+     * The compass point this level was authored from, 0–7 clockwise from north
+     * — where the camera starts when the level is opened.
+     *
+     * <p>A level is built from some direction, and a plan-view level built from
+     * one and opened from another reads as a different place: the wall you put
+     * on the player's left is on their right, and the shape you laid out to be
+     * approached from the south is approached from the north. So the heading
+     * the creator was looking from is part of the level, in the way the sun's
+     * bearing already is — a look the level owns rather than a setting the
+     * engine keeps.
+     *
+     * <p>It is <em>not</em> a constraint on the player, who may turn wherever
+     * they like from there, and it is not networked: C10 makes the point that
+     * two players looking at one world from different angles is correct
+     * behaviour. This is only where the camera starts.
+     *
+     * <p>Stored as the compass point rather than as radians because that is
+     * what it means and because an integer cannot arrive from a file a hair off
+     * a compass point — which would cost the floor cache and the upright tile
+     * blit for the whole session (C3, C4). A side-scroller carries it
+     * harmlessly and ignores it, exactly as it carries {@link #lightAngle}.
+     */
+    public int authoredHeading;
+
     public int tileSize = 32;
     public int width;          // in tiles
     public int height;         // in tiles
@@ -889,7 +914,7 @@ public class Level {
      * a window that was opened and cancelled leaves no undo step behind.
      */
     public record Doc(String name, String music, double lightAngle,
-                      double spawnX, double spawnY,
+                      int authoredHeading, double spawnX, double spawnY,
                       List<EntitySpawn> entities,
                       List<SurfaceDecor.Placement> surfaceDecor,
                       List<StatRule> statRules, List<String> characters,
@@ -900,7 +925,7 @@ public class Level {
     public Doc snapshotDoc() {
         List<Map<String, Object>> scenes = new ArrayList<>(cutscenes.size());
         for (Cutscene cs : cutscenes) scenes.add(cs.toMap());
-        return new Doc(name, music, lightAngle, spawnX, spawnY,
+        return new Doc(name, music, lightAngle, authoredHeading, spawnX, spawnY,
                 List.copyOf(entities), List.copyOf(surfaceDecor),
                 List.copyOf(statRules), List.copyOf(characters),
                 List.copyOf(scenes), minigame == null ? null : minigame.toMap());
@@ -912,6 +937,7 @@ public class Level {
         name = doc.name();
         music = doc.music();
         lightAngle = doc.lightAngle();
+        authoredHeading = doc.authoredHeading();
         spawnX = doc.spawnX();
         spawnY = doc.spawnY();
         refill(entities, doc.entities());
@@ -1028,6 +1054,9 @@ public class Level {
         m.put("perspective", perspective.name());
         if (music != null && !music.isBlank()) m.put("music", music);
         if (lightAngle != DEFAULT_LIGHT_ANGLE) m.put("lightAngle", lightAngle);
+        // Absent when the level was built square to the world, which is every
+        // level written before headings existed and every side-scroller ever.
+        if (authoredHeading != 0) m.put("heading", authoredHeading);
         m.put("tileSize", tileSize);
         m.put("width", width);
         m.put("height", height);

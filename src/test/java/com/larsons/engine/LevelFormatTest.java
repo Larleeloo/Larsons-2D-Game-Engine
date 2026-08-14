@@ -22,8 +22,11 @@ import com.larsons.engine.world.BlockRegistry;
 import com.larsons.engine.world.LiquidSim;
 import com.larsons.engine.world.World;
 import org.junit.jupiter.api.Test;
+
 import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
@@ -257,6 +260,99 @@ class LevelFormatTest {
             assertTrue(lvl.solidAt(5, 5));
             assertTrue(lvl.solidAt(-1, 5), "and so is off the edge");
         }
+    }
+
+    // --- C9: the heading a level was built from ---------------------------------
+
+    /**
+     * A level remembers the compass point it was authored from, and a level
+     * built square to the world says nothing about it at all.
+     *
+     * <p>Both halves matter and only one is obvious. The heading has to survive
+     * a save, or a plan-view level opens from a direction its creator never
+     * looked from — the wall they put on the player's left is on their right,
+     * and a room laid out to be entered from the south is entered from the
+     * north. And it has to be <em>absent</em> when it is zero, because that is
+     * every level ever written before this field existed and every side-scroller
+     * there will ever be: an optional field that is always written is a format
+     * change, and a format change is a file an older build cannot open.
+     */
+    @Test
+    void theAuthoringHeadingSurvivesASaveAndIsAbsentWhenItIsZero() {
+        Level built = LevelFormat.TOP_DOWN.starterLevel("Turned", 20, 12, 32);
+        built.authoredHeading = 3;
+        String json = built.toJson();
+        assertTrue(json.contains("heading"), "the heading was not written at all");
+        assertEquals(3, LevelLoader.parse(json).authoredHeading);
+
+        Level square = LevelFormat.TOP_DOWN.starterLevel("Square", 20, 12, 32);
+        assertEquals(0, square.authoredHeading, "a fresh level is built square to the world");
+        assertFalse(square.toJson().contains("heading"),
+                "a level built square to the world writes a heading anyway, which makes "
+                        + "an optional field a format change");
+        assertEquals(0, LevelLoader.parse(square.toJson()).authoredHeading);
+    }
+
+    /**
+     * A level from a build that had never heard of headings opens square to the
+     * world, rather than at a heading read out of whatever was in that slot.
+     */
+    @Test
+    void aLevelFromBeforeHeadingsOpensSquareToTheWorld() {
+        Level old = LevelFormat.ISOMETRIC.starterLevel("Ancient", 20, 12, 32);
+        String json = old.toJson();
+        assertFalse(json.contains("heading"), "this fixture is meant to have no heading");
+
+        Level loaded = LevelLoader.parse(json);
+        assertEquals(0, loaded.authoredHeading);
+        // And the levels this build actually ships open the same way.
+        for (LevelFormat format : LevelFormat.values()) {
+            assertEquals(0, format.starterLevel("S", 20, 12, 32).authoredHeading,
+                    format + "'s starter level is not built square to the world");
+        }
+    }
+
+    /**
+     * The level this build ships still opens exactly as it did, byte for byte
+     * on disk and field for field once loaded.
+     *
+     * <p>C9 asks for this specifically, and it is the assertion that says the
+     * new field is optional in the way that matters: a level authored before it
+     * existed is not rewritten, not migrated, and not read differently. The
+     * file is compared to itself on disk as well as parsed, because "loads
+     * fine" and "is unchanged" are different claims and only the second one
+     * survives a build that silently rewrites what it opens.
+     */
+    @Test
+    void theShippedLevelStillOpensExactlyAsItDid() throws IOException {
+        Path onDisk = Path.of("src/main/resources/levels/sample_level.json");
+        String before = Files.readString(onDisk);
+        assertFalse(before.contains("heading"),
+                "the shipped level already mentions a heading, so this proves nothing");
+
+        Level loaded = LevelLoader.load("levels/sample_level.json");
+        assertEquals(0, loaded.authoredHeading, "the shipped level opens square to the world");
+        assertEquals(LevelFormat.SIDE_SCROLLER, loaded.format());
+        assertEquals(24, loaded.width);
+        assertEquals(14, loaded.height);
+
+        assertEquals(before, Files.readString(onDisk),
+                "loading the shipped level rewrote it on disk");
+        // …and writing it back out adds nothing, so a level that passes through
+        // this build is the level that went in.
+        assertFalse(loaded.toJson().contains("heading"),
+                "re-saving a level authored before headings adds one to it");
+    }
+
+    /** An out-of-range heading in a file is read as one of the eight, not as itself. */
+    @Test
+    void aHeadingOutsideTheEightIsFoldedOntoThem() {
+        Level lvl = LevelFormat.TOP_DOWN.starterLevel("Wrapped", 20, 12, 32);
+        lvl.authoredHeading = 11;          // three quarters of a turn past a full one
+        assertEquals(3, LevelLoader.parse(lvl.toJson()).authoredHeading);
+
+        lvl.authoredHeading = -1;          // and one the other way
+        assertEquals(7, LevelLoader.parse(lvl.toJson()).authoredHeading);
     }
 
     /** Clearing a floor takes what stood on it: a block over a hole is neither. */

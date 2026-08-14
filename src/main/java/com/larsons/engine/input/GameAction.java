@@ -64,6 +64,23 @@ public enum GameAction {
     // --- camera --------------------------------------------------------------------
     ZOOM_IN("zoom_in", "Zoom In", Category.CAMERA, InputBinding.key(KeyEvent.VK_EQUALS)),
     ZOOM_OUT("zoom_out", "Zoom Out", Category.CAMERA, InputBinding.key(KeyEvent.VK_MINUS)),
+    /*
+     * The eight-point camera's two keys. RENDER_PLAN C8 suggested Q and E and
+     * both were already taken — Q drops one of the held stack and E interacts
+     * with doors, chests and mounts — which is what asking the enum rather than
+     * the plan is for. Comma and period are free, sit beside each other under
+     * the right hand, and are what Don't Starve binds camera rotation to, which
+     * is the game §6.1 describes the feature from.
+     *
+     * A side-scroller ignores both: Camera.turn does nothing where the
+     * projection has no vertical axis to turn around, so the keys are harmless
+     * rather than hidden, and a player who rebinds them keeps the binding when
+     * they walk through a door into a plan-view level.
+     */
+    ROTATE_LEFT("rotate_left", "Rotate Camera Left", Category.CAMERA,
+            InputBinding.key(KeyEvent.VK_COMMA)),
+    ROTATE_RIGHT("rotate_right", "Rotate Camera Right", Category.CAMERA,
+            InputBinding.key(KeyEvent.VK_PERIOD)),
 
     // --- menus & interface ----------------------------------------------------------
     MENU_UP("menu_up", "Menu: Previous Item", Category.INTERFACE,

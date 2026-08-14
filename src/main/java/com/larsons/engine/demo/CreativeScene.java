@@ -1000,6 +1000,15 @@ public class CreativeScene extends AbstractScene {
             camera.y += pan2d.moveY() * pan;
         }
 
+        // The eight-point camera: a press aims it one compass point round and
+        // the animation carries it there over the next fifth of a second. Both
+        // are per-frame because a snap in flight has to keep going while the
+        // player is doing something else — and both are no-ops in a level whose
+        // projection does not turn. C8.
+        if (KeyBinds.pressed(input, GameAction.ROTATE_LEFT)) camera.turn(-1);
+        if (KeyBinds.pressed(input, GameAction.ROTATE_RIGHT)) camera.turn(1);
+        camera.stepYaw(dt);
+
         boolean overSidebar = input.getMouseX() < SIDEBAR_W;
         int wheel = input.getWheelRotation();
         if (wheel != 0) {
@@ -3377,6 +3386,11 @@ public class CreativeScene extends AbstractScene {
      */
     private void captureLevelSettings() {
         if (net == null) level.captureSettings(profile());
+        // The heading the creator was looking from when they saved, which is
+        // where the level opens. Taken here rather than on every press of a
+        // rotate key: turning to look at what you are building is not an edit,
+        // and making it one would fill the undo history with camera moves. C9.
+        level.authoredHeading = camera.heading();
     }
 
     /** Camera/slider bookkeeping after replacing the edited level. */
@@ -3387,6 +3401,10 @@ public class CreativeScene extends AbstractScene {
         if (net == null) ctx.applyLevelSettings(level.settings);
         camera.tileSize = level.tileSize;
         if (net == null) camera.setPerspective(level.perspective);
+        // Open the level looking the way it was built, and settled there
+        // rather than sliding into it — setYaw is the teleport, turn() is what
+        // a player does. C9.
+        camera.setYaw(level.authoredHeading * Camera.EIGHTH_TURN);
         camera.centerOn(level.spawnX, level.spawnY);
         pendingLevelW = level.width;
         pendingLevelH = level.height;

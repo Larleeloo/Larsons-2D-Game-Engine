@@ -1,10 +1,13 @@
 # Render Plan — GPU Acceleration, End to End
 
 **Status:** Living document. Written 2026-08-02 against commit `85196b9` on
-`claude/gpu-acceleration-shaders-oqbx54`. **Jobs A, B and D are complete; Job C
-is under way** — C1–C7 are closed, C8 is next. Job A closed 2026-08-04: the
-shipped GLSL runs on the GPU, matching the CPU chain pass for pass, and the GL
-backend has lighting again (§5, A2–A6).
+`claude/gpu-acceleration-shaders-oqbx54`. **Jobs A, B, C and D are all
+complete.** Job C closed with C10: the camera turns to eight compass points,
+everything the projection touches turns with it, and two players may look at one
+world from different directions — which is correct behaviour, and is now
+asserted over a real socket. Job A closed 2026-08-04: the shipped GLSL runs on
+the GPU, matching the CPU chain pass for pass, and the GL backend has lighting
+again (§5, A2–A6).
 
 **Job B delivered.**
 Measured on the M1 Air across four runs on two builds: the scene stage fell from
@@ -109,10 +112,26 @@ second; the same sentence explains C3's visible bounds and C4's depth order.
 the keys are a screen intent and the camera that gives them meaning is
 per-client state the server is never sent — which makes the determinism
 boundary structural rather than careful, and which turned up a turned editor
-panning diagonally on the way past. **And four times in this job a negative
-control found a defect the entire existing suite could not see**: a cache key no
-test ever turned, a branch nothing could reach, a conversion no scene would have
-called, and a heading every physics test set for itself. §6.
+panning diagonally on the way past.
+
+**C8 finally added a control rather than turning something that already
+existed, and both of its findings are about the check rather than the code.**
+The keys the step recommended — `Q` and `E` — are both already bound, to
+dropping an item and to interacting. Worse, `KeyBinds.conflicts` would have said
+they were fine: it reports collisions inside a category, and rotation lives in
+`CAMERA` while dropping lives in `ITEMS`, so by its rule the two are different
+contexts. They are the same frame of the same game. The negative control passed
+until the test stopped asking `conflicts` and started asking what the player can
+press at one moment. **C9 then needed nothing for placement** — creative mode
+already resolves every click through the camera's inverse — and what it did need
+was a sharper claim than the round trip: an editor resolves a pixel to a whole
+cell, so the middle of every cell must resolve back to itself.
+
+**Five times in this job a negative control found a defect the entire existing
+suite could not see**: a cache key no test ever turned, a branch nothing could
+reach, a conversion no scene would have called, a heading every physics test set
+for itself, and a key collision the project's own conflict check is built not to
+report. §6.
 
 Also open: **B11** fixed a GL jar that could not open a window when
 double-clicked on macOS, the platform it had been profiled on for four steps. And
@@ -221,6 +240,11 @@ Everything in this table has been measured or executed, not assumed.
 | Shadows, decor and liquids already turn, and the isometric projection is why | C6 — all three were written against `planarDelta` or against projected world vectors when the diamond arrived, and a diamond is a projection that does not let a screen-space assumption survive. Verified at eight headings; no diff |
 | A rotated camera pans an editor diagonally | C7 — `CreativeScene`'s pan keys moved `camera.x/y` along the world's axes. Found by anchoring the input scan on *every* movement-key input rather than the first, which is the draft that passed |
 | **The heading is part of what the player pressed, not of where they are now** | C7 — it rides `PlayerInput` over the wire, so prediction and authority step the same rotation bit-for-bit through 240 ticks of a camera turning under a running player. The server has no camera to ask, and C10 says it never will |
+| The camera never rests between compass points | C8 — the last frame of a snap assigns the heading from a whole-number index rather than easing until it is close enough. A control that stops within 0.001% of the target fails six of the step's nine tests, because 44.99° costs the floor cache, the upright tile blit and the exact axis swap for as long as the camera sits there |
+| **A key-bind conflict check can be blind to the collision that matters** | C8 — `KeyBinds.conflicts` reports inside a `Category`, so rotation on `Q` (CAMERA) against dropping an item on `Q` (ITEMS) is not a conflict by its rule, and both fire in the same frame. The plan's own suggested keys were caught only after the test stopped asking `conflicts` and started asking what is live at once |
+| A level remembers the heading it was built from, and older levels do not gain one | C9 — `heading`, an integer 0–7, absent when zero. The shipped level is asserted unchanged byte-for-byte on disk and free of the field after a round trip; writing it unconditionally fails three tests by name |
+| **Two players may look different ways at one world, and do** | C10 — a real server, two real clients on a socket: one looking north and one east both hold "up", and the server walks one north and the other east in the same tick. Forty ticks later their descriptions of the same tick are identical field for field |
+| The simulation cannot acquire a camera by accident | C10 — the seven packages that simulate, serve, serialise and store the world are scanned for the class name, prose excluded. The audit is a scan because an audit is worth a day |
 | **An unexercised path is where the defect is, four times in one job** | C3's cache key survived all 28 cache tests (none turns a warm camera); C4's winding measurement survived every test in the suite (nothing mirrors a quad, so the branch was unreachable); C5's conversion would have survived all 64 of its own cases while no scene called it; C7's heading would have survived all of `PlayerPhysicsTest`, which sets it itself |
 
 **The honest summary:** Job A's *unknowns* are gone; only its plumbing remains,
@@ -256,10 +280,10 @@ much faster it makes things.
    the Java2D path working and tested.
 3. **Pixel parity is the contract.** "Looks fine" is not a result. Every port
    step compares rendered output against a reference and states the error.
-4. **The suite stays green.** Last full run, under `xvfb-run`: **1,019 tests,
+4. **The suite stays green.** Last full run, under `xvfb-run`: **1,038 tests,
    0 failures, 3 skipped** in core plus **62/0/0** in `:gl` (was 810/0/3 when
-   this was written; B0–B11, D0–D7, A1–A7 and C1–C7 added the rest, twelve of
-   them in Job A and forty in Job C so far). The three skips are the display
+   this was written; B0–B11, D0–D7, A1–A7 and C1–C10 added the rest, twelve of
+   them in Job A and fifty-nine in Job C). The three skips are the display
    tests losing a race with the eleven classes that set
    `java.awt.headless=true` in the shared JVM (see B4); with no display at all,
    17 stand aside instead — fourteen of those need a GL driver, seven in core
@@ -3554,6 +3578,72 @@ a held key should feel responsive without spinning the world.
 between. Assert this after a randomised sequence of presses, including presses
 during animation.
 
+#### C8 — done. The keys the step suggested were both taken, and the check that should have said so could not
+
+**The decision, recorded: queue one, drop the rest.** Four presses in a frame
+turn the camera two points. A held key then walks the world round one point at a
+time and stops when the key does; queueing every press would spin the world for
+seconds after the key came up, and blending two turns would leave the camera
+resting between compass points — the one thing an eight-point camera may never
+do.
+
+**Why "never rests between" is the assertion everything else hangs on.** A
+camera left a hair off a compass point is not cosmetic. At 44.99°
+`TerrainCache` refuses to bake the floor (C3), a tile texture stops being an
+upright blit and becomes a warp (C4), and the cardinal headings stop being exact
+axis swaps (C1) — three costs paid for ever by a camera that looks settled. So
+the last frame of a snap **assigns** the heading from a whole-number compass
+index rather than easing until the difference is small enough, and the tests
+assert the resting position with a tolerance of exactly zero.
+
+The heading is kept as that index, not as an angle: adding 45° to a `double`
+once per press for the length of a session drifts, and drift is precisely what
+turns "exact multiple of 45°" into "nearly". **A consequence worth writing down,
+because it surprised the test first:** `yaw()` can step by a whole turn at the
+instant a snap settles across north — the animation runs 0° → −45° and the
+heading it lands on is 315°. It is the representation wrapping, not the camera;
+`snap` gives both the same cosine and sine to the last bit. Anything measuring
+how far the camera turned by subtracting two yaws has to fold the difference
+into a half turn.
+
+**The keys: not `Q`/`E`.** The step suggested them and both ship bound — `Q`
+drops one of the held stack, `E` interacts with doors, chests and mounts. They
+are `,` and `.` instead: free, adjacent under the right hand, and what *Don't
+Starve* binds camera rotation to, which is the game §6.1 describes the feature
+from.
+
+**And the finding that outlived the keys: `KeyBinds.conflicts` could not have
+told me.** It reports collisions inside a `Category`, on the argument that two
+categories overlapping is not a conflict — the left mouse button attacks in play
+and paints in the editor, and never both at once. That argument is sound for
+play against editing, and for the world against an open menu. It is **not** sound
+between `CAMERA` and `ITEMS`, which are live in the same frame of the same game:
+binding rotation to `Q` would have turned the camera and dropped an item on one
+press, and every conflict check in the project would have called it fine. The
+negative control proved it — binding the rotate keys to the step's own
+suggestion produced no failure at all until the test was rewritten to ask the
+question the categories cannot: *no action the player can reach without opening
+anything may share a key with either rotate key.* Menus and the editor stay
+excluded on purpose, which is why `Space` may still both jump and confirm.
+
+**One golden moved, and it should have.** `scene-key-binds` draws the controls
+screen, and the screen now has two more rebindable actions in its Camera group.
+Regenerated through B0's own escape hatch, which fails the build on the
+rewriting run so it cannot happen by accident; only that one PNG changed.
+
+**Verified.** `CameraSnapTest`, 9 tests: a randomised sequence of 30 presses
+across 40 runs — presses mid-snap, presses in both directions, bursts faster than
+the animation can absorb — asserting at every frame that the camera is either
+turning or resting *exactly* on a compass point, and that the heading never
+moves two points at once; one press turning exactly one point from each of the
+eight, measured as distance swept so a turn that crosses north the long way
+round fails; the turn taking time rather than happening on the press; the ease
+being an ease; the queue rule; a full circle returning to bit-identical pixels;
+and a side-scroller that cannot be turned at all. Negative controls: easing to
+within 0.001% of the target instead of assigning it (six of the nine fail),
+queueing every press (the queue rule fails), and the plan's own `Q`/`E` (fails
+by name, once the test could see it).
+
 ---
 
 ### C9 — Editor and save format
@@ -3569,6 +3659,52 @@ during animation.
 **Verify.** `LevelFormatTest` round-trips a level with a yaw and one without.
 Load an existing level file from `src/main/resources` and confirm it is unchanged.
 
+#### C9 — done. The editor was already safe; the format is the new part
+
+**Placement needed nothing.** Every one of creative mode's seven mouse-to-world
+conversions already goes through `camera.screenToWorld`, which C1 made
+yaw-aware — so the step's own precondition ("placement must resolve through the
+same `inversePlanar` the picking path uses") was satisfied the moment the camera
+learned to turn. What it did want is a sharper check than C1's round trip, and
+that is now written: the round trip says a screen pixel maps back to *within a
+couple of pixels* of the world point it came from, and an editor resolves that
+point to a **whole cell**, where a half-pixel disagreement at a tile boundary
+paints the neighbour. `aClickLandsOnTheCellItIsOverAtEveryHeading` projects the
+centre of every cell in a spread and demands the pixel it lands on resolve back
+to that same cell, at all eight headings in both plan views.
+
+**The format: `heading`, an integer 0–7, absent when zero.** Stored as the
+compass point rather than as radians for the same reason the camera stores an
+index — an angle read from a file can arrive a hair off a compass point, and a
+hair costs the floor cache and the upright tile blit for the whole session. It
+follows `lightAngle`'s pattern exactly, which is the precedent already in the
+file for "a look the level owns": written only when it differs from the default,
+read with a default, and carried through the editor's undo `Doc` so an undo
+across a change restores it.
+
+**Two decisions inside that, both recorded rather than assumed:**
+
+- **The heading is taken at save time, not on every press of a rotate key.**
+  Turning to look at what you are building is not an edit, and making it one
+  would fill the undo history with camera moves. `captureLevelSettings` is
+  where it happens, beside the settings capture that was already there.
+- **It is where the level *opens*, not a constraint on the player.** Both
+  scenes place the camera there on adopting a level — settled, through the
+  teleport rather than the animation, because a level should not slide into
+  position as it loads. The player may turn from there whenever they like, and
+  where they turn to stays theirs: C10 keeps the heading off the wire, so two
+  players in one world may face different ways.
+
+**Verified.** `LevelFormatTest` 29 → 33 tests: the heading surviving a save, and
+being **absent** from a level built square to the world — which is every level
+written before the field existed and every side-scroller there will ever be, so
+an optional field that was always written would be a format change and a format
+change is a file an older build cannot open. A heading outside the eight is
+folded onto them rather than trusted. And the level this build ships is asserted
+unchanged both ways: byte-for-byte on disk after loading it, and free of a
+heading after being written back out. Negative control: writing the field
+unconditionally, which fails three of those four by name.
+
 ---
 
 ### C10 — Multiplayer consistency
@@ -3581,6 +3717,80 @@ but audit rather than assume.
 
 **Verify.** Two clients at different yaws, same server, sustained play; assert
 world state stays identical.
+
+#### C10 — done. The audit is a scan, because an audit is worth a day
+
+**The audit's answer: three camera-derived values cross the wire, all of them
+inputs, and no camera does.** `PlayerInput` carries the heading (C7), the world
+point an attack was aimed at, and the cell being mined. Each is a quantity the
+player chose by looking at their own screen, converted to world terms before it
+is sent and resolved by the server against the world — not view state being
+synchronised. Nothing else: the `Camera` class is not named, in code, by any of
+`sim`, `net`, `world`, `entity`, `combat`, `level` or `crafting`.
+
+**The server had already written this rule down for a different reason**, which
+is worth recording because it is the same argument arriving twice:
+
+> *Physics always uses the served level's own format: a client switching its
+> local camera view must not change how it moves on the server.*
+
+Perspective was the first thing a client could have leaked into the simulation
+and it was closed by taking the value from the level instead. The heading is the
+second, and it is closed the other way round — by sending it explicitly, per
+tick, as part of what the player pressed.
+
+**One thing that looks like a leak and is not.** The level a joining client
+receives now carries `heading` (C9). That is level data, authored once and
+identical for everybody, in the way `lightAngle` is — where the level *opens*,
+not where anyone is looking now. The distinction is the whole of C10 in one
+field, so it is asserted rather than explained: the shipped level carries none,
+and a snapshot carries none ever.
+
+**An audit is worth exactly as long as it takes for the next change to
+invalidate it, so it is a scan.** `noClassThatHoldsWorldStateNamesTheCamera`
+walks the seven packages that simulate, serve, serialise and store the world and
+fails if any of them names the class. Prose is left alone — several of those
+files explain at length why they take a perspective from the level rather than
+from the client, and a rule whose only remedy is deleting the explanation is a
+bad rule. `SealedSeamTest` settled that argument once already for Java2D and
+this strips comments and string literals the same way, with the same kind of
+control on the stripper itself.
+
+**And a control caught the control.** The first attempt at "a world-state class
+acquires a camera" edited `public class PlayerState` when the file says
+`public final class PlayerState`, so it changed nothing and the scan passed —
+which for a moment looked exactly like a scan that does not work. Re-run against
+a control that actually applied, it names the file. A negative control that
+silently fails to inject is indistinguishable from a test that cannot fail, and
+the only defence is asserting the injection landed.
+
+**Verified.** `NetCameraIndependenceTest`, 5 tests, over a real server on a real
+socket with two real clients:
+
+- **The positive half.** Two clients, one looking north and one east, both hold
+  "up" — which means "away from me" to each of them — and the server walks one
+  north and the other east, in the same tick of the same simulation. Without
+  this C10 is satisfiable by deleting C7.
+- **The negative half.** Forty ticks of both players moving with their headings
+  three eighths apart, then the two clients' descriptions of the same tick
+  compared field by field in wire form. One world, whichever way you look at it.
+- **The wire.** A player's networked state carries position, health and the
+  direction they are *walking* — a world direction, which C5 keeps separate
+  from the picture drawn of it — and no heading, however far round the client
+  has turned.
+- **The seal**, and its own control.
+
+Negative controls: the server taking one heading for everybody (the two players
+stop walking different ways), the heading leaked into the player snapshot, and a
+world-state class acquiring a camera.
+
+**JOB C DELIVERED**, by ten steps, of which **four needed no production change
+at all** — C2's accessor already existed, C3's visible bounds and C4's depth
+order were already written against the projection, and C6's shadows, decor and
+liquids turn because the isometric projection had already forced them to be
+honest. The recurring lesson of the job is in those four and in the five defects
+found by negative control: **this codebase was mostly already right about
+rotation, and the work was finding out where it was not.**
 
 ---
 
@@ -4317,6 +4527,8 @@ gets declared finished while broken.
 | **`TurnedTerrainTest`** | What does the terrain do when the view turns — which cells are swept, which faces of a block are shown, which of two blocks is in front? Every other terrain instrument renders square-on to the world, where a tile is a rectangle and only one of its edges can face the viewer | `TurnedTerrainTest.java`, C3–C4 |
 | **`TerrainCacheTest`'s seam measurement** | Is the cacheability *rule* still the artefact it stands for? The rule is one line of arithmetic about tile edges; what it is really about is what Java2D's rasteriser does at a diagonal, which is not this project's to promise | `TerrainCacheTest.java`, C3 |
 | **`FacingUnderYawTest`** | Is a character drawn walking the way the world visibly moves them — and does any scene still hand a raw world facing to the art? The second question is the one that fails in practice: the conversion is correct and forgotten | `FacingUnderYawTest.java`, C5 |
+| **`NetCameraIndependenceTest`** | Can one client's view reach another client's world? Every other network test in the project runs one client or two identical ones; this is the only one that makes them differ in something that must not matter | `NetCameraIndependenceTest.java`, C10 |
+| **`CameraSnapTest`** | Does the camera always arrive on a compass point and never rest between two? Randomised presses mid-snap are the only way to ask, because every other instrument in Job C sets a heading and reads it back — none of them can produce the state where a turn is interrupted | `CameraSnapTest.java`, C8 |
 | **`PlayerPhysicsTest`'s C7 half** | Does a key press mean the same world movement on both sides of the wire, while the camera turns under the player? Every other determinism check in the project steps the *same object* twice; this one steps an input and its round-tripped twin, because the defect it is aimed at lives in the serialisation | `PlayerPhysicsTest.java`, C7 |
 
 **`DrawStats` and `GlParityTest` answer different questions and B8 measured the
@@ -4579,9 +4791,51 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
          │      found a defect the step does not mention: CreativeScene's EDITOR
          │      PAN moved camera.x/y along the world's axes, so a turned editor
          │      panned diagonally. Same arithmetic now.
-         C8  the snap animation
-         C9  editor + save format
-         C10 multiplayer consistency
+         C8  the snap animation        ← done. Queue one, drop the rest (recorded):
+         │      four presses in a frame turn two points. The last frame of a
+         │      snap ASSIGNS the heading from a whole-number index rather than
+         │      easing until it is close enough, because 44.99° costs the floor
+         │      cache (C3), the upright tile blit (C4) and the exact axis swap
+         │      (C1) for as long as the camera sits there — a control that stops
+         │      within 0.001% fails six of nine tests. Keys are , and . : the
+         │      step suggested Q and E and BOTH SHIP BOUND (drop item, interact).
+         │      And KeyBinds.conflicts could not have told me — it reports
+         │      inside a Category, so rotation in CAMERA against dropping in
+         │      ITEMS is not a conflict by its rule, and both fire in the same
+         │      frame. The control passed until the test stopped asking
+         │      conflicts and started asking what is live at once. One golden
+         │      moved (the controls screen has two more rows) and should have.
+         C9  editor + save format      ← done. Placement needed NOTHING: all
+         │      seven of creative mode's mouse-to-world conversions already go
+         │      through screenToWorld, which C1 turned. What it wanted was a
+         │      sharper check than the round trip — an editor resolves a pixel
+         │      to a WHOLE CELL, so the middle of every cell must resolve back
+         │      to itself, which is now asserted at eight headings. The format
+         │      is `heading`, an integer 0-7, absent when zero, following
+         │      lightAngle's pattern exactly. Taken at SAVE time, not on every
+         │      rotate press — turning to look at what you are building is not
+         │      an edit, and making it one fills the undo history with camera
+         │      moves. It is where the level OPENS, not a constraint: C10 keeps
+         │      the heading off the wire, so two players may face different ways
+         │      in one world.
+         C10 multiplayer consistency  ← done. The audit's answer: THREE
+                camera-derived values cross the wire and all are INPUTS — the
+                heading (C7), the world point an attack aimed at, and the cell
+                being mined. No camera does: the class is not named in code by
+                sim, net, world, entity, combat, level or crafting, which is now
+                a scan rather than an audit, because an audit is worth a day.
+                The server had already written the rule down for perspective —
+                "a client switching its local camera view must not change how it
+                moves on the server" — and closed it by taking the value from
+                the LEVEL; the heading is closed the other way, by sending it
+                explicitly per tick. The level's own `heading` (C9) looks like a
+                leak and is not: it is level data, authored once, identical for
+                everyone, in the way lightAngle is. A control caught a control —
+                the first "a world-state class acquires a camera" injection
+                edited `public class PlayerState` where the file says `public
+                final class`, changed nothing, and passed.
+                JOB C DELIVERED, by ten steps, FOUR of which needed no
+                production change at all.
 
 ```
 
@@ -4597,8 +4851,28 @@ whose first step is making the update stage as legible as the scene stage
 already is.
 
 A and C are independent of each other once B10 passes. A is much smaller and its
-risk is already retired, so it is the natural next one — but nothing forces that
-order.
+risk was already retired, so it went first — but nothing forced that order, and
+C followed it.
+
+**All four jobs are now closed, and the shape of the last one is worth keeping.**
+Job C was ten steps and **four of them needed no production change at all**:
+C2's height accessor already existed under another name, C3's visible bounds and
+C4's depth order were already written against the projection rather than against
+the grid, and C6's shadows, decor and liquids already turn. The reason is the
+same in every case and it is not luck — each was written or rewritten when the
+**isometric** projection arrived, and a diamond is a projection that does not
+let a screen-space assumption survive contact with it. A camera that turns is a
+second such projection. Code the first one made honest was already honest for the
+second, and the six steps that did need changing are exactly the places nothing
+had ever forced to be.
+
+The other half of the job's shape is that **five defects were found by negative
+control rather than by a failing test**: a cache key no test ever turned, a
+branch nothing could reach, a conversion no scene would have called, a heading
+every physics test set for itself, and a key collision the project's own
+conflict check is built not to report. In each case the code was written, the
+tests were green, and the only thing that found the hole was deliberately
+breaking the thing under test and watching what stayed silent.
 
 ---
 
