@@ -1088,15 +1088,16 @@ The GL backend that consumes all of this exists and is selected at startup where
 a driver answers, and it now runs the shader chain as well as the scene. The
 sub-pixel stability question at HiDPI is closed too, by seven separate fixes —
 "the shimmer" turned out never to be one defect. What remains of the renderer
-work is camera rotation, and it is nearly all done. The camera turns to eight
-compass points on `,` and `.`, easing between them and never resting anywhere
-else; the grid, the block faces, the shadows and the characters' sprites all
-turn with it; the movement keys mean what they look like they mean, at every
-heading and on both sides of a network connection; a level remembers the
-heading it was built from and opens there; and the floor cache knows which
-headings it can still bake — four of the eight in either plan view, including
-four in isometric it could never bake before. What is left is the multiplayer
-audit. [`RENDER_PLAN.md`](RENDER_PLAN.md) is the plan of record.
+work is camera rotation, and it is done. The camera turns to eight compass
+points on `,` and `.`, easing between them and never resting anywhere else; the
+grid, the block faces, the shadows and the characters' sprites all turn with it;
+the movement keys mean what they look like they mean, at every heading and on
+both sides of a network connection; a level remembers the heading it was built
+from and opens there; and the floor cache knows which headings it can still bake
+— four of the eight in either plan view, including four in isometric it could
+never bake before. Two players may look at one world from different directions,
+which is the point rather than a bug. [`RENDER_PLAN.md`](RENDER_PLAN.md) is the
+plan of record, and all four of its jobs are closed.
 
 Whether any of it was worth doing stayed a question about measurements rather
 than architecture. The

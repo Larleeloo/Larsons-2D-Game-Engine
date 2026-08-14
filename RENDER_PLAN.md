@@ -1,10 +1,13 @@
 # Render Plan — GPU Acceleration, End to End
 
 **Status:** Living document. Written 2026-08-02 against commit `85196b9` on
-`claude/gpu-acceleration-shaders-oqbx54`. **Jobs A, B and D are complete; Job C
-is under way** — C1–C9 are closed, C10 is next and is the last of it. Job A
-closed 2026-08-04: the shipped GLSL runs on the GPU, matching the CPU chain pass
-for pass, and the GL backend has lighting again (§5, A2–A6).
+`claude/gpu-acceleration-shaders-oqbx54`. **Jobs A, B, C and D are all
+complete.** Job C closed with C10: the camera turns to eight compass points,
+everything the projection touches turns with it, and two players may look at one
+world from different directions — which is correct behaviour, and is now
+asserted over a real socket. Job A closed 2026-08-04: the shipped GLSL runs on
+the GPU, matching the CPU chain pass for pass, and the GL backend has lighting
+again (§5, A2–A6).
 
 **Job B delivered.**
 Measured on the M1 Air across four runs on two builds: the scene stage fell from
@@ -240,6 +243,8 @@ Everything in this table has been measured or executed, not assumed.
 | The camera never rests between compass points | C8 — the last frame of a snap assigns the heading from a whole-number index rather than easing until it is close enough. A control that stops within 0.001% of the target fails six of the step's nine tests, because 44.99° costs the floor cache, the upright tile blit and the exact axis swap for as long as the camera sits there |
 | **A key-bind conflict check can be blind to the collision that matters** | C8 — `KeyBinds.conflicts` reports inside a `Category`, so rotation on `Q` (CAMERA) against dropping an item on `Q` (ITEMS) is not a conflict by its rule, and both fire in the same frame. The plan's own suggested keys were caught only after the test stopped asking `conflicts` and started asking what is live at once |
 | A level remembers the heading it was built from, and older levels do not gain one | C9 — `heading`, an integer 0–7, absent when zero. The shipped level is asserted unchanged byte-for-byte on disk and free of the field after a round trip; writing it unconditionally fails three tests by name |
+| **Two players may look different ways at one world, and do** | C10 — a real server, two real clients on a socket: one looking north and one east both hold "up", and the server walks one north and the other east in the same tick. Forty ticks later their descriptions of the same tick are identical field for field |
+| The simulation cannot acquire a camera by accident | C10 — the seven packages that simulate, serve, serialise and store the world are scanned for the class name, prose excluded. The audit is a scan because an audit is worth a day |
 | **An unexercised path is where the defect is, four times in one job** | C3's cache key survived all 28 cache tests (none turns a warm camera); C4's winding measurement survived every test in the suite (nothing mirrors a quad, so the branch was unreachable); C5's conversion would have survived all 64 of its own cases while no scene called it; C7's heading would have survived all of `PlayerPhysicsTest`, which sets it itself |
 
 **The honest summary:** Job A's *unknowns* are gone; only its plumbing remains,
@@ -275,10 +280,10 @@ much faster it makes things.
    the Java2D path working and tested.
 3. **Pixel parity is the contract.** "Looks fine" is not a result. Every port
    step compares rendered output against a reference and states the error.
-4. **The suite stays green.** Last full run, under `xvfb-run`: **1,033 tests,
+4. **The suite stays green.** Last full run, under `xvfb-run`: **1,038 tests,
    0 failures, 3 skipped** in core plus **62/0/0** in `:gl` (was 810/0/3 when
-   this was written; B0–B11, D0–D7, A1–A7 and C1–C9 added the rest, twelve of
-   them in Job A and fifty-four in Job C so far). The three skips are the display
+   this was written; B0–B11, D0–D7, A1–A7 and C1–C10 added the rest, twelve of
+   them in Job A and fifty-nine in Job C). The three skips are the display
    tests losing a race with the eleven classes that set
    `java.awt.headless=true` in the shared JVM (see B4); with no display at all,
    17 stand aside instead — fourteen of those need a GL driver, seven in core
@@ -3713,6 +3718,80 @@ but audit rather than assume.
 **Verify.** Two clients at different yaws, same server, sustained play; assert
 world state stays identical.
 
+#### C10 — done. The audit is a scan, because an audit is worth a day
+
+**The audit's answer: three camera-derived values cross the wire, all of them
+inputs, and no camera does.** `PlayerInput` carries the heading (C7), the world
+point an attack was aimed at, and the cell being mined. Each is a quantity the
+player chose by looking at their own screen, converted to world terms before it
+is sent and resolved by the server against the world — not view state being
+synchronised. Nothing else: the `Camera` class is not named, in code, by any of
+`sim`, `net`, `world`, `entity`, `combat`, `level` or `crafting`.
+
+**The server had already written this rule down for a different reason**, which
+is worth recording because it is the same argument arriving twice:
+
+> *Physics always uses the served level's own format: a client switching its
+> local camera view must not change how it moves on the server.*
+
+Perspective was the first thing a client could have leaked into the simulation
+and it was closed by taking the value from the level instead. The heading is the
+second, and it is closed the other way round — by sending it explicitly, per
+tick, as part of what the player pressed.
+
+**One thing that looks like a leak and is not.** The level a joining client
+receives now carries `heading` (C9). That is level data, authored once and
+identical for everybody, in the way `lightAngle` is — where the level *opens*,
+not where anyone is looking now. The distinction is the whole of C10 in one
+field, so it is asserted rather than explained: the shipped level carries none,
+and a snapshot carries none ever.
+
+**An audit is worth exactly as long as it takes for the next change to
+invalidate it, so it is a scan.** `noClassThatHoldsWorldStateNamesTheCamera`
+walks the seven packages that simulate, serve, serialise and store the world and
+fails if any of them names the class. Prose is left alone — several of those
+files explain at length why they take a perspective from the level rather than
+from the client, and a rule whose only remedy is deleting the explanation is a
+bad rule. `SealedSeamTest` settled that argument once already for Java2D and
+this strips comments and string literals the same way, with the same kind of
+control on the stripper itself.
+
+**And a control caught the control.** The first attempt at "a world-state class
+acquires a camera" edited `public class PlayerState` when the file says
+`public final class PlayerState`, so it changed nothing and the scan passed —
+which for a moment looked exactly like a scan that does not work. Re-run against
+a control that actually applied, it names the file. A negative control that
+silently fails to inject is indistinguishable from a test that cannot fail, and
+the only defence is asserting the injection landed.
+
+**Verified.** `NetCameraIndependenceTest`, 5 tests, over a real server on a real
+socket with two real clients:
+
+- **The positive half.** Two clients, one looking north and one east, both hold
+  "up" — which means "away from me" to each of them — and the server walks one
+  north and the other east, in the same tick of the same simulation. Without
+  this C10 is satisfiable by deleting C7.
+- **The negative half.** Forty ticks of both players moving with their headings
+  three eighths apart, then the two clients' descriptions of the same tick
+  compared field by field in wire form. One world, whichever way you look at it.
+- **The wire.** A player's networked state carries position, health and the
+  direction they are *walking* — a world direction, which C5 keeps separate
+  from the picture drawn of it — and no heading, however far round the client
+  has turned.
+- **The seal**, and its own control.
+
+Negative controls: the server taking one heading for everybody (the two players
+stop walking different ways), the heading leaked into the player snapshot, and a
+world-state class acquiring a camera.
+
+**JOB C DELIVERED**, by ten steps, of which **four needed no production change
+at all** — C2's accessor already existed, C3's visible bounds and C4's depth
+order were already written against the projection, and C6's shadows, decor and
+liquids turn because the isometric projection had already forced them to be
+honest. The recurring lesson of the job is in those four and in the five defects
+found by negative control: **this codebase was mostly already right about
+rotation, and the work was finding out where it was not.**
+
 ---
 
 ## 7. Job D — Sub-pixel stability on HiDPI
@@ -4448,6 +4527,7 @@ gets declared finished while broken.
 | **`TurnedTerrainTest`** | What does the terrain do when the view turns — which cells are swept, which faces of a block are shown, which of two blocks is in front? Every other terrain instrument renders square-on to the world, where a tile is a rectangle and only one of its edges can face the viewer | `TurnedTerrainTest.java`, C3–C4 |
 | **`TerrainCacheTest`'s seam measurement** | Is the cacheability *rule* still the artefact it stands for? The rule is one line of arithmetic about tile edges; what it is really about is what Java2D's rasteriser does at a diagonal, which is not this project's to promise | `TerrainCacheTest.java`, C3 |
 | **`FacingUnderYawTest`** | Is a character drawn walking the way the world visibly moves them — and does any scene still hand a raw world facing to the art? The second question is the one that fails in practice: the conversion is correct and forgotten | `FacingUnderYawTest.java`, C5 |
+| **`NetCameraIndependenceTest`** | Can one client's view reach another client's world? Every other network test in the project runs one client or two identical ones; this is the only one that makes them differ in something that must not matter | `NetCameraIndependenceTest.java`, C10 |
 | **`CameraSnapTest`** | Does the camera always arrive on a compass point and never rest between two? Randomised presses mid-snap are the only way to ask, because every other instrument in Job C sets a heading and reads it back — none of them can produce the state where a turn is interrupted | `CameraSnapTest.java`, C8 |
 | **`PlayerPhysicsTest`'s C7 half** | Does a key press mean the same world movement on both sides of the wire, while the camera turns under the player? Every other determinism check in the project steps the *same object* twice; this one steps an input and its round-tripped twin, because the defect it is aimed at lives in the serialisation | `PlayerPhysicsTest.java`, C7 |
 
@@ -4738,7 +4818,24 @@ B11 macOS first-thread relaunch        ← done. The GL jar could not open a win
          │      moves. It is where the level OPENS, not a constraint: C10 keeps
          │      the heading off the wire, so two players may face different ways
          │      in one world.
-         C10 multiplayer consistency
+         C10 multiplayer consistency  ← done. The audit's answer: THREE
+                camera-derived values cross the wire and all are INPUTS — the
+                heading (C7), the world point an attack aimed at, and the cell
+                being mined. No camera does: the class is not named in code by
+                sim, net, world, entity, combat, level or crafting, which is now
+                a scan rather than an audit, because an audit is worth a day.
+                The server had already written the rule down for perspective —
+                "a client switching its local camera view must not change how it
+                moves on the server" — and closed it by taking the value from
+                the LEVEL; the heading is closed the other way, by sending it
+                explicitly per tick. The level's own `heading` (C9) looks like a
+                leak and is not: it is level data, authored once, identical for
+                everyone, in the way lightAngle is. A control caught a control —
+                the first "a world-state class acquires a camera" injection
+                edited `public class PlayerState` where the file says `public
+                final class`, changed nothing, and passed.
+                JOB C DELIVERED, by ten steps, FOUR of which needed no
+                production change at all.
 
 ```
 
@@ -4754,8 +4851,28 @@ whose first step is making the update stage as legible as the scene stage
 already is.
 
 A and C are independent of each other once B10 passes. A is much smaller and its
-risk is already retired, so it is the natural next one — but nothing forces that
-order.
+risk was already retired, so it went first — but nothing forced that order, and
+C followed it.
+
+**All four jobs are now closed, and the shape of the last one is worth keeping.**
+Job C was ten steps and **four of them needed no production change at all**:
+C2's height accessor already existed under another name, C3's visible bounds and
+C4's depth order were already written against the projection rather than against
+the grid, and C6's shadows, decor and liquids already turn. The reason is the
+same in every case and it is not luck — each was written or rewritten when the
+**isometric** projection arrived, and a diamond is a projection that does not
+let a screen-space assumption survive contact with it. A camera that turns is a
+second such projection. Code the first one made honest was already honest for the
+second, and the six steps that did need changing are exactly the places nothing
+had ever forced to be.
+
+The other half of the job's shape is that **five defects were found by negative
+control rather than by a failing test**: a cache key no test ever turned, a
+branch nothing could reach, a conversion no scene would have called, a heading
+every physics test set for itself, and a key collision the project's own
+conflict check is built not to report. In each case the code was written, the
+tests were green, and the only thing that found the hole was deliberately
+breaking the thing under test and watching what stayed silent.
 
 ---
 
