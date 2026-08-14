@@ -5,6 +5,7 @@ import com.larsons.engine.combat.MeleeAction;
 import com.larsons.engine.combat.MeleeProfile;
 import com.larsons.engine.combat.MeleeProfiles;
 import com.larsons.engine.combat.MeleeState;
+import com.larsons.engine.character.Characters;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.core.GameLoop;
 import com.larsons.engine.entity.DroppedItem;
@@ -295,6 +296,24 @@ public final class GameServer {
         broadcast(Protocol.blockBatch(flat));
     }
 
+    /**
+     * Stamp a client's announced character onto the body the server
+     * simulates for it.
+     *
+     * <p>Health is the one thing a restamp must not hand back: a player who
+     * swapped character mid-fight would otherwise heal to full by saying so.
+     * Everything else — the speed, the jumps, the pools' <em>ceilings</em>,
+     * and the two sizes the body is drawn and collided at — is what the
+     * character means, and the server has to agree with the client about all
+     * of it or they disagree about every wall.
+     */
+    private void applyCharacter(Connection c) {
+        if (c.state == null) return;
+        double health = c.state.health;
+        Characters.getOrDefault(c.characterKey).applyTo(c.state, level.tileSize);
+        c.state.health = Math.min(health, c.state.maxHealth);
+    }
+
     private void processJoins() {
         Connection conn;
         while ((conn = pendingJoins.poll()) != null) {
@@ -308,6 +327,11 @@ public final class GameServer {
             double[] spawn = minigame != null
                     ? minigame.respawnPoint(id) : level.spawnPointFor(id);
             conn.state = new PlayerState(id, name, spawn[0], spawn[1]);
+            // Whatever character this client has already announced. Usually
+            // nothing yet — the roster comes down in the welcome below and the
+            // choice follows — so the body starts on the game type's defaults
+            // and is restamped the moment the client says who it is playing.
+            applyCharacter(conn);
             conn.joined = true;
             // Serialize the live level so late joiners see every edit so far.
             // Compact + RLE: the welcome is one protocol line, and the pretty
@@ -556,8 +580,9 @@ public final class GameServer {
         int col = in.mineCol;
         int row = in.mineRow;
         double ts = level.tileSize;
-        double px = c.state.x + profile.playerSize / 2.0;
-        double py = c.state.y + profile.playerSize / 2.0;
+        double body = c.state.hitSize(profile.playerSize);
+        double px = c.state.x + body / 2.0;
+        double py = c.state.y + body / 2.0;
         boolean inReach = Math.hypot((col + 0.5) * ts - px, (row + 0.5) * ts - py)
                 <= MINE_REACH_TILES * ts;
         if (!inReach || level.tileAt(col, row) <= 0) {
@@ -634,6 +659,7 @@ public final class GameServer {
             Map<String, Object> msg = req.msg();
             if (conn.closed || !conn.joined) continue;
             switch (Protocol.type(msg)) {
+                case "character" -> applyCharacter(conn);
                 case "edit" -> {
                     int col = intOf(msg.get("c"));
                     int row = intOf(msg.get("r"));
@@ -852,6 +878,8 @@ public final class GameServer {
                 new LinkedBlockingQueue<>(INBOX_CAPACITY);
 
         volatile String requestedName = "Player";
+        /** The character profile this client announced ({@code ""} = the default). */
+        volatile String characterKey = "";
         volatile PlayerState state;      // assigned by the tick thread on join
         volatile boolean joined;
         volatile boolean closed;
@@ -911,6 +939,10 @@ public final class GameServer {
                             // seconds; shed the oldest input and keep the new.
                             PlayerInput parsed = PlayerInput.fromMap(msg);
                             while (!inputQueue.offer(parsed)) inputQueue.poll();
+                        }
+                        case "character" -> {
+                            characterKey = msg.get("ch") instanceof String c ? c : "";
+                            if (joined) pendingRequests.add(new ClientRequest(this, msg));
                         }
                         case "edit", "paint", "erase", "invmove", "invdrop", "use",
                              "mount", "dismount" -> {

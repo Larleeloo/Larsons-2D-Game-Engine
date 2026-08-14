@@ -93,6 +93,7 @@ public final class GameClient implements Closeable {
     /**
      * Connect and complete the join handshake, or throw with a reason
      * (unreachable host, incompatible version, server said no).
+     *
      */
     public static GameClient connect(String host, int port, String playerName, int timeoutMs)
             throws IOException {
@@ -267,6 +268,15 @@ public final class GameClient implements Closeable {
     /** A block edit aimed at one of a plan-view level's two layers. */
     public void sendBlockEdit(int col, int row, int blockId, String mode, int layer) {
         if (connected) outbox.offer(Protocol.blockEdit(col, row, blockId, mode, layer));
+    }
+
+    /**
+     * Tell the server which character profile this player picked, so it
+     * simulates the body the client is predicting — see
+     * {@link Protocol#character}.
+     */
+    public void sendCharacter(String key) {
+        if (connected) outbox.offer(Protocol.character(key));
     }
 
     /** Ask the server to spawn a painted entity (kind "mob" or "item"). */

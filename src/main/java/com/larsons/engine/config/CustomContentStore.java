@@ -339,6 +339,9 @@ public final class CustomContentStore {
         m.put("body", hex(d.body()));
         m.put("accent", hex(d.accent()));
         m.put("size", d.size());
+        // Absent on a species drawn and collided at one size, which is every
+        // species written before the two came apart.
+        if (d.hitboxSize() > 0) m.put("hitbox", d.hitboxSize());
         m.put("speed", d.speed());
         m.put("maxHealth", d.maxHealth());
         m.put("damage", d.damage());
@@ -366,7 +369,8 @@ public final class CustomContentStore {
             }
             return new MobDef(str(m.get("key")), str(m.get("name")),
                     color(m.get("body"), Color.GRAY), color(m.get("accent"), Color.DARK_GRAY),
-                    dbl(m.get("size"), 28), dbl(m.get("speed"), 60),
+                    dbl(m.get("size"), 28), dbl(m.get("hitbox"), 0),
+                    dbl(m.get("speed"), 60),
                     dbl(m.get("maxHealth"), 20), dbl(m.get("damage"), 5),
                     MobDef.Temperament.valueOf(str(m.get("temperament"))),
                     dbl(m.get("detectRange"), 220), dbl(m.get("attackRange"), 34),

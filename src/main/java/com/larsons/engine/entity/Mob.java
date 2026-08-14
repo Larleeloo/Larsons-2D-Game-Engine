@@ -316,7 +316,7 @@ public final class Mob {
         }
         health -= amount;
         hurtTimer = HURT_FLASH;
-        double half = def.size() / 2;
+        double half = def.hitbox() / 2;
         if (space.hasElevation()) {
             double dx = x + half - fromX, dy = y + half - fromY;
             double len = Math.hypot(dx, dy);
@@ -496,7 +496,7 @@ public final class Mob {
         // flying species navigate the plane there like everything else.
         boolean planar = !gravityOn;
         double ts = level.tileSize;
-        double cx = x + def.size() / 2, cy = y + def.size() / 2;
+        double cx = x + def.hitbox() / 2, cy = y + def.hitbox() / 2;
         double pcx = nearest == null ? cx : nearest.x + ts / 2;
         double pcy = nearest == null ? cy : nearest.y + ts / 2;
         double dx = 0, dyPlanar = 0;
@@ -584,7 +584,7 @@ public final class Mob {
         dyPlanar *= speedFactor;
 
         // --- projectile awareness: sidestep incoming shots ---
-        double size = def.size();
+        double size = def.hitbox();
         if (dodgeTimer <= 0 && !projectiles.isEmpty()) {
             Projectile threat = incomingThreat(projectiles);
             if (threat != null) {
@@ -730,8 +730,8 @@ public final class Mob {
         strikeTarget = null;
         if (!combatOn || target == null || dead()) return;
         double half = level.tileSize / 2.0;
-        double d = Math.hypot((target.x + half) - (x + def.size() / 2),
-                (target.y + half) - (y + def.size() / 2));
+        double d = Math.hypot((target.x + half) - (x + def.hitbox() / 2),
+                (target.y + half) - (y + def.hitbox() / 2));
         if (d > meleeProfile.reach() + half) return; // they got out of the way
         double dmg = def.damage() * meleeProfile.move(melee.action()).damageScale();
         boolean parried = target.parrying;
@@ -768,7 +768,7 @@ public final class Mob {
     private void chaseAbilities(Level level, PlayerState target, double dist,
                                 boolean gravityOn, boolean planar, double ts) {
         if (abilityTimer > 0) return;
-        double size = def.size();
+        double size = def.hitbox();
         double towardX = Math.signum(target.x - x);
         switch (def.ability()) {
             case LEAP -> {
@@ -839,7 +839,7 @@ public final class Mob {
 
     /** The nearest projectile flying toward this mob within awareness range. */
     private Projectile incomingThreat(List<Projectile> projectiles) {
-        double cx = x + def.size() / 2, cy = y + def.size() / 2;
+        double cx = x + def.hitbox() / 2, cy = y + def.hitbox() / 2;
         for (Projectile p : projectiles) {
             if (p.dead()) continue;
             if (p.ownerId < 0) continue; // don't dodge our own side's volleys
@@ -896,9 +896,9 @@ public final class Mob {
 
     private void pickWanderTarget(Level level) {
         double range = 5 * level.tileSize;
-        wanderTargetX = Math.max(0, Math.min(level.width * (double) level.tileSize - def.size(),
+        wanderTargetX = Math.max(0, Math.min(level.width * (double) level.tileSize - def.hitbox(),
                 x + (rng.nextDouble() * 2 - 1) * range));
-        wanderTargetY = Math.max(0, Math.min(level.height * (double) level.tileSize - def.size(),
+        wanderTargetY = Math.max(0, Math.min(level.height * (double) level.tileSize - def.hitbox(),
                 y + (rng.nextDouble() * 2 - 1) * range));
     }
 
@@ -927,9 +927,9 @@ public final class Mob {
      */
     private double distanceTo(PlayerState p, Level level) {
         double half = level.tileSize / 2.0; // players are one tile square
-        double d = Math.hypot((p.x + half) - (x + def.size() / 2),
-                (p.y + half) - (y + def.size() / 2));
-        return Math.max(0, d - def.size() / 2);
+        double d = Math.hypot((p.x + half) - (x + def.hitbox() / 2),
+                (p.y + half) - (y + def.hitbox() / 2));
+        return Math.max(0, d - def.hitbox() / 2);
     }
 
     // --- wire form (what snapshots carry) --------------------------------------

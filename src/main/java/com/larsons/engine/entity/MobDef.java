@@ -13,7 +13,15 @@ import java.awt.Color;
  * @param displayName palette name
  * @param body        main sprite colour
  * @param accent      secondary sprite colour (eyes/belly)
- * @param size        world-pixel size (square)
+ * @param size        world-pixel size the species is <em>drawn</em> at
+ *                    (square). Independent of {@link #hitbox()}, which is how
+ *                    much floor it occupies — see
+ *                    {@link com.larsons.engine.sim.ActorSize} for why a
+ *                    species has two sizes and not one
+ * @param hitboxSize  world-pixel footprint that collides, or {@code 0} to
+ *                    occupy exactly as much floor as it is drawn on, which is
+ *                    what every species registered before the two came apart
+ *                    still asks for
  * @param speed       walk speed, px/sec
  * @param maxHealth   hit points
  * @param damage      contact/attack damage to players
@@ -39,7 +47,8 @@ import java.awt.Color;
  *                    {@code com.larsons.engine.combat.MeleeProfiles}
  */
 public record MobDef(String key, String displayName, Color body, Color accent,
-                     double size, double speed, double maxHealth, double damage,
+                     double size, double hitboxSize,
+                     double speed, double maxHealth, double damage,
                      Temperament temperament, double detectRange,
                      double attackRange, boolean flying,
                      String projectile, Ability ability, String abilityArg,
@@ -77,6 +86,45 @@ public record MobDef(String key, String displayName, Color body, Color accent,
         SHIELD
     }
 
+    /**
+     * How much floor this species occupies, world pixels — its own footprint,
+     * or its drawn size when it was registered before the two came apart.
+     *
+     * <p>Everything that collides, chases, or measures where a mob <em>is</em>
+     * asks this; {@link #size()} is only ever how large it is drawn. A dragon
+     * can therefore fill the screen and still fit through the cave mouth its
+     * artist drew it squeezing into.
+     */
+    public double hitbox() {
+        return hitboxSize > 0 ? hitboxSize : size;
+    }
+
+    /** This species again, redrawn at {@code drawSize} without moving its feet. */
+    public MobDef drawnAt(double drawSize) {
+        return new MobDef(key, displayName, body, accent, drawSize, hitbox(), speed,
+                maxHealth, damage, temperament, detectRange, attackRange, flying,
+                projectile, ability, abilityArg, weapon);
+    }
+
+    /** This species again, standing on {@code footprint} world pixels of floor. */
+    public MobDef standingOn(double footprint) {
+        return new MobDef(key, displayName, body, accent, size, footprint, speed,
+                maxHealth, damage, temperament, detectRange, attackRange, flying,
+                projectile, ability, abilityArg, weapon);
+    }
+
+    /** Pre-hitbox constructor shape: drawn and collided at one size. */
+    public MobDef(String key, String displayName, Color body, Color accent,
+                  double size, double speed, double maxHealth, double damage,
+                  Temperament temperament, double detectRange,
+                  double attackRange, boolean flying,
+                  String projectile, Ability ability, String abilityArg,
+                  String weapon) {
+        this(key, displayName, body, accent, size, 0, speed, maxHealth, damage,
+                temperament, detectRange, attackRange, flying,
+                projectile, ability, abilityArg, weapon);
+    }
+
     /** Pre-weapon constructor shape, kept so existing registrations read the same. */
     public MobDef(String key, String displayName, Color body, Color accent,
                   double size, double speed, double maxHealth, double damage,
@@ -110,8 +158,8 @@ public record MobDef(String key, String displayName, Color body, Color accent,
 
     /** This species again, issued {@code itemKey} to fight with. */
     public MobDef armedWith(String itemKey) {
-        return new MobDef(key, displayName, body, accent, size, speed, maxHealth,
-                damage, temperament, detectRange, attackRange, flying,
+        return new MobDef(key, displayName, body, accent, size, hitboxSize, speed,
+                maxHealth, damage, temperament, detectRange, attackRange, flying,
                 projectile, ability, abilityArg, itemKey);
     }
 

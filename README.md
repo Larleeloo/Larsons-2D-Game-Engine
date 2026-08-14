@@ -1946,6 +1946,8 @@ different to control
 | Trait | What it does |
 |-------|--------------|
 | Body / skin colour | tints the generated directional art (real sheets override it entirely) |
+| **Sprite size** | how large they are **drawn**, in blocks — 0.2 to 8 |
+| **Hitbox size** | how much floor they **occupy**, in blocks — 0.2 to 8, set independently |
 | Speed | multiplies walk and sprint speed |
 | Sprint | whether Shift sprints at all |
 | Mid-air jumps | 1 is the classic double jump; 0 grounds them; up to 8 |
@@ -1960,6 +1962,38 @@ and the form edits every field above. Create saves it into the game type's
 ([`CharacterStore`](src/main/java/com/larsons/engine/character/CharacterStore.java))
 and registers it live, so it is immediately paintable-adjacent in the palette,
 right-clickable for its skin, and deletable from that same dialog.
+
+**How big a character looks and how big they *are* are two numbers**
+([`ActorSize`](src/main/java/com/larsons/engine/sim/ActorSize.java)), and mobs
+work the same way. They were one number, and one number is exactly what stopped
+a creator using their own art: a 64×64 character drawn at the engine's 0.9 of a
+block is a postage stamp, and the only way to enlarge them was to enlarge their
+body — which walls them out of every gap they used to fit through. So the
+sprite says how large they *look* and the hitbox says how much floor they
+*stand on*, and neither is derived from the other. A boss can tower three
+blocks over the corridor it is walking down; a pebble-sized sprite can be a
+boulder to walk around. Sizes are authored **in blocks, not pixels**, because
+"two blocks tall" means the same thing in a 16-pixel game type and a 96-pixel
+one — and because it is the sentence a creator can picture.
+
+The **minimum is a fifth of a block** (small enough for a rat or a fairy, large
+enough to stay a character rather than a smudge) and the **maximum is eight**,
+which fills a good part of the screen at any ordinary zoom. The game type's own
+*Tile size* row still sets the **default** both sizes fall back to, so a game
+type that never touches any of this plays exactly as it did.
+
+**The form draws what you are deciding.** "Sprite 3.4 blocks, hitbox 0.6
+blocks" is not something anyone can see, so the *+ New Character* and *+ New
+Mob* dialogs carry a live
+[`ActorPreview`](src/main/java/com/larsons/engine/graphics/ActorPreview.java)
+beside them: the actor at its size, standing against a wall with a one-block
+doorway beside it, its footprint outlined on the floor, in the level's own
+projection. It is rendered through the same terrain painter and depth pass the
+game uses — a preview that draws its own approximation is one that lies the
+moment either side changes — so what it shows is what play shows, including
+that the character is drawn *in front of* the wall they are touching at every
+size. The character picker draws its roster to scale against each other for the
+same reason, so a line-up with a giant in it looks like one.
 
 **Each level decides which characters it offers.** The Characters palette's
 *Level Roster…* window (and the same toggles on the *Load Level → Edit

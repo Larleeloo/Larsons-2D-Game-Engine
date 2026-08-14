@@ -119,6 +119,24 @@ public final class Protocol {
         return encode(m);
     }
 
+    /**
+     * A client naming the character profile it is playing.
+     *
+     * <p>Sent once, when the level has arrived and the player has picked — not
+     * at join, because the character is chosen from the level's roster and the
+     * level comes down in the welcome. The server needs it because a character
+     * is not only a skin: it carries the speed, the jumps, the pools, and
+     * &mdash; since sizes came apart from the tile grid &mdash; how much floor
+     * the body occupies. A server simulating a default-sized body for a client
+     * predicting a giant disagrees about every wall between them.
+     */
+    public static String character(String key) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("t", "character");
+        m.put("ch", key == null ? "" : key);
+        return encode(m);
+    }
+
     public static String welcome(int id, int tickRate, GameProfile profile, String levelJson) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("t", "welcome");

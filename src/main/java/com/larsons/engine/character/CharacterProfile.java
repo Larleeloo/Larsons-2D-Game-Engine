@@ -1,5 +1,6 @@
 package com.larsons.engine.character;
 
+import com.larsons.engine.sim.ActorSize;
 import com.larsons.engine.sim.PlayerState;
 
 import java.awt.Color;
@@ -37,6 +38,20 @@ public class CharacterProfile {
     // with real sheets under character/<key>/<state>[/<facing>].
     public Color body = new Color(70, 130, 220);
     public Color accent = new Color(245, 210, 170);
+
+    /**
+     * How large this character is drawn, in blocks, and how much floor they
+     * occupy — independent numbers, both authored here rather than derived
+     * from the game type's tile size. See {@link ActorSize} for why they are
+     * two numbers and why blocks rather than pixels.
+     *
+     * <p>A creator bringing their own art sets {@link #spriteScale} until the
+     * character looks the size they drew them, and leaves {@link #hitboxScale}
+     * wherever the character should <em>fit</em> — a hero drawn three blocks
+     * tall still walks down a one-block corridor if their footprint says so.
+     */
+    public double spriteScale = ActorSize.DEFAULT_TILES;
+    public double hitboxScale = ActorSize.DEFAULT_TILES;
 
     // Movement traits.
     /** Walk/run speed multiplier. */
@@ -78,9 +93,24 @@ public class CharacterProfile {
     }
 
     /**
-     * Stamp this profile's traits onto a player's simulated state: pools are
-     * resized (and topped up), movement traits take effect on the next physics
-     * step, and the ultimate meter starts empty.
+     * Stamp this profile's traits onto a player's simulated state, sizing it
+     * against a {@code tileSize}-pixel grid.
+     *
+     * <p>Pools are resized (and topped up), movement traits take effect on the
+     * next physics step, the body takes its drawn and collided sizes, and the
+     * ultimate meter starts empty.
+     */
+    public void applyTo(PlayerState s, double tileSize) {
+        applyTo(s);
+        if (s == null) return;
+        s.spriteSize = ActorSize.pixels(spriteScale, tileSize);
+        s.hitSize = ActorSize.pixels(hitboxScale, tileSize);
+    }
+
+    /**
+     * Stamp everything but the sizes, for a caller with no grid to size
+     * against — the body keeps whatever sizes it already had, which for a
+     * fresh one means the game type's own.
      */
     public void applyTo(PlayerState s) {
         if (s == null) return;
@@ -111,6 +141,10 @@ public class CharacterProfile {
         m.put("name", name);
         m.put("body", hex(body));
         m.put("accent", hex(accent));
+        // Absent on a profile that never moved them, so a character written
+        // before sizes existed round-trips byte for byte.
+        if (spriteScale != ActorSize.DEFAULT_TILES) m.put("spriteScale", spriteScale);
+        if (hitboxScale != ActorSize.DEFAULT_TILES) m.put("hitboxScale", hitboxScale);
         m.put("speed", speed);
         m.put("sprint", sprintEnabled);
         m.put("airJumps", airJumps);
@@ -129,6 +163,8 @@ public class CharacterProfile {
         p.name = str(m.get("name"), p.name);
         p.body = color(m.get("body"), p.body);
         p.accent = color(m.get("accent"), p.accent);
+        p.spriteScale = dbl(m.get("spriteScale"), p.spriteScale);
+        p.hitboxScale = dbl(m.get("hitboxScale"), p.hitboxScale);
         p.speed = dbl(m.get("speed"), p.speed);
         p.sprintEnabled = bool(m.get("sprint"), p.sprintEnabled);
         p.airJumps = num(m.get("airJumps"), p.airJumps);
@@ -146,6 +182,8 @@ public class CharacterProfile {
     public void normalize() {
         if (key == null || key.isBlank()) key = DEFAULT_KEY;
         if (name == null || name.isBlank()) name = key;
+        spriteScale = ActorSize.clampTiles(spriteScale);
+        hitboxScale = ActorSize.clampTiles(hitboxScale);
         speed = clamp(speed, 0.25, 3.0);
         jumpHeight = clamp(jumpHeight, 0.25, 3.0);
         airJumps = (int) clamp(airJumps, 0, 8);
@@ -162,6 +200,13 @@ public class CharacterProfile {
     /** A one-line trait summary for menus and the palette tooltip. */
     public String summary() {
         StringBuilder sb = new StringBuilder();
+        if (spriteScale != ActorSize.DEFAULT_TILES || hitboxScale != ActorSize.DEFAULT_TILES) {
+            sb.append(ActorSize.label(spriteScale)).append(" tall");
+            if (hitboxScale != spriteScale) {
+                sb.append(" on ").append(ActorSize.label(hitboxScale)).append(" of floor");
+            }
+            sb.append(" · ");
+        }
         sb.append((int) Math.round(speed * 100)).append("% speed");
         sb.append(" · ").append((int) Math.round(maxHealth)).append(" hp");
         if (maxMana > 0) sb.append(" · ").append((int) Math.round(maxMana)).append(" mana");

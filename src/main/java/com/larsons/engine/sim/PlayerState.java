@@ -67,6 +67,31 @@ public final class PlayerState {
     /** Jump-velocity multiplier (side-scroll jumps and plan-view hops alike). */
     public double jumpFactor = 1.0;
 
+    /**
+     * How large this character is <em>drawn</em>, in world pixels — and, right
+     * below it, how much floor they actually occupy. Two numbers because they
+     * answer different questions: see {@link ActorSize}.
+     *
+     * <p>Zero means "whatever the game type says", which is what every body
+     * built before characters had sizes of their own holds, and what
+     * {@link #spriteSize(double)} resolves against the profile's default. The
+     * simulation reads {@link #hitSize(double)} and nothing else — a sprite
+     * cannot push anybody around — so a character can be redrawn at four times
+     * the size without a single collision changing.
+     */
+    public double spriteSize;
+    public double hitSize;
+
+    /** {@link #spriteSize}, falling back to the game type's player size. */
+    public double spriteSize(double profileSize) {
+        return spriteSize > 0 ? spriteSize : profileSize;
+    }
+
+    /** {@link #hitSize}, falling back to the game type's player size. */
+    public double hitSize(double profileSize) {
+        return hitSize > 0 ? hitSize : profileSize;
+    }
+
     // --- ultimate ability (simulation-side; see character.Ultimates) --------------
     /** The ability this character brings ({@code ""} = none). */
     public String ultimateKey = "";

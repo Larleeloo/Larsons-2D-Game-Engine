@@ -71,6 +71,7 @@ import com.larsons.engine.net.GameClient;
 import com.larsons.engine.net.NetSession;
 import com.larsons.engine.net.Snapshot;
 import com.larsons.engine.scene.AbstractScene;
+import com.larsons.engine.sim.ActorSize;
 import com.larsons.engine.sim.PerspectiveSpace;
 import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerPhysics;
@@ -426,9 +427,14 @@ public class PlayScene extends AbstractScene {
     /** Make {@code p} the character being played: traits, pools, and sprite. */
     private void applyCharacter(CharacterProfile p) {
         character = p == null ? CharacterProfile.defaultProfile() : p;
-        character.applyTo(me);
+        character.applyTo(me, level.tileSize);
         ctx.setCharacter(character.key);
         prevHealth = me.health;
+        // Online, the server has to simulate the body this client is
+        // predicting. It cannot know which character that is until the level's
+        // roster has come down and the player has chosen from it, which is
+        // here — so this is where it is told.
+        if (net != null) net.client().sendCharacter(character.key);
     }
 
     /**
@@ -601,7 +607,7 @@ public class PlayScene extends AbstractScene {
                 world.dismount(me);
                 vehicleSound(left, "dismount");
             } else if (!tryDoorTravel(p) && !tryOpenStation(p)) {
-                Vehicle mountable = world.mountableNear(me.x + ps() / 2, me.y + ps() / 2);
+                Vehicle mountable = world.mountableNear(me.x + hitSize() / 2, me.y + hitSize() / 2);
                 if (mountable != null && world.mount(me, mountable.id, p)) {
                     vehicleSound(mountable, "mount");
                 }
@@ -827,7 +833,7 @@ public class PlayScene extends AbstractScene {
         if (swingTime > 0) swingTime -= dt;
         if (p.particlesEnabled) particles.update(dt);
 
-        double size = ps();
+        double size = hitSize();
         // On the simulation's own position, and render() moves it again onto the
         // interpolated one. Both are wanted: everything in update() that maps
         // between the screen and the world — a mining click, a placed block, the
@@ -895,7 +901,7 @@ public class PlayScene extends AbstractScene {
      * one game.
      */
     private boolean tryDoorTravel(GameProfile p) {
-        double half = p.playerSize / 2.0;
+        double half = hitSize() / 2.0;
         Level.EntitySpawn door = level.doorNear(me.x + half, me.y + half, ts() * 1.3);
         if (door == null) return false;
         DoorLink link = doors.get(door.type);
@@ -945,8 +951,8 @@ public class PlayScene extends AbstractScene {
      */
     private boolean tryOpenStation(GameProfile p) {
         double ts = ts();
-        int pc = (int) Math.floor((me.x + p.playerSize / 2.0) / ts);
-        int pr = (int) Math.floor((me.y + p.playerSize / 2.0) / ts);
+        int pc = (int) Math.floor((me.x + hitSize() / 2.0) / ts);
+        int pr = (int) Math.floor((me.y + hitSize() / 2.0) / ts);
         for (int dr = -1; dr <= 1; dr++) {
             for (int dc = -2; dc <= 2; dc++) {
                 Block b = level.blockAt(pc + dc, pr + dr);
@@ -985,7 +991,7 @@ public class PlayScene extends AbstractScene {
     private EntityView nearestSnapshotVehicle(Snapshot snap) {
         EntityView best = null;
         double bestD = World.MOUNT_RANGE;
-        double half = ps() / 2;
+        double half = hitSize() / 2;
         for (EntityView v : snap.vehicles()) {
             if (v.rider >= 0) continue;
             VehicleDef def = VehicleRegistry.standard().get(v.key);
@@ -1181,7 +1187,7 @@ public class PlayScene extends AbstractScene {
         double ts = ts();
         int col = (int) Math.floor(aim[0] / ts);
         int row = (int) Math.floor(aim[1] / ts);
-        boolean inReach = Math.hypot(aim[0] - (me.x + ps() / 2), aim[1] - (me.y + ps() / 2))
+        boolean inReach = Math.hypot(aim[0] - (me.x + hitSize() / 2), aim[1] - (me.y + hitSize() / 2))
                 <= REACH_TILES * ts;
 
         ItemDef held = p.itemsEnabled ? inventory.selectedDef() : null;
@@ -1328,7 +1334,7 @@ public class PlayScene extends AbstractScene {
         // step above collided with, which on a plane is the ground under the
         // feet: measured on the body box instead, a plan-view player could
         // never build on the cell their sprite's head reaches into.
-        boolean overlapsMe = PlayerPhysics.standingIn(level, me.x, me.y, ps(),
+        boolean overlapsMe = PlayerPhysics.standingIn(level, me.x, me.y, hitSize(),
                 PerspectiveSpace.of(simPerspective()), col, row);
         boolean wouldClose = b.solid()
                 && (!level.layered() || layer == Level.LAYER_UPPER);
@@ -1487,7 +1493,7 @@ public class PlayScene extends AbstractScene {
             if (stance == MeleeAction.PARRY) stats.add("parries", 1);
             else stats.add("blocks", 1);
             if (p.particlesEnabled) {
-                particles.burst(me.x + ps() / 2, me.y + ps() / 2,
+                particles.burst(me.x + hitSize() / 2, me.y + hitSize() / 2,
                         new Color(230, 240, 255), 8);
             }
         }
@@ -1872,7 +1878,7 @@ public class PlayScene extends AbstractScene {
             predictedVehicle.x += ex * k;
             predictedVehicle.y += ey * k;
         }
-        predictedVehicle.seat(me, p.playerSize);
+        predictedVehicle.seat(me, hitSize());
         return true;
     }
 
@@ -2040,7 +2046,7 @@ public class PlayScene extends AbstractScene {
         // the accumulator hands out. A running cutscene owns the camera and is
         // left alone: its director drives it from a timeline of its own.
         if (cutscenes == null || cutscenes.active() == null) {
-            double size = ps();
+            double size = hitSize();
             camera.centerOn(drawX() + size / 2.0, drawY() + size / 2.0);
         }
         feedLighting(p);
@@ -2075,8 +2081,8 @@ public class PlayScene extends AbstractScene {
         if (mgView != null) MiniGameHud.drawWorld(target, camera, level, mgView, animClock);
         if (net != null) drawRemotePlayers(target, standing);
         if (mgView != null) {
-            MiniGameHud.drawTeamRing(target, camera, drawX() + ps() / 2, drawY() + ps(),
-                    ps(), mgView.teamOf(me.id), camera.zoom);
+            MiniGameHud.drawTeamRing(target, camera, drawX() + hitSize() / 2, drawY() + hitSize(),
+                    drawSize(), mgView.teamOf(me.id), camera.zoom);
         }
         // The local player, wearing whatever the object in their hands says
         // they should look like while doing this (see MeleeSprites), with the
@@ -2085,11 +2091,11 @@ public class PlayScene extends AbstractScene {
         // each other by the step the interpolation is spanning.
         double meX = drawX(), meY = drawY(), meZ = drawZ();
         standingAt(standing, meX, meY, () -> {
-            drawPlayer(target, meX, meY, meZ, MeleeSprites.playerFrame(
+            drawPlayer(target, meX, meY, meZ, hitSize(), drawSize(), MeleeSprites.playerFrame(
                     me.characterKey, meleeItem, animState, seen(me.facing), animStateClock,
-                    melee.progress(), (int) ps(), character.body), null);
-            drawHeldObject(target, meX, meY, meZ, ps(), seen(me.facing), meleeItem,
-                    melee.action(), melee.progress(), meleeProfile(p));
+                    melee.progress(), (int) drawSize(), character.body), null);
+            drawHeldObject(target, meX, meY, meZ, hitSize(), drawSize(), seen(me.facing),
+                    meleeItem, melee.action(), melee.progress(), meleeProfile(p));
         });
         // The depth queue is where the plan views actually pay: everything
         // standing on the floor was deferred to here, sorted, and drawn.
@@ -2290,7 +2296,7 @@ public class PlayScene extends AbstractScene {
             }
         }
         // Player glow.
-        camera.worldToScreen(drawX() + ps() / 2, drawY() + ps() / 2, corner);
+        camera.worldToScreen(drawX() + hitSize() / 2, drawY() + hitSize() / 2, corner);
         lighting.addLight(corner[0], corner[1], 2.5 * ts * camera.zoom,
                 new Color(255, 240, 210));
     }
@@ -2584,7 +2590,7 @@ public class PlayScene extends AbstractScene {
 
     /** {@link #standingAt} for a player-sized body. */
     private void standingAt(DepthPass into, double x, double y, Runnable sprite) {
-        standingAt(into, x, y, ps(), sprite);
+        standingAt(into, x, y, hitSize(), sprite);
     }
 
     /** Painted doors: tinted door shapes anchored at their base. */
@@ -2607,7 +2613,7 @@ public class PlayScene extends AbstractScene {
 
     /** "[E] Enter …" prompt while standing at a linked door. */
     private void drawDoorHint(DrawTarget target, GameProfile p) {
-        double half = p.playerSize / 2.0;
+        double half = hitSize() / 2.0;
         Level.EntitySpawn door = level.doorNear(me.x + half, me.y + half, ts() * 1.3);
         if (door == null) return;
         DoorLink link = doors.get(door.type);
@@ -2632,7 +2638,7 @@ public class PlayScene extends AbstractScene {
                             + (v.def.projectile() != null ? " · click fires" : "");
                 }
             } else {
-                Vehicle near = world.mountableNear(me.x + ps() / 2, me.y + ps() / 2);
+                Vehicle near = world.mountableNear(me.x + hitSize() / 2, me.y + hitSize() / 2);
                 if (near != null) {
                     text = "[" + KeyBinds.label(GameAction.INTERACT) + "] Ride "
                             + near.def.name();
@@ -2893,14 +2899,16 @@ public class PlayScene extends AbstractScene {
             img = EntitySprites.mob(def, 32, dir);
             mirror = false;
         }
+        // Drawn at its own size, standing on the floor its footprint covers —
+        // the same two answers a player's sprite is drawn from.
         int w = (int) Math.round(def.size() * camera.zoom);
-        camera.worldToScreen(x + def.size() / 2, y + def.size(), corner);
+        camera.worldToScreen(x + def.hitbox() / 2, y + def.hitbox(), corner);
         int dx = corner[0] - w / 2;
         int dy = corner[1] - w;
         if (mirror) target.drawImage(img, dx + w, dy, -w, w);
         else target.drawImage(img, dx, dy, w, w);
         // Whatever it fights with, drawn in its hands and swept by the move.
-        drawHeldObject(target, x, y, 0, def.size(), dir, weapon,
+        drawHeldObject(target, x, y, 0, def.hitbox(), def.size(), dir, weapon,
                 move, moveProgress, MeleeProfiles.ofKey(weapon));
         if (hurt) target.fillRect(dx, dy, w, w, HURT_TINT);
         // Elemental status tints (replicated bits, so online matches offline).
@@ -2961,9 +2969,8 @@ public class PlayScene extends AbstractScene {
 
     /** A short arc in front of the player while a mining or firing stroke plays. */
     private void drawSwing(DrawTarget target) {
-        double size = ps();
-        camera.worldToScreen(drawX() + size / 2, drawY() + size / 2, corner);
-        int r = (int) (size * camera.zoom * 0.9);
+        camera.worldToScreen(drawX() + hitSize() / 2, drawY() + hitSize() / 2, corner);
+        int r = (int) (drawSize() * camera.zoom * 0.9);
         int start = me.facingLeft ? 120 : -60;
         target.drawArc(corner[0] - r, corner[1] - r, r * 2, r * 2, start, 120,
                 new Color(255, 255, 255, (int) (150 * Math.max(0, swingTime / 0.2))), 3f);
@@ -2997,8 +3004,7 @@ public class PlayScene extends AbstractScene {
     }
 
     private void drawMeleeArc(DrawTarget target, MeleeProfile profile) {
-        double size = ps();
-        camera.worldToScreen(drawX() + size / 2, drawY() + size / 2, corner);
+        camera.worldToScreen(drawX() + hitSize() / 2, drawY() + hitSize() / 2, corner);
         int r = (int) Math.round(profile.reach() * camera.zoom);
         MeleeAction action = melee.action();
         double t = melee.progress();
@@ -3045,7 +3051,8 @@ public class PlayScene extends AbstractScene {
      * angled comes from {@link MeleeSprites#hold}, shared with every other
      * scene that draws a fighter.
      */
-    private void drawHeldObject(DrawTarget target, double x, double y, double z, double size,
+    private void drawHeldObject(DrawTarget target, double x, double y, double z,
+                                double hit, double draw,
                                 Facing facing, String itemKey, MeleeAction action,
                                 double progress, MeleeProfile profile) {
         if (itemKey == null || itemKey.isEmpty()) return;
@@ -3057,15 +3064,18 @@ public class PlayScene extends AbstractScene {
             img = EntitySprites.item(def, 16);
         }
         MeleeSprites.Hold hold = MeleeSprites.hold(action, profile, progress);
-        int w = Math.max(6, (int) Math.round(size * hold.scale() * camera.zoom * 0.7));
+        // Sized and placed against the sprite — an object is held by the
+        // character you can see, not by the patch of floor they stand on — but
+        // anchored where they stand, so hand and feet belong to one body.
+        int w = Math.max(6, (int) Math.round(draw * hold.scale() * camera.zoom * 0.7));
         Facing dir = facing == null ? Facing.EAST : facing;
         int flip = dir.facingLeft() ? -1 : 1;
-        int footX = camera.worldToScreenX(x + size / 2.0, y + size);
-        int footY = camera.worldToScreenY(x + size / 2.0, y + size);
+        int footX = camera.worldToScreenX(x + hit / 2.0, y + hit);
+        int footY = camera.worldToScreenY(x + hit / 2.0, y + hit);
         int lift = (int) Math.round(z * camera.zoom * PlayerPhysics.HOP_DRAW_SCALE);
-        double cx = footX + flip * hold.offsetX() * size * camera.zoom;
-        double cy = footY - size * camera.zoom * 0.5 - lift
-                + hold.offsetY() * size * camera.zoom;
+        double cx = footX + flip * hold.offsetX() * draw * camera.zoom;
+        double cy = footY - draw * camera.zoom * 0.5 - lift
+                + hold.offsetY() * draw * camera.zoom;
 
         // Rotate about the grip rather than the image's corner: the held item
         // swings with the hand, so the pivot is the hand.
@@ -3087,31 +3097,35 @@ public class PlayScene extends AbstractScene {
         Snapshot from = pair[0], to = pair[1];
         double t = interpFactor(from, to, renderTime);
 
-        double size = ps();
         for (PlayerState ps : to.players()) {
             if (ps.id == me.id) continue;
             PlayerState old = from.player(ps.id);
             double x = old != null ? old.x + (ps.x - old.x) * t : ps.x;
             double y = old != null ? old.y + (ps.y - old.y) * t : ps.y;
-            if (mgView != null) {
-                MiniGameHud.drawTeamRing(target, camera, x + size / 2, y + size,
-                        size, mgView.teamOf(ps.id), camera.zoom);
-            }
             // Remote players wear their own character's skin, hold their own
             // weapon, and face their own direction — all of it rides along in
             // the snapshot, so a swing looks like a swing from across the map.
+            // Their size comes the same way: the character store is part of
+            // the game type both ends loaded, so a giant is a giant on every
+            // screen without a byte of it going over the wire.
             CharacterProfile theirs = Characters.getOrDefault(ps.characterKey);
+            double hit = ActorSize.pixels(theirs.hitboxScale, ts());
+            double draw = ActorSize.pixels(theirs.spriteScale, ts());
+            if (mgView != null) {
+                MiniGameHud.drawTeamRing(target, camera, x + hit / 2, y + hit,
+                        draw, mgView.teamOf(ps.id), camera.zoom);
+            }
             Color body = remoteBody(ps.id, theirs);
             String state = ps.meleeAction.isEmpty()
                     ? (ps.moving ? "walk" : "idle") : ps.meleeAction;
             PlayerSprites.Frame sprite = MeleeSprites.playerFrame(
                     ps.characterKey, ps.heldKey, state, seen(ps.facing),
-                    animClock, ps.meleeProgress, (int) size, body);
+                    animClock, ps.meleeProgress, (int) draw, body);
             MeleeAction move = MeleeAction.byKey(ps.meleeAction);
-            standingAt(into, x, y, () -> {
-                drawPlayer(target, x, y, ps.z, sprite, ps.name);
-                drawHeldObject(target, x, y, ps.z, size, seen(ps.facing), ps.heldKey, move,
-                        ps.meleeProgress, MeleeProfiles.ofKey(ps.heldKey));
+            standingAt(into, x, y, hit, () -> {
+                drawPlayer(target, x, y, ps.z, hit, draw, sprite, ps.name);
+                drawHeldObject(target, x, y, ps.z, hit, draw, seen(ps.facing), ps.heldKey,
+                        move, ps.meleeProgress, MeleeProfiles.ofKey(ps.heldKey));
             });
         }
     }
@@ -3146,19 +3160,26 @@ public class PlayScene extends AbstractScene {
      * in for a westward facing.
      */
     private void drawPlayer(DrawTarget target, double x, double y, double z,
+                            double hit, double draw,
                             PlayerSprites.Frame sprite, String nameTag) {
         if (sprite == null || sprite.image() == null) return;
-        double size = ps();
-        int w = (int) Math.round(size * camera.zoom);
+        // The billboard stands on the hitbox's base line and is drawn at its
+        // own size around it: where a character stands and how large they are
+        // drawn are separate answers (see ActorSize), and this is the one place
+        // the two meet.
+        int w = (int) Math.round(draw * camera.zoom);
         int h = w;
-        int footX = camera.worldToScreenX(x + size / 2.0, y + size);
-        int footY = camera.worldToScreenY(x + size / 2.0, y + size);
+        int footX = camera.worldToScreenX(x + hit / 2.0, y + hit);
+        int footY = camera.worldToScreenY(x + hit / 2.0, y + hit);
         int dx = footX - w / 2;
         int lift = (int) Math.round(z * camera.zoom * PlayerPhysics.HOP_DRAW_SCALE);
         if (lift > 0) {
-            // The shadow marks where they will land, shrinking with height.
-            double shrink = Math.max(0.35, 1 - z / (size * 3));
-            int sw = (int) (w * 0.7 * shrink), sh = Math.max(2, (int) (w * 0.25 * shrink));
+            // The shadow marks where they will land, shrinking with height. It
+            // is cast by the body rather than the sprite: a shadow is the floor
+            // they occupy, so a giant with small feet throws a small one.
+            int foot = (int) Math.round(hit * camera.zoom);
+            double shrink = Math.max(0.35, 1 - z / (draw * 3));
+            int sw = (int) (foot * 0.7 * shrink), sh = Math.max(2, (int) (foot * 0.25 * shrink));
             target.fillOval(footX - sw / 2, footY - sh / 2, sw, sh,
                     new Color(0, 0, 0, (int) (90 * shrink)));
         }
@@ -3372,7 +3393,22 @@ public class PlayScene extends AbstractScene {
 
     private double ts() { return level.tileSize; }
 
-    private double ps() { return profile().playerSize; }
+    /**
+     * How much floor the local player occupies, world pixels — what collides,
+     * what the camera follows, and what everything measuring <em>where they
+     * are</em> anchors on.
+     */
+    private double hitSize() { return me.hitSize(profile().playerSize); }
+
+    /**
+     * How large the local player is <em>drawn</em>, world pixels.
+     *
+     * <p>Deliberately not the same accessor as {@link #hitSize()}: they were
+     * one number, and one number is what a call site could quietly get wrong
+     * once they came apart. Splitting them means the compiler asked about
+     * every use rather than letting the old name keep answering.
+     */
+    private double drawSize() { return me.spriteSize(profile().playerSize); }
 
     /**
      * The space the player's own body is simulated in.
