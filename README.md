@@ -848,6 +848,21 @@ Walking north behind a wall puts the wall in front of you; walking south past
 it puts you in front of the wall — the same rule that already decided whether
 you pass in front of a tree.
 
+**Depth is which cell you are on, not where on it you are standing.** That
+distinction is the whole of it in isometric, where the screen row folds in both
+world axes: a cell and its *diagonal* neighbour sit at the same depth, side by
+side on screen, and an actor standing on one could score a pixel less than the
+block standing on the other. Sprites are billboards wider than the diamond of
+floor they stand on, so that one pixel was the difference between a player
+pressed against a wall and a player with a fifth of themselves — and whatever
+they were holding — eaten by the block beside them, appearing and vanishing as
+they walked along the wall. So cells are compared first and where-on-the-cell
+only settles ties: a block covers you when your cell is behind its, never
+because of where on your own cell you happen to stand, and a block sorts behind
+every actor at its own depth because a wall is something to stand against. Ties
+still sort exactly, so you still pass behind a tree and then in front of it as
+you walk past its trunk.
+
 **What collides with a wall is the ground under your feet**, not the whole
 body box — on a plane, and only there. Edge-on, the box *is* the character and
 all of it sweeps. On a plane the box is a patch of floor and the character is a

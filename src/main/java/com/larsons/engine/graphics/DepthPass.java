@@ -26,8 +26,44 @@ import java.util.List;
  * down the screen is toward the viewer in the side view and in top-down, and
  * it is the {@code col + row} diagonal once the isometric camera has folded
  * both world axes into it.
+ *
+ * <p><b>Depth is two numbers, because the floor is made of tiles and the
+ * actors are not.</b> The primary is the row of the <em>tile</em> a thing
+ * stands on, and it is what decides the order; {@link #at(int, int, Runnable)}
+ * takes a second row — where on that tile the thing actually is — which only
+ * breaks ties among the things sharing a tile's depth.
+ *
+ * <p>One number was enough while the only question was "who is further down
+ * the screen", and it stays enough in top-down, where the screen row of a
+ * point depends on world y alone: a tile's own row separates the row behind it
+ * from the row in front by a clear tile, and any point inside the near row
+ * beats it. Isometric folds both world axes into that number, and the
+ * separation closes to nothing: a tile and its diagonal neighbour sit at the
+ * <em>same</em> depth, side by side on screen, and an actor standing on one of
+ * them can score a pixel less than the block standing on the other. Their
+ * sprites overlap — an actor's billboard is wider than the diamond it stands
+ * on — so that one pixel is the difference between a player pressed against a
+ * wall and a player with a fifth of themselves, and the object in their hand,
+ * eaten by the block beside them.
+ *
+ * <p>Comparing the tiles first is what a plan view means by depth: a block
+ * covers an actor when the actor's tile is behind the block's, and never
+ * because of where on their own tile they happen to be standing. Ties among
+ * the things on one tile still sort exactly, so a player still passes behind a
+ * tree and then in front of it as they walk past its trunk.
  */
 public final class DepthPass {
+
+    /**
+     * The secondary depth of the floor's own geometry — behind everything else
+     * standing at the same depth.
+     *
+     * <p>A raised block is not <em>on</em> a tile, it <em>is</em> one, so there
+     * is no "where on the tile" for it to be. Sorting it under every actor at
+     * its own depth is the rule the plan views want: a wall covers you when you
+     * are behind it, and an actor beside it is in front of it.
+     */
+    public static final int TERRAIN = Integer.MIN_VALUE;
 
     private final List<Entry> queue;
 
@@ -61,14 +97,25 @@ public final class DepthPass {
 
     /**
      * Draw {@code sprite} at the depth its feet landed on — now, or when the
-     * pass is flushed.
+     * pass is flushed. For callers with nothing standing on a tile to
+     * distinguish: the one row serves as both keys.
      */
     public void at(int depth, Runnable sprite) {
+        at(depth, depth, sprite);
+    }
+
+    /**
+     * Draw {@code sprite} at {@code depth} — the row of the tile its feet are
+     * on — breaking ties against everything else at that depth on
+     * {@code within}, the row the feet themselves landed on. Pass
+     * {@link #TERRAIN} for the floor's own geometry.
+     */
+    public void at(int depth, int within, Runnable sprite) {
         if (queue == null) {
             sprite.run();
             return;
         }
-        queue.add(new Entry(depth, queue.size(), sprite));
+        queue.add(new Entry(depth, within, queue.size(), sprite));
     }
 
     /** Draw everything queued, back to front, and empty the queue. */
@@ -76,10 +123,12 @@ public final class DepthPass {
         if (queue == null || queue.isEmpty()) return;
         // Ties keep the order they arrived in, so a sprite drawn as several
         // pieces (a mob and its health bar) never comes apart.
-        queue.sort(Comparator.comparingInt(Entry::depth).thenComparingInt(Entry::seq));
+        queue.sort(Comparator.comparingInt(Entry::depth)
+                .thenComparingInt(Entry::within)
+                .thenComparingInt(Entry::seq));
         for (Entry e : queue) e.sprite().run();
         queue.clear();
     }
 
-    private record Entry(int depth, int seq, Runnable sprite) {}
+    private record Entry(int depth, int within, int seq, Runnable sprite) {}
 }

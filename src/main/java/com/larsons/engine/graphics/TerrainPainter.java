@@ -28,11 +28,13 @@ import java.util.Map;
  * <p><b>Layers and depth.</b> The floor goes down first, in one flat pass —
  * it is the ground everything else stands on and can never be in front of
  * anything. Raised blocks are not a layer at all: they join the {@link DepthPass}
- * that the trees, mobs, dropped items and players share, queued at the screen
- * row of their base, so who is in front of whom is settled by where each thing
- * stands. Walking north behind a wall puts the wall in front of you; walking
- * south past it puts you in front of the wall — the same rule that already
- * decided whether you pass in front of a tree.
+ * that the trees, mobs, dropped items and players share, queued at the depth of
+ * the cell they stand on ({@link #tileDepth}), so who is in front of whom is
+ * settled by where each thing stands. Walking north behind a wall puts the wall
+ * in front of you; walking south past it puts you in front of the wall — the
+ * same rule that already decided whether you pass in front of a tree. A block
+ * is queued {@link DepthPass#TERRAIN behind} everything else at its own depth,
+ * because a wall is something to stand against and not something to be inside.
  *
  * <p><b>Faces.</b> A plan view looks at faces a side-scroller never shows, so
  * blocks have their own texture pools for them ({@link TextureKeys#BLOCKS_TOP},
@@ -72,6 +74,46 @@ public final class TerrainPainter {
     public static int liftPixels(Camera camera, int tileSize) {
         return (int) Math.round(tileSize * BLOCK_HEIGHT * camera.zoom
                 * PerspectiveSpace.of(camera.getPerspective()).screenLift());
+    }
+
+    /**
+     * The depth a cell is sorted at: the screen row of its centre.
+     *
+     * <p>The primary key of everything sharing a plan view's {@link DepthPass}
+     * — a raised block's own, and the cell an actor is standing on. It is
+     * public because those two have to be the <em>same number</em> for the same
+     * cell: what orders a plan view is which cell a thing is on, and a second
+     * copy of this line elsewhere is a bug waiting for a projection to change
+     * under it. {@link DepthPass} carries the argument for comparing cells at
+     * all.
+     *
+     * <p><b>Why the centre.</b> Between one cell and another the offset inside
+     * the cell cancels — any point taken the same way for every cell puts them
+     * in the same order — so this is not what fixes the ordering. What it fixes
+     * is the comparison against a caller that hands {@link DepthPass#at(int,
+     * Runnable)} a plain screen row, knowing nothing about cells: that number
+     * lands somewhere inside a cell, and the stand-in wants to be as far from
+     * both edges as it can. Write {@code f} for the screen row of a floor point
+     * — linear, whatever the projection or heading. A cell's key has to sit
+     * above {@code f} of every point on the cells behind it and below {@code f}
+     * of every point on the cells in front, and those two bounds are symmetric
+     * about {@code f} of the cell's centre. In top-down the window between them
+     * is a whole tile deep, so the middle of the cell's southern edge — what
+     * this used to be — sat exactly on its rim and survived anyway. In
+     * isometric, which folds both world axes into the screen row, the window
+     * closes to a single value, and the centre is it.
+     */
+    public static int tileDepth(Camera camera, int tileSize, int col, int row) {
+        return camera.worldToScreenY((col + 0.5) * tileSize, (row + 0.5) * tileSize);
+    }
+
+    /**
+     * The depth of a body whose feet are at ({@code footX}, {@code footY}) —
+     * {@link #tileDepth} of the cell it is standing on.
+     */
+    public static int standingDepth(Camera camera, int tileSize, double footX, double footY) {
+        return tileDepth(camera, tileSize,
+                (int) Math.floor(footX / tileSize), (int) Math.floor(footY / tileSize));
     }
 
     /**
@@ -341,7 +383,7 @@ public final class TerrainPainter {
             // part drawn on top. Blocks nearer the viewer still cover them,
             // which is right: they are in front of the block being mined.
             if (mining != null && mining.progress() > 0.01) {
-                raisedPass.at(baseDepth(mining.col(), mining.row()), () ->
+                raisedPass.at(baseDepth(mining.col(), mining.row()), DepthPass.TERRAIN, () ->
                         drawMiningCracks(target, camera, level, mining.col(), mining.row(),
                                 mining.progress()));
             }
@@ -432,12 +474,9 @@ public final class TerrainPainter {
             }
         }
 
-        /**
-         * The screen row a cell's base sits on — what everything standing on
-         * the floor there is sorted by, sprites included.
-         */
+        /** {@link TerrainPainter#tileDepth} against this pass's camera. */
         private int baseDepth(int col, int row) {
-            return camera.worldToScreenY((col + 0.5) * tileSize, (row + 1.0) * tileSize);
+            return tileDepth(camera, tileSize, col, row);
         }
 
         /** The flat floor tile — the top face of the block lying in the ground layer. */
@@ -486,7 +525,8 @@ public final class TerrainPainter {
                     project(c, r);
                     if (offScreen()) continue;
                     int col = c, row = r;
-                    raisedPass.at(baseDepth(col, row), () -> drawRaised(col, row, block));
+                    raisedPass.at(baseDepth(col, row), DepthPass.TERRAIN,
+                            () -> drawRaised(col, row, block));
                 }
             }
         }

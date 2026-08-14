@@ -75,7 +75,10 @@ public final class SurfaceDecorPainter {
             if (def == null) continue;
             FaceFrame frame = FaceFrame.of(level, camera, space, p);
             if (frame == null) continue; // sub-pixel at extreme zoom-out
-            into.at(frame.py, () -> drawOne(target, frame, p, def, animClock));
+            // Surface decor belongs to the block it is stuck to, so it sorts on
+            // that cell and settles ties on the face's own row.
+            into.at(TerrainPainter.tileDepth(camera, level.tileSize, p.col(), p.row()),
+                    frame.py, () -> drawOne(target, frame, p, def, animClock));
         }
     }
 

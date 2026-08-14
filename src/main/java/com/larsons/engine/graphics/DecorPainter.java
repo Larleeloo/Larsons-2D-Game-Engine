@@ -71,7 +71,7 @@ public final class DecorPainter {
     public static void draw(DrawTarget target, Level level, Camera camera,
                             boolean foreground, double animClock, DepthPass into) {
         for (Placed p : collect(level, camera, foreground, animClock)) {
-            into.at(p.depth(), () ->
+            into.at(p.tile(), p.depth(), () ->
                     target.drawImage(p.sprite(), p.x(), p.y(), p.size(), p.size()));
         }
     }
@@ -97,11 +97,20 @@ public final class DecorPainter {
                     || y + size < 0 || y > camera.viewportHeight) continue;
             BufferedImage sprite = Skins.frame("decor/" + e.type, animClock);
             if (sprite == null) sprite = EntitySprites.decor(def, SPRITE_PX);
-            batch.add(new Placed(sprite, x, y, size, anchor[1]));
+            batch.add(new Placed(sprite, x, y, size,
+                    TerrainPainter.standingDepth(camera, level.tileSize, e.x, e.y),
+                    anchor[1]));
         }
         return batch;
     }
 
-    /** One projected decoration; {@code depth} is where its feet landed. */
-    private record Placed(BufferedImage sprite, int x, int y, int size, int depth) {}
+    /**
+     * One projected decoration. A tree stands on the floor like an actor does,
+     * so it is sorted the same way: {@code tile} is the cell it is planted in
+     * and decides the order, {@code depth} is where its trunk meets the ground
+     * and settles ties with whoever else is on that cell — which is what makes
+     * a player pass behind a tree and then in front of it.
+     */
+    private record Placed(BufferedImage sprite, int x, int y, int size,
+                          int tile, int depth) {}
 }

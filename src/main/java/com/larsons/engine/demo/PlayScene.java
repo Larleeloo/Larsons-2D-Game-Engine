@@ -2084,7 +2084,7 @@ public class PlayScene extends AbstractScene {
         // position the camera was centred on, so the two cannot drift against
         // each other by the step the interpolation is spanning.
         double meX = drawX(), meY = drawY(), meZ = drawZ();
-        standing.at(footDepth(meX, meY), () -> {
+        standingAt(standing, meX, meY, () -> {
             drawPlayer(target, meX, meY, meZ, MeleeSprites.playerFrame(
                     me.characterKey, meleeItem, animState, seen(me.facing), animStateClock,
                     melee.progress(), (int) ps(), character.body), null);
@@ -2554,7 +2554,7 @@ public class PlayScene extends AbstractScene {
 
     /**
      * The screen row a body standing at this world point puts its feet on —
-     * what everything sharing a {@link DepthPass} is ordered by. {@code x,y}
+     * the tie-breaker among everything sharing one tile's depth. {@code x,y}
      * is a sprite's top-left corner and {@code size} its world extent, the
      * way the level stores entities.
      */
@@ -2562,9 +2562,29 @@ public class PlayScene extends AbstractScene {
         return camera.worldToScreenY(x + size / 2, y + size);
     }
 
-    /** {@link #footDepth} for a player-sized body. */
-    private int footDepth(double x, double y) {
-        return footDepth(x, y, ps());
+    /**
+     * The depth of the tile those feet are on — what a
+     * {@link DepthPass} orders by, and what a raised block is measured on
+     * ({@link TerrainPainter#tileDepth}).
+     */
+    private int standDepth(double x, double y, double size) {
+        return TerrainPainter.standingDepth(camera, level.tileSize, x + size / 2, y + size);
+    }
+
+    /**
+     * Queue {@code sprite} where a body of {@code size} at (x,y) is standing.
+     *
+     * <p>Every actor on the floor goes through here, so the two halves of a
+     * plan view's depth — which tile you are on, and where on it — are decided
+     * in one place rather than at twenty call sites.
+     */
+    private void standingAt(DepthPass into, double x, double y, double size, Runnable sprite) {
+        into.at(standDepth(x, y, size), footDepth(x, y, size), sprite);
+    }
+
+    /** {@link #standingAt} for a player-sized body. */
+    private void standingAt(DepthPass into, double x, double y, Runnable sprite) {
+        standingAt(into, x, y, ps(), sprite);
     }
 
     /** Painted doors: tinted door shapes anchored at their base. */
@@ -2677,12 +2697,12 @@ public class PlayScene extends AbstractScene {
             double a = renderAlpha;
             for (Vehicle v : world.vehicles()) {
                 double vx = v.renderX(a), vy = v.renderY(a);
-                into.at(footDepth(vx, vy, v.def.size()), () ->
+                standingAt(into, vx, vy, v.def.size(), () ->
                         drawVehicleSprite(target, v.def, vx, vy, v.facingLeft));
             }
             for (DroppedItem item : world.items()) {
                 double ix = item.renderX(a), iy = item.renderY(a);
-                into.at(footDepth(ix, iy, DroppedItem.SIZE), () ->
+                standingAt(into, ix, iy, DroppedItem.SIZE, () ->
                         drawItemSprite(target, item.key, ix, iy, item.count));
             }
             for (Mob m : world.mobs()) {
@@ -2690,14 +2710,14 @@ public class PlayScene extends AbstractScene {
                 String state = m.meleeAction().isEmpty()
                         ? stateKeyFor(m.state.ordinal(), m.hurting()) : m.meleeAction();
                 double mx = m.renderX(a), my = m.renderY(a);
-                into.at(footDepth(mx, my, m.def.size()), () ->
+                standingAt(into, mx, my, m.def.size(), () ->
                         drawMobSprite(target, m.def, mx, my, m.facing, m.health, m.hurting(),
                                 state, m.statusBits(), m.weaponKey(),
                                 m.melee.action(), m.meleeProgress()));
             }
             for (Projectile pr : world.projectiles()) {
                 double px = pr.renderX(a), py = pr.renderY(a), pz = pr.renderZ(a);
-                into.at(footDepth(px, py, 0), () ->
+                standingAt(into, px, py, 0, () ->
                         drawProjectileSprite(target, pr.def.key(), px, py, pz, pr.vx, pr.vy));
             }
         } else {
@@ -2719,7 +2739,7 @@ public class PlayScene extends AbstractScene {
                 VehicleDef def = vehicles.get(v.key);
                 if (def != null) {
                     double vx = lerpX(old.get(v.id), v, t), vy = lerpY(old.get(v.id), v, t);
-                    into.at(footDepth(vx, vy, def.size()), () ->
+                    standingAt(into, vx, vy, def.size(), () ->
                             drawVehicleSprite(target, def, vx, vy, v.facingLeft));
                 }
             }
@@ -2729,14 +2749,14 @@ public class PlayScene extends AbstractScene {
                 // same alpha as that player, for the same reason.
                 Vehicle mount = predictedVehicle;
                 double mx = mount.renderX(renderAlpha), my = mount.renderY(renderAlpha);
-                into.at(footDepth(mx, my, mount.def.size()), () ->
+                standingAt(into, mx, my, mount.def.size(), () ->
                         drawVehicleSprite(target, mount.def, mx, my, mount.facingLeft));
             }
             old = viewsById(from.items());
             for (EntityView item : to.items()) {
                 double ix = lerpX(old.get(item.id), item, t);
                 double iy = lerpY(old.get(item.id), item, t);
-                into.at(footDepth(ix, iy, DroppedItem.SIZE), () ->
+                standingAt(into, ix, iy, DroppedItem.SIZE, () ->
                         drawItemSprite(target, item.key, ix, iy, item.count));
             }
             MobRegistry mobs = MobRegistry.standard();
@@ -2751,7 +2771,7 @@ public class PlayScene extends AbstractScene {
                     String state = mv.meleeAction.isEmpty()
                             ? stateKeyFor(mv.aiState, false) : mv.meleeAction;
                     MeleeAction move = MeleeAction.byKey(mv.meleeAction);
-                    into.at(footDepth(mx, my, def.size()), () ->
+                    standingAt(into, mx, my, def.size(), () ->
                             drawMobSprite(target, def, mx, my, mv.facing, mv.health, false,
                                     state, mv.status, mv.weapon, move, mv.meleeProgress));
                 }
@@ -2759,7 +2779,7 @@ public class PlayScene extends AbstractScene {
             old = viewsById(from.shots());
             for (EntityView s : to.shots()) {
                 double sx = lerpX(old.get(s.id), s, t), sy = lerpY(old.get(s.id), s, t);
-                into.at(footDepth(sx, sy, 0), () ->
+                standingAt(into, sx, sy, 0, () ->
                         drawProjectileSprite(target, s.key, sx, sy, s.z, s.vx, s.vy));
             }
         }
@@ -3088,7 +3108,7 @@ public class PlayScene extends AbstractScene {
                     ps.characterKey, ps.heldKey, state, seen(ps.facing),
                     animClock, ps.meleeProgress, (int) size, body);
             MeleeAction move = MeleeAction.byKey(ps.meleeAction);
-            into.at(footDepth(x, y), () -> {
+            standingAt(into, x, y, () -> {
                 drawPlayer(target, x, y, ps.z, sprite, ps.name);
                 drawHeldObject(target, x, y, ps.z, size, seen(ps.facing), ps.heldKey, move,
                         ps.meleeProgress, MeleeProfiles.ofKey(ps.heldKey));

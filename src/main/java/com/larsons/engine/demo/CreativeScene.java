@@ -5708,7 +5708,7 @@ public class CreativeScene extends AbstractScene {
         drawSpawnMarker(target);
         if (!testing) drawCutsceneMarkers(target);
         if (testing && testMe != null) {
-            standing.at(footDepth(testDrawX(), testDrawY(), profile().playerSize),
+            standingAt(standing, testDrawX(), testDrawY(), profile().playerSize,
                     () -> drawTestPlayer(target));
         }
         standing.flush();
@@ -5947,12 +5947,23 @@ public class CreativeScene extends AbstractScene {
 
     /**
      * The screen row a body standing at this world point puts its feet on —
-     * what everything sharing a {@link DepthPass} is ordered by. {@code x,y}
+     * the tie-breaker among everything sharing one tile's depth. {@code x,y}
      * is a sprite's top-left corner and {@code size} its world extent, the
      * way the level stores entities.
      */
     private int footDepth(double x, double y, double size) {
         return camera.worldToScreenY(x + size / 2, y + size);
+    }
+
+    /**
+     * Queue {@code sprite} where a body of {@code size} at (x,y) is standing:
+     * ordered by the tile its feet are on ({@link TerrainPainter#tileDepth},
+     * the same measure a raised block is sorted by), ties broken by where on
+     * that tile it stands.
+     */
+    private void standingAt(DepthPass into, double x, double y, double size, Runnable sprite) {
+        into.at(TerrainPainter.standingDepth(camera, level.tileSize, x + size / 2, y + size),
+                footDepth(x, y, size), sprite);
     }
 
     /** Painted mobs/items/doors/markers: level spawns offline, snapshots online. */
@@ -5968,17 +5979,17 @@ public class CreativeScene extends AbstractScene {
             double a = renderAlpha;
             for (DroppedItem item : testWorld.items()) {
                 double ix = item.renderX(a), iy = item.renderY(a);
-                into.at(footDepth(ix, iy, DroppedItem.SIZE), () ->
+                standingAt(into, ix, iy, DroppedItem.SIZE, () ->
                         drawItemAt(target, items.get(item.key), ix, iy));
             }
             for (Mob m : testWorld.mobs()) {
                 double mx = m.renderX(a), my = m.renderY(a);
-                into.at(footDepth(mx, my, m.def.size()), () ->
+                standingAt(into, mx, my, m.def.size(), () ->
                         drawMobAt(target, m.def, mx, my, m.facing, mobStateKey(m),
                                 m.weaponKey(), m.melee.action(), m.meleeProgress()));
             }
             for (Projectile pr : testWorld.projectiles()) {
-                into.at(footDepth(pr.renderX(a), pr.renderY(a), 0),
+                standingAt(into, pr.renderX(a), pr.renderY(a), 0,
                         () -> drawProjectileAt(target, pr));
             }
             return;
@@ -5987,13 +5998,13 @@ public class CreativeScene extends AbstractScene {
             Snapshot snap = net.client().latest();
             if (snap != null) {
                 for (EntityView e : snap.items()) {
-                    into.at(footDepth(e.x, e.y, DroppedItem.SIZE), () ->
+                    standingAt(into, e.x, e.y, DroppedItem.SIZE, () ->
                             drawItemAt(target, items.get(e.key), e.x, e.y));
                 }
                 for (EntityView e : snap.mobs()) {
                     MobDef def = mobs.get(e.key);
                     if (def != null) {
-                        into.at(footDepth(e.x, e.y, def.size()), () ->
+                        standingAt(into, e.x, e.y, def.size(), () ->
                                 drawMobAt(target, def, e.x, e.y, e.facing, "idle"));
                     }
                 }
@@ -6008,11 +6019,11 @@ public class CreativeScene extends AbstractScene {
                     // A painted-but-not-yet-live spawn faces the camera, so
                     // the editor shows the species rather than a profile.
                     if (def != null) {
-                        into.at(footDepth(e.x, e.y, def.size()), () ->
+                        standingAt(into, e.x, e.y, def.size(), () ->
                                 drawMobAt(target, def, e.x, e.y, Facing.SOUTH, "idle"));
                     }
                 }
-                case "item" -> into.at(footDepth(e.x, e.y, DroppedItem.SIZE), () ->
+                case "item" -> standingAt(into, e.x, e.y, DroppedItem.SIZE, () ->
                         drawItemAt(target, items.get(e.type), e.x, e.y));
                 default -> { /* doors/decor/markers drawn by their own passes */ }
             }
