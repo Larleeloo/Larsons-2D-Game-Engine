@@ -4,7 +4,9 @@ import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.level.Level;
+import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelLoader;
+import com.larsons.engine.sim.PerspectiveSpace;
 import com.larsons.engine.sim.PlayerInput;
 import com.larsons.engine.sim.PlayerPhysics;
 import com.larsons.engine.sim.PlayerState;
@@ -431,5 +433,129 @@ class PlayerPhysicsTest {
             assertEquals(a.y, b.y, 0.0, "y must be bit-identical at step " + i);
             assertEquals(a.vy, b.vy, 0.0, "vy must be bit-identical at step " + i);
         }
+    }
+
+    // --- what collides, and it is not the same shape in every format ------------
+
+    /**
+     * A plan-view character can walk right up to a raised block from every
+     * side, and stops the same distance out on all four.
+     *
+     * <p>On a plane the body box is a patch of <em>floor</em> and the sprite is
+     * a billboard standing on it: feet on the box's southern edge, head a whole
+     * body north of them. Sweeping the whole box therefore stopped a character
+     * when their <em>head</em> reached a wall, leaving their feet a full
+     * body-length short of it — an invisible barrier most of a tile deep along
+     * the south face of every stacked block, and nothing at all along the north
+     * face, where the same rule let the feet land exactly on the wall. It is
+     * the asymmetry that gives it away: a hitbox that is right can be argued
+     * with, one that answers differently depending on which way you walked into
+     * the same block cannot be.
+     */
+    @Test
+    void feetWalkUpToARaisedBlockFromEverySide() {
+        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+            Level lvl = walledPlane(format);
+            GameProfile p = profile();
+            Perspective view = format.perspective();
+            double size = p.playerSize;
+            // The wall at (5,5) occupies world [160,192] on both axes.
+            double lane = 5 * 32;
+
+            double fromSouth = feet(walkInto(lvl, p, view, lane, 8 * 32, 0, -1), size)[1] - 192;
+            double fromNorth = 160 - feet(walkInto(lvl, p, view, lane, 2 * 32, 0, 1), size)[1];
+            double fromWest = 160 - feet(walkInto(lvl, p, view, 2 * 32, lane, 1, 0), size)[0];
+            double fromEast = feet(walkInto(lvl, p, view, 8 * 32, lane, -1, 0), size)[0] - 192;
+
+            // Half a footprint out, whichever way you came — the footprint
+            // straddles the feet, so each approach spends half of it.
+            double expected = PlayerPhysics.footSize(size) / 2;
+            for (double gap : List.of(fromSouth, fromNorth, fromWest, fromEast)) {
+                assertEquals(expected, gap, 0.5, format + ": stopped " + gap
+                        + "px from the wall, expected half a footprint");
+            }
+            assertTrue(fromSouth < size / 3, format
+                    + ": walking north stopped " + fromSouth + "px short of the block — "
+                    + "that is the head colliding, not the feet");
+        }
+    }
+
+    /**
+     * Edge-on the box really is the character, and all of it still collides.
+     *
+     * <p>This is the other half of the rule and the easier one to break while
+     * fixing the first: a side-scroller's floor is under the body box, so a
+     * footprint hovering around the feet would have the player land somewhere
+     * other than flush on it — and gravity would then keep pulling.
+     */
+    @Test
+    void aSideScrollerStillLandsItsWholeBodyOnTheFloor() {
+        Level level = floorLevel();
+        GameProfile p = profile();
+        PlayerState s = new PlayerState(1, "t", 64, 0);
+
+        PlayerInput idle = new PlayerInput();
+        for (int i = 0; i < 300; i++) {
+            PlayerPhysics.step(s, idle, level, p, Perspective.SIDE_SCROLL, DT);
+        }
+        assertEquals(128, s.y, 0.001, "the body box rests on the floor row, not the feet");
+    }
+
+    /**
+     * "Am I standing there?" is asked of the collision shape, which is what
+     * lets a plan-view player build on the cell in front of them.
+     *
+     * <p>Block placement refuses a cell the player occupies, so that nobody can
+     * brick themselves in. Measured on the body box, a character standing
+     * against a wall occupies the wall's own cell — their head is inside it —
+     * and the most ordinary placement in a plan view, laying a block on the far
+     * side of the one you are facing, would be refused for a player who had
+     * done nothing but walk up to it.
+     */
+    @Test
+    void standingInAsksTheCollisionShapeAndNotTheBodyBox() {
+        Level lvl = walledPlane(LevelFormat.TOP_DOWN);
+        GameProfile p = profile();
+        double size = p.playerSize;
+        PlayerState s = walkInto(lvl, p, Perspective.TOP_DOWN, 5 * 32, 8 * 32, 0, -1);
+        PerspectiveSpace plane = PerspectiveSpace.of(Perspective.TOP_DOWN);
+
+        assertTrue(s.y + size > 5 * 32 && s.y < 6 * 32,
+                "the sprite's head does reach into the wall's cell");
+        assertFalse(PlayerPhysics.standingIn(lvl, s.x, s.y, size, plane, 5, 5),
+                "but the player is not standing in it, so a block may be placed there");
+        assertTrue(PlayerPhysics.standingIn(lvl, s.x, s.y, size, plane, 5, 6),
+                "they are standing on the cell south of it");
+
+        // Edge-on, the whole box is still where the player is.
+        PerspectiveSpace wall = PerspectiveSpace.of(Perspective.SIDE_SCROLL);
+        assertTrue(PlayerPhysics.standingIn(lvl, 5 * 32, 5 * 32, size, wall, 5, 5));
+    }
+
+    /** A layered plan-view level, floored throughout, with one wall at (5,5). */
+    private static Level walledPlane(LevelFormat format) {
+        Level lvl = Level.empty("plane", 12, 12, 32);
+        lvl.setFormat(format);
+        int path = lvl.blocks.get("stone_path").id();
+        for (int r = 0; r < lvl.height; r++) {
+            for (int c = 0; c < lvl.width; c++) lvl.setTile(c, r, path);
+        }
+        lvl.setUpper(5, 5, lvl.blocks.get("stone").id());
+        assertTrue(lvl.solidAt(5, 5), format + ": the stack is a wall");
+        return lvl;
+    }
+
+    /** Walk a fresh player from (x0,y0) in one direction until they stop. */
+    private static PlayerState walkInto(Level lvl, GameProfile p, Perspective view,
+                                        double x0, double y0, int ix, int iy) {
+        PlayerState s = new PlayerState(1, "t", x0, y0);
+        PlayerInput in = new PlayerInput(ix < 0, ix > 0, iy < 0, iy > 0, 1);
+        for (int i = 0; i < 400; i++) PlayerPhysics.step(s, in, lvl, p, view, DT);
+        return s;
+    }
+
+    /** Where the sprite's feet come to rest: the base line of the billboard. */
+    private static double[] feet(PlayerState s, double size) {
+        return new double[]{s.x + size / 2, s.y + size};
     }
 }

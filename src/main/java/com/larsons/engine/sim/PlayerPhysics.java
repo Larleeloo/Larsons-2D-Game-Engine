@@ -19,6 +19,20 @@ import com.larsons.engine.level.Level;
  * players pass through walls. Mobs share the same helpers so both simulations
  * obey identical rules.
  *
+ * <p><b>What collides is not the same shape in every format</b>, because the
+ * body box does not mean the same thing in all three. Edge-on, the box
+ * <em>is</em> the character: it is drawn inside those bounds and every face of
+ * it can hit something, so the whole box sweeps ({@link #slideX}/{@link
+ * #slideY}). On a plane the box is a patch of <em>floor</em> and the character
+ * is a billboard standing on it — feet on the box's southern edge, head a whole
+ * body north of them. Colliding the whole box there stops a character when
+ * their <em>head</em> reaches a wall, which leaves their feet a full body-length
+ * short of it: an invisible barrier most of a tile deep along the south face of
+ * every raised block, and nothing at all along the north face. So the plan views
+ * collide the ground under the feet instead — {@link #walkX}/{@link #walkY} over
+ * the {@link #FOOT_FRACTION} footprint — and a character can walk up to a block
+ * from any side and stand against it.
+ *
  * <p><b>Perspective.</b> Each format simulates in its own space (see
  * {@link PerspectiveSpace}). The side-scrolling format runs the platformer
  * model (gravity down the screen, jumps, swimming); the plan-view formats
@@ -111,6 +125,23 @@ public final class PlayerPhysics {
      */
     public static final double COLLISION_EPS = 0.001;
 
+    /**
+     * How much floor a body's feet cover on a plan view, as a fraction of the
+     * body's size — the footprint {@link #walkX}/{@link #walkY} collide.
+     *
+     * <p>A third of the body, which is about what a standing figure's boots
+     * actually cover and small enough that the character reads as touching
+     * whatever they walk up to: they come to rest with half a footprint —
+     * around a sixth of a tile — between their feet and the wall, on every
+     * side. Making it smaller buys nothing (a wall is already flush at this
+     * size) and costs the feet somewhere to stand: a footprint narrower than a
+     * few pixels can slip between the tiles it is meant to be stopped by.
+     *
+     * <p>It does not widen what a body can fit through. Gaps are cut in whole
+     * tiles, and the body box was already narrower than one.
+     */
+    public static final double FOOT_FRACTION = 0.34;
+
     private PlayerPhysics() {}
 
     /**
@@ -133,6 +164,12 @@ public final class PlayerPhysics {
         // view does.
         PerspectiveSpace space = PerspectiveSpace.of(perspective);
         boolean sideScroll = space.gravityOnPlane() && profile.gravityEnabled;
+        // Whether the world plane is the floor, and so whether what collides is
+        // the ground under the feet rather than the whole body box. This asks
+        // the projection rather than the gravity toggle on purpose: a
+        // side-scroller with gravity switched off still stands its characters
+        // edge-on against the screen, and there the box really is the body.
+        boolean planView = space.hasElevation();
         // On a plane every direction is walking, so up/down count as movement
         // for sprinting too — sprinting north in a top-down level is the same
         // act as sprinting east.
@@ -243,13 +280,15 @@ public final class PlayerPhysics {
             s.vz = 0;
         } else {
             double dy = bursting ? s.dashVy * dt : in.moveY() * speed * dt;
-            s.y = slideY(level, s.x, s.y, size, size, dy);
+            s.y = planView ? walkY(level, s.x, s.y, size, dy)
+                    : slideY(level, s.x, s.y, size, size, dy);
             moving = moving || dy != 0;
             steerY = dy;
             stepHop(s, in, dt);
         }
 
-        s.x = slideX(level, s.x, s.y, size, size, dx);
+        s.x = planView ? walkX(level, s.x, s.y, size, dx)
+                : slideX(level, s.x, s.y, size, size, dx);
         clampToLevel(s, level, size);
         s.moving = moving;
         // Which way the character is drawn facing: left/right in a
@@ -371,6 +410,97 @@ public final class PlayerPhysics {
             }
         }
         return y + dy;
+    }
+
+    /**
+     * Whether a {@code w}&times;{@code h} body at (x,y) overlaps solid terrain
+     * — the standing test, as opposed to the sweeps above. A teleport that
+     * lands here has landed inside a wall.
+     */
+    public static boolean blocked(Level level, double x, double y, double w, double h) {
+        double ts = level.tileSize;
+        int c0 = (int) Math.floor(x / ts);
+        int c1 = (int) Math.floor((x + w - COLLISION_EPS) / ts);
+        int r0 = (int) Math.floor(y / ts);
+        int r1 = (int) Math.floor((y + h - COLLISION_EPS) / ts);
+        for (int c = c0; c <= c1; c++) {
+            for (int r = r0; r <= r1; r++) {
+                if (level.solidAt(c, r)) return true;
+            }
+        }
+        return false;
+    }
+
+    // --- the plan-view footprint, and the sweeps over it -------------------------
+
+    /** The side of the square patch of floor a {@code size} body stands on. */
+    public static double footSize(double size) {
+        return Math.max(1, size * FOOT_FRACTION);
+    }
+
+    /**
+     * The west edge of that patch: the footprint is centred across the body,
+     * under the middle of the sprite, because that is where the legs are.
+     */
+    public static double footLeft(double x, double size) {
+        return x + (size - footSize(size)) / 2;
+    }
+
+    /**
+     * The north edge of that patch, which straddles the body's base line
+     * ({@code y + size}) rather than sitting above it.
+     *
+     * <p>Centring it on the feet is what makes the four approaches symmetric.
+     * A footprint tucked <em>inside</em> the box would let a character put
+     * their feet exactly on a wall's north face and still stop a whole
+     * footprint short of its south face — the same lopsidedness in miniature.
+     */
+    public static double footTop(double y, double size) {
+        return y + size - footSize(size) / 2;
+    }
+
+    /**
+     * {@link #slideX} for a body walking a plane: the feet sweep, and the body
+     * box is carried along with them. Returns the body's new x.
+     */
+    public static double walkX(Level level, double x, double y, double size, double dx) {
+        double foot = footSize(size);
+        double fx = footLeft(x, size);
+        return x + (slideX(level, fx, footTop(y, size), foot, foot, dx) - fx);
+    }
+
+    /** {@link #slideY} over the same footprint. Returns the body's new y. */
+    public static double walkY(Level level, double x, double y, double size, double dy) {
+        double foot = footSize(size);
+        double fy = footTop(y, size);
+        return y + (slideY(level, footLeft(x, size), fy, foot, foot, dy) - fy);
+    }
+
+    /** Whether a plan-view body's feet are standing in solid terrain. */
+    public static boolean footBlocked(Level level, double x, double y, double size) {
+        double foot = footSize(size);
+        return blocked(level, footLeft(x, size), footTop(y, size), foot, foot);
+    }
+
+    /**
+     * Whether a body of {@code size} at (x,y) is standing in the cell
+     * (col,row) — measured on whichever shape {@code space} collides with.
+     *
+     * <p>Block placement asks this so a player cannot brick themselves in. It
+     * has to be the collision shape and not the body box: on a plane a
+     * character's head routinely overlaps the wall they are standing against,
+     * and refusing to build there would refuse the most ordinary placement
+     * there is — laying a block on the far side of the one in front of you.
+     */
+    public static boolean standingIn(Level level, double x, double y, double size,
+                                     PerspectiveSpace space, int col, int row) {
+        boolean onFloor = space.hasElevation();
+        double bx = onFloor ? footLeft(x, size) : x;
+        double by = onFloor ? footTop(y, size) : y;
+        double bs = onFloor ? footSize(size) : size;
+        double ts = level.tileSize;
+        return bx + bs > col * ts && bx < (col + 1) * ts
+                && by + bs > row * ts && by < (row + 1) * ts;
     }
 
     /** Whether the body rests on solid ground (any tile under its bottom edge). */
