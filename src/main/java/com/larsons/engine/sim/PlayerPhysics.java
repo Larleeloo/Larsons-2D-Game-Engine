@@ -613,13 +613,44 @@ public final class PlayerPhysics {
      * </ul>
      */
     public static boolean barrierAt(Level level, int col, int row, double z) {
-        int support = level.supportHeight(col, row);
+        return barrierAt(level, col, row, z, 1);
+    }
+
+    /**
+     * {@link #barrierAt} for a body {@code bodyLayers} tall.
+     *
+     * <p>The surface is the one under <em>this</em> body rather than the
+     * column's only one, which is the whole of O1 seen from the movement side:
+     * walking under a bridge, the ground is the ground; walking on it, the
+     * ground is the deck. And a step up is refused when there is no room to
+     * stand in — O2 — which is what stops a body from wedging itself into a
+     * one-block gap it could technically climb into.
+     */
+    public static boolean barrierAt(Level level, int col, int row, double z,
+                                    int bodyLayers) {
+        // Probed one layer above the feet, not from them. A body can step up
+        // one layer, so a stair one layer up has to be *visible* to the sweep
+        // before the step rule can decide about it — probing from the feet
+        // finds only the floor, and then reads the stair above it as a ceiling
+        // with no head-room, which turns every staircase into a wall.
+        int standing = layerOf(level, z) + 1;
+        int support = level.supportUnder(col, row, standing);
         if (support <= 0) return true;
         double surface = level.surfaceZ(support);
-        if (surface <= z + STEP_EPS) return false;
-        Block top = level.blockAt(col, row, support - 1);
-        return top == null || !top.step()
-                || surface - z > level.blockHeight() + STEP_EPS;
+        boolean reachable = surface <= z + STEP_EPS;
+        if (!reachable) {
+            Block top = level.blockAt(col, row, support - 1);
+            reachable = top != null && top.step()
+                    && surface - z <= level.blockHeight() + STEP_EPS;
+        }
+        if (!reachable) return true;
+        return !level.headRoom(col, row, support, bodyLayers);
+    }
+
+    /** Which layer a world height sits in. */
+    public static int layerOf(Level level, double z) {
+        double block = level.blockHeight();
+        return block <= 0 ? 0 : (int) Math.floor(z / block + STEP_EPS);
     }
 
     /**
@@ -633,6 +664,21 @@ public final class PlayerPhysics {
      * on the feet, and straddling the base line (see {@link #footTop}).
      */
     public static double groundZ(Level level, double x, double y, double size) {
+        return groundZ(level, x, y, size, Double.MAX_VALUE);
+    }
+
+    /**
+     * {@link #groundZ} as seen from height {@code z} — the ground under a body
+     * rather than under the column.
+     *
+     * <p>Identical answers in a heightfield, where a column has one surface and
+     * "under" cannot pick between two. Job O is where it can.
+     */
+    public static double groundZ(Level level, double x, double y, double size, double z) {
+        // The same one-layer allowance the sweep probes with, so a body that
+        // was let onto a stair is then lifted onto it. Tighter than the
+        // heightfield version this replaces, which saw the whole column.
+        int standing = z == Double.MAX_VALUE ? Integer.MAX_VALUE : layerOf(level, z) + 1;
         double ts = level.tileSize;
         double foot = footSize(size);
         double fx = footLeft(x, size), fy = footTop(y, size);
@@ -644,7 +690,7 @@ public final class PlayerPhysics {
         boolean found = false;
         for (int c = c0; c <= c1; c++) {
             for (int r = r0; r <= r1; r++) {
-                int support = level.supportHeight(c, r);
+                int support = level.supportUnder(c, r, standing);
                 if (support <= 0) continue;
                 double surface = level.surfaceZ(support);
                 if (!found || surface > best) {

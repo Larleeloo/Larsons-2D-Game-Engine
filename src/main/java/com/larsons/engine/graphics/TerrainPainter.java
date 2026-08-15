@@ -67,6 +67,13 @@ public final class TerrainPainter {
     /** The bright line along the top of an exposed liquid surface. */
     private static final Color LIQUID_SURFACE = new Color(255, 255, 255, 90);
 
+    /**
+     * How many layers of screen a standing body covers, for the cutaway's
+     * reach. A character is drawn about a tile tall, and one layer of slack
+     * covers what they carry over their head.
+     */
+    private static final int BODY_LAYERS = 2;
+
     private TerrainPainter() {}
 
     /**
@@ -133,6 +140,74 @@ public final class TerrainPainter {
     public static int standingLayer(Level level, double z) {
         double block = level.blockHeight();
         return block <= 0 ? 0 : (int) Math.floor(z / block + 1e-6);
+    }
+
+    /**
+     * The cells between the camera and a body — what has to be seen through
+     * for that body to be visible at all.
+     *
+     * <p><b>Without this, walking indoors is walking into nothing.</b> A roof
+     * is geometry nearer the camera than the player under it, so the painter
+     * draws it over them and correctly: they <em>are</em> behind it. That is
+     * the whole reason overhangs are a job of their own rather than a flag —
+     * the moment a column may have a gap in it, the engine can hide the player
+     * from the player.
+     *
+     * <p>The march is {@link #pick}'s, run backwards: from the body's own cell,
+     * step toward the camera one layer at a time and collect every column that
+     * reaches the ray. Bounded by the level's height rather than by its size,
+     * and it costs one pass per body rather than a search.
+     *
+     * @return cell keys ({@code col | row << 32}) to draw see-through this
+     *         frame, empty when nothing is in the way
+     */
+    public static java.util.Set<Long> cutaway(Camera camera, Level level,
+                                              double footX, double footY, double z) {
+        if (!level.layered() || !level.verticality()) return java.util.Set.of();
+        int ts = level.tileSize;
+        double[] step = camera.inversePlanar(0,
+                BLOCK_HEIGHT * ts * camera.liftScale());
+        int bodyCol = (int) Math.floor(footX / ts), bodyRow = (int) Math.floor(footY / ts);
+        int standing = (int) Math.floor(z / Math.max(1e-9, level.blockHeight()) + 1e-6);
+        java.util.Set<Long> hidden = null;
+        // A block at cell T and layer L draws over the floor point T − L·step,
+        // so the cells drawn over a body at cell B and layer s are B + m·step
+        // for m = 1 upward. Along the step, not against it — the sign that
+        // decides whether a cutaway finds the roof over your head or the empty
+        // ground behind you.
+        //
+        // <b>And a band of layers at each one, not a single layer.</b> A body
+        // is a billboard taller than the tile it stands on, so it reaches into
+        // the screen space of the cells north of it; clearing only what the ray
+        // through its feet meets leaves everything above the ankles still
+        // behind roof. A block at (T, L) overlaps a body {@code BODY_LAYERS}
+        // tall exactly when L runs from m + s to m + s + BODY_LAYERS.
+        for (int m = 1; m <= level.tallestColumn(); m++) {
+            int col = bodyCol + (int) Math.round(step[0] * m / ts);
+            int row = bodyRow + (int) Math.round(step[1] * m / ts);
+            if (!inside(level, col, row)) break;
+            int from = standing + m;
+            int to = Math.min(level.layerCount() - 1, from + BODY_LAYERS);
+            for (int layer = from; layer <= to; layer++) {
+                if (!level.solidAt(col, row, layer)) continue;
+                if (hidden == null) hidden = new java.util.HashSet<>(16);
+                // The cell and the ring around it. A body's billboard is
+                // narrower than an isometric diamond but not confined to one:
+                // it laps into the screen space of the cells beside and above,
+                // so a cutaway that clears only the cells the ray passes
+                // through leaves a player visible in top-down and still buried
+                // in isometric. Clearing the ring is also what a cutaway looks
+                // like in practice — a hole in the roof that moves with you,
+                // rather than a single tile winking out.
+                for (int dc = -1; dc <= 1; dc++) {
+                    for (int dr = -1; dr <= 1; dr++) {
+                        hidden.add(((col + dc) & 0xFFFFFFFFL) | ((long) (row + dr) << 32));
+                    }
+                }
+                break;
+            }
+        }
+        return hidden == null ? java.util.Set.of() : hidden;
     }
 
     /**
@@ -362,8 +437,21 @@ public final class TerrainPainter {
     public static void draw(DrawTarget target, Level level, Camera camera, int[] bounds,
                             double animClock, DepthPass raised, CellDecorator decor,
                             Mining mining, TerrainCache cache) {
-        new Pass(target, level, camera, animClock, decor)
-                .run(bounds, raised, mining, decor == null ? cache : null);
+        draw(target, level, camera, bounds, animClock, raised, decor, mining, cache,
+                java.util.Set.of());
+    }
+
+    /**
+     * One frame's terrain with {@code seeThrough} cells drawn as ghosts — the
+     * columns {@link #cutaway} found between the camera and a body.
+     */
+    public static void draw(DrawTarget target, Level level, Camera camera, int[] bounds,
+                            double animClock, DepthPass raised, CellDecorator decor,
+                            Mining mining, TerrainCache cache,
+                            java.util.Set<Long> seeThrough) {
+        Pass pass = new Pass(target, level, camera, animClock, decor);
+        pass.seeThrough = seeThrough == null ? java.util.Set.of() : seeThrough;
+        pass.run(bounds, raised, mining, decor == null ? cache : null);
     }
 
     /** One frame's terrain, with the scratch state a sweep over the cells needs. */
@@ -425,6 +513,8 @@ public final class TerrainPainter {
          * {@link TerrainCache} — which is the opposite of what culling is for.
          */
         private boolean culling = true;
+        /** Cells to draw see-through this frame; see {@link #cutaway}. */
+        private java.util.Set<Long> seeThrough = java.util.Set.of();
 
         // Projected corners of the cell being drawn: top-left, top-right,
         // bottom-right, bottom-left — the order every texture path expects.
@@ -683,14 +773,37 @@ public final class TerrainPainter {
         private void queueRaised(int[] bounds, DepthPass raisedPass) {
             for (int r = bounds[1]; r <= bounds[3]; r++) {
                 for (int c = bounds[0]; c <= bounds[2]; c++) {
-                    if (level.tileAt(c, r) <= 0) continue;
-                    int height = level.stackHeight(c, r);
-                    if (height <= 1) continue;
+                    int layers = level.layerCount();
+                    if (layers <= 1) continue;
                     project(c, r);
                     if (offScreen()) continue;
                     int col = c, row = r;
-                    raisedPass.at(baseDepth(col, row), height - 1, DepthPass.TERRAIN,
-                            () -> drawColumn(col, row, height));
+                    // Every occupied run in the column, wherever it sits —
+                    // walking the layers rather than the run from the ground,
+                    // because a bridge deck is precisely the geometry that run
+                    // does not reach (O1).
+                    //
+                    // One queue entry per run, banded by the layer it stands
+                    // on. A column with no gaps is one band and sorts exactly
+                    // as it did; a deck is a band of its own, four layers up,
+                    // and sorts against an actor walking under it rather than
+                    // with the ground beneath them (O4).
+                    for (int base = 1; base < layers; ) {
+                        int id = level.tileAt(col, row, base);
+                        if (id <= 0) {
+                            base++;
+                            continue;
+                        }
+                        int top = base + 1;
+                        while (top < layers && level.tileAt(col, row, top) == id) top++;
+                        Block block = level.blocks.get(id);
+                        int from = base, to = top;
+                        if (block != null) {
+                            raisedPass.at(baseDepth(col, row), from - 1, DepthPass.TERRAIN,
+                                    () -> drawRun(col, row, block, from, to));
+                        }
+                        base = top;
+                    }
                 }
             }
         }
@@ -734,6 +847,16 @@ public final class TerrainPainter {
         private void drawRun(int col, int row, Block block, int base, int top) {
             project(col, row);
             Color color = block.color();
+            if (!seeThrough.isEmpty()
+                    && seeThrough.contains((col & 0xFFFFFFFFL) | ((long) row << 32))) {
+                // Ghosted: the shape stays legible so a creator can still read
+                // the building they are inside, and the body under it shows
+                // through. Drawn as an outline rather than at reduced alpha
+                // because a translucent fill still hides a sprite behind two
+                // of them, and a player indoors is behind several.
+                drawGhost(base, top, color);
+                return;
+            }
             // Layer 0 is the floor tile itself, drawn flat by the floor pass,
             // so the block in layer 1 stands ON it at a lift of zero. A run
             // covering layers [base, top) therefore spans screen heights
@@ -747,7 +870,7 @@ public final class TerrainPainter {
             BufferedImage side = face(block.sideTextureKey(), block.textureKey());
             drawVisibleFaces(col, row, base, top, side, color);
             for (int i = 0; i < 4; i++) ys[i] -= upper;
-            if (top == level.stackHeight(col, row)) {
+            if (top >= level.layerCount() || level.tileAt(col, row, top) <= 0) {
                 BufferedImage skin = face(block.topTextureKey(), block.textureKey());
                 if (skin != null) {
                     TilePainter.drawTexture(target, skin, xs, ys, flatBlit);
@@ -861,6 +984,20 @@ public final class TerrainPainter {
             target.fillPolygon(faceX, faceY, 4, shade(color, SIDE_SHADE));
             target.drawPolygon(faceX, faceY, 4, shade(color, SIDE_SHADE * 0.75));
             drawLayerSeams(from, to, riseUp, shade(color, SIDE_SHADE * 0.72));
+        }
+
+        /**
+         * A run drawn see-through: its silhouette and nothing else.
+         */
+        private void drawGhost(int base, int top, Color color) {
+            int lower = (int) Math.round(lift * (base - 1));
+            int upper = (int) Math.round(lift * (top - 1));
+            Color ink = new Color(color.getRed(), color.getGreen(), color.getBlue(), 70);
+            for (int i = 0; i < 4; i++) ys[i] -= upper;
+            target.drawPolygon(xs, ys, 4, ink);
+            for (int i = 0; i < 4; i++) ys[i] += upper - lower;
+            target.drawPolygon(xs, ys, 4, ink);
+            for (int i = 0; i < 4; i++) ys[i] -= lower;
         }
 
         /**

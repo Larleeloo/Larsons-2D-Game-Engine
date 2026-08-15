@@ -118,34 +118,32 @@ public final class DepthPass {
      * Draw {@code sprite} at {@code depth}, {@code layers} of height above the
      * floor, breaking ties on {@code within}.
      *
-     * <p><b>Height is the last key, not the second, and the difference is a
-     * bug this engine already had a test for.</b> The obvious reading of "a
-     * higher thing is nearer" puts height straight after the cell depth. That
-     * breaks the rule C4 established and {@code StackedBlockTest} guards: in
-     * isometric a tile and its <em>diagonal</em> neighbour sit at the same
-     * depth, so a wall in one and an actor on the floor of the other tie on the
-     * primary key — and promoting the wall on height draws it over a character
-     * who is beside it rather than behind it. That is the "block ate a fifth of
-     * them" defect, back again by a different route.
+     * <p><b>{@code layers} is what a thing stands on, not how tall it is, and
+     * that distinction is the whole of O4.</b> The obvious reading — key a
+     * column by its own top — sorts a wall above an actor tied with it on
+     * depth, and in isometric a tile and its <em>diagonal</em> neighbour do
+     * tie: a wall in one would draw over a character standing beside it in the
+     * other, which is the "block ate a fifth of them" defect C4 wrote
+     * {@code StackedBlockTest} for. Keyed by what it stands on, a wall on the
+     * ground and an actor on the ground share a band, and the tie-break below
+     * puts the actor in front where it belongs.
      *
-     * <p>It is also unnecessary. {@code HEIGHT_PLAN.md} Appendix C proves that
-     * for a heightfield the <em>cell depth alone</em> already orders terrain
-     * against actors correctly: a nearer column can only overlap something
-     * standing behind it when that column's top rises above the thing's feet on
-     * screen, and when it does the column genuinely is both nearer and taller,
-     * so covering it is right. Screen overlap and true occlusion are the same
-     * condition. No pairwise test, no topological sort, and no depth buffer —
-     * which Java2D does not have and requirement #4 says must not be needed.
+     * <p>What the band <em>does</em> settle is the case a gap in a column
+     * introduces. {@code HEIGHT_PLAN.md} Appendix C proves that while every
+     * column is solid from the ground up, cell depth alone already orders
+     * terrain against actors correctly — screen overlap and true occlusion are
+     * the same condition — and the proof uses that solidity in one step: a
+     * column's drawn extent starts at its own floor row. Give a column a
+     * bridge over it and that stops being true. The deck's extent starts four
+     * layers up, an actor walking underneath is at the ground, and nothing
+     * about the cell they share says which is in front.
      *
-     * <p>So what this key actually settles is the residue the proof does not
-     * reach: two things on the <em>same</em> tile at the same foot row and
-     * different heights — two players sharing a tile with one of them
-     * mid-hop. Last place in the sort, where it can only break ties.
-     *
-     * <p>The proof uses one thing only: that every column is solid from the
-     * ground up, so its drawn extent starts at its own floor row. Job O lets a
-     * column have a gap in it and cell depth stops being sufficient at that
-     * exact moment — which is what O4 is for.
+     * <p>So terrain is queued a run at a time rather than a column at a time,
+     * each banded by the layer it rests on: the deck sorts above the actor
+     * beneath it and below the one standing on it, and a column with no gaps is
+     * a single band that sorts exactly as it always did. No pairwise test, no
+     * topological sort, and no depth buffer — which Java2D does not have and
+     * requirement #4 says must not be needed.
      */
     public void at(int depth, int layers, int within, Runnable sprite) {
         if (queue == null) {
@@ -161,8 +159,8 @@ public final class DepthPass {
         // Ties keep the order they arrived in, so a sprite drawn as several
         // pieces (a mob and its health bar) never comes apart.
         queue.sort(Comparator.comparingInt(Entry::depth)
-                .thenComparingInt(Entry::within)
                 .thenComparingInt(Entry::layers)
+                .thenComparingInt(Entry::within)
                 .thenComparingInt(Entry::seq));
         for (Entry e : queue) e.sprite().run();
         queue.clear();

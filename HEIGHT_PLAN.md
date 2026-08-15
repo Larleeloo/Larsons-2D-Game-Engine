@@ -1,10 +1,18 @@
 # Height Plan — the third axis, end to end
 
 **Status:** Written 2026-08-14 against commit `244762c` on
-`claude/vertical-stacking-walkable-blocks-bf522d`. **Jobs V, W, R, S and E are
-complete**, bar four steps recorded as deferred where they stand, each with its
-reason: S7, E2's cursor preview, E4 (which waits on that preview), and E5's
-wiring to the new-level default. V was storage and changed no pixels; **W is the one players would
+`claude/vertical-stacking-walkable-blocks-bf522d`. **Every job in this plan is
+complete** — V, W, R, S, E, N and O — bar four steps recorded as deferred where
+they stand, each with its reason: S7, E2's cursor preview, E4 (which waits on
+that preview), and E5's wiring to the new-level default.
+
+**Job O was built out of order, and that is worth stating.** §12 says to ship
+V–N, play it, and then decide about O on evidence from playing. That did not
+happen: O was built on request, against the failure cases this document
+predicted rather than against any observed. Its three steps each needed
+correcting — O3 three times — and every correction came from a test rather than
+from a player, which is exactly the gap the ordering rule existed to close.
+Nothing in O has been played. V was storage and changed no pixels; **W is the one players would
 name** — a body's floor stopped being the literal zero, so a plan-view
 character climbs stacks, stands on their tops, walks off them and falls, gated
 per level and off by default. **R is what it looks like**: blocks are cubes,
@@ -17,15 +25,19 @@ surface, and lights are gathered from the whole column. **E is the part a
 creator touches**: the editor aims through the terrain instead of at the floor
 behind it, a column builds to the ceiling and mines from the top, four height
 brushes sculpt the ground, a landscape generator exists, and the level settings
-form carries the switch. **Job N is next**, then the decision about Job O.
-Baseline at the time of writing,
+form carries the switch. **N** needed no new wire — only a bound on what a
+client may ask for, which was a hole that predates this job. **O** gives a
+column gaps: bridges, roofs and two-storey buildings, with head-room, a cutaway
+so indoors is playable, and a depth order that survives them. Baseline at the
+time of writing,
 `./gradlew test`: core **1051 tests, 0 failures, 10 skipped**; `:gl` **62 tests,
 0 failures, 34 skipped** (the GL tests that need a driver skip in a container —
-they are the D-series instruments and they run on a real machine). After Job E:
-core **1109/0/10**, `:gl` unchanged. Four golden frames have been regenerated
-across the five jobs: two by Job W's stair blocks (a content change — the
+they are the D-series instruments and they run on a real machine). After Job O:
+core **1115/0/10**, `:gl` unchanged. Four golden frames have been regenerated
+across the whole plan: two by Job W's stair blocks (a content change — the
 palette is longer and an item cycle shifts) and two by R0's cubes, which is the
-first change in this plan a player would see. Jobs S and E changed none.
+only change here a player would see as a change rather than as a feature. Jobs
+S, E, N and O moved none.
 
 **Four of Job V's six steps found their own instruction wrong**, which is
 recorded per step rather than summarised away: V0's byte-identity was
@@ -1826,6 +1838,15 @@ encoding is limited to two.
 **Verify.** `NetWorldSyncTest` / `NetProjectileInventoryTest` green unchanged;
 a new case asserting a block edit at layer 5 replicates.
 
+#### N1 — done, and it was confirmation rather than construction
+
+Nothing on the wire changed. `blockEdit`/`blockSet`/`blockBatch` already carried
+an arbitrary `"y"`, `PlayerState.toMap` already wrote `z`, and the only thing
+limited to two layers was the sentence describing the encoding — corrected in
+place, along with a note on `layerOf` saying explicitly that it is unbounded on
+purpose and that bounding it is the server's job. A comment that implied a check
+where none existed was the one real hazard here.
+
 ### N2 — The server validates the height
 
 **Do.** The client's aim (R7) chooses a cell *and a layer*, and the server must
@@ -1845,6 +1866,19 @@ lies within those bounds has done nothing a legitimate client could not do.
 server's world is unchanged; an edit at a legal layer replicates to every
 client.
 
+#### N2 — done, and it was a hole rather than a widening
+
+The server took `Protocol.layerOf(msg)` and wrote with it, unvalidated — so a
+client could already name any layer it liked, before this job made the number
+mean anything. `editAllowed` bounds it now: the cell's own bounds, the level's
+ceiling, a reach in tiles, and `World.canReachCell` for the height.
+
+**Bounding, not reproducing.** C7 established that a client's camera is
+per-client state the server is never sent, so the server cannot recompute an
+aim derived from it — and does not try. Reach, ceiling and bounds are the
+server's to check, and a client inside them has asked for nothing a legitimate
+client could not have asked for.
+
 ### N3 — Determinism across the step-up rule
 
 **Do.** The server ticks the same `PlayerPhysics` clients predict with. W2's
@@ -1861,6 +1895,28 @@ position; it does not handle `z`. Reconcile `z` the same way.
 **Verify.** `NetCameraIndependenceTest`'s shape — two clients, one world — with
 one of them building under itself: both converge, and neither ends inside
 geometry.
+
+#### N3 — done, and the step's own reasoning was the useful part
+
+`z` and `vz` reconcile exactly as `x`, `y` and `vy` do — snap past the
+threshold, damped correction inside it.
+
+The step predicted the interesting case correctly: W2's rule is deterministic
+by construction because it reads only the level and the body, and what actually
+differs across the wire is **the level** — a client that has just placed a
+block under itself stands on it a tick before the server agrees. That is
+ordinary prediction error, and the ordinary correction is the right answer
+rather than a special case.
+
+**A regression on the way, caught by the instrument written for it.** Making the
+liquid layer per-column put a `Level.surfaceLayer()` call — and the format
+lookup behind it — inside `LiquidSim`'s whole-grid survey scan. That is the
+hottest loop in the class and the one `SIM_PLAN.md` measured the p95 stall in,
+and it cost **200 ms on a level that had taken 1 ms**.
+`LiquidSimBoundedTest.aSmallPondDoesNotCostWhatABigLevelCosts` failed on the
+first run after the change, saying exactly what had happened: the work had gone
+back to scaling with the level rather than with the liquid. The flat layer is
+resolved once and held again.
 
 ---
 
@@ -1893,6 +1949,19 @@ otherwise the move is refused. This is what makes a tunnel a tunnel.
 **Verify.** A body walks under a bridge; the same body cannot walk into a
 one-block-high gap.
 
+#### O2 — done, and W4's method stopped being a formality
+
+`Level.headRoom` and `barrierAt`'s body-height argument. W4 wrote `clearAt` as
+a method that could only answer yes, precisely so this step would have callers
+already asking it — and it did.
+
+**The probe had to look one layer above the feet, not from them.** Written the
+obvious way, `supportUnder(standing)` finds only the floor a body is on and
+then reads the stair one layer up as a ceiling with no head-room — which turns
+every staircase in the engine into a wall.
+`WalkableBlockTest.aStairIsWalkedUpWithoutJumping` caught it on the first run.
+A body can step up one layer, so the probe must see one layer up.
+
 ### O3 — Cutaway, or indoors is unplayable
 
 **Do.** A player who walks under a roof disappears. This is not a bug to fix
@@ -1907,6 +1976,30 @@ per-frame, and bounded by the ray's length.
 
 **Verify.** A player walks under a roof and remains visible; the roof is
 visibly faded and the columns beside it are not.
+
+#### O3 — done, and it took three corrections to point the right way
+
+`TerrainPainter.cutaway` returns the cells to draw see-through; the painter
+draws those runs as silhouettes. Outlines rather than reduced alpha, because a
+translucent fill still hides a sprite behind two of them and a player indoors is
+behind several.
+
+Three things were wrong before it worked, and all three are the same mistake in
+different clothes — reasoning about the ray instead of about what is *drawn*:
+
+1. **The march went the wrong way.** A block at cell T and layer L draws over
+   the floor point T − L·step, so the cells drawn over a body are B + m·step —
+   *along* the step, not against it. Backwards, the cutaway cleared the empty
+   ground behind the player.
+2. **It cleared one layer per step instead of a band.** A body is a billboard
+   taller than the tile it stands on, so a block anywhere from m to m + body
+   height overlaps it. Clearing only the layer the ray passes through left
+   everything above the ankles behind roof.
+3. **It cleared one cell per step instead of the ring.** This showed up as
+   top-down passing and isometric failing, which is the signature of a width
+   assumption: a diamond is twice as wide as the marker, so a body laps into the
+   cells beside it. Clearing the ring is also what a cutaway looks like in
+   practice — a hole in the roof that moves with the player.
 
 ### O4 — The depth order stops being provable
 
@@ -1930,11 +2023,49 @@ actor under an overhang with a shorter column in front — and it must fail
 before O4 and pass after. A test that passes before the step is not testing the
 step.
 
+#### O4 — done, and the pairwise sort turned out not to be needed
+
+**The fix is one change of granularity: terrain is queued a run at a time, each
+banded by the layer it rests on.** A column with no gaps is a single band and
+sorts exactly as it always did; a bridge's deck is a band four layers up, so it
+sorts above an actor walking underneath and below one standing on it.
+
+**Banded by what a run stands on, not by how tall it is**, and that distinction
+is the whole step. Keyed by its own top, a wall outranks an actor tied with it
+on depth — and in isometric a tile and its diagonal neighbour do tie, which is
+the "block ate a fifth of them" defect arriving by a third route. Keyed by what
+it stands on, a wall on the ground and an actor on the ground share a band and
+the existing tie-break settles them correctly.
+
+**So the plan's own proposal — the pairwise box comparator and a topological
+sort over screen-overlapping sprites — is recorded as not needed rather than
+deferred.** Appendix C's proof fails at exactly one sentence when a column gains
+a gap: "a column's drawn extent starts at its own floor row". Splitting the
+column into runs restores that sentence for each run independently, and the
+proof then applies to each. The expensive machinery was for a problem the
+cheaper change removes.
+
+A depth buffer stays rejected on requirement #4, unchanged.
+
 ### O5 — What a volume is finally for
 
 **Do.** Doors and stairs between storeys, roofs that are also floors, bridges
 over water. These are content, not engine, once O1–O4 are in — and listing them
 here is how this plan says where it stops.
+
+#### O5 — nothing to build, which is what this step says
+
+O1–O4 are in, so a bridge, a roof and a two-storey building are things the
+engine holds, simulates, draws, sorts and lets a creator build. What is left is
+somebody building one.
+
+Two engine-side gaps are worth naming rather than leaving to be discovered:
+**a run floating over a gap casts no shadow** (the shadow pass reads the run
+from the ground, which is deliberate — changing it would move golden frames for
+a look nobody has asked for yet), and **the cutaway is per-player**, so in
+multiplayer each client cuts its own roof away and a spectator sees a building
+another player is standing inside as solid. Both are correct for one player and
+both are known.
 
 ---
 
