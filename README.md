@@ -686,7 +686,8 @@ plays:
 | **Isometric** | diamond | along the screen's vertical | walks the plane on both axes | everything, **plus paths & walls** |
 
 Each format has its **own creative mode** — the main menu's *Creative Mode*
-entry picks which one to open, and the editor then paints, play-tests and
+entry picks which one to open, the *New Level* screen then names and sizes the
+level being built, and the editor paints, play-tests and
 generates for that format. Playing is the opposite: a level simply loads in the
 format it was built in, so a game type can hold side-scrolling caves, a
 top-down overworld and an isometric town at once, and a **door between two
@@ -1337,8 +1338,9 @@ figure, so the readout never inflates the frame it is measuring.
 ## Creative mode (paint objects)
 
 The Side-Scroller engine's built-in level editor, rebuilt on this engine's
-camera/registry architecture. From the main menu choose **Creative Mode**
-(or from the pause menu in a running game): a palette sidebar lists
+camera/registry architecture. From the main menu choose **Creative Mode**, pick
+a format and set the new level up on the *New Level* screen (or open the editor
+straight from the pause menu in a running game): a palette sidebar lists
 everything the registries know, in categories —
 
 | Category | Contents |
@@ -1446,10 +1448,21 @@ Isometric (with how many levels of each the game type already holds) — and
 the editor opens as that format's creative mode: its camera projection, its
 starter canvas (a ground floor to land on, or a walled plan-view arena), its
 palette, its generator default, and a play-test that moves under that
-format's rules. Picking a format continues the game type's last level when
-that level is in the same format, and starts a fresh canvas otherwise. The
-*New Level* and *Generate* dialogs carry a **Format** row, so you can switch
-modes in place without leaving the editor.
+format's rules.
+
+**Picking a format does not create the level.** It opens the **New Level**
+screen ([`NewLevelScene`](src/main/java/com/larsons/engine/demo/NewLevelScene.java)):
+the level's name, its canvas size, and the per-level settings form, all
+answered *before* anything is built. **Create Level** builds the starter
+canvas for the chosen format, saves it into the game type — so a created level
+is one that exists, listed under *Load Level* — and hands it to the editor.
+Those decisions used to be made for you and then only changeable afterwards,
+each somewhere else: the name in the editor's *Save* dialog, the size in its
+*New Level* dialog, the toggles in *Load Level → Edit Settings*. When the game
+type's last level is in the format you picked, the screen offers to **continue
+editing it** instead, which is what picking a format used to do by itself.
+The editor's own *New Level* and *Generate* dialogs still carry a **Format**
+row, so you can switch modes in place without leaving it.
 
 Painting itself works in **every format** — the palette paints through the
 same `Camera` projection the game renders with, so building in isometric is
@@ -3141,10 +3154,17 @@ default.
    ([`LevelSelectScene`](src/main/java/com/larsons/engine/demo/LevelSelectScene.java)).
    Click a level and you get two buttons: **Play Level** (load and play it) and
    **Edit Settings** (a form to **rename the level** and edit *that level's* own
-   toggles, saved back into the level). This is the one place per-level settings
-   are edited. The main menu also has **Rename Game Type**, which renames the
-   folder — its levels, doors, and custom content move with it.
-5. **Play** — the level loads with only its own enabled features active. Press
+   toggles, saved back into the level). The main menu also has **Rename Game
+   Type**, which renames the folder — its levels, doors, and custom content move
+   with it.
+5. **New level** — **Creative Mode** asks two questions before it builds
+   anything: which **format** (side-scroller, top-down, isometric), then the
+   **New Level** screen
+   ([`NewLevelScene`](src/main/java/com/larsons/engine/demo/NewLevelScene.java))
+   — the level's name, its canvas size, and the same per-level settings form
+   *Edit Settings* shows. **Create Level** builds the starter canvas, saves it
+   into the game type, and opens the editor on it.
+6. **Play** — the level loads with only its own enabled features active. Press
    **Esc** for a deliberately simple **pause menu**: *Resume*, *Save Level*
    (persist this world + its settings), *Edit in Creative*, and *Quit to Menu*.
 
@@ -3152,8 +3172,11 @@ Levels are authored and saved in **Creative Mode**, which snapshots the active
 toggles into the level on every save, and are stored under
 `resources/levels/<game-type>/<level>.json`.
 
-**Currently configurable features** — all of them per level, in
-*Load Level → Edit Settings*:
+**Currently configurable features** — all of them per level, asked in the two
+places a level's settings are decided: *Creative Mode → New Level* (before it
+exists) and *Load Level → Edit Settings* (afterwards), both built from
+[`ProfileForms`](src/main/java/com/larsons/engine/demo/ProfileForms.java) so
+neither can drift from the other:
 
 | Feature | Type | Notes |
 |---------|------|-------|

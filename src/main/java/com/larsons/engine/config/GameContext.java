@@ -11,6 +11,7 @@ import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.graphics.shader.ShaderChain;
 import com.larsons.engine.graphics.shader.ShaderPass;
 import com.larsons.engine.graphics.shader.Shaders;
+import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.net.NetSession;
 import com.larsons.engine.profile.DisplayCap;
@@ -139,11 +140,13 @@ public class GameContext {
     // --- creative mode selection ------------------------------------------------
 
     /**
-     * The level format the next creative session should build in, set by the
-     * main menu's per-format creative entries and consumed by the creative
-     * scene. {@code null} means "carry on with the level already being
-     * edited" — which is what re-entering creative mode from a paused game
-     * does, so it doesn't restart the format the creator is in.
+     * The level format the next new level should be built in, set by the main
+     * menu's per-format creative entries and consumed by the <em>New Level</em>
+     * settings screen that follows them (the creative scene consumes it too,
+     * for the paths that open the editor without going through that screen).
+     * {@code null} means "carry on with the level already being edited" —
+     * which is what re-entering creative mode from a paused game does, so it
+     * doesn't restart the format the creator is in.
      */
     private LevelFormat creativeFormat;
 
@@ -157,6 +160,32 @@ public class GameContext {
         LevelFormat requested = creativeFormat;
         creativeFormat = null;
         return requested;
+    }
+
+    /**
+     * The level a creative session should open with, built by the <em>New
+     * Level</em> settings screen. Picking a format no longer creates a level on
+     * the spot: the settings screen names it, sizes it and sets the toggles it
+     * will carry, and the level is created when that screen is done with. The
+     * finished level is handed over here rather than re-read from disk, so the
+     * editor opens exactly the object that was created.
+     *
+     * <p>{@code null} — the usual case — means "carry on with the level already
+     * being edited", which is what re-entering the editor from a paused game
+     * does.
+     */
+    private Level pendingCreativeLevel;
+
+    /** Hand {@code level} to the next creative session (the New Level screen). */
+    public void setPendingCreativeLevel(Level level) {
+        this.pendingCreativeLevel = level;
+    }
+
+    /** The level waiting to be edited, cleared as it is read (may be {@code null}). */
+    public Level takePendingCreativeLevel() {
+        Level pending = pendingCreativeLevel;
+        pendingCreativeLevel = null;
+        return pending;
     }
 
     // --- character selection ------------------------------------------------------

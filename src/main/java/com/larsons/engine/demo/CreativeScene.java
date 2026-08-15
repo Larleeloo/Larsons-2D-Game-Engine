@@ -704,10 +704,14 @@ public class CreativeScene extends AbstractScene {
             level = net.client().level(); // paint straight into the shared world
         } else {
             net = null;
-            // The main menu opens creative mode for one format; that choice is
-            // consumed here so re-entering (from the pause menu, say) returns
-            // to the level being edited instead of restarting the format.
-            level = loadInitialLevel(ctx.takeCreativeFormat());
+            // Both requests are spent here, whichever one is answered, so
+            // re-entering (from the pause menu, say) returns to the level being
+            // edited instead of restarting the format or re-creating a level.
+            LevelFormat requested = ctx.takeCreativeFormat();
+            Level created = ctx.takePendingCreativeLevel();
+            // A level the New Level screen just created is opened as it was
+            // created; otherwise carry on with (or start) one of this format's.
+            level = created != null ? created : loadInitialLevel(requested);
             // Edit (and play-test) with the level's own saved feature toggles.
             ctx.applyLevelSettings(level.settings);
         }
@@ -735,11 +739,16 @@ public class CreativeScene extends AbstractScene {
     }
 
     /**
-     * The level this creative session opens with. Entering creative mode for a
-     * particular format (the main menu's per-format entries) continues the
-     * last level when it was built in that format and starts a fresh canvas
-     * otherwise, so each format's creative mode picks up where <em>it</em> left
-     * off instead of dropping the creator into another format's level.
+     * The level this creative session opens with when no level was handed to it
+     * — re-entering from a paused game, and the editor's own entry points.
+     * Continues the game type's last level when it is in the requested format
+     * (or when nothing in particular was requested) and starts a fresh canvas
+     * otherwise, so the editor picks up where <em>this</em> format left off
+     * instead of dropping the creator into another format's level.
+     *
+     * <p>Creating a level from the main menu goes through
+     * {@link NewLevelScene} instead: it is named, sized and configured there
+     * and arrives here already built.
      */
     private Level loadInitialLevel(LevelFormat requested) {
         Level last = loadLastLevel();
