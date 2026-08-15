@@ -843,6 +843,22 @@ public class ConfigForm {
 
     public int getSelectedIndex() { return selected; }
 
+    /**
+     * Put the cursor on {@code index} (clamped to the form), scrolling it into
+     * view on the next render.
+     *
+     * <p>For a screen that rebuilds its form when a row is changed — a toggle
+     * that adds or removes the rows below it, say. Without this the cursor
+     * jumps back to the first row every time such a row is touched, which is
+     * not where the creator was.
+     */
+    public ConfigForm select(int index) {
+        if (options.isEmpty()) return this;
+        selected = Math.max(0, Math.min(options.size() - 1, index));
+        followSelection = true;
+        return this;
+    }
+
     /** Index of the first visible row (top of the scrolled window). */
     public int getScroll() { return scroll; }
 

@@ -1,5 +1,8 @@
 package com.larsons.engine.demo;
 
+import com.larsons.engine.character.CharacterProfile;
+import com.larsons.engine.character.CharacterStore;
+import com.larsons.engine.character.Characters;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.graphics.shader.Shaders;
@@ -9,11 +12,14 @@ import com.larsons.engine.profile.DisplayCap;
 import com.larsons.engine.ui.ConfigForm;
 
 import java.nio.file.Path;
+import java.util.List;
 
 /**
- * Builds the feature toggles for a level's own {@link GameProfile} — the
- * <em>Load Level → Edit Settings</em> form, and the only place these are
- * asked about. Each control edits the profile in place via lambdas.
+ * Builds the feature toggles for a level's own {@link GameProfile} — the two
+ * places a level's settings are asked about, and the same rows in both:
+ * <em>New Level</em> (before the level is created, see {@link NewLevelScene})
+ * and <em>Load Level → Edit Settings</em> (afterwards). Each control edits the
+ * profile in place via lambdas.
  *
  * <p>The launch-time game-type editor used to show this same list as a
  * template for levels created later. It no longer does: see
@@ -24,6 +30,35 @@ import java.nio.file.Path;
 final class ProfileForms {
 
     private ProfileForms() {}
+
+    /**
+     * A level's character roster: which profiles a player may choose from when
+     * the level starts. Nothing ticked means every profile is offered, which is
+     * what levels built before character profiles existed do.
+     *
+     * <p>Two screens ask this — <em>New Level</em> before the level exists and
+     * <em>Load Level → Edit Settings</em> afterwards — so the rows live beside
+     * the feature toggles they are shown with rather than in one of the two.
+     *
+     * @param gameType the game type whose character profiles are on offer
+     * @param roster   the level's roster, edited in place
+     */
+    static void addRosterOptions(ConfigForm form, String gameType, List<String> roster) {
+        // The game type's profiles must be registered before they can be listed.
+        new CharacterStore(gameType).loadAndRegister();
+        for (CharacterProfile c : Characters.all()) {
+            form.addToggle("Character: " + c.name,
+                    () -> roster.contains(c.key),
+                    v -> {
+                        if (v) {
+                            if (!roster.contains(c.key)) roster.add(c.key);
+                        } else {
+                            roster.remove(c.key);
+                        }
+                    });
+        }
+        form.addAction("Offer every character (clear the roster)", roster::clear);
+    }
 
     static void addFeatureOptions(ConfigForm form, GameProfile p) {
         // No level-format row here. The level's format is its own property and

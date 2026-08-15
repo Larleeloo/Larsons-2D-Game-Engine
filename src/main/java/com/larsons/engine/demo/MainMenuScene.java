@@ -77,7 +77,7 @@ public class MainMenuScene extends AbstractScene {
         // A finalized (published) game type is play-only: no creative editing,
         // feature edits, renames, or re-exports — just play its levels.
         if (p.creativeEnabled && !p.finalized) {
-            menu.add("Creative Mode (pick a level format)", this::openCreativePicker);
+            menu.add("Creative Mode (new level)", this::openCreativePicker);
         }
         menu.add("Multiplayer (Host / Join)", () -> scenes.transitionTo("multiplayer"));
         if (!p.finalized) {
@@ -97,10 +97,11 @@ public class MainMenuScene extends AbstractScene {
 
     /**
      * The creative-mode picker: one entry per {@link LevelFormat}, because the
-     * three formats are three creative modes. Each opens the editor building
-     * for that format — continuing this game type's last level when it was
-     * built in the same format, or starting a fresh canvas in it otherwise —
-     * and the counts show how many levels of each format the game type holds.
+     * three formats are three creative modes. Picking one is the first of two
+     * questions — it leads to the {@link NewLevelScene} settings screen, where
+     * the level is named, sized and given the toggles it will play with, and
+     * the level itself is created from there. The counts show how many levels
+     * of each format the game type already holds.
      */
     private void openCreativePicker() {
         GameProfile p = ctx.profile();
@@ -114,7 +115,7 @@ public class MainMenuScene extends AbstractScene {
                             + (saved == 1 ? " level)" : " levels)"),
                     () -> {
                         ctx.setCreativeFormat(format);
-                        scenes.transitionTo("creative");
+                        scenes.transitionTo(NewLevelScene.NAME);
                     });
         }
         picker.add("Back", this::buildMenu);

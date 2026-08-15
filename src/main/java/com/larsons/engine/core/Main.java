@@ -19,6 +19,7 @@ import com.larsons.engine.demo.KeyBindsScene;
 import com.larsons.engine.demo.LevelSelectScene;
 import com.larsons.engine.demo.MainMenuScene;
 import com.larsons.engine.demo.MultiplayerScene;
+import com.larsons.engine.demo.NewLevelScene;
 import com.larsons.engine.demo.PlayScene;
 import com.larsons.engine.demo.SkinEditorScene;
 import com.larsons.engine.demo.StartupScene;
@@ -122,6 +123,7 @@ public class Main {
         engine.scenes().register("menu", new MainMenuScene(context));
         engine.scenes().register("levelselect", new LevelSelectScene(context));
         engine.scenes().register("play", new PlayScene(context, LEVEL));
+        engine.scenes().register(NewLevelScene.NAME, new NewLevelScene(context));
         engine.scenes().register("creative", new CreativeScene(context));
         engine.scenes().register("multiplayer", new MultiplayerScene(context, LEVEL));
         engine.scenes().register("autolobby", new AutoBattlerLobbyScene(context));
