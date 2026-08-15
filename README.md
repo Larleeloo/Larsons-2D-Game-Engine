@@ -29,7 +29,10 @@ over in a generic, data-driven form and wired to the same toggles:
   erasing, pick-block, pan/zoom, play-testing, `Ctrl+Z` undo over **every**
   action it can take, and per-game-type level saving — in **three modes, one
   per level format** (side-scroller, top-down, isometric), each with its own
-  palette, starter canvas and movement model.
+  palette, starter canvas and movement model. The two plan views build in
+  **three dimensions**: stack columns against the face you point at, sculpt
+  the ground with raise / lower / flatten / smooth brushes, lock a build
+  height to cut a terrace, and roll a whole landscape from noise.
   Works offline **and inside a multiplayer session**, where strokes replicate
   to every player. See [Creative mode](#creative-mode-paint-objects) and
   [The three level formats](#the-three-level-formats).
@@ -1353,7 +1356,7 @@ everything the registries know, in categories —
 | Sounds   | the [sound editor](#sound-every-action-state): *Sound Editor…* lists **every place the game makes a noise** (~2,000 of them, custom objects included) with what each currently plays, *Sound Options…* holds the volumes and the fresh-pitch toggle, *Level Music…* picks this level's track, and one entry per family opens the list filtered to it |
 | Cutscenes | the level's scripted cutscenes — paint one to place its trigger marker; *Manage Cutscenes…* (or right-clicking an entry) opens the editor |
 | Mini Game | the *Mini Game Setup…* window plus the objective markers the four team modes are built from: flag bases, stockpile crates, team spawns, escort waypoints |
-| Tools    | player spawn, multiplayer spawn points, eraser, Brush Settings, the Generate button, **Light Direction…** (where the sun stands, and so which way stacked blocks throw their shadows), the Stat Rules editor, the Sound Editor |
+| Tools    | player spawn, multiplayer spawn points, eraser, Brush Settings, **Landscape…** (the height axis, this level's ceiling, and the raise/lower/flatten/smooth brushes), the Generate button, **Light Direction…** (where the sun stands, and so which way stacked blocks throw their shadows), the Stat Rules editor, the Sound Editor |
 
 Objects **you** created (via the "+" entries) wear a green corner badge in
 the palette and say "· custom" in the caption, so they're obvious at a
@@ -1387,9 +1390,12 @@ broken block.
 | Middle click | pick the hovered block into the palette (the top of the stack) |
 | WASD / arrows | pan the camera |
 | Mouse wheel | zoom (over the canvas) / scroll the palette (over the sidebar) |
+| Ctrl + wheel | move the build height (plan views) |
 | Tab | next palette category |
 | B | toggle the decoration layer (background / foreground) |
 | [ / ] | shrink / grow the paint brush (shapes cycle in the sidebar's Brush row) |
+| H | next landscape tool — Stack, Raise, Lower, Flatten, Smooth |
+| PgUp / PgDn | build height up / down (off the bottom = follow the surface) |
 | G | toggle the grid |
 | P | play-test the level in place (terrain restored on exit) |
 | Ctrl+Z | undo the last thing you did (a whole drag, or a whole window's worth of editing) |
@@ -1474,6 +1480,46 @@ palette) opens the full brush window: shape, size, and a **multi-block
 mix** — name up to three extra block keys and every stroke scatters them
 stably alongside the selected block, so one drag lays down varied terrain
 (stone + granite + gravel, say) instead of a flat fill.
+
+**Building 3D landscapes (top-down & isometric).** In the plan views a
+column of blocks is real height — you climb it, stand on it, and fall off
+it — so the editor builds along that axis rather than along a floor.
+
+- **Stack.** A click puts a block **against the face you are pointing at**:
+  point at a column's top and it grows taller, point at its side and the
+  block goes into the cell beside it, all the way to the level's ceiling
+  (eight blocks by default). The cursor is aimed by a ray marched *through*
+  the terrain, so what you click is what you see, not the floor tile hidden
+  behind the tower. Right-click takes the top block off, whatever height it
+  is at.
+- **Raise / Lower / Flatten / Smooth.** The `Build` row beside the brush
+  (or `H`, or the Landscape window) swaps the brush from placing blocks to
+  sculpting them: raise and lower move every column under the footprint a
+  layer at a time, flatten sets them all to one height, smooth averages
+  each against its neighbours — which turns the staircase a raise brush
+  leaves into a hill. Raising keeps the material each column is already
+  made of, so pulling a hillside up doesn't repaint it, and lowering stops
+  at the floor rather than punching a hole. A whole sculpting drag is one
+  `Ctrl+Z`.
+- **Build height.** `top` means "on whatever it lands on". Lock it to a
+  layer — `Ctrl+wheel`, `PgUp`/`PgDn`, or the sidebar's `- +` — and every
+  stroke builds to *that* height: a terrace cut across rolling ground, or
+  a stripe of one material painted along a cliff face at layer 4. A column
+  short of the lock is filled up to it and one already taller is repainted
+  at that height, so a placed block never floats over a gap.
+- **The cursor tells you what will happen.** It is drawn as the block (or
+  the column) it is about to become, standing at the height it will land
+  at, in the block's own colour; a cell with nowhere left to build draws
+  **red**; a sculpting brush ghosts the layers it is about to add and
+  outlines the ones it is about to remove; and a readout beside the pointer
+  says `h 4/8 · Stack · on top`.
+- **Landscape…** (Tools) holds the two settings the tools need: **Standing
+  on blocks (height)** — off, stacks are walls nobody can climb; on, they
+  are terrain — and **Ceiling (layers)**, how tall this level may be built.
+- **Generate → Landscape (hills)** rolls a whole one: two octaves of Perlin
+  noise quantised into layers, grass over stone, deterministic in the seed,
+  with a relief slider for how much rise you want. It switches the height
+  axis on, since terrain nobody can climb is just a maze of cliffs.
 
 **Liquids flow.**
 [`LiquidSim`](src/main/java/com/larsons/engine/world/LiquidSim.java) makes

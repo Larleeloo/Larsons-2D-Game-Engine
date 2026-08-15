@@ -38,10 +38,11 @@ import com.larsons.engine.world.BlockRegistry;
  *       walk on, two layers is a wall, and bare ground is a hole you cannot
  *       cross. A side-scroller has one layer and reads solidity off the block
  *       itself, exactly as it always did.</li>
- *   <li><b>Starter canvas &amp; generator</b> — {@link #starterLevel} floors a
- *       side-scroller and gives a plan-view map a walkable floor inside a
- *       stacked wall border, and {@link #defaultsToMaze()} picks the generator
- *       the format expects.</li>
+ *   <li><b>Starter canvas</b> — {@link #starterLevel} floors a side-scroller
+ *       and gives a plan-view map a walkable floor inside a stacked wall
+ *       border. Which <em>generator</em> a format's Generate window opens on is
+ *       the editor's decision rather than the format's, since the list of modes
+ *       differs by format: only a layered one has relief to build.</li>
  * </ul>
  */
 public enum LevelFormat {
@@ -125,9 +126,6 @@ public enum LevelFormat {
      * has one layer and no use for a second.
      */
     public boolean layered() { return planar(); }
-
-    /** Whether the Generate dialog defaults to the maze generator. */
-    public boolean defaultsToMaze() { return planar(); }
 
     /** The floor block a fresh (or migrated) plan-view canvas is laid with. */
     public static Block floorBlock(BlockRegistry blocks) {

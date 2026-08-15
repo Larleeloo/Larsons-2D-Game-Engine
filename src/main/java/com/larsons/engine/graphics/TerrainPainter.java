@@ -313,6 +313,79 @@ public final class TerrainPainter {
     }
 
     /**
+     * Whether the quad edge {@code i}&rarr;{@code j} is turned toward the
+     * viewer — an ordinary back-face cull, done in two dimensions because the
+     * extrusion runs along a screen axis.
+     *
+     * <p>A block stands <em>up</em> the screen, so a side face is turned toward
+     * the camera exactly when its edge's outward normal points <em>down</em> it.
+     * See {@link Pass#drawVisibleFaces} for why the winding is assumed rather
+     * than measured, and for the test that guards the assumption. It is one
+     * method rather than two because the editor's ghost cursor has to pick the
+     * same faces the solid block will: a preview that shows a different pair of
+     * faces from the block it is previewing is worse than no preview.
+     */
+    private static boolean facesCamera(int[] xs, int i, int j) {
+        return -(xs[j] - xs[i]) > 0;
+    }
+
+    /**
+     * A block-shaped ghost standing at (col,row) over the layers
+     * {@code [base, top)} — the editor's cursor, drawn as the thing it is
+     * about to build.
+     *
+     * <p><b>Why the painter owns this and not the editor.</b> Where a block
+     * lands on screen is three pieces of arithmetic that must not have a second
+     * copy: the lift per layer, the off-by-one that puts layer 1 <em>on</em> the
+     * floor rather than one block above it, and which side faces a heading
+     * shows. A preview drawn from its own copy of those is a preview that is
+     * right at rest and wrong at a turned heading — which is exactly the class
+     * of bug the creator would blame on placement.
+     *
+     * <p>Unlike a real column this draws every camera-facing side, without
+     * asking whether a neighbour hides it. A ghost is meant to read as a cube
+     * hanging in the air even when it is pressed against a cliff, and the
+     * faces a solid block would drop are the ones that say where it is.
+     *
+     * @param base  the lowest layer the ghost occupies; {@code 0} is the floor
+     *              itself, which has no height and draws as a flat quad
+     * @param top   one past the highest layer it occupies
+     * @param fill  a translucent body colour, or {@code null} for outline only
+     */
+    public static void drawGhostColumn(DrawTarget target, Camera camera, Level level,
+                                       int col, int row, int base, int top,
+                                       Color fill, Color ink, float thickness) {
+        int ts = level.tileSize;
+        int lift = liftPixels(camera, ts);
+        int[] xs = new int[4], ys = new int[4], corner = new int[2];
+        double wx = col * (double) ts, wy = row * (double) ts;
+        double[][] cs = {{wx, wy}, {wx + ts, wy}, {wx + ts, wy + ts}, {wx, wy + ts}};
+        for (int i = 0; i < 4; i++) {
+            camera.worldToScreen(cs[i][0], cs[i][1], corner);
+            xs[i] = corner[0];
+            ys[i] = corner[1];
+        }
+        int lower = (int) Math.round(lift * (double) Math.max(0, base - 1));
+        int upper = (int) Math.round(lift * (double) Math.max(0, top - 1));
+        int[] faceX = new int[4], faceY = new int[4];
+        if (upper > lower) {
+            for (int i = 0; i < 4; i++) {
+                int j = (i + 1) & 3;
+                if (!facesCamera(xs, i, j)) continue;
+                faceX[0] = xs[i]; faceY[0] = ys[i] - upper;
+                faceX[1] = xs[j]; faceY[1] = ys[j] - upper;
+                faceX[2] = xs[j]; faceY[2] = ys[j] - lower;
+                faceX[3] = xs[i]; faceY[3] = ys[i] - lower;
+                if (fill != null) target.fillPolygon(faceX, faceY, 4, fill);
+                target.drawPolygon(faceX, faceY, 4, ink, thickness);
+            }
+        }
+        for (int i = 0; i < 4; i++) ys[i] -= upper;
+        if (fill != null) target.fillPolygon(xs, ys, 4, fill);
+        target.drawPolygon(xs, ys, 4, ink, thickness);
+    }
+
+    /**
      * The crack overlay on the block being held-mined at (col,row), spreading
      * with {@code progress} in [0,1].
      *
@@ -936,7 +1009,7 @@ public final class TerrainPainter {
                 int j = (i + 1) & 3;
                 // The y component of the edge's outward normal, (dy, -dx) for a
                 // quad that reads clockwise on a screen whose y grows downward.
-                if (-(xs[j] - xs[i]) <= 0) continue;
+                if (!facesCamera(xs, i, j)) continue;
                 // …and the neighbour on the far side of this edge hides
                 // everything up to its own height. A plateau of identical
                 // columns therefore draws its tops and the side faces of its

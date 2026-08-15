@@ -280,6 +280,14 @@ public class CreativeScene extends AbstractScene {
     private static final Color CUTSCENE_PUPIL = new Color(20, 20, 30);
     private static final Color CUSTOM_BADGE = new Color(110, 220, 140);
     private static final Color FACE_HIGHLIGHT = new Color(160, 240, 160);
+    /** The cursor's outline over a block the eraser would take off. */
+    private static final Color ERASE_GHOST = new Color(230, 100, 120);
+    /** A cell the placement rule refuses, and the layers a sculpt would remove. */
+    private static final Color REFUSED_INK = new Color(240, 110, 110);
+    private static final Color REFUSED_FILL = new Color(200, 60, 60, 70);
+    /** The layers a sculpting verb is about to add. */
+    private static final Color GROW_INK = new Color(150, 235, 180);
+    private static final Color GROW_FILL = new Color(110, 210, 150, 70);
 
     /** The three-stop rarity halo, shared so no paint is built per item per frame. */
     private static final float[] HALO_STOPS = {0f, 0.55f, 1f};
@@ -305,7 +313,7 @@ public class CreativeScene extends AbstractScene {
         CHARACTERS, EFFECTS, SOUNDS, CUTSCENES, MINIGAME, TOOLS }
 
     private enum Dialog { NONE, NEW_LEVEL, SAVE, LOAD, CONFIRM_EXIT, GENERATE, DOORS, TEXTURE,
-        CUSTOM, RULES, BRUSH, CUTSCENES, CUTSCENE_ACTORS, CUTSCENE_STEPS, MINIGAME,
+        CUSTOM, RULES, BRUSH, LANDSCAPE, CUTSCENES, CUTSCENE_ACTORS, CUTSCENE_STEPS, MINIGAME,
         ROSTER, SOUNDS, SOUND, SOUND_OPTIONS, LEVEL_MUSIC, SUNLIGHT, KEYBINDS }
 
     /** {@code custom} marks user-created objects (badged, deletable). */
@@ -379,6 +387,34 @@ public class CreativeScene extends AbstractScene {
     private final Rectangle brushShapeBox = new Rectangle();
     private boolean brushMix;
     private String brushKey2 = "", brushKey3 = "", brushKey4 = "";
+
+    /**
+     * What a block stroke does to the <em>height</em> of the cells it covers,
+     * as opposed to which block it paints in them.
+     *
+     * <p>{@link Brush.Height#PAINT} is the editor as it always was — one block
+     * per click, against the face the cursor is pointing at. The other four are
+     * what turn a tower into a landscape: placing blocks one at a time builds a
+     * wall, and nobody has ever sculpted a hillside that way
+     * ({@code HEIGHT_PLAN.md} E3).
+     */
+    private Brush.Height buildTool = Brush.Height.PAINT;
+    /**
+     * The layer every stroke builds to, or {@code -1} to follow the surface.
+     *
+     * <p>Unlocked, a block goes on top of whatever it is dropped on, which is
+     * the rule that makes a column something you build by clicking. Locked, it
+     * goes at a height the creator chose — which is how a terrace is cut across
+     * rolling ground, how a stripe of one material is drawn along a cliff face,
+     * and how anything is built <em>inside</em> a shape rather than on top of
+     * it ({@code HEIGHT_PLAN.md} E4).
+     */
+    private int buildLayer = -1;
+    /** Why the last stroke refused a cell, shown once the stroke has finished. */
+    private String buildRefusal;
+    private final Rectangle buildToolBox = new Rectangle();
+    private final Rectangle buildLayerDownBox = new Rectangle();
+    private final Rectangle buildLayerUpBox = new Rectangle();
 
     // Surface decor paint options (the SURFACE category's toggle rows).
     private int surfaceFaceMode;    // 0 = auto, 1..4 = UP/DOWN/LEFT/RIGHT
@@ -482,8 +518,19 @@ public class CreativeScene extends AbstractScene {
     /** Format picked in the New Level / Generate dialogs (the mode they build for). */
     private LevelFormat pendingFormat = LevelFormat.SIDE_SCROLLER;
     private int genWidth = 240, genHeight = 140, genSeed = 1;
-    /** Generate dialog mode: Perlin terrain, or the top-down/iso maze. */
-    private boolean genMaze;
+    /**
+     * Generate dialog mode: rolling landscape, Perlin terrain, or the maze.
+     *
+     * <p>Held as the label the form shows rather than as an enum, because the
+     * list of modes is not the same in every format — a side-scroller has no
+     * layers to build relief out of, so it is not offered the landscape.
+     */
+    private String genMode = GEN_TERRAIN;
+    private static final String GEN_LANDSCAPE = "Landscape (hills)";
+    private static final String GEN_TERRAIN = "Perlin terrain";
+    private static final String GEN_MAZE = "Maze";
+    /** How many layers of rise the landscape generator is allowed. */
+    private int genRelief = 4;
     private int doorEditIndex; // 0 = new door, 1.. = existing doors
     private String doorLabel = "";
     private int doorTargetIndex, doorColorIndex;
@@ -607,6 +654,19 @@ public class CreativeScene extends AbstractScene {
 
     /** This session's undo history, exposed so tests can walk it. */
     public EditHistory history() { return history; }
+
+    /**
+     * The camera this session is looking through, exposed so tests can work
+     * out where a cell is on screen.
+     *
+     * <p>Editing in three dimensions is aimed at faces rather than at cells —
+     * the top of a three-deep column is three block-lifts up the screen from
+     * its own floor tile — so a test that clicks "on the tower" has to project
+     * the same way the editor does. Reconstructing a matching camera in the
+     * test would be a second copy of that arithmetic, and a second copy is
+     * what would go on passing after the projection changed.
+     */
+    public Camera camera() { return camera; }
 
     /**
      * The level format this creative session is building in — the editor
@@ -872,6 +932,7 @@ public class CreativeScene extends AbstractScene {
         tools.add(new Entry("playerskin", "playerskin", "Player Skin…", playerSkinIcon()));
         tools.add(new Entry("eraser", "eraser", "Eraser", eraserIcon()));
         tools.add(new Entry("brush", "brush", "Brush Settings…", brushIcon()));
+        tools.add(new Entry("landscape", "landscape", "Landscape…", landscapeIcon()));
         tools.add(new Entry("generate", "generate", "Generate Level…", generateIcon()));
         tools.add(new Entry("sunlight", "sunlight", "Light Direction…", sunlightIcon()));
         tools.add(new Entry("rules", "rules", "Stat Rules…", rulesIcon()));
@@ -1043,6 +1104,13 @@ public class CreativeScene extends AbstractScene {
             if (overSidebar) {
                 scroll.merge(category, wheel, Integer::sum);
                 clampScroll();
+            } else if (ctrl) {
+                // Ctrl+wheel is the build height, because the height axis is
+                // the one thing a creator changes as often as the zoom and the
+                // wheel is where a hand already is. Ctrl is free over the
+                // canvas: it is what stops the camera panning, so nothing else
+                // is listening while it is down.
+                nudgeBuildLayer(-wheel);
             } else {
                 double factor = wheel < 0 ? 1.15 : 1 / 1.15;
                 camera.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, camera.zoom * factor));
@@ -1072,6 +1140,9 @@ public class CreativeScene extends AbstractScene {
             brushSize = Math.min(Brush.MAX_SIZE, brushSize + 1);
             setStatus("Brush: " + Brush.label(brushShape) + " " + brushSize);
         }
+        if (KeyBinds.pressed(input, GameAction.EDITOR_BUILD_TOOL)) cycleBuildTool();
+        if (KeyBinds.pressed(input, GameAction.EDITOR_LAYER_UP)) nudgeBuildLayer(1);
+        if (KeyBinds.pressed(input, GameAction.EDITOR_LAYER_DOWN)) nudgeBuildLayer(-1);
         if (net == null) {
             if (KeyBinds.pressed(input, GameAction.EDITOR_PLAYTEST)) {
                 enterTest();
@@ -1134,15 +1205,27 @@ public class CreativeScene extends AbstractScene {
             Entry entry = selectedEntry();
             boolean paintable = entry != null
                     && (entry.kind.equals("block") || entry.kind.equals("eraser"));
-            boolean newCell = col != lastPaintCol || row != lastPaintRow;
+            // Which cell a stroke acts on. Blocks build against the face the
+            // cursor is on — a top face carries on up the same column, a side
+            // face steps out into the cell the ray was passing through when it
+            // met that face — so the stamp is centred there rather than on the
+            // cell that was hit. The sculpting verbs act on the ground the
+            // cursor is over, which is the cell that was hit.
+            int strokeCol = sculpting(entry) || at == null ? col : at.placeCol();
+            int strokeRow = sculpting(entry) || at == null ? row : at.placeRow();
+            boolean newCell = strokeCol != lastPaintCol || strokeRow != lastPaintRow;
             if (paintStarted || (paintable && newCell)) {
                 // Opened here rather than on the press, because a drag that
                 // began over the sidebar arrives on the canvas with the press
                 // already spent — and it still paints, so it is still a stroke.
                 beginStroke(entry);
-                paintAt(entry, aim[0], aim[1], col, row, paintStarted);
-                lastPaintCol = col;
-                lastPaintRow = row;
+                if (sculpting(entry)) {
+                    sculptAt(entry, strokeCol, strokeRow);
+                } else {
+                    paintAt(entry, aim[0], aim[1], strokeCol, strokeRow, paintStarted);
+                }
+                lastPaintCol = strokeCol;
+                lastPaintRow = strokeRow;
             }
         } else {
             lastPaintCol = lastPaintRow = Integer.MIN_VALUE;
@@ -1163,9 +1246,97 @@ public class CreativeScene extends AbstractScene {
         }
         if (!painting && !erasing) {
             endStroke(); // both released: the stroke is one finished action
+            // A refusal is reported when the stroke is over rather than as it
+            // happens: a drag across a plateau at the ceiling would otherwise
+            // rewrite the status line every frame with the same sentence.
+            if (buildRefusal != null) {
+                setStatus("Nothing placed — " + buildRefusal);
+                buildRefusal = null;
+            }
         }
 
         particles.update(dt);
+    }
+
+    // --- the landscape tools --------------------------------------------------------
+
+    /**
+     * Whether a stroke with {@code entry} armed sculpts the ground rather than
+     * painting a block into it.
+     *
+     * <p>Gated on the palette holding a block, because the verbs move terrain
+     * and there is no sense in which a mob or a door has a height to raise.
+     * Arming "raise" and then selecting a mob paints the mob, which is the
+     * answer that never surprises anybody.
+     */
+    private boolean sculpting(Entry entry) {
+        return buildTool != Brush.Height.PAINT && entry != null && entry.kind.equals("block");
+    }
+
+    /** Move the ground under the brush with the armed verb. */
+    private void sculptAt(Entry entry, int col, int row) {
+        Block block = level.blocks.get(entry.key);
+        if (block == null) return;
+        if (!level.layered()) {
+            setStatus("The landscape tools need a plan view — a side-scroller has"
+                    + " no height axis to sculpt");
+            return;
+        }
+        List<int[]> cells = Brush.cells(brushShape, brushSize, col, row);
+        // Every cell the stamp covers joins the undo step before any of it
+        // moves, because a sculpt writes a whole column per cell and the step
+        // has to hand back the column that was there — not the one halfway
+        // through the drag (V5).
+        for (int[] cell : cells) recordCell(cell[0], cell[1]);
+        boolean changed = Brush.applyHeight(level, buildTool, cells, col, row,
+                block.id(), buildLayer, this::writeLayer);
+        if (!changed) return;
+        if (net == null) {
+            Sounds.playFirst(1.0, SoundKeys.block(block.key(), "place"),
+                    SoundKeys.ui("paint"), SoundKeys.player("place"));
+        }
+        setStatus(Brush.label(buildTool) + " · " + level.stackHeight(col, row)
+                + " blocks deep here");
+    }
+
+    /** The editor's landscape verb, {@code PAINT} when it is placing blocks. */
+    public Brush.Height buildTool() { return buildTool; }
+
+    /** The layer strokes build to, or {@code -1} when they follow the surface. */
+    public int buildLayer() { return buildLayer; }
+
+    private void cycleBuildTool() {
+        buildTool = Brush.next(buildTool);
+        ctx.sfx(Sfx.CLICK);
+        setStatus(buildTool == Brush.Height.PAINT
+                ? "Tool: Stack — a block goes on the face you point at"
+                : "Tool: " + Brush.label(buildTool) + " — " + Brush.describe(buildTool));
+    }
+
+    /**
+     * Move the build height by {@code delta} layers, off the bottom of the
+     * range and back to following the surface.
+     *
+     * <p>One control rather than a lock switch and a number: "follow the
+     * surface" is the layer below the floor, so a creator winds the height down
+     * past the ground and lands back in the mode they started in instead of
+     * hunting for the toggle that turns it off.
+     */
+    private void nudgeBuildLayer(int delta) {
+        int ceiling = level.layerLimit();
+        buildLayer = Math.max(-1, Math.min(ceiling - 1, buildLayer + delta));
+        ctx.sfx(Sfx.CLICK);
+        setStatus(buildLayer < 0
+                ? "Build height: follow the surface"
+                : "Build height: layer " + buildLayer + " (" + (buildLayer + 1)
+                + " blocks up) of " + ceiling
+                + (level.verticality() ? "" : " — this level's height axis is off,"
+                + " so players will read these as walls: Landscape… to turn it on"));
+    }
+
+    /** The build height as the HUD spells it, in the width the sidebar has. */
+    private String buildLayerLabel() {
+        return buildLayer < 0 ? "top" : "L" + buildLayer;
     }
 
     // --- level size sliders, override button & brush controls -----------------------
@@ -1244,6 +1415,18 @@ public class CreativeScene extends AbstractScene {
             brushShape = Brush.next(brushShape);
             ctx.sfx(Sfx.CLICK);
             setStatus("Brush: " + Brush.label(brushShape) + " " + brushSize);
+            return true;
+        }
+        if (buildToolBox.width > 0 && buildToolBox.contains(mouseX, mouseY)) {
+            cycleBuildTool();
+            return true;
+        }
+        if (buildLayerDownBox.width > 0 && buildLayerDownBox.contains(mouseX, mouseY)) {
+            nudgeBuildLayer(-1);
+            return true;
+        }
+        if (buildLayerUpBox.width > 0 && buildLayerUpBox.contains(mouseX, mouseY)) {
+            nudgeBuildLayer(1);
             return true;
         }
         for (int i = 0; i < sliderTracks.length; i++) {
@@ -1366,6 +1549,33 @@ public class CreativeScene extends AbstractScene {
             clampScroll();
         }));
     }
+
+    /**
+     * The level's height axis and its ceiling, for the Landscape window.
+     *
+     * <p>Not part of {@link #recordDoc}, and it is worth saying why rather than
+     * adding it there: the ceiling is a level property like the sun's bearing
+     * and belongs beside it, but the height axis lives in {@code Level.settings}
+     * — a copy of the game profile — and putting the level's copy back without
+     * the running one would leave the editor drawing under one rule and playing
+     * under the other. So this restores both, through the same call a loaded
+     * level's settings arrive by.
+     */
+    private void recordLandscape() {
+        if (!history.recording() || !stepAspects.add("landscape")) return;
+        Level target = level;
+        history.add(EditHistory.field(
+                () -> new LandscapeState(target.maxLayers,
+                        target.settings == null ? null : target.settings.copy()),
+                state -> {
+                    target.maxLayers = state.maxLayers();
+                    target.settings = state.settings();
+                    ctx.applyLevelSettings(target.settings);
+                }));
+    }
+
+    /** What {@link #recordLandscape} hands back. */
+    private record LandscapeState(int maxLayers, GameProfile settings) {}
 
     /** Save the level's size and contents before a resize re-cuts them. */
     private void recordBounds() {
@@ -1547,6 +1757,11 @@ public class CreativeScene extends AbstractScene {
                             cell[0] * 31 + cell[1] * 47, mix.size()));
                     if (paintCell(cell[0], cell[1], paintId)) painted = true;
                 }
+                if (painted) {
+                    // A stroke that put something down is not a refused one,
+                    // whatever a cell at the edge of a wide brush said.
+                    buildRefusal = null;
+                }
                 if (painted && net == null) {
                     Sounds.playFirst(1.0, SoundKeys.block(b.key(), "place"),
                             SoundKeys.ui("paint"), SoundKeys.player("place"));
@@ -1705,6 +1920,9 @@ public class CreativeScene extends AbstractScene {
             case "brush" -> {
                 if (firstClick) openDialog(Dialog.BRUSH);
             }
+            case "landscape" -> {
+                if (firstClick) openDialog(Dialog.LANDSCAPE);
+            }
             case "generate" -> {
                 if (firstClick) {
                     if (net != null) {
@@ -1798,20 +2016,35 @@ public class CreativeScene extends AbstractScene {
      * toggles.
      */
     /**
-     * Where the brush drops a block at (col,row): on the floor when the cell is
-     * bare, and on top of what is already there when it isn't. Blocks stack by
-     * themselves, so building a wall in a plan view is painting the same cell
-     * twice rather than arming a mode first — and painting a full cell replaces
-     * the block on top, which is what repainting a wall should do.
+     * Where the brush drops a block at (col,row) — {@link Brush#place}, asked
+     * with the editor's current build height.
+     *
+     * <p>Blocks stack by themselves, so building a tower in a plan view is
+     * clicking the same cell repeatedly rather than arming a mode first, and it
+     * carries on past the second layer to whatever ceiling the level sets. What
+     * used to be here stopped at two, which is the shape a plan view had before
+     * it had a height axis at all.
      */
-    private int paintLayer(int col, int row) {
-        if (!level.layered() || level.tileAt(col, row) == 0) return Level.LAYER_GROUND;
-        return Level.LAYER_UPPER;
+    private Brush.Placement placementAt(int col, int row) {
+        return Brush.place(level, col, row, buildLayer);
     }
 
-    /** Paint one cell with {@code id}, into whichever layer it lands in. */
+    /**
+     * Paint one cell with {@code id}, filling every layer the placement covers
+     * — one for a block dropped on the surface, and the run from the column's
+     * top up to the build height when one is locked.
+     */
     private boolean paintCell(int col, int row, int id) {
-        return writeLayer(col, row, paintLayer(col, row), id);
+        Brush.Placement at = placementAt(col, row);
+        if (at.refused()) {
+            if (buildRefusal == null) buildRefusal = at.refusal();
+            return false;
+        }
+        boolean changed = false;
+        for (int layer = at.fromLayer(); layer <= at.toLayer(); layer++) {
+            changed |= writeLayer(col, row, layer, id);
+        }
+        return changed;
     }
 
     /**
@@ -1924,13 +2157,16 @@ public class CreativeScene extends AbstractScene {
     }
 
     /**
-     * The layer the eraser bites into: a stack comes apart from the top, so
-     * the first stroke takes the wall down to a path and the second takes the
-     * path away, leaving the hole.
+     * The layer the eraser bites into: a stack comes apart from the top,
+     * however deep it is, so a stroke takes a tower down a block at a time and
+     * the last one takes the floor away, leaving the hole.
+     *
+     * <p>Asked of the whole column rather than of layer 1, which is what it
+     * used to be — an eraser that only knew about two layers took the middle
+     * out of anything taller and left the top standing on nothing.
      */
     private int eraseLayer(int col, int row) {
-        return level.tileAt(col, row, Level.LAYER_UPPER) > 0
-                ? Level.LAYER_UPPER : Level.LAYER_GROUND;
+        return Math.max(Level.LAYER_GROUND, level.topFilledLayer(col, row));
     }
 
     /** Erase the topmost block of one cell. */
@@ -2075,6 +2311,7 @@ public class CreativeScene extends AbstractScene {
                 }
                 case "new" -> openCustomCreator();
                 case "brush" -> openDialog(Dialog.BRUSH);
+                case "landscape" -> openDialog(Dialog.LANDSCAPE);
                 case "rules" -> {
                     if (net == null) openDialog(Dialog.RULES);
                     else setStatus("Stat rules are edited offline");
@@ -3051,12 +3288,16 @@ public class CreativeScene extends AbstractScene {
         int layer = level.placeLayer(col, row);
         if (b == null || layer < 0) return;
         // "Where I am" is the shape the physics step collided with — on a plane
-        // the ground under the feet, not the body box the sprite's head fills.
+        // the ground under the feet, not the body box the sprite's head fills —
+        // and, once a body can be at a height, at which height: a player on the
+        // floor is not in the way of a block going on a roof four layers up
+        // (W6), and a player standing on a tower is in the way of the next
+        // block on top of it whatever number that layer has.
         boolean overlapsMe = PlayerPhysics.standingIn(level, testMe.x, testMe.y, testHitSize(),
-                PerspectiveSpace.of(level.perspective), col, row);
+                PerspectiveSpace.of(level.perspective), col, row, testMe.z, layer);
         // Flooring a hole under your own feet is not walling yourself in.
         boolean wouldClose = b.solid()
-                && (!level.layered() || layer == Level.LAYER_UPPER);
+                && (!level.layered() || layer > Level.LAYER_GROUND);
         if (wouldClose && overlapsMe) return;
         if (testWorld.placeBlock(col, row, b.id())) {
             if (p.itemsEnabled) testInv.consumeSelected();
@@ -3126,6 +3367,7 @@ public class CreativeScene extends AbstractScene {
             case CUSTOM -> "New Custom " + customKindName();
             case RULES -> "Stat Rules — " + level.name;
             case BRUSH -> "Brush Settings";
+            case LANDSCAPE -> "Landscape — " + level.name;
             case CUTSCENES -> "Cutscenes — " + level.name;
             case CUTSCENE_ACTORS -> "Actors — " + editingCutsceneName();
             case CUTSCENE_STEPS -> "Steps — " + editingCutsceneName();
@@ -3240,6 +3482,7 @@ public class CreativeScene extends AbstractScene {
             case CUSTOM -> buildCustomForm();
             case RULES -> buildRulesForm();
             case BRUSH -> buildBrushForm();
+            case LANDSCAPE -> buildLandscapeForm();
             case CUTSCENES -> buildCutscenesForm();
             case CUTSCENE_ACTORS -> buildCutsceneActorsForm();
             case CUTSCENE_STEPS -> buildCutsceneStepsForm();
@@ -3402,6 +3645,83 @@ public class CreativeScene extends AbstractScene {
         });
     }
 
+    /**
+     * The Landscape window: the height axis, how deep this level may be built,
+     * and the sculpting verb the brush is currently armed with.
+     *
+     * <p><b>The height axis is the first row for a reason.</b> A level that has
+     * not asked for it is one where a stack is a wall — the blocks still draw
+     * and still stop you, and a player cannot climb them or stand on top. A
+     * creator building hills in such a level has made a landscape nobody can
+     * walk on, and there is nothing in the picture that says so. Turning it on
+     * is one click from the tool that builds the hills, and the note underneath
+     * says what turning it on does to the level it is being turned on for.
+     */
+    private void buildLandscapeForm() {
+        if (!level.layered()) {
+            dialogForm.addNote("This is a " + format().displayName().toLowerCase()
+                    + " level. The height axis belongs to the plan views: a"
+                    + " side-scroller already draws height as the screen's"
+                    + " vertical, and a second one on top of it is a"
+                    + " contradiction rather than a feature.");
+            dialogForm.addAction("Done", this::closeDialog);
+            return;
+        }
+        GameProfile p = profile();
+        dialogForm.addToggle("Standing on blocks (height)", () -> p.verticality, v -> {
+            p.verticality = v;
+            // Written into the level as well as the profile, because
+            // Level.verticality() reads the level's own copy: a toggle that
+            // only moved the profile would leave the editor drawing and
+            // placing under the old rule until the level was saved and
+            // reopened.
+            if (net == null) level.captureSettings(p);
+            ctx.applyLiveSettings();
+        });
+        dialogForm.addNote("Off: stacks are walls you cannot climb. On: climb them,"
+                + " stand on top, walk off and fall — and every wall in this level"
+                + " becomes something a jump can clear.");
+        dialogForm.addToggle("Falling hurts", () -> p.fallDamageEnabled,
+                        v -> p.fallDamageEnabled = v)
+                .enabledWhen(() -> p.verticality);
+        dialogForm.addSlider("Ceiling (layers)", () -> level.maxLayers,
+                v -> level.maxLayers = v, 2, Level.DEFAULT_MAX_LAYERS);
+        dialogForm.addNote("How tall a column in this level may be built. Eight is"
+                + " two storeys and a roof; a level that means to stay flat says"
+                + " so here rather than relying on nobody stacking.");
+
+        String[] tools = new String[Brush.Height.values().length];
+        for (Brush.Height h : Brush.Height.values()) tools[h.ordinal()] = Brush.label(h);
+        dialogForm.addEnum("Landscape tool", tools, () -> Brush.label(buildTool), v -> {
+            for (Brush.Height h : Brush.Height.values()) {
+                if (Brush.label(h).equals(v)) buildTool = h;
+            }
+        });
+        dialogForm.addNote(Brush.describe(buildTool));
+        dialogForm.addToggle("Lock the build height",
+                () -> buildLayer >= 0,
+                v -> buildLayer = v ? Math.max(0, buildLayer) : -1);
+        dialogForm.addSlider("Build height (layer)", () -> Math.max(0, buildLayer),
+                        v -> buildLayer = v, 0, Level.DEFAULT_MAX_LAYERS - 1)
+                .enabledWhen(() -> buildLayer >= 0);
+        dialogForm.addNote("Unlocked, a block lands on whatever it is dropped on."
+                + " Locked, every stroke builds to that layer — a terrace across"
+                + " rolling ground, or a stripe along a cliff face.");
+        dialogForm.addNote("[" + KeyBinds.label(GameAction.EDITOR_BUILD_TOOL)
+                + "] cycles the tool. ["
+                + KeyBinds.label(GameAction.EDITOR_LAYER_DOWN) + "] / ["
+                + KeyBinds.label(GameAction.EDITOR_LAYER_UP) + "] and Ctrl+wheel"
+                + " move the build height.");
+        dialogForm.addAction("Done", () -> {
+            closeDialog();
+            setStatus(level.verticality()
+                    ? "Height axis on — columns up to " + level.layerLimit()
+                    + " blocks, and players can climb them"
+                    : "Height axis off — columns up to " + level.layerLimit()
+                    + " blocks, read as walls players cannot climb");
+        });
+    }
+
     private String customKindName() {
         return switch (customCategory) {
             case LIQUIDS -> "Liquid";
@@ -3450,25 +3770,54 @@ public class CreativeScene extends AbstractScene {
         closeDialog();
     }
 
+    /**
+     * The generator a format opens the window on.
+     *
+     * <p>Unchanged for the side-scroller, whose terrain is the Perlin one it
+     * has always been. The plan views now lead with the landscape rather than
+     * with the maze: a maze is one thing a plan view can be and a landscape is
+     * what its height axis is <em>for</em>, and the mode is one row away either
+     * way. The starter canvas a brand-new level opens with is a separate
+     * decision and is left alone.
+     */
+    private static String defaultGenMode(LevelFormat format) {
+        return format.layered() ? GEN_LANDSCAPE : GEN_TERRAIN;
+    }
+
     private void buildGenerateForm() {
         if (!dialogRebuild) {
             pendingName = "Generated " + (1 + (int) (Math.random() * 8999));
             genSeed = 1 + (int) (Math.random() * 99998);
             pendingFormat = format();
-            // Maze mode fits the plan-view formats; Perlin terrain fits the
-            // side-scroller — default the mode to match the format.
-            genMaze = pendingFormat.defaultsToMaze();
+            genMode = defaultGenMode(pendingFormat);
         }
         dialogRebuild = false;
         dialogForm.addText("Name", () -> pendingName, v -> pendingName = v, 32);
         dialogForm.addEnum("Format", LevelFormat.values(),
                 () -> pendingFormat, v -> {
                     pendingFormat = v;
-                    genMaze = v.defaultsToMaze();
+                    genMode = defaultGenMode(v);
+                    dialogRebuild = true;
+                    openDialog(Dialog.GENERATE);  // the mode list is per format
                 });
-        dialogForm.addEnum("Mode", new String[]{"Perlin terrain", "Maze"},
-                () -> genMaze ? "Maze" : "Perlin terrain",
-                v -> genMaze = "Maze".equals(v));
+        // Landscape is offered for the plan views only: it builds its relief
+        // out of stacked layers, and a side-scroller has one layer to stack in.
+        String[] modes = pendingFormat.layered()
+                ? new String[]{GEN_LANDSCAPE, GEN_TERRAIN, GEN_MAZE}
+                : new String[]{GEN_TERRAIN, GEN_MAZE};
+        dialogForm.addEnum("Mode", modes, () -> genMode, v -> {
+            genMode = v;
+            dialogRebuild = true;
+            openDialog(Dialog.GENERATE);   // the relief row belongs to one mode
+        });
+        if (GEN_LANDSCAPE.equals(genMode) && pendingFormat.layered()) {
+            dialogForm.addSlider("Relief (layers of rise)", () -> genRelief,
+                    v -> genRelief = v, 1, Level.DEFAULT_MAX_LAYERS - 1);
+            dialogForm.addNote("Rolling ground in stacked layers, capped with grass"
+                    + " over stone — the same seed is the same landscape. Turns the"
+                    + " height axis on, since terrain nobody can climb is a maze of"
+                    + " cliffs.");
+        }
         dialogForm.addToggle("Override map size (giant, chunk-loaded)",
                 () -> overrideMapSize, v -> {
                     overrideMapSize = v;
@@ -3491,7 +3840,24 @@ public class CreativeScene extends AbstractScene {
         dialogForm.addAction("Generate", () -> {
             String name = pendingName.isBlank() ? "Generated" : pendingName.trim();
             recordLevelSwap(); // Ctrl+Z hands the level back untouched
-            if (genMaze) {
+            if (GEN_LANDSCAPE.equals(genMode) && pendingFormat.layered()) {
+                // The height axis comes on with the terrain. A landscape in a
+                // level that has not asked for height is a field of cliffs
+                // nobody can climb, and a creator who generates hills has said
+                // what they want plainly enough.
+                profile().verticality = true;
+                ctx.applyLiveSettings();
+                level = LevelGenerator.generateLandscape(name, genWidth, genHeight,
+                        profile().tileSize, genSeed, pendingFormat, genRelief);
+                level.captureSettings(profile());
+                afterLevelSwap();
+                ctx.sound(SoundKeys.world("level_generate"));
+                setStatus("Generated landscape \"" + level.name + "\" (" + level.width + "x"
+                        + level.height + ", seed " + genSeed + ", relief " + genRelief
+                        + ") — the height axis is on, so it can be walked");
+                return;
+            }
+            if (GEN_MAZE.equals(genMode)) {
                 level = LevelGenerator.generateMaze(name, genWidth, genHeight,
                         profile().tileSize, genSeed, pendingFormat);
                 afterLevelSwap();
@@ -5671,6 +6037,7 @@ public class CreativeScene extends AbstractScene {
             case LOAD -> "load level";
             case GENERATE -> "generate level";
             case RULES -> "stat rules";
+            case LANDSCAPE -> "landscape settings";
             case CUTSCENES, CUTSCENE_ACTORS, CUTSCENE_STEPS -> "cutscene edit";
             case MINIGAME -> "mini game setup";
             case ROSTER -> "character roster";
@@ -5689,6 +6056,8 @@ public class CreativeScene extends AbstractScene {
         // reach further (a level swap, a created object, a reassigned sheet)
         // record that where they do it.
         recordDoc();
+        // …and the Landscape window reaches what the document does not hold.
+        if (d == Dialog.LANDSCAPE) recordLandscape();
     }
 
     /** Close a window's step (see {@link #beginDialogEdit}). */
@@ -5933,16 +6302,10 @@ public class CreativeScene extends AbstractScene {
         for (int i = 0; i < pys.length; i++) pys[i] -= px;
     }
 
-    /** How high the brush's preview stands at (col,row): where the block lands. */
-    private int previewLift(int col, int row) {
-        return paintLayer(col, row) == Level.LAYER_UPPER
-                ? TerrainPainter.liftPixels(camera, level.tileSize) : 0;
-    }
-
     /** How high the top-most block at (col,row) is drawn — what a hover marks. */
     private int topBlockLift(int col, int row) {
-        return level.tileAt(col, row, Level.LAYER_UPPER) > 0
-                ? TerrainPainter.liftPixels(camera, level.tileSize) : 0;
+        int top = level.topFilledLayer(col, row);
+        return top <= 0 ? 0 : TerrainPainter.liftPixels(camera, level.tileSize) * (top - 1);
     }
 
     private void projectCell(int c, int r, int ts) {
@@ -6559,26 +6922,25 @@ public class CreativeScene extends AbstractScene {
         if (entry == null || dialog != Dialog.NONE || mouseX < SIDEBAR_W) return;
         double[] aim = camera.screenToWorld(mouseX, mouseY);
         int ts = level.tileSize;
-        int col = (int) Math.floor(aim[0] / ts);
-        int row = (int) Math.floor(aim[1] / ts);
+        // The marched aim, not the floor point: over the side of a tower the
+        // two are different cells, and the preview has to agree with the stroke
+        // rather than with the ground behind it (HEIGHT_PLAN.md R7).
+        TerrainPainter.Aim at = TerrainPainter.pick(camera, level, mouseX, mouseY);
+        int col = at != null ? at.col() : (int) Math.floor(aim[0] / ts);
+        int row = at != null ? at.row() : (int) Math.floor(aim[1] / ts);
 
         target.pushAlpha(0.55f);
         switch (entry.kind) {
             case "block" -> {
                 Block b = level.blocks.get(entry.key);
                 if (b != null) {
-                    // The preview stands where the block would land — on the
-                    // floor of a bare cell, on top of whatever is already in a
-                    // full one — so a creator sees the wall they are about to
-                    // build rather than a flat square that turns out to be one.
-                    for (int[] cell : Brush.cells(brushShape, brushSize, col, row)) {
-                        projectCell(cell[0], cell[1], ts);
-                        raiseQuad(previewLift(cell[0], cell[1]));
-                        target.fillPolygon(pxs, pys, 4, b.color());
+                    int buildCol = sculpting(entry) || at == null ? col : at.placeCol();
+                    int buildRow = sculpting(entry) || at == null ? row : at.placeRow();
+                    if (sculpting(entry)) {
+                        drawSculptPreview(target, buildCol, buildRow);
+                    } else {
+                        drawPlacePreview(target, b, buildCol, buildRow);
                     }
-                    projectCell(col, row, ts);
-                    raiseQuad(previewLift(col, row));
-                    target.drawPolygon(pxs, pys, 4, Color.WHITE, 2f);
                 }
             }
             case "surface" -> {
@@ -6629,12 +6991,13 @@ public class CreativeScene extends AbstractScene {
                         tint);
             }
             case "eraser" -> {
-                for (int[] cell : Brush.cells(brushShape, brushSize, col, row)) {
-                    projectCell(cell[0], cell[1], ts);
+                for (int[] cell : stampBackToFront(col, row)) {
                     // Outline the block that would actually come off — the top
-                    // of the stack, which is the one standing up.
-                    raiseQuad(topBlockLift(cell[0], cell[1]));
-                    target.drawPolygon(pxs, pys, 4, new Color(230, 100, 120), 2f);
+                    // of the stack, wherever up the column that has got to.
+                    int top = level.topFilledLayer(cell[0], cell[1]);
+                    if (top < 0) continue;
+                    TerrainPainter.drawGhostColumn(target, camera, level,
+                            cell[0], cell[1], top, top + 1, null, ERASE_GHOST, 2f);
                 }
             }
             case "spawn" -> {
@@ -6671,6 +7034,124 @@ public class CreativeScene extends AbstractScene {
             default -> { /* generate/managedoors are buttons; nothing to preview */ }
         }
         target.popAlpha();
+        if (entry.kind.equals("block") || entry.kind.equals("eraser")) {
+            drawAimReadout(target, col, row);
+        }
+    }
+
+    /**
+     * The block about to be placed, drawn standing where it will land —
+     * {@code HEIGHT_PLAN.md} E2.
+     *
+     * <p><b>A preview of a cube is a cube.</b> While a stack was two deep a
+     * flat quad lifted by one block said everything there was to say; a stroke
+     * that can drop a block on the seventh layer of a tower, or build a pillar
+     * up to a locked height, is one whose result a creator cannot guess from a
+     * square lying on the floor. So the ghost is drawn as the run of layers the
+     * placement rule says it will occupy, through the painter that draws the
+     * real thing.
+     *
+     * <p>A refused cell draws <em>refused</em> rather than drawing nothing.
+     * Nothing is the same picture as "the cursor is not over the level", and
+     * the difference between those two is the whole question a creator is
+     * asking when a click does not do what they expected.
+     */
+    private void drawPlacePreview(DrawTarget target, Block block, int col, int row) {
+        for (int[] cell : stampBackToFront(col, row)) {
+            Brush.Placement at = placementAt(cell[0], cell[1]);
+            boolean centre = cell[0] == col && cell[1] == row;
+            if (at.refused()) {
+                if (cell[0] < 0 || cell[1] < 0
+                        || cell[0] >= level.width || cell[1] >= level.height) {
+                    continue;   // off the level: there is no cell to draw on
+                }
+                int top = Math.max(0, level.stackHeight(cell[0], cell[1]) - 1);
+                TerrainPainter.drawGhostColumn(target, camera, level, cell[0], cell[1],
+                        top, top + 1, REFUSED_FILL, REFUSED_INK, centre ? 2.5f : 1.5f);
+                continue;
+            }
+            TerrainPainter.drawGhostColumn(target, camera, level, cell[0], cell[1],
+                    at.fromLayer(), at.toLayer() + 1, block.color(),
+                    centre ? Color.WHITE : new Color(255, 255, 255, 120),
+                    centre ? 2.5f : 1f);
+        }
+    }
+
+    /**
+     * What a sculpting verb would do to the ground under the brush: the layers
+     * a column is about to gain drawn as ghost blocks, the ones it is about to
+     * lose outlined in the refusal colour.
+     *
+     * <p>Read from {@link Brush#plannedHeight} rather than from a rule of its
+     * own, so a smooth brush shows the hill it is actually going to make. The
+     * two answers cannot drift because there is only one of them.
+     */
+    private void drawSculptPreview(DrawTarget target, int col, int row) {
+        for (int[] cell : stampBackToFront(col, row)) {
+            if (cell[0] < 0 || cell[1] < 0
+                    || cell[0] >= level.width || cell[1] >= level.height) {
+                continue;
+            }
+            int here = level.stackHeight(cell[0], cell[1]);
+            int want = Brush.plannedHeight(level, buildTool, cell[0], cell[1],
+                    col, row, buildLayer);
+            if (want == here) {
+                int top = Math.max(0, here - 1);
+                TerrainPainter.drawGhostColumn(target, camera, level, cell[0], cell[1],
+                        top, top + 1, null, new Color(255, 255, 255, 90), 1f);
+            } else if (want > here) {
+                TerrainPainter.drawGhostColumn(target, camera, level, cell[0], cell[1],
+                        Math.max(1, here), want, GROW_FILL, GROW_INK, 1.5f);
+            } else {
+                TerrainPainter.drawGhostColumn(target, camera, level, cell[0], cell[1],
+                        Math.max(1, want), here, REFUSED_FILL, REFUSED_INK, 1.5f);
+            }
+        }
+    }
+
+    /**
+     * The brush's footprint, ordered so the ghosts are drawn back to front.
+     *
+     * <p>A ghost block standing over one cell reaches into the screen space of
+     * the cells behind it, so a footprint painted in the order
+     * {@link Brush#cells} happens to produce has nearer ghosts drawn before the
+     * ones they stand in front of. Sorted on {@link TerrainPainter#tileDepth},
+     * which is the same key the terrain and the actors sort on and is therefore
+     * right at every heading — the row-major order the stamp comes in only
+     * looks right at the heading it was authored at.
+     */
+    private List<int[]> stampBackToFront(int col, int row) {
+        List<int[]> cells = Brush.cells(brushShape, brushSize, col, row);
+        if (cells.size() > 1) {
+            int ts = level.tileSize;
+            cells.sort(java.util.Comparator.comparingInt(
+                    c -> TerrainPainter.tileDepth(camera, ts, c[0], c[1])));
+        }
+        return cells;
+    }
+
+    /**
+     * The one line of text that makes building in three dimensions legible: how
+     * deep the column under the cursor is, what the stroke will leave it at,
+     * and which verb is armed.
+     *
+     * <p>Height is the one property of a plan view the picture cannot state.
+     * From above, a column three deep and a column six deep are the same square
+     * with a taller side to it, and counting the seams on that side is not how
+     * anybody wants to answer "how high am I building". So the cursor says it.
+     */
+    private void drawAimReadout(DrawTarget target, int col, int row) {
+        if (!level.layered()) return;
+        if (col < 0 || row < 0 || col >= level.width || row >= level.height) return;
+        String text = "h " + level.stackHeight(col, row) + "/" + level.layerLimit()
+                + " · " + Brush.label(buildTool)
+                + " · " + (buildLayer < 0 ? "on top" : "layer " + buildLayer);
+        int w = target.textWidth(text, SMALL_FONT);
+        int x = mouseX + 16, y = mouseY + 20;
+        x = Math.min(x, viewportWidth - w - 12);
+        y = Math.min(y, viewportHeight - 12);
+        target.fillRoundRect(x - 5, y - 12, w + 10, 17, 6, 6, new Color(0, 0, 0, 170));
+        target.drawText(text, x, y, SMALL_FONT, new Color(220, 226, 240));
     }
 
     private void drawSidebar(DrawTarget target) {
@@ -6930,9 +7411,14 @@ public class CreativeScene extends AbstractScene {
                 return "Opens Brush Settings: the stroke shape, its size, and the"
                         + " multi-block mix painted per stamp.";
             }
+            case "landscape" -> {
+                return "Opens Landscape: the height axis, how deep this level may"
+                        + " be built, and the raise / lower / flatten / smooth"
+                        + " brushes that sculpt terrain instead of placing blocks.";
+            }
             case "generate" -> {
-                return "Opens the level generator: Perlin terrain with caves, ores"
-                        + " and liquids, or a top-down maze.";
+                return "Opens the level generator: rolling landscape, Perlin terrain"
+                        + " with caves and ores, or a top-down maze.";
             }
             case "rules" -> {
                 return "Opens Stat Rules: programmable triggers over tracked stats"
@@ -6961,9 +7447,10 @@ public class CreativeScene extends AbstractScene {
     }
 
     /**
-     * The sidebar's bottom panel: brush shape/size controls, the live level
-     * width/height sliders, and the "override map size" button that unlocks
-     * them past {@value #STANDARD_MAX_SIZE} (up to 65536, exponential scale).
+     * The sidebar's bottom panel: brush shape/size controls, the landscape
+     * tool and its build height, the live level width/height sliders, and the
+     * "override map size" button that unlocks them past
+     * {@value #STANDARD_MAX_SIZE} (up to 65536, exponential scale).
      */
     private void drawSizeSliders(DrawTarget target) {
         int top = sliderPanelTop();
@@ -6971,20 +7458,47 @@ public class CreativeScene extends AbstractScene {
         target.drawLine(0, top, SIDEBAR_W, top, new Color(255, 255, 255, 30), 2f);
 
         // Brush row: shape button + size slider ([ ] keys too).
-        target.drawText("Brush", 10, top + 14, SMALL_FONT, new Color(200, 200, 215));
-        brushShapeBox.setBounds(48, top + 4, 64, 14);
+        target.drawText("Brush", 10, top + 13, SMALL_FONT, new Color(200, 200, 215));
+        brushShapeBox.setBounds(48, top + 3, 64, 14);
         target.fillRoundRect(brushShapeBox.x, brushShapeBox.y, brushShapeBox.width,
                 brushShapeBox.height, 6, 6, new Color(255, 255, 255, 34));
         target.drawText(Brush.label(brushShape), brushShapeBox.x + 6, brushShapeBox.y + 11,
                 SMALL_FONT, new Color(255, 220, 120));
-        drawOneSlider(target, 2, top + 24, "S",
+        drawOneSlider(target, 2, top + 20, "S",
                 brushSize, Brush.MIN_SIZE, Brush.MAX_SIZE, false);
 
-        target.drawText("Level size (drag)", 10, top + 44, SMALL_FONT, new Color(200, 200, 215));
+        // Landscape row: which verb the brush is, and the height it builds at.
+        // Beside the brush rather than in a window of its own, because it is
+        // changed as often as the brush size is, and a tool a creator has to go
+        // looking for is a tool they build the whole level without. Greyed in a
+        // side-scroller, which has no height axis for either control to mean
+        // anything in.
+        boolean height = level.layered();
+        target.drawText("Build", 10, top + 44, SMALL_FONT,
+                height ? new Color(200, 200, 215) : new Color(120, 120, 132));
+        buildToolBox.setBounds(44, top + 33, 62, 14);
+        target.fillRoundRect(buildToolBox.x, buildToolBox.y, buildToolBox.width,
+                buildToolBox.height, 6, 6, new Color(255, 255, 255, height ? 34 : 14));
+        target.drawText(Brush.label(buildTool), buildToolBox.x + 5, buildToolBox.y + 11,
+                SMALL_FONT, height ? new Color(150, 235, 180) : new Color(110, 110, 120));
+        buildLayerDownBox.setBounds(110, top + 33, 15, 14);
+        buildLayerUpBox.setBounds(SIDEBAR_W - 26, top + 33, 15, 14);
+        int stepper = new Color(255, 255, 255, height ? 26 : 12).getRGB();
+        target.fillRoundRect(buildLayerDownBox.x, buildLayerDownBox.y, 15, 14, 5, 5, stepper);
+        target.fillRoundRect(buildLayerUpBox.x, buildLayerUpBox.y, 15, 14, 5, 5, stepper);
+        target.drawText("-", buildLayerDownBox.x + 6, buildLayerDownBox.y + 11, SMALL_FONT,
+                new Color(210, 210, 225));
+        target.drawText("+", buildLayerUpBox.x + 4, buildLayerUpBox.y + 11, SMALL_FONT,
+                new Color(210, 210, 225));
+        target.drawText(buildLayerLabel(), buildLayerDownBox.x + 19, buildLayerDownBox.y + 11,
+                SMALL_FONT,
+                buildLayer < 0 ? new Color(170, 175, 190) : new Color(255, 220, 120));
+
+        target.drawText("Level size (drag)", 10, top + 57, SMALL_FONT, new Color(200, 200, 215));
         int shownW = draggingSizeSlider == 0 ? pendingLevelW : level.width;
         int shownH = draggingSizeSlider == 1 ? pendingLevelH : level.height;
-        drawOneSlider(target, 0, top + 54, "W", shownW, MIN_LEVEL_W, maxLevelSize(), true);
-        drawOneSlider(target, 1, top + 78, "H", shownH, MIN_LEVEL_H, maxLevelSize(), true);
+        drawOneSlider(target, 0, top + 63, "W", shownW, MIN_LEVEL_W, maxLevelSize(), true);
+        drawOneSlider(target, 1, top + 83, "H", shownH, MIN_LEVEL_H, maxLevelSize(), true);
 
         // Override button.
         overrideButtonBox.setBounds(8, top + 98, SIDEBAR_W - 16, 18);
@@ -7051,8 +7565,15 @@ public class CreativeScene extends AbstractScene {
                     : "";
             String redo = history.canRedo()
                     ? " · [" + KeyBinds.label(GameAction.EDITOR_REDO) + "] redo" : "";
+            // What the brush is about to do to the height axis, on the bar
+            // because it is the one piece of editor state a plan view cannot
+            // show in the picture. Only where there is a height axis to have.
+            String build = level.layered()
+                    ? "   ·   " + Brush.label(buildTool) + " @ " + buildLayerLabel()
+                    + " [" + KeyBinds.label(GameAction.EDITOR_BUILD_TOOL) + "]"
+                    : "";
             bar = mode + " CREATIVE — " + level.name + " (" + level.width + "x" + level.height + ")"
-                    + chunkInfo
+                    + chunkInfo + build
                     + "   ·   [" + KeyBinds.label(GameAction.EDITOR_NEXT_PALETTE) + "] category · ["
                     + KeyBinds.label(GameAction.EDITOR_ERASE) + "] erase · ["
                     + KeyBinds.label(GameAction.EDITOR_PICK) + "] pick · ["
@@ -7427,6 +7948,23 @@ public class CreativeScene extends AbstractScene {
         g.fillOval(20, 28, 8, 8);
         g.setColor(new Color(240, 200, 110));
         g.fillOval(28, 20, 7, 7);
+        g.dispose();
+        return img;
+    }
+
+    /** Three blocks stacked into a step, which is what the tool makes. */
+    private static BufferedImage landscapeIcon() {
+        BufferedImage img = new BufferedImage(40, 40, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        int[][] steps = {{4, 26, 12}, {14, 20, 12}, {24, 14, 12}};
+        for (int[] s : steps) {
+            g.setColor(new Color(120, 180, 120));
+            g.fillRect(s[0], s[1], s[2], 6);            // the grassy top
+            g.setColor(new Color(96, 84, 70));
+            g.fillRect(s[0], s[1] + 6, s[2], 36 - s[1] - 6);   // the side face
+            g.setColor(new Color(40, 36, 32));
+            g.drawRect(s[0], s[1], s[2], 35 - s[1]);
+        }
         g.dispose();
         return img;
     }

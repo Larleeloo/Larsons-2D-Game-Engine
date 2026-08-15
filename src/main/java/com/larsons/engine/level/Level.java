@@ -880,6 +880,25 @@ public class Level {
         return -1;
     }
 
+    /**
+     * The highest layer at (col,row) holding <em>anything</em>, or {@code -1}
+     * for an empty cell.
+     *
+     * <p>The geometry twin of {@link #topSolidLayer}, and what a tool that
+     * takes a column apart asks: the eraser bites whatever is on top whether or
+     * not it is a barrier, so a torch standing on a wall comes off before the
+     * wall does. Reading down from the ceiling rather than up from the floor is
+     * what makes it right over a gap — the deck of a bridge is the top of that
+     * column even though the run from the ground stopped underneath it
+     * ({@code HEIGHT_PLAN.md} O1).
+     */
+    public int topFilledLayer(int col, int row) {
+        for (int layer = layerCount() - 1; layer >= 0; layer--) {
+            if (tileAt(col, row, layer) > 0) return layer;
+        }
+        return -1;
+    }
+
     /** The block definition at (col,row), or {@code null} (empty / palette mode). */
     public Block blockAt(int col, int row) {
         return blockAt(col, row, LAYER_GROUND);
