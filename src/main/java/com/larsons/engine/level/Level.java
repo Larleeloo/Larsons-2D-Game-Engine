@@ -354,7 +354,7 @@ public class Level {
      * and whose first did not is not a shape this engine has any meaning for.
      */
     public void setGrid(int layer, int[][] grid) {
-        if (layer < 0 || grid == null) return;
+        if (layer < 0 || layer >= layerLimit() || grid == null) return;
         layerChunks.clear();
         while (layers.size() < layer) layers.add(new int[height][width]);
         if (layers.size() == layer) layers.add(grid);
@@ -368,6 +368,7 @@ public class Level {
      * level's saved chunks.
      */
     public ChunkedTiles newChunkedLayer(int layer) {
+        if (layer < 0 || layer >= layerLimit()) return new ChunkedTiles(width, height);
         layers.clear();
         while (layerChunks.size() <= layer) {
             layerChunks.add(new ChunkedTiles(width, height));
@@ -393,13 +394,45 @@ public class Level {
     }
 
     /**
-     * How many layers this level's format allows. One in a side-scroller,
-     * whose screen is the vertical plane and which therefore has no height axis
-     * to stack along; two in the plan views, until V2 of {@code HEIGHT_PLAN.md}
-     * raises it.
+     * The tallest a plan-view level may be built, in layers, unless it says
+     * otherwise in {@link #maxLayers}.
+     *
+     * <p><b>Eight is a decision, not a limit waiting to be raised.</b> It is
+     * four times the tallest thing the art currently reads as — a wall — and
+     * enough for a two-storey building with a roof. What stops it going
+     * further is legibility rather than storage: a block is a cube, so a column
+     * of eight stands eight tiles up the screen (256 px at a 32 px tile, better
+     * than a third of a 720 px viewport) and hides the eight rows of floor
+     * behind it. The number that would fix a taller stack is the camera's
+     * pitch, not this constant.
+     */
+    public static final int DEFAULT_MAX_LAYERS = 8;
+
+    /**
+     * How tall <em>this</em> level may be built, in layers — its own ceiling
+     * within the format's, chosen by whoever made it.
+     *
+     * <p>A level that wants to be flat says so here rather than relying on
+     * nobody stacking, which is what makes "this is a maze, not a mountain" a
+     * property of the level instead of a convention. Clamped into range by
+     * {@link #layerLimit()}, so a hand-edited file cannot ask for a hundred.
+     */
+    public int maxLayers = DEFAULT_MAX_LAYERS;
+
+    /**
+     * How many layers this level allows: one in a side-scroller, whose screen
+     * <em>is</em> the vertical plane and which therefore has no height axis to
+     * stack along, and this level's {@link #maxLayers} on a plane.
+     *
+     * <p>The side-scroller's one is not a placeholder. A second height axis on
+     * top of a view that already draws height as the screen's vertical is a
+     * contradiction rather than a feature, and it is the same scope rule Job C
+     * of {@code RENDER_PLAN.md} worked under: the format with no second layer
+     * is exactly the format that does not rotate.
      */
     public int layerLimit() {
-        return layered() ? 2 : 1;
+        if (!layered()) return 1;
+        return Math.max(1, Math.min(DEFAULT_MAX_LAYERS, maxLayers));
     }
 
     // --- level format ----------------------------------------------------------
@@ -1191,6 +1224,9 @@ public class Level {
         m.put("tileSize", tileSize);
         m.put("width", width);
         m.put("height", height);
+        // The third dimension, written beside the other two and only when the
+        // level has an opinion about it.
+        if (maxLayers != DEFAULT_MAX_LAYERS) m.put("maxLayers", maxLayers);
         m.put("background", hex(background));
         // Each level stores its own feature toggles so game types can hold a
         // diverse mix of levels; loading a level loads its settings.
@@ -1221,33 +1257,35 @@ public class Level {
                 // hand the level back full of holes and hills.
                 if (floor.generator() instanceof FlatChunks) m.put("generator", "flat");
             }
-            Map<String, Object> chunkMap = new LinkedHashMap<>();
-            chunkMap.putAll(floor.dirtyChunksRle());
-            m.put("chunks", chunkMap);
-            ChunkedTiles stacked = chunks(LAYER_UPPER);
-            if (stacked != null) {
-                Map<String, Object> upperMap = new LinkedHashMap<>();
-                upperMap.putAll(stacked.dirtyChunksRle());
-                if (!upperMap.isEmpty()) m.put("upperChunks", upperMap);
+            // One chunk map per layer, indexed by height. Empty maps are kept
+            // rather than skipped, because the index is what says which layer
+            // a map belongs to.
+            List<Object> perLayer = new ArrayList<>(layerCount());
+            for (int layer = 0; layer < layerCount(); layer++) {
+                perLayer.add(new LinkedHashMap<>(chunks(layer).dirtyChunksRle()));
             }
+            m.put("layerChunks", perLayer);
         } else {
             // Run-length encoded, row-major over the whole grid: pairs of
             // (tileId, runLength). Levels are mostly runs of air and terrain,
             // so this is dramatically smaller (and faster to write) than the
             // old row-of-arrays form — which matters both for saves and for
             // the multiplayer welcome message that carries the level as one
-            // line. LevelLoader still reads the legacy "tiles" shape.
-            m.put("tilesRle", rleOf(tiles()));
-            // The stacked layer rides alongside in the same encoding. It is
-            // absent in a side-scroller and in a plan-view level nobody has
-            // built anything up in yet, which is also how a reader tells a
-            // pre-layer level apart from a deliberately flat one.
+            // line.
             //
-            // Layers above this one have nowhere to go in the format yet, and
-            // nothing can put a block in one until layerLimit() rises: V3 of
-            // HEIGHT_PLAN.md is where they learn to persist, and V0's
-            // LevelBytesTest is what says this shape stayed put until then.
-            if (grid(LAYER_UPPER) != null) m.put("upperRle", rleOf(grid(LAYER_UPPER)));
+            // One run list per layer, bottom first. This used to be two named
+            // keys, `tilesRle` and `upperRle`, from when a column was a floor
+            // with at most one thing standing on it; a column of eight has no
+            // name for its fifth layer, and a format that wrote "the floor,
+            // the thing on the floor, and then the rest" would have made every
+            // later reader ask why. LevelLoader still reads both old shapes
+            // and the legacy row-of-arrays "tiles" — writing is free, reading
+            // is additive (HEIGHT_PLAN.md invariant 3).
+            List<Object> perLayer = new ArrayList<>(layerCount());
+            for (int layer = 0; layer < layerCount(); layer++) {
+                perLayer.add(rleOf(grid(layer)));
+            }
+            m.put("layersRle", perLayer);
         }
         if (!surfaceDecor.isEmpty()) {
             List<Object> sds = new ArrayList<>(surfaceDecor.size());

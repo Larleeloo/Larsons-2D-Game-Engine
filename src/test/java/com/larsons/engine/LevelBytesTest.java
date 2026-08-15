@@ -105,92 +105,167 @@ class LevelBytesTest {
         }
     }
 
-    // --- the churn guard ---------------------------------------------------------
+    // --- the shape of the file ---------------------------------------------------
 
     /**
-     * The keys a two-layer level writes, listed exactly.
+     * The keys a level writes, listed exactly.
      *
-     * <p>This is the assertion V3 is measured against. Widening the format is
-     * allowed to add keys to levels that <em>use</em> the extra depth; it is not
-     * allowed to add so much as an empty array to a level that does not, because
-     * every level anyone has saved is a level that does not, and a format that
-     * rewrites all of them on load has broken the plan's third invariant in both
-     * directions at once.
+     * <p><b>These three assertions were rewritten by V3, on purpose.</b> They
+     * were written to forbid the format churning, back when the plan promised
+     * an append-only format so old builds kept working; that promise was
+     * withdrawn by decision, and the honest response to a guard whose rule has
+     * been repealed is to change it and say so — not to weaken it into
+     * something that could never have caught anything. What they assert now is
+     * the new shape rather than the old one's preservation.
      *
-     * <p>The list is spelled out rather than derived so that adding a key is a
-     * decision someone makes in this file, on purpose, with this comment in
+     * <p>The lists are spelled out rather than derived so that adding a key is
+     * a decision someone makes in this file, on purpose, with this comment in
      * front of them.
+     *
+     * <p>Note what stopped varying: <b>the key set no longer depends on how
+     * tall the level is.</b> Geometry is one list under one name, so a
+     * side-scroller and an eight-deep isometric tower write the same keys and
+     * differ only in how many entries that list has. That is the readability
+     * the revision was for.
      */
     @Test
-    void aTwoLayerLevelWritesExactlyTheKeysItWritesToday() {
-        Set<String> sideScroller = keysOf(furnished(LevelFormat.SIDE_SCROLLER));
-        assertEquals(new LinkedHashSet<>(List.of(
-                        "name", "format", "perspective", "tileSize", "width", "height",
-                        "background", "settings", "tileset", "spawn", "tilesRle",
-                        "surface", "entities")),
-                sideScroller,
-                "the side-scroller's saved keys");
-
-        Set<String> planView = keysOf(furnished(LevelFormat.TOP_DOWN));
-        assertEquals(new LinkedHashSet<>(List.of(
-                        "name", "format", "perspective", "tileSize", "width", "height",
-                        "background", "settings", "tileset", "spawn", "tilesRle",
-                        "upperRle", "surface", "entities")),
-                planView,
-                "a plan view's saved keys — the stacked layer and nothing else");
+    void everyLevelWritesTheSameGeometryKeyWhateverItsHeight() {
+        Set<String> expected = new LinkedHashSet<>(List.of(
+                "name", "format", "perspective", "tileSize", "width", "height",
+                "background", "settings", "tileset", "spawn", "layersRle",
+                "surface", "entities"));
+        for (LevelFormat format : LevelFormat.values()) {
+            assertEquals(expected, keysOf(furnished(format)), format + ": saved keys");
+        }
+        assertEquals(expected, keysOf(tower()), "an eight-deep tower: saved keys");
     }
 
     /**
-     * The stacked layer is written when there is one and absent when there is
-     * not, and its absence is load-bearing: {@code LevelLoader} tells a level
-     * written before blocks stacked from a deliberately flat one by whether the
-     * key is there at all, and converts the first kind and not the second.
+     * One run-length list per layer, bottom first — so the list's length is
+     * the level's height in layers, and reading the file tells you how tall it
+     * is without decoding a single run.
      */
     @Test
-    void theStackedLayerIsWrittenOnlyWhenSomethingIsStackedInIt() {
-        Level flat = LevelFormat.TOP_DOWN.starterLevel("Flat", 12, 12, 32);
-        for (int r = 0; r < flat.height; r++) {
-            for (int c = 0; c < flat.width; c++) flat.setTile(c, r, Level.LAYER_UPPER, 0);
-        }
-        // A starter level stands a border of wall, so clear the storage question
-        // by asking a level that never allocated the layer at all.
+    void theGeometryListHasOneEntryPerLayer() {
         Level bare = Level.empty("Bare", 12, 12, 32);
         bare.setFormat(LevelFormat.TOP_DOWN);
         bare.fillFloor(bare.blocks.get("stone_path").id());
-        assertFalse(keysOf(bare).contains("upperRle"),
-                "a plan-view level nobody has built in writes no stacked layer");
+        assertEquals(1, layerRunsOf(bare).size(),
+                "a plan-view level nobody has built in is one layer deep");
 
         bare.setTile(4, 4, Level.LAYER_UPPER, bare.blocks.get("stone").id());
-        assertTrue(keysOf(bare).contains("upperRle"),
-                "and writes one the moment something stands in it");
+        assertEquals(2, layerRunsOf(bare).size(),
+                "and two the moment something stands on it");
 
-        Level side = furnished(LevelFormat.SIDE_SCROLLER);
-        assertFalse(keysOf(side).contains("upperRle"),
-                "a side-scroller has no second layer to write");
+        assertEquals(1, layerRunsOf(furnished(LevelFormat.SIDE_SCROLLER)).size(),
+                "a side-scroller is one layer and can never be two");
+        assertEquals(Level.DEFAULT_MAX_LAYERS, layerRunsOf(tower()).size(),
+                "and a tower is as deep as it was built");
+    }
+
+    /** A giant level writes the same list, as one chunk map per layer. */
+    @Test
+    void aGiantLevelWritesOneChunkMapPerLayer() {
+        Set<String> keys = keysOf(giant());
+        assertTrue(keys.contains("layerChunks"), "chunked geometry is a list of layers");
+        assertFalse(keys.contains("chunks"), "and not the old floor-plus-lid pair");
+        assertFalse(keys.contains("upperChunks"));
+
+        Object parsed = Json.parse(giant().toJson());
+        Object chunks = ((Map<?, ?>) parsed).get("layerChunks");
+        assertTrue(chunks instanceof List, "layerChunks is a list");
+        assertEquals(2, ((List<?>) chunks).size(), "one map per layer, at the layer's index");
+    }
+
+    // --- what the new shape carries ----------------------------------------------
+
+    /**
+     * A tower survives a save, layer for layer and cell for cell. This is the
+     * property V3 exists for, and nothing before V3 could have asserted it —
+     * there was nowhere in the file to put a fifth layer.
+     */
+    @Test
+    void aTowerRoundTripsEveryLayer() {
+        Level before = tower();
+        Level after = LevelLoader.parse(before.toJson());
+        assertEquals(before.layerCount(), after.layerCount());
+        for (int layer = 0; layer < before.layerCount(); layer++) {
+            for (int r = 0; r < before.height; r++) {
+                for (int c = 0; c < before.width; c++) {
+                    assertEquals(before.tileAt(c, r, layer), after.tileAt(c, r, layer),
+                            "layer " + layer + " at (" + c + "," + r + ")");
+                }
+            }
+        }
+        assertEquals(Level.DEFAULT_MAX_LAYERS, after.stackHeight(4, 4),
+                "the column is as deep as it was saved");
+        assertFixedPoint(before, "tower");
+    }
+
+    /** A level's own ceiling is saved when it has an opinion, and not otherwise. */
+    @Test
+    void theCeilingIsSavedOnlyWhenTheLevelHasAnOpinionAboutIt() {
+        Level plain = furnished(LevelFormat.ISOMETRIC);
+        assertFalse(keysOf(plain).contains("maxLayers"),
+                "a level that never moved its ceiling says nothing");
+        assertEquals(Level.DEFAULT_MAX_LAYERS,
+                LevelLoader.parse(plain.toJson()).maxLayers);
+
+        Level flat = furnished(LevelFormat.ISOMETRIC);
+        flat.maxLayers = 2;
+        assertTrue(keysOf(flat).contains("maxLayers"));
+        Level reloaded = LevelLoader.parse(flat.toJson());
+        assertEquals(2, reloaded.maxLayers);
+        assertEquals(2, reloaded.layerLimit(),
+                "a level that says it is flat is still flat when it comes back");
+    }
+
+    // --- the shapes that are still read and no longer written ---------------------
+
+    /**
+     * Writing is free; reading is additive ({@code HEIGHT_PLAN.md} invariant
+     * 3). The two-key shapes this build has stopped writing still load, and
+     * they load into the same geometry — which is what lets the shipped levels
+     * and anything a player saved last week keep working without a migration.
+     */
+    @Test
+    void theShapesThisBuildNoLongerWritesStillLoad() {
+        Level source = furnished(LevelFormat.TOP_DOWN);
+        String legacy = twoKeyForm(source);
+        assertTrue(legacy.contains("tilesRle") && legacy.contains("upperRle"),
+                "the fixture really is in the old shape");
+
+        Level loaded = LevelLoader.parse(legacy);
+        for (int r = 0; r < source.height; r++) {
+            for (int c = 0; c < source.width; c++) {
+                assertEquals(source.tileAt(c, r), loaded.tileAt(c, r),
+                        "floor at (" + c + "," + r + ")");
+                assertEquals(source.tileAt(c, r, Level.LAYER_UPPER),
+                        loaded.tileAt(c, r, Level.LAYER_UPPER),
+                        "stack at (" + c + "," + r + ")");
+            }
+        }
+        assertTrue(loaded.toJson().contains("layersRle"),
+                "and it is written back in the shape this build writes");
     }
 
     /**
-     * No level this build writes carries a key for a third layer, under any of
-     * the names V3 proposes.
-     *
-     * <p>Trivially true today, and that is what makes it useful: it is the
-     * assertion that turns red the moment V3 writes a new key unconditionally
-     * instead of only for the levels that need it.
+     * The oldest shape of all — the bundled level's row-of-arrays {@code tiles}
+     * — still loads, and is still recognised as describing no layers at all,
+     * which is what triggers the conversion that makes such a level playable.
      */
     @Test
-    void nothingWritesAThirdLayerYet() {
-        for (LevelFormat format : LevelFormat.values()) {
-            Set<String> keys = keysOf(furnished(format));
-            for (String future : List.of("layerRle", "layerChunks", "maxLayers")) {
-                assertFalse(keys.contains(future),
-                        format + ": writes '" + future + "' before V3 says it may");
-            }
-        }
-        Set<String> giantKeys = keysOf(giant());
-        assertTrue(giantKeys.contains("chunks"), "a giant level writes its chunks");
-        for (String future : List.of("layerRle", "layerChunks", "maxLayers")) {
-            assertFalse(giantKeys.contains(future), "chunked: writes '" + future + "'");
-        }
+    void aLevelDescribingNoLayersIsStillConvertedOnLoad() {
+        String legacy = """
+                {"name":"Old","perspective":"TOP_DOWN","tileset":"registry",
+                 "tileSize":32,"width":3,"height":3,
+                 "tiles":[[0,0,0],[0,1,0],[0,0,0]]}
+                """;
+        Level lvl = LevelLoader.parse(legacy);
+        assertTrue(lvl.stackHeight(0, 0) >= 1,
+                "air became floor, because it was somewhere you could walk");
+        assertEquals(2, lvl.stackHeight(1, 1),
+                "and the solid block became a stack of itself, the barrier it always was");
     }
 
     // --- helpers -----------------------------------------------------------------
@@ -216,6 +291,37 @@ class LevelBytesTest {
             }
         }
         assertEquals(first, second, what + ": saving a loaded level is not a no-op");
+    }
+
+    /** The per-layer run lists a dense level writes, outermost list only. */
+    private static List<?> layerRunsOf(Level level) {
+        Object runs = ((Map<?, ?>) Json.parse(level.toJson())).get("layersRle");
+        assertTrue(runs instanceof List, "layersRle is a list of layers");
+        return (List<?>) runs;
+    }
+
+    /**
+     * {@code level} re-encoded in the two-key shape this build no longer
+     * writes — {@code tilesRle} plus {@code upperRle} — so the reader's legacy
+     * path is exercised against a file rather than against a hope.
+     */
+    private static String twoKeyForm(Level level) {
+        Map<String, Object> m = level.toMap();
+        Object runs = m.remove("layersRle");
+        List<?> perLayer = (List<?>) runs;
+        m.put("tilesRle", perLayer.get(0));
+        if (perLayer.size() > 1) m.put("upperRle", perLayer.get(1));
+        return Json.stringify(m);
+    }
+
+    /** A plan-view level with one column built all the way to the ceiling. */
+    private static Level tower() {
+        Level lvl = furnished(LevelFormat.ISOMETRIC);
+        int stone = lvl.blocks.get("stone").id();
+        for (int layer = 1; layer < Level.DEFAULT_MAX_LAYERS; layer++) {
+            lvl.setTile(4, 4, layer, stone);
+        }
+        return lvl;
     }
 
     /** The top-level keys of a level's saved JSON, in the order it writes them. */

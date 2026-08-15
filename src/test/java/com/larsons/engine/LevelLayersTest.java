@@ -107,25 +107,27 @@ class LevelLayersTest {
         assertNull(lvl.grid(Level.LAYER_UPPER));
     }
 
-    // --- the ceiling V2 raises ---------------------------------------------------
+    // --- the ceiling -------------------------------------------------------------
 
     /**
-     * How tall a level may be, today: one layer edge-on, two on a plane.
+     * How tall a level may be: one layer edge-on, and the level's own ceiling
+     * on a plane — eight by default (V2).
      *
-     * <p>Asserted here rather than left implicit because V2's whole diff should
-     * be {@link Level#layerLimit()} and this method. The side-scroller's one is
-     * not a placeholder — the screen <em>is</em> the vertical plane there, and a
-     * second height axis on top of it is a contradiction rather than a feature.
+     * <p>The side-scroller's one is not a placeholder. The screen <em>is</em>
+     * the vertical plane there, so a second height axis on top of it is a
+     * contradiction rather than a feature, and it is the same scope rule Job C
+     * of the render plan worked under.
      */
     @Test
-    void theCeilingIsOneLayerEdgeOnAndTwoOnAPlane() {
+    void theCeilingIsOneLayerEdgeOnAndTheLevelsOwnOnAPlane() {
         for (LevelFormat format : LevelFormat.values()) {
             Level lvl = Level.empty("ceiling", 8, 8, 32);
             lvl.setFormat(format);
             lvl.fillFloor(lvl.blocks.get("stone_path").id());
             int stone = lvl.blocks.get("stone").id();
 
-            assertEquals(format.layered() ? 2 : 1, lvl.layerLimit(), format + ": the ceiling");
+            assertEquals(format.layered() ? Level.DEFAULT_MAX_LAYERS : 1, lvl.layerLimit(),
+                    format + ": the ceiling");
             assertFalse(lvl.setTile(4, 4, lvl.layerLimit(), stone),
                     format + ": a block above the ceiling is refused");
             assertFalse(lvl.setTile(4, 4, -1, stone),
@@ -133,6 +135,48 @@ class LevelLayersTest {
             assertEquals(0, lvl.tileAt(4, 4, lvl.layerLimit()),
                     format + ": nothing landed up there");
         }
+    }
+
+    /** A plan view builds as deep as its ceiling allows, and no deeper. */
+    @Test
+    void aColumnStacksUpToTheCeiling() {
+        Level lvl = Level.empty("tower", 8, 8, 32);
+        lvl.setFormat(LevelFormat.ISOMETRIC);
+        lvl.fillFloor(lvl.blocks.get("stone_path").id());
+        int stone = lvl.blocks.get("stone").id();
+
+        for (int layer = 1; layer < Level.DEFAULT_MAX_LAYERS; layer++) {
+            assertTrue(lvl.setTile(4, 4, layer, stone), "layer " + layer + " accepts a block");
+        }
+        assertEquals(Level.DEFAULT_MAX_LAYERS, lvl.stackHeight(4, 4),
+                "the column is as deep as it was built");
+        assertEquals(Level.DEFAULT_MAX_LAYERS, lvl.layerCount());
+        assertFalse(lvl.setTile(4, 4, Level.DEFAULT_MAX_LAYERS, stone),
+                "and the next block has nowhere to go");
+    }
+
+    /**
+     * A level's own ceiling is its to set — how a maze says it is a maze rather
+     * than relying on nobody stacking — and it is clamped, so a hand-edited
+     * file cannot ask for a hundred layers.
+     */
+    @Test
+    void aLevelMaySetItsOwnCeilingAndItIsClamped() {
+        Level flat = Level.empty("flat", 8, 8, 32);
+        flat.setFormat(LevelFormat.TOP_DOWN);
+        flat.fillFloor(flat.blocks.get("stone_path").id());
+        int stone = flat.blocks.get("stone").id();
+
+        flat.maxLayers = 2;
+        assertEquals(2, flat.layerLimit());
+        assertTrue(flat.setTile(4, 4, 1, stone), "a wall still fits");
+        assertFalse(flat.setTile(4, 4, 2, stone), "a tower does not");
+
+        flat.maxLayers = 900;
+        assertEquals(Level.DEFAULT_MAX_LAYERS, flat.layerLimit(),
+                "a level cannot vote itself past the engine's ceiling");
+        flat.maxLayers = 0;
+        assertEquals(1, flat.layerLimit(), "nor below a single layer of floor");
     }
 
     // --- the column is one thing -------------------------------------------------
