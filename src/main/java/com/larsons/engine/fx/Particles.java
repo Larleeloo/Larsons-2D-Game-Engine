@@ -364,7 +364,7 @@ public final class Particles {
         // behaviour, preserved here because a port that quietly fixed it would
         // be a port that changed what the player sees.
         boolean alphaPushed = false;
-        double lift = space.screenLift();
+        double lift = camera.liftScale();
         for (int p = 0; p < count; p++) {
             double fade = Math.max(0, Math.min(1, life[p] / maxLife[p]));
             int sx = camera.worldToScreenX(x[p], y[p]);

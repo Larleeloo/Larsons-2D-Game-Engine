@@ -180,6 +180,30 @@ public class Camera {
      */
     private double elevation;
 
+    /**
+     * Screen pixels of lift per world unit of height, before zoom — how far up
+     * the screen something rises by being one unit above the floor.
+     *
+     * <p><b>The two plan views arrive at the same number by different routes,
+     * and asking the projection is what keeps them right.</b> Top-down draws
+     * the ground at world scale, so a unit of height is a unit of screen. The
+     * isometric ground is a diamond {@link #isoTileWidth} across per tile, and
+     * the vertical edge of a cube in that projection is <em>half the diamond's
+     * width</em> — the classic 64&times;64 block sprite standing on a
+     * 64&times;32 top face. Those agree at 32 px only because the diamond is
+     * currently twice the tile size; widen it and the naive formula draws
+     * rhomboids instead of cubes.
+     *
+     * <p>Zero in a side view, which has no height axis to lift along.
+     */
+    public double liftScale() {
+        if (perspective == Perspective.SIDE_SCROLL) return 0;
+        if (perspective == Perspective.ISOMETRIC) {
+            return tileSize <= 0 ? 0 : (isoTileWidth / 2.0) / tileSize;
+        }
+        return 1.0;
+    }
+
     /** Set the focus's lift; see {@link #elevation}. */
     public void setElevation(double screenPixels) {
         this.elevation = screenPixels;

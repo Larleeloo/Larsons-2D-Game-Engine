@@ -77,7 +77,7 @@ public final class TerrainPainter {
      */
     public static int liftPixels(Camera camera, int tileSize) {
         return (int) Math.round(tileSize * BLOCK_HEIGHT * camera.zoom
-                * PerspectiveSpace.of(camera.getPerspective()).screenLift());
+                * camera.liftScale());
     }
 
     /**
@@ -121,6 +121,102 @@ public final class TerrainPainter {
     }
 
     /**
+     * The height key a body at {@code z} sorts on — how many layers above the
+     * floor it is standing, rounded down.
+     *
+     * <p>The companion to {@link #standingDepth}, and the same rule a column
+     * queues itself with: a body standing on a column of height {@code h} is at
+     * layer {@code h - 1}, which is the number that column passes, so the body
+     * and the block it stands on tie on this key and the tie-break puts the
+     * body in front. Anything lower in the same cell sorts behind both.
+     */
+    public static int standingLayer(Level level, double z) {
+        double block = level.blockHeight();
+        return block <= 0 ? 0 : (int) Math.floor(z / block + 1e-6);
+    }
+
+    /**
+     * What the cursor is pointing at: a cell, the layer of it under the
+     * pointer, and which face of that block the ray struck.
+     *
+     * @param col   the column hit
+     * @param row   the row hit
+     * @param layer the layer of the block hit — {@code 0} for a bare floor tile
+     * @param top   whether the ray landed on the block's top face rather than
+     *              on one of its sides. This is what block placement needs:
+     *              pointing at a top places on top of the column, pointing at a
+     *              side places against that face, in the neighbouring cell
+     */
+    public record Aim(int col, int row, int layer, boolean top) {}
+
+    /**
+     * The cell under a screen point, accounting for how tall the terrain is —
+     * {@code HEIGHT_PLAN.md} R7.
+     *
+     * <p><b>Why a march and not an inverse.</b> {@link Camera#screenToWorld}
+     * inverts the ground projection, which answers "which point of the
+     * <em>floor</em> is under this pixel". That was the whole question while
+     * the floor was all there was. With columns standing on it the answer is
+     * wrong in the way players notice first: the cursor over the <em>side</em>
+     * of a tower resolves to the floor cell behind the tower, so mining hits a
+     * block one or more cells from the one under the mouse, and the taller the
+     * tower the further off it is.
+     *
+     * <p>So the ray is walked instead. A screen point plus the projection's
+     * view direction is a line through the world; stepping it cell by cell and
+     * asking each column whether it reaches the ray gives the first thing hit.
+     * The march is exact rather than approximate because the projection is
+     * parallel and the geometry is unit boxes: a cell's column occupies a known
+     * height, and the ray's height over that cell is a linear function of how
+     * far along it we are.
+     *
+     * <p>Walking <em>toward</em> the camera from the floor point is what makes
+     * this cheap. The floor point is where the ray leaves the world, so
+     * everything the ray could have hit is between there and the viewer — a
+     * bounded walk of at most the level's height in cells, not a search.
+     *
+     * @return what is under the point, or {@code null} when the ray leaves the
+     *         level without meeting anything
+     */
+    public static Aim pick(Camera camera, Level level, int screenX, int screenY) {
+        double[] floor = camera.screenToWorld(screenX, screenY);
+        int ts = level.tileSize;
+        double lift = BLOCK_HEIGHT * ts;
+        if (lift <= 0 || !level.layered()) {
+            int col = (int) Math.floor(floor[0] / ts), row = (int) Math.floor(floor[1] / ts);
+            return inside(level, col, row) ? new Aim(col, row, 0, true) : null;
+        }
+        // Where a block one layer up has to sit to draw over a given floor
+        // point. A block at cell T whose top is n layers up projects to the
+        // planar point of T lifted by n lifts, so the floor point under the
+        // cursor is T shifted back by n of these — and T is the cursor's floor
+        // point shifted forward by n. Taken through the projection's own
+        // inverse, so it turns with the camera without this method knowing a
+        // camera can turn.
+        double[] step = camera.inversePlanar(0, lift * camera.liftScale());
+        // From the top down: the ray meets the highest thing first, and the
+        // first column it meets is what the cursor is on. Marching up from the
+        // floor instead would return the floor every time, since the floor
+        // point under the cursor is itself a floored cell.
+        for (int n = level.tallestColumn(); n >= 0; n--) {
+            int col = (int) Math.floor((floor[0] + step[0] * n) / ts);
+            int row = (int) Math.floor((floor[1] + step[1] * n) / ts);
+            if (!inside(level, col, row)) continue;
+            int height = level.stackHeight(col, row);
+            // Over this cell the ray is n blocks above the floor, so it strikes
+            // the column exactly when the column stands at least that tall.
+            if (height >= 1 && height - 1 >= n) {
+                return new Aim(col, row, height - 1, height - 1 == n);
+            }
+        }
+        return null;
+    }
+
+    private static boolean inside(Level level, int col, int row) {
+        return col >= 0 && row >= 0 && col < level.width && row < level.height;
+    }
+
+    /**
      * The crack overlay on the block being held-mined at (col,row), spreading
      * with {@code progress} in [0,1].
      *
@@ -144,8 +240,8 @@ public final class TerrainPainter {
         double wx = col * (double) tileSize, wy = row * (double) tileSize;
         double[][] cs = {{wx, wy}, {wx + tileSize, wy},
                 {wx + tileSize, wy + tileSize}, {wx, wy + tileSize}};
-        int lift = level.tileAt(col, row, Level.LAYER_UPPER) > 0
-                ? liftPixels(camera, tileSize) : 0;
+        int lift = liftPixels(camera, tileSize)
+                * Math.max(0, level.stackHeight(col, row) - 1);
         int minX = Integer.MAX_VALUE, maxX = Integer.MIN_VALUE;
         int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
         long sumX = 0, sumY = 0;
@@ -295,7 +391,9 @@ public final class TerrainPainter {
          * top face. Being generous costs a few cells at the edge of the screen;
          * being mean costs a wall that pops in when its base leaves the view.
          */
-        private final int cullMargin;
+        private final int cullMarginSide;
+        private final int cullMarginUp;
+        private final int cullMarginDown;
         /**
          * Whether cells outside the viewport are skipped.
          *
@@ -359,8 +457,23 @@ public final class TerrainPainter {
             double[] offset = camera.planarDelta(awayX, awayY);
             this.shadowX = offset[0] * camera.zoom;
             this.shadowY = offset[1] * camera.zoom;
-            this.cullMargin = (int) Math.ceil(lift + Math.abs(shadowX) + Math.abs(shadowY)
-                    + tileSize * camera.zoom);
+            // How far a cell's drawing reaches beyond its own quad, per side.
+            //
+            // <b>A column reaches up the screen and nowhere else</b>, so only
+            // the margin below the viewport grows with height — cells whose
+            // quads are off the bottom whose columns still paint into view. A
+            // uniform margin would have cost the same slack on all four sides,
+            // which is most of what C-series culling buys back at a turned
+            // heading. The shadow reaches in whichever direction the level's
+            // sun throws it, and both scale with how tall the level is known to
+            // get (Level.tallestColumn).
+            int tallest = level.tallestColumn();
+            double stories = Math.max(1, tallest - 1);
+            double slack = tileSize * camera.zoom;
+            this.cullMarginSide = (int) Math.ceil(Math.abs(shadowX) * stories + slack);
+            this.cullMarginDown = (int) Math.ceil(Math.abs(shadowY) * stories + slack);
+            this.cullMarginUp = (int) Math.ceil(lift * stories
+                    + Math.abs(shadowY) * stories + slack);
         }
 
         void run(int[] bounds, DepthPass raisedPass, Mining mining, TerrainCache cache) {
@@ -388,7 +501,13 @@ public final class TerrainPainter {
             // part drawn on top. Blocks nearer the viewer still cover them,
             // which is right: they are in front of the block being mined.
             if (mining != null && mining.progress() > 0.01) {
-                raisedPass.at(baseDepth(mining.col(), mining.row()), DepthPass.TERRAIN, () ->
+                // Queued at the mined column's own height as well as its depth,
+                // so the block it is breaking cannot sort above its own cracks
+                // — the two tie on every key and arrival order, which puts the
+                // cracks last, decides.
+                int height = Math.max(1, level.stackHeight(mining.col(), mining.row()));
+                raisedPass.at(baseDepth(mining.col(), mining.row()), height - 1,
+                        DepthPass.TERRAIN, () ->
                         drawMiningCracks(target, camera, level, mining.col(), mining.row(),
                                 mining.progress()));
             }
@@ -403,8 +522,9 @@ public final class TerrainPainter {
                     project(c, r);
                     if (offScreen()) continue;
                     drawFloor(c, r, id);
-                    if (shadows != null && level.tileAt(c, r, Level.LAYER_UPPER) > 0) {
-                        addShadow(shadows);
+                    if (shadows != null) {
+                        int height = level.stackHeight(c, r);
+                        if (height > 1) addShadow(shadows, height);
                     }
                 }
             }
@@ -414,11 +534,11 @@ public final class TerrainPainter {
         private void gatherShadows(int[] bounds, Path2D.Double shadows) {
             for (int r = bounds[1]; r <= bounds[3]; r++) {
                 for (int c = bounds[0]; c <= bounds[2]; c++) {
-                    if (level.tileAt(c, r) <= 0
-                            || level.tileAt(c, r, Level.LAYER_UPPER) <= 0) continue;
+                    int height = level.stackHeight(c, r);
+                    if (height <= 1) continue;
                     project(c, r);
                     if (offScreen()) continue;
-                    addShadow(shadows);
+                    addShadow(shadows, height);
                 }
             }
         }
@@ -450,8 +570,9 @@ public final class TerrainPainter {
                 if (ys[i] < minY) minY = ys[i];
                 if (ys[i] > maxY) maxY = ys[i];
             }
-            return maxX < -cullMargin || minX > camera.viewportWidth + cullMargin
-                    || maxY < -cullMargin || minY > camera.viewportHeight + cullMargin;
+            return maxX < -cullMarginSide || minX > camera.viewportWidth + cullMarginSide
+                    || maxY < -cullMarginDown
+                    || minY > camera.viewportHeight + cullMarginUp;
         }
 
         /**
@@ -510,10 +631,25 @@ public final class TerrainPainter {
             if (decor != null) decor.afterTop(target, col, row, xs, ys, block, color);
         }
 
-        /** Add this cell's cast shadow to the frame's single shadow shape. */
-        private void addShadow(Path2D.Double into) {
-            into.moveTo(xs[0] + shadowX, ys[0] + shadowY);
-            for (int i = 1; i < 4; i++) into.lineTo(xs[i] + shadowX, ys[i] + shadowY);
+        /**
+         * Add this cell's cast shadow to the frame's single shadow shape,
+         * thrown as far as the column is tall.
+         *
+         * <p><b>Not raycast, and that is a decision rather than an oversight.</b>
+         * The offset scales with the caster's height and stops there: a tower's
+         * shadow falls on the floor even where a taller neighbour should have
+         * caught it, and two towers' shadows merge rather than one falling
+         * across the other. A real cast is affordable on a heightfield — march
+         * each column along the light bearing until the accumulated drop meets
+         * a taller column, which is O(reach) per column with no allocation —
+         * but it is a shadow system, and this step's job is only that height
+         * reads. Recorded in {@code HEIGHT_PLAN.md} Appendix B.
+         */
+        private void addShadow(Path2D.Double into, int height) {
+            double reach = Math.max(1, height - 1);
+            double dx = shadowX * reach, dy = shadowY * reach;
+            into.moveTo(xs[0] + dx, ys[0] + dy);
+            for (int i = 1; i < 4; i++) into.lineTo(xs[i] + dx, ys[i] + dy);
             into.closePath();
         }
 
@@ -526,34 +662,80 @@ public final class TerrainPainter {
         private void queueRaised(int[] bounds, DepthPass raisedPass) {
             for (int r = bounds[1]; r <= bounds[3]; r++) {
                 for (int c = bounds[0]; c <= bounds[2]; c++) {
-                    int id = level.tileAt(c, r, Level.LAYER_UPPER);
-                    if (id <= 0 || level.tileAt(c, r) <= 0) continue;
-                    Block block = level.blocks.get(id);
-                    if (block == null) continue;
+                    if (level.tileAt(c, r) <= 0) continue;
+                    int height = level.stackHeight(c, r);
+                    if (height <= 1) continue;
                     project(c, r);
                     if (offScreen()) continue;
                     int col = c, row = r;
-                    raisedPass.at(baseDepth(col, row), DepthPass.TERRAIN,
-                            () -> drawRaised(col, row, block));
+                    raisedPass.at(baseDepth(col, row), height - 1, DepthPass.TERRAIN,
+                            () -> drawColumn(col, row, height));
                 }
             }
         }
 
-        /** One stacked block: the faces its lift exposes, then its top. */
-        private void drawRaised(int col, int row, Block block) {
+        /**
+         * One column of raised blocks: the side faces its lift exposes, then
+         * the top face of whatever is on top.
+         *
+         * <p><b>Drawn as runs of one material rather than block by block.</b> A
+         * column of eight stones is one extrusion eight blocks tall, not eight
+         * extrusions of one — which is a correctness matter and not only a
+         * speed one. Each face is placed by rounding its own lift to whole
+         * pixels, and rounding eight times accumulates: at a lift of 17.6 px,
+         * eight blocks drawn one at a time land at {@code 8 × round(17.6) =
+         * 144} while the column's true top is {@code round(8 × 17.6) = 141}, and
+         * the three pixels of difference open as seams down the side. Rounding
+         * happens once per run, against the run's own top.
+         *
+         * <p>Runs also do the culling. Only the topmost block's <em>top</em> is
+         * visible — the others have a block sitting on them — so a column that
+         * is all one material is one quad and one set of side faces however
+         * deep it is.
+         */
+        private void drawColumn(int col, int row, int height) {
+            int runTop = height;
+            while (runTop > 1) {
+                int id = level.tileAt(col, row, runTop - 1);
+                int runBase = runTop - 1;
+                while (runBase > 1 && level.tileAt(col, row, runBase - 1) == id) runBase--;
+                Block block = level.blocks.get(id);
+                if (block != null) drawRun(col, row, block, runBase, runTop);
+                runTop = runBase;
+            }
+        }
+
+        /**
+         * One run of identical blocks in a column, occupying layers
+         * {@code [base, top)} — its exposed side faces and, when it is the
+         * column's own top, its top face.
+         */
+        private void drawRun(int col, int row, Block block, int base, int top) {
             project(col, row);
             Color color = block.color();
+            // Layer 0 is the floor tile itself, drawn flat by the floor pass,
+            // so the block in layer 1 stands ON it at a lift of zero. A run
+            // covering layers [base, top) therefore spans screen heights
+            // [base - 1, top - 1) — the off-by-one that draws a whole column
+            // floating one block above its own floor.
+            int lower = (int) Math.round(lift * (base - 1));
+            int upper = (int) Math.round(lift * (top - 1));
+            // The face spans from this run's floor to its ceiling. Both ends are
+            // rounded from the column's own base, so neighbouring runs share an
+            // edge exactly and no seam can open between them.
             BufferedImage side = face(block.sideTextureKey(), block.textureKey());
-            drawVisibleFaces(side, color);
-            for (int i = 0; i < 4; i++) ys[i] -= (int) Math.round(lift);
-            BufferedImage top = face(block.topTextureKey(), block.textureKey());
-            if (top != null) {
-                TilePainter.drawTexture(target, top, xs, ys, flatBlit);
-            } else {
-                target.fillPolygon(xs, ys, 4, color);
-                target.drawPolygon(xs, ys, 4, color.darker());
+            drawVisibleFaces(col, row, base, top, side, color);
+            for (int i = 0; i < 4; i++) ys[i] -= upper;
+            if (top == level.stackHeight(col, row)) {
+                BufferedImage skin = face(block.topTextureKey(), block.textureKey());
+                if (skin != null) {
+                    TilePainter.drawTexture(target, skin, xs, ys, flatBlit);
+                } else {
+                    target.fillPolygon(xs, ys, 4, color);
+                    target.drawPolygon(xs, ys, 4, color.darker());
+                }
+                if (decor != null) decor.afterTop(target, col, row, xs, ys, block, color);
             }
-            if (decor != null) decor.afterTop(target, col, row, xs, ys, block, color);
         }
 
         /**
@@ -592,22 +774,47 @@ public final class TerrainPainter {
          * every heading of both plan views winds the same way, so a projection
          * that ever mirrors fails there and names this method.
          */
-        private void drawVisibleFaces(BufferedImage side, Color color) {
+        /**
+         * Which world neighbour each edge of the projected quad faces.
+         *
+         * <p>The corners are projected in a fixed world order — {@code (c,r)},
+         * {@code (c+1,r)}, {@code (c+1,r+1)}, {@code (c,r+1)} — so edge
+         * {@code i}&rarr;{@code i+1} always separates this cell from the same
+         * neighbour whatever the camera is doing. Where those edges <em>appear</em>
+         * turns with the yaw; which cells they divide does not.
+         */
+        private static final int[] EDGE_DC = {0, 1, 0, -1};
+        private static final int[] EDGE_DR = {-1, 0, 1, 0};
+
+        private void drawVisibleFaces(int col, int row, int base, int top,
+                                      BufferedImage side, Color color) {
             for (int i = 0; i < 4; i++) {
                 int j = (i + 1) & 3;
                 // The y component of the edge's outward normal, (dy, -dx) for a
                 // quad that reads clockwise on a screen whose y grows downward.
                 if (-(xs[j] - xs[i]) <= 0) continue;
+                // …and the neighbour on the far side of this edge hides
+                // everything up to its own height. A plateau of identical
+                // columns therefore draws its tops and the side faces of its
+                // rim, and nothing in between — which is the difference between
+                // a landscape costing its silhouette and costing its area.
+                int neighbour = level.stackHeight(col + EDGE_DC[i], row + EDGE_DR[i]);
+                int from = Math.max(base, neighbour);
+                if (from >= top) continue;
+                int lower = (int) Math.round(lift * (from - 1));
+                int upper = (int) Math.round(lift * (top - 1));
+                for (int k = 0; k < 4; k++) ys[k] -= lower;
                 // Drawn from its higher end to its lower one, so the texture on
                 // it keeps one orientation across the faces of a block and
                 // across headings. This is the order the isometric and top-down
                 // cases were written with by hand, and it reproduces both.
                 boolean iFirst = ys[i] < ys[j] || (ys[i] == ys[j] && xs[i] < xs[j]);
                 if (iFirst) {
-                    drawFace(i, j, side, color);
+                    drawFace(i, j, side, color, upper - lower);
                 } else {
-                    drawFace(j, i, side, color);
+                    drawFace(j, i, side, color, upper - lower);
                 }
+                for (int k = 0; k < 4; k++) ys[k] += lower;
             }
         }
 
@@ -617,8 +824,7 @@ public final class TerrainPainter {
          * handed to the texture painter in the corner order it expects, with
          * the lifted edge on top.
          */
-        private void drawFace(int from, int to, BufferedImage skin, Color color) {
-            int riseUp = (int) Math.round(lift);
+        private void drawFace(int from, int to, BufferedImage skin, Color color, int riseUp) {
             faceX[0] = xs[from]; faceY[0] = ys[from] - riseUp;
             faceX[1] = xs[to];   faceY[1] = ys[to] - riseUp;
             faceX[2] = xs[to];   faceY[2] = ys[to];
@@ -628,10 +834,37 @@ public final class TerrainPainter {
                 // in isometric and a plain band straight down, and the warping
                 // path draws both from the quad's own edges.
                 TilePainter.drawTexture(target, skin, faceX, faceY, false);
+                drawLayerSeams(from, to, riseUp, shade(color, SIDE_SHADE * 0.7));
                 return;
             }
             target.fillPolygon(faceX, faceY, 4, shade(color, SIDE_SHADE));
             target.drawPolygon(faceX, faceY, 4, shade(color, SIDE_SHADE * 0.75));
+            drawLayerSeams(from, to, riseUp, shade(color, SIDE_SHADE * 0.72));
+        }
+
+        /**
+         * The lines where one block of a run meets the next.
+         *
+         * <p><b>What makes a tall column readable.</b> R1 draws a run of eight
+         * identical stones as one extrusion, which is right for seams and for
+         * speed and leaves a flat slab of colour eight blocks tall with nothing
+         * in it to say so. A player cannot count what they cannot see the edges
+         * of, and "how many blocks up is that ledge" is a question they ask
+         * before every jump.
+         *
+         * <p>A line per boundary rather than a fill per block: the extrusion
+         * stays one quad, the seams cost a stroke each, and — because every
+         * boundary is measured from the column's own base with the same
+         * rounding the run's ends use — a seam lands exactly where the block
+         * edge is rather than a pixel off it.
+         */
+        private void drawLayerSeams(int from, int to, int riseUp, Color ink) {
+            if (lift < 2) return;   // zoomed out far enough that seams are noise
+            int blocks = (int) Math.round(riseUp / lift);
+            for (int k = 1; k < blocks; k++) {
+                int up = (int) Math.round(lift * k);
+                target.drawLine(xs[from], ys[from] - up, xs[to], ys[to] - up, ink);
+            }
         }
 
         /** Project cell (col,row) into {@link #xs}/{@link #ys}. */

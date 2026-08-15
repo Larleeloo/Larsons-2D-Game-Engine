@@ -846,7 +846,7 @@ public class PlayScene extends AbstractScene {
         // plane, so a camera that follows only (x,y) leaves a player on an
         // eight-deep tower a fifth of a viewport above its centre. The lift is
         // the same one the sprite is drawn with, so the two cannot disagree.
-        camera.setElevation(me.z * PerspectiveSpace.of(camera.getPerspective()).screenLift());
+        camera.setElevation(me.z * camera.liftScale());
         // A mounted player sits (idle art); otherwise classify the action so
         // the matching skin animation plays, restarting on state changes.
         String state = riding ? "idle"
@@ -2095,7 +2095,7 @@ public class PlayScene extends AbstractScene {
         // position the camera was centred on, so the two cannot drift against
         // each other by the step the interpolation is spanning.
         double meX = drawX(), meY = drawY(), meZ = drawZ();
-        standingAt(standing, meX, meY, () -> {
+        standingAt(standing, meX, meY, hitSize(), meZ, () -> {
             drawPlayer(target, meX, meY, meZ, hitSize(), drawSize(), MeleeSprites.playerFrame(
                     me.characterKey, meleeItem, animState, seen(me.facing), animStateClock,
                     melee.progress(), (int) drawSize(), character.body), null);
@@ -2590,7 +2590,22 @@ public class PlayScene extends AbstractScene {
      * in one place rather than at twenty call sites.
      */
     private void standingAt(DepthPass into, double x, double y, double size, Runnable sprite) {
-        into.at(standDepth(x, y, size), footDepth(x, y, size), sprite);
+        standingAt(into, x, y, size, 0, sprite);
+    }
+
+    /**
+     * {@link #standingAt} for a body standing {@code z} above the floor — the
+     * third key of a plan view's depth.
+     *
+     * <p>Everything on the ground passes zero and sorts exactly as it did. A
+     * body on a column passes its own height and sorts with that column rather
+     * than with the floor beside it, which is what puts a player on a roof in
+     * front of the wall below them instead of behind it.
+     */
+    private void standingAt(DepthPass into, double x, double y, double size,
+                            double z, Runnable sprite) {
+        into.at(standDepth(x, y, size), TerrainPainter.standingLayer(level, z),
+                footDepth(x, y, size), sprite);
     }
 
     /** {@link #standingAt} for a player-sized body. */
@@ -2856,7 +2871,7 @@ public class PlayScene extends AbstractScene {
         int w = Math.max(8, (int) Math.round(def.radius() * 3.5 * camera.zoom
                 * space.heightScale(z, ts())));
         camera.worldToScreen(x, y, corner);
-        int lift = (int) Math.round(z * space.screenLift() * camera.zoom);
+        int lift = (int) Math.round(z * camera.liftScale() * camera.zoom);
         if (lift > 0) {
             double shrink = Math.max(0.3, 1 - z / (ts() * 8));
             int sw = Math.max(3, (int) (w * 0.6 * shrink));
@@ -3127,7 +3142,7 @@ public class PlayScene extends AbstractScene {
                     ps.characterKey, ps.heldKey, state, seen(ps.facing),
                     animClock, ps.meleeProgress, (int) draw, body);
             MeleeAction move = MeleeAction.byKey(ps.meleeAction);
-            standingAt(into, x, y, hit, () -> {
+            standingAt(into, x, y, hit, ps.z, () -> {
                 drawPlayer(target, x, y, ps.z, hit, draw, sprite, ps.name);
                 drawHeldObject(target, x, y, ps.z, hit, draw, seen(ps.facing), ps.heldKey,
                         move, ps.meleeProgress, MeleeProfiles.ofKey(ps.heldKey));
@@ -3177,15 +3192,24 @@ public class PlayScene extends AbstractScene {
         int footX = camera.worldToScreenX(x + hit / 2.0, y + hit);
         int footY = camera.worldToScreenY(x + hit / 2.0, y + hit);
         int dx = footX - w / 2;
-        int lift = (int) Math.round(z * camera.zoom * PlayerPhysics.HOP_DRAW_SCALE);
-        if (lift > 0) {
+        int lift = (int) Math.round(z * camera.zoom * camera.liftScale()
+                * PlayerPhysics.HOP_DRAW_SCALE);
+        // What they would land on if they stopped here — the top of the column
+        // under their feet rather than the floor of the world. A player on a
+        // roof throws their shadow onto the roof; only the part of their height
+        // that is a hop reads as being in the air.
+        double surface = level.verticality()
+                ? PlayerPhysics.groundZ(level, x, y, hit) : 0;
+        int surfaceLift = (int) Math.round(surface * camera.zoom * camera.liftScale());
+        double airborne = Math.max(0, z - surface);
+        if (airborne > 0) {
             // The shadow marks where they will land, shrinking with height. It
             // is cast by the body rather than the sprite: a shadow is the floor
             // they occupy, so a giant with small feet throws a small one.
             int foot = (int) Math.round(hit * camera.zoom);
-            double shrink = Math.max(0.35, 1 - z / (draw * 3));
+            double shrink = Math.max(0.35, 1 - airborne / (draw * 3));
             int sw = (int) (foot * 0.7 * shrink), sh = Math.max(2, (int) (foot * 0.25 * shrink));
-            target.fillOval(footX - sw / 2, footY - sh / 2, sw, sh,
+            target.fillOval(footX - sw / 2, footY - surfaceLift - sh / 2, sw, sh,
                     new Color(0, 0, 0, (int) (90 * shrink)));
         }
         int dy = footY - h - lift;

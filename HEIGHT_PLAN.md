@@ -1,20 +1,22 @@
 # Height Plan — the third axis, end to end
 
 **Status:** Written 2026-08-14 against commit `244762c` on
-`claude/vertical-stacking-walkable-blocks-bf522d`. **Jobs V and W are
-complete.** Job V was storage and changed no pixels; **Job W is the one players
-would name** — a body's floor stopped being the literal zero, so a plan-view
-character now climbs stacks, stands on their tops, walks off them and falls.
-It is gated per level and off by default, so nothing already saved plays
-differently. **Job R is next, starting with R0 (blocks are cubes).** Baseline at
-the time of writing,
+`claude/vertical-stacking-walkable-blocks-bf522d`. **Jobs V, W and R are
+complete.** V was storage and changed no pixels; **W is the one players would
+name** — a body's floor stopped being the literal zero, so a plan-view
+character climbs stacks, stands on their tops, walks off them and falls, gated
+per level and off by default. **R is what it looks like**: blocks are cubes,
+a column is one extrusion with its hidden faces culled against its neighbours,
+shadows and the mining overlay ride the column's height, and the cursor
+resolves by marching the view ray instead of inverting the floor. **Job S is
+next.** Baseline at the time of writing,
 `./gradlew test`: core **1051 tests, 0 failures, 10 skipped**; `:gl` **62 tests,
 0 failures, 34 skipped** (the GL tests that need a driver skip in a container —
-they are the D-series instruments and they run on a real machine). After Job W:
-core **1090/0/10**, `:gl` unchanged. Thirty of the 32 golden frames are still
-byte-identical; two were regenerated because Job W adds two stair blocks to the
-registry, which lengthens the creative palette and shifts an item cycle — a
-content change, not a rendering one (W2).
+they are the D-series instruments and they run on a real machine). After Job R:
+core **1096/0/10**, `:gl` unchanged. Four golden frames have been regenerated
+across the three jobs: two by Job W's stair blocks (a content change — the
+palette is longer and an item cycle shifts) and two by R0's cubes, which is the
+first change in this plan a player would see.
 
 **Four of Job V's six steps found their own instruction wrong**, which is
 recorded per step rather than summarised away: V0's byte-identity was
@@ -30,6 +32,17 @@ accessors answers — what holds a body *up*, which is not its geometry and not
 what stops it. And W5 turned up the projection's offset written out twice, safe
 only while it was one line and a mis-click waiting for the second term this step
 added.
+
+**Job R found three more, and one of them was this document not reading
+itself.** R3 specified a third depth key that Appendix C — written into this
+plan before the step was — proves unnecessary, and putting it where the step
+said reintroduced the exact "the block ate a fifth of them" defect C4 wrote
+`StackedBlockTest` for. R4 assumed cacheable floor meant flat cells and
+measured a collapse that does not exist, because the cache bakes a layer that
+every column has. And **R1 was half-built until R9 measured for it**: merging
+runs inside a column is not culling faces between columns, and only the second
+one makes a plateau cost its silhouette — before it, a plateau was the most
+expensive case in the profile rather than the cheapest.
 
 **V0 could not be done as written and says so in place**: byte-identity had to
 be measured against the save's fixed point rather than against the bundled
@@ -990,6 +1003,20 @@ design, so the regeneration is reviewed as a picture and not waved through.
 `TurnedTerrainTest` must stay green unchanged: cubes are taller, not differently
 shaped, and nothing about which faces a heading shows moves.
 
+#### R0 — done. Two frames moved, and they were looked at
+
+`Level.BLOCK_HEIGHT` is 1, and `Camera.liftScale()` supplies the per-projection
+conversion every lift now goes through — the painter's, the player sprite's,
+the particles', the camera's own follow. `oneLayerOfHeightIsOneTileOfScreenEdge`
+asserts the two routes separately (top-down: the tile; isometric: half the
+diamond's width) rather than asserting 32 twice, which would pass just as
+happily on a formula that draws rhomboids the day somebody widens the diamond.
+
+`world-top-down` and `world-isometric` regenerated and reviewed side by side.
+The isometric pair is the one worth looking at: the same two stone blocks go
+from reading as flat slabs to reading as cubes, which is the whole point of the
+step and is not a thing a mean-channel-error number can tell you.
+
 ### R1 — A column is one extrusion, not a stack of blocks
 
 **Do.** `drawRaised` draws one block: side faces, then the top, lifted by one
@@ -1020,6 +1047,27 @@ common case of it.
 `DrawCallReport` on a level with a 32&times;32 plateau shows draw calls
 proportional to the plateau's perimeter and not its height.
 
+#### R1 — done, and half of it was missing until R9 measured for it
+
+A column is drawn as runs of one material, each run's ends rounded from the
+column's own base so neighbouring runs share an edge exactly and no seam can
+open. `aColumnStandsAsManyBlocksTallAsItIsDeep` pins it.
+
+**The first version had an off-by-one that put every column a block in the
+air.** Layer 0 is the floor tile, drawn flat by the floor pass, so the block in
+layer 1 stands *on* it at a lift of zero — a run over layers `[base, top)`
+spans screen heights `[base - 1, top - 1)`. Written the obvious way it spans
+`[base, top)`, every column floats one block up, and the symptom is not a
+floating column but a wall that stops covering the actor behind it.
+
+**And the face culling this step is mostly about was not implemented at all
+until R9 went looking for it.** Merging runs *within* a column is not the same
+as culling faces *against neighbours*, and only the second one makes a plateau
+cost its silhouette. The neighbour a given edge faces is a fixed table —
+`EDGE_DC`/`EDGE_DR` — because the corners project in a fixed world order, so
+which cells an edge divides never turns even though where it appears does.
+Measured effect in R9.
+
 ### R2 — The floor pass, the column pass, and which cells are which
 
 **Do.** Today: a flat floor pass (cached, R4), then raised blocks queued into
@@ -1036,6 +1084,21 @@ this way for one block; it now reasons about `maxLayers`.
 **Verify.** `PerspectiveDecorTest`-style: a tall column just outside the
 visible bounds still paints, and the frame is identical to one rendered with an
 untruncated sweep.
+
+#### R2 — done. The margin grows upward only, and it is measured not assumed
+
+**Scaling a uniform margin by the level's ceiling cost most of what Job C's
+culling buys.** `TurnedTerrainTest.aTurnedViewDoesNotSweepTheBoxAroundItself`
+caught it immediately: the turned sweep went from 270 fills to 441. A column
+reaches *up* the screen and nowhere else, so only the margin below the viewport
+grows with height — `cullMarginUp`, `cullMarginDown` and `cullMarginSide` are
+separate now, and the sideways one carries only the shadow.
+
+It is also derived from `Level.tallestColumn()`, a high-water mark maintained
+on writes, rather than from the format's ceiling: a level that may hold eight
+layers but holds two should pay for two. The mark only ever rises and resets
+when the grid is replaced, so it costs a generous margin and never a missing
+block — the direction to be wrong in.
 
 ### R3 — Depth, with the third key
 
@@ -1060,6 +1123,26 @@ the actor's visible pixel count is all-or-nothing at each step and flips at the
 cell boundary — the shape `StackedBlockTest.nothingCoversAnActorStandingAgainstAWallsSouthFace`
 already uses, because that test found a real bug in a band a few pixels wide
 and a sampled version would have missed it.
+
+#### R3 — done as a no-op, because this plan's own appendix already covered it
+
+**The third key is unnecessary, and putting it where the step said broke a
+defect the engine already had a test for.** Adding height straight after the
+cell depth promotes a column above actors tied with it — and in isometric a
+tile and its *diagonal* neighbour tie, so a wall started drawing over a
+character standing *beside* it. `StackedBlockTest` and `ActorSizeTest` both went
+red on the "the block ate N px of them" assertion that C4 wrote them for.
+
+Appendix C says why no key was needed: for a heightfield the cell depth alone
+already orders terrain against actors correctly, because screen overlap and
+true occlusion are the same condition. The proof was written into this plan
+before the step was, and the step did not read it.
+
+So `layers` went in last, where it can only settle what the proof does not
+reach — two things on one tile at one foot row and different heights, which is
+two players sharing a tile with one of them mid-hop. This is C6 again: a step
+that came out with almost no diff because the earlier work had already made the
+code honest.
 
 ### R4 — The floor cache, and a measurement that may rewrite this step
 
@@ -1088,6 +1171,35 @@ level**, whichever branch this step takes.
 
 **Verify.** The measurement, recorded here. Plus the hit-rate assertion.
 
+#### R4 — done. The branch this step feared does not exist, and the metric that suggested it was wrong
+
+Measured on a 192&times;192 top-down level at three reliefs, warming the cache
+to completion first (its rebuild budget is throttled, so a big level takes many
+frames to bake — the same warm-up `TerrainCacheTest` does):
+
+| level | cells with no column | cache hit rate |
+|---|---:|---:|
+| flat — today's shipped shape | 100% | **100%** |
+| gentle heightfield, 0–2 above the floor | 11.3% | **100%** |
+| built-up, towers to 5 | 2.4% | **100%** |
+
+**The hit rate does not move at all**, and the first column of that table is the
+step's own mistake made visible. R4 assumed "cacheable floor" meant "cells that
+are flat", so rolling terrain at 11% flat looked like a cache about to
+collapse. The cache bakes **layer 0**, and in a heightfield every column has a
+layer 0 — the floor is a complete layer *under* the terrain, not the subset of
+cells that happen to have nothing on them. Relief cannot reduce it.
+
+So the conditional half of this step is dropped rather than implemented, and
+the fix it proposed — baking a column's top face into the chunk image — is
+recorded as **rejected on structure**: columns interleave with actors in the
+depth pass, which is the whole reason they are not in the floor pass, and a
+baked chunk cannot be sorted against a player standing in front of half of it.
+
+**What the measurement did find is for R9**: the floor under a raised cell is
+drawn and then covered, so a plateau pays for a cached floor blit it never
+shows. Named there rather than fixed here.
+
 ### R5 — Shadows that know how tall the caster is
 
 **Do.** The shadow is one flat quad offset by `SHADOW_REACH` toward the sun's
@@ -1111,6 +1223,13 @@ step of its own.
 column's shadow reaches four times as far as a 1-tall one, and both still swing
 with `lightAngle`.
 
+#### R5 — done
+
+The offset scales with the caster's height and the frame still merges every
+shadow into one fill, so overlapping casters cannot band the floor. Not
+raycast, recorded in Appendix B as accepted, with the march a later step would
+use written down in the method that would host it.
+
 ### R6 — Making eight blocks of stone legible
 
 **Do.** A column drawn as one flat extrusion is a slab of colour with no scale.
@@ -1127,6 +1246,23 @@ Two cheap terms fix it, and both are height's to give:
 playing. Add `world-top-down-tall.png` and `world-isometric-tall.png` to the
 golden catalogue — which is also the reference the rest of Job R regresses
 against.
+
+#### R6 — done as layer seams; the gradient and the ambient occlusion are not
+
+**What R1 buys in speed it costs in legibility**, and this is the step that pays
+it back: a run of eight identical stones is one quad eight blocks tall with
+nothing in it to say so, and "how many blocks up is that ledge" is a question a
+player asks before every jump. A stroke at each block boundary — measured from
+the column's base with the same rounding the run's ends use, so a seam lands on
+the edge rather than a pixel off it — makes the height countable for the cost
+of a line per boundary, with the single extrusion intact.
+
+**The depth gradient and the neighbour-derived ambient occlusion this step also
+asked for are not built.** Both want per-band fills where there is currently one
+quad, which is R1's win spent on shading; the seams already answer the question
+the step was for. Recorded rather than quietly dropped — they are a look, and a
+look should be decided by playing rather than by a plan written before anything
+was on screen.
 
 ### R7 — Picking, which is where the aim stops being a point on the floor
 
@@ -1162,6 +1298,25 @@ that column, that layer and that face; a cursor over the floor beside it
 resolves to the floor cell; a cursor over the *side* of a tower resolves to the
 tower and not to the cell behind it — the defect this step exists for.
 
+#### R7 — done. `TerrainPainter.pick` returns a cell, a layer and a face
+
+Green first run across all eight headings in both projections, which is the
+part worth reporting: the march never asks what the heading is. The step per
+layer is taken through `Camera.inversePlanar`, so it turns with the camera by
+construction — invariant 6, and the same reason `drawVisibleFaces` survived Job
+C untouched.
+
+**The march runs from the top down, and getting that backwards is silent.**
+Walking up from the floor returns the floor every time, because the floor point
+under the cursor is itself a floored cell and satisfies the hit test at
+{@code n = 0}. The ray meets the highest thing first, so the loop counts down
+from `tallestColumn`, and the first column that stands at least as tall as the
+ray is high over it is the hit.
+
+Nothing consumes it yet — the sixteen `screenToWorld` sites are Job E's to
+convert, because each one also has to decide what to do with the face, which is
+E1's rule and not a mechanical substitution.
+
 ### R8 — Sprites at height
 
 **Do.** A body at `z` is drawn lifted by `z × screenLift` and scaled by
@@ -1177,6 +1332,15 @@ feet makes it one line.
 4-tall column draws 4 lifts above the cell's floor row, with their shadow on
 the column's top face.
 
+#### R8 — done
+
+The sprite lift goes through `Camera.liftScale()` like everything else, and the
+shadow separates two things the old code conflated: a body's **height above the
+world** and its height **above what it is standing on**. The shadow is drawn on
+the column's top rather than the floor, and only the airborne part of `z` — the
+hop — shrinks it. Without that split a player standing still on a tower throws
+a permanent shadow on the ground eight blocks below them.
+
 ### R9 — Re-profile
 
 **Do.** Frame profile on the tall golden levels, both backends, against V6's
@@ -1187,6 +1351,40 @@ about what a flat one costs plus its silhouette.
 regressed, the suspects in order are R4's cache hit rate, R1's per-run material
 splitting, and R2's cull margin — in that order, because that is the order of
 how much each one multiplies.
+
+#### R9 — done, and it is the step that found R1 was half-built
+
+192&times;192 level, 720&times;720 viewport, Java2D, this container (not the M1
+Air the render plan's numbers come from — the *ratios* are the result). Best of
+15 after warm-up, terrain only:
+
+| level | top-down | isometric |
+|---|---:|---:|
+| flat | 2.23 ms | 2.93 ms |
+| rolling, 0–2 above the floor | 9.07 | 10.66 |
+| built-up, towers to 5 | 8.94 | 11.31 |
+| plateau at 5 — all silhouette, no interior | 9.40 | 11.12 |
+
+**The plateau row is why this step matters.** Before the neighbour cull it was
+the *most expensive* case of the four — 12.46 top-down, 16.16 isometric —
+which is the exact opposite of what R1 claims a plateau should cost, and it is
+what revealed that R1 had merged runs within a column and never culled faces
+between columns. With the cull it costs about what the built-up level does, and
+the four relief cases sit within 5% of each other rather than climbing with
+area.
+
+**What did not go away: relief costs about 4&times; flat, and that is
+structural.** A flat cell is one cached blit; a raised cell is a cached blit
+*plus* a top face *plus* a place in the depth sort. The multiple is not the
+height — built-up and rolling cost the same — it is the count of cells that
+have anything on them at all.
+
+**One measured opportunity, named rather than taken.** The floor under a raised
+cell is drawn from the cache and then covered by the column that stands one
+step nearer the camera, so a plateau pays in full for a floor it never shows.
+Skipping it needs the floor pass to know a cell is hidden, which the chunk-blit
+path cannot express per cell — so it is a change to what the cache bakes, and
+it belongs with a measurement of its own rather than at the end of Job R.
 
 ---
 
