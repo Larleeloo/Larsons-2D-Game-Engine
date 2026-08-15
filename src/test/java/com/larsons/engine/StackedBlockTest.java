@@ -414,42 +414,47 @@ class StackedBlockTest {
     }
 
     /**
-     * The placement rule tops out at two, and that is now a different statement
-     * from the one above.
+     * The placement rule is the height gate now, not the editor.
      *
-     * <p>This split out of {@code theHeightAxisIsZeroOneOrTwoAndNeverThree},
-     * which asserted both at once and was believed to be pinning the height
-     * axis. It was not: it stacked one block and then proved the cell full with
-     * {@link Level#placeLayer}, so it went on passing when V2 raised the
-     * storage ceiling to eight — because the number it was actually measuring
-     * had not moved. <b>Storage tops out at the level's ceiling; placement
-     * still tops out at two.</b>
+     * <p>This split out of the height-axis test in V2, when raising the storage
+     * ceiling to eight failed to turn it red: it stacked one block and then
+     * proved the cell full with {@link Level#placeLayer}, so it was measuring
+     * the placement rule and not the storage. The plan then predicted E1 would
+     * be the step that turned it red, because that is where the editor learns
+     * to aim at a face.
      *
-     * <p>Kept, named for what it measures, and deliberately left failing-shaped
-     * for E1: that step replaces the placement rule with one that aims at a
-     * face, and when it does, this test is the one that should turn red.
+     * <p><b>It was not E1, and the reason is better than the prediction.</b>
+     * Placement builds a column to the level's ceiling now — but only in a
+     * level whose height axis is switched on. A level that has not asked for
+     * height is still a level where two layers is a wall and there is nothing
+     * above it, so the old rule is not legacy behaviour to be migrated, it is
+     * the correct behaviour for that kind of level, and it is what every level
+     * saved before this job gets. Both halves are asserted, because either one
+     * alone reads like the other one being broken.
      */
     @Test
-    void thePlacementRuleStillTopsOutAtTwoUntilTheEditorCanAim() {
+    void placementBuildsToTheCeilingOnlyWhereTheHeightAxisIsOn() {
         for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
-            Level lvl = floored(format);
-            int stone = lvl.blocks.get("stone").id();
+            Level flat = floored(format);
+            int stone = flat.blocks.get("stone").id();
+            assertFalse(flat.verticality(), format + ": a level that never asked for height");
+            assertEquals(Level.LAYER_UPPER, flat.placeLayer(15, 15));
+            flat.setTile(15, 15, Level.LAYER_UPPER, stone);
+            assertEquals(-1, flat.placeLayer(15, 15),
+                    format + ": two layers is a wall and the cell is full");
 
-            assertEquals(Level.LAYER_UPPER, lvl.placeLayer(15, 15),
-                    format + ": a floored cell takes a block on top");
-            lvl.setTile(15, 15, Level.LAYER_UPPER, stone);
-            assertEquals(-1, lvl.placeLayer(15, 15),
-                    format + ": and then placement says the cell is full");
-            assertTrue(lvl.layerLimit() > 2,
-                    format + ": while the storage still has six layers of room");
-            assertTrue(lvl.setTile(15, 15, 2, stone),
-                    format + ": which a direct write can reach and placement cannot");
+            Level tall = floored(format);
+            tall.settings = new com.larsons.engine.config.GameProfile("stacked-test");
+            tall.settings.verticality = true;
+            assertTrue(tall.verticality());
+            for (int expected = 1; expected < tall.layerLimit(); expected++) {
+                assertEquals(expected, tall.placeLayer(15, 15),
+                        format + ": the next block goes on top of what is there");
+                assertTrue(tall.setTile(15, 15, expected, stone));
+            }
+            assertEquals(-1, tall.placeLayer(15, 15),
+                    format + ": until the column reaches the level's ceiling");
         }
-
-        // A side-scroller's placement rule and its ceiling agree, and always did.
-        Level side = floored(LevelFormat.SIDE_SCROLLER);
-        assertEquals(-1, side.placeLayer(15, 15), "one layer, and it is full");
-        assertEquals(1, side.layerLimit());
     }
 
     /**

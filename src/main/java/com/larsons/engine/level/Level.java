@@ -868,9 +868,21 @@ public class Level {
         if (!layered()) {
             return liquidAt(col, row) != null ? LAYER_GROUND : -1;
         }
-        Block up = blockAt(col, row, LAYER_UPPER);
-        if (up == null) return LAYER_UPPER;
-        return up.liquid() ? LAYER_UPPER : -1;
+        if (!verticality()) {
+            // Two layers, and the second one is the top of the world. The rule
+            // every level saved before the height axis was built under.
+            Block up = blockAt(col, row, LAYER_UPPER);
+            if (up == null) return LAYER_UPPER;
+            return up.liquid() ? LAYER_UPPER : -1;
+        }
+        // With the axis live a column is built as high as the level allows,
+        // and the next block goes on top of whatever is there. A liquid on top
+        // is covered rather than stood on — covering a pool is how pools are
+        // removed, since they cannot be mined.
+        int height = stackHeight(col, row);
+        Block top = blockAt(col, row, height - 1);
+        if (top != null && top.liquid()) return height - 1;
+        return height < layerLimit() ? height : -1;
     }
 
     /**

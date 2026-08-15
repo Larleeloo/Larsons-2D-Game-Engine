@@ -1776,8 +1776,27 @@ public final class World {
      * leaves the hole nobody can cross.
      */
     public int mineLayer(int col, int row) {
-        return level.tileAt(col, row, Level.LAYER_UPPER) > 0
-                ? Level.LAYER_UPPER : Level.LAYER_GROUND;
+        int height = level.stackHeight(col, row);
+        return Math.max(Level.LAYER_GROUND, height - 1);
+    }
+
+    /**
+     * Whether a tool may take the block at (col,row) — the top of the column
+     * and nothing under it.
+     *
+     * <p><b>A hole in the middle of a wall is a shape a heightfield cannot
+     * hold.</b> Mining layer 2 of a five-deep column would leave three blocks
+     * standing on nothing, which is either a physics system that drops them or
+     * a lie about what {@code stackHeight} means. Refusing is a rule; collapsing
+     * is a feature, and it belongs with Job O, where a column may legitimately
+     * have a gap in it.
+     *
+     * <p>So a column comes apart from the top down, which is what it has always
+     * done — this is the same sentence as before, said about eight layers
+     * instead of two ({@code HEIGHT_PLAN.md} E1).
+     */
+    public boolean canMineLayer(int col, int row, int layer) {
+        return layer == mineLayer(col, row);
     }
 
     /**

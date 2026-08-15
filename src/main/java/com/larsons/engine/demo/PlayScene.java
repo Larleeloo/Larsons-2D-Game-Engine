@@ -1190,8 +1190,17 @@ public class PlayScene extends AbstractScene {
 
         double[] aim = camera.screenToWorld(input.getMouseX(), input.getMouseY());
         double ts = ts();
-        int col = (int) Math.floor(aim[0] / ts);
-        int row = (int) Math.floor(aim[1] / ts);
+        // What the cursor is on, and where a block placed against it goes.
+        // Inverting the floor answers neither once the terrain has height: the
+        // pixels showing a tower's side belong to the floor cell behind it, so
+        // a click on a wall used to mine a block a cell or more away — further
+        // the taller the wall (HEIGHT_PLAN.md R7/E1).
+        TerrainPainter.Aim at = TerrainPainter.pick(camera, level,
+                input.getMouseX(), input.getMouseY());
+        int col = at != null ? at.col() : (int) Math.floor(aim[0] / ts);
+        int row = at != null ? at.row() : (int) Math.floor(aim[1] / ts);
+        int placeCol = at != null ? at.placeCol() : col;
+        int placeRow = at != null ? at.placeRow() : row;
         boolean inReach = Math.hypot(aim[0] - (me.x + hitSize() / 2), aim[1] - (me.y + hitSize() / 2))
                 <= REACH_TILES * ts;
 
@@ -1265,7 +1274,7 @@ public class PlayScene extends AbstractScene {
             }
         }
         if (rightClick && p.blockEditingEnabled && inReach) {
-            placeAt(col, row, p);
+            placeAt(placeCol, placeRow, p);
         }
     }
 

@@ -332,6 +332,13 @@ public class CreativeScene extends AbstractScene {
     // Editing state.
     private boolean showGrid = true;
     private boolean decorForeground; // which layer decorations paint into
+    /**
+     * What the cursor last resolved to — the cell, the layer and the face.
+     * Held so the preview (E2) draws where the brush would actually land
+     * rather than recomputing the march and risking a different answer.
+     */
+    private TerrainPainter.Aim aimedAt;
+
     private int lastPaintCol = Integer.MIN_VALUE, lastPaintRow = Integer.MIN_VALUE;
     /** The cell the held eraser last took a layer off, so it takes only one. */
     private int lastEraseCol = Integer.MIN_VALUE, lastEraseRow = Integer.MIN_VALUE;
@@ -1105,8 +1112,14 @@ public class CreativeScene extends AbstractScene {
 
         double[] aim = camera.screenToWorld(input.getMouseX(), input.getMouseY());
         double ts = level.tileSize;
-        int col = (int) Math.floor(aim[0] / ts);
-        int row = (int) Math.floor(aim[1] / ts);
+        // The cell the cursor is on, marched through the terrain rather than
+        // inverted off the floor — a brush aimed at a tower's side face used to
+        // paint the cell behind it (HEIGHT_PLAN.md R7/E1).
+        TerrainPainter.Aim at = TerrainPainter.pick(camera, level,
+                input.getMouseX(), input.getMouseY());
+        int col = at != null ? at.col() : (int) Math.floor(aim[0] / ts);
+        int row = at != null ? at.row() : (int) Math.floor(aim[1] / ts);
+        aimedAt = at;
 
         if (KeyBinds.pressed(input, GameAction.EDITOR_PICK)) {
             pickBlock(col, row);

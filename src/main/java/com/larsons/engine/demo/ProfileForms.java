@@ -47,6 +47,21 @@ final class ProfileForms {
         form.addNote(DisplayCap.describeRule(DeviceProfile.detect()));
 
         form.addToggle("Gravity / jumping", () -> p.gravityEnabled, v -> p.gravityEnabled = v);
+
+        // The height axis. Off by default and off in every level saved before
+        // it existed, because turning it on is a change to how those levels
+        // play: a hop clears a block, so every wall becomes something to climb
+        // and every maze becomes traversable over its own walls
+        // (HEIGHT_PLAN.md W0). The note says so rather than leaving a creator
+        // to discover it by flipping the switch on a finished level.
+        form.addToggle("Standing on blocks (height)",
+                () -> p.verticality, v -> p.verticality = v);
+        form.addNote("Off: stacks are walls. On: climb them, stand on top, "
+                + "walk off and fall — and every wall in this level becomes "
+                + "something a jump can clear.");
+        form.addToggle("Falling hurts", () -> p.fallDamageEnabled,
+                        v -> p.fallDamageEnabled = v)
+                .enabledWhen(() -> p.verticality);
         form.addToggle("Show HUD", () -> p.hudVisible, v -> p.hudVisible = v);
         form.addToggle("Show grid", () -> p.gridVisible, v -> p.gridVisible = v);
 
