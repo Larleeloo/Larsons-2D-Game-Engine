@@ -1954,11 +1954,25 @@ public class PlayScene extends AbstractScene {
             me.x = corrected.x;
             me.y = corrected.y;
             me.vy = corrected.vy;
+            me.z = corrected.z;
+            me.vz = corrected.vz;
         } else {
             double k = Math.min(1.0, CORRECTION_PER_SEC * dt);
             me.x += ex * k;
             me.y += ey * k;
             me.vy += (corrected.vy - me.vy) * k;
+            // The third axis reconciles like the other two.
+            //
+            // W2's step-up rule reads only the level and the body, so it is
+            // deterministic by construction — but "by construction" is what C7
+            // said before the heading turned out to need to ride the input.
+            // What actually differs across the wire is the level: a client that
+            // has just placed a block under itself stands on it a tick before
+            // the server agrees, which is ordinary prediction error and needs
+            // the ordinary correction rather than a special case
+            // ({@code HEIGHT_PLAN.md} N3).
+            me.z += (corrected.z - me.z) * k;
+            me.vz += (corrected.vz - me.vz) * k;
         }
         // Resources are server-authoritative too (shots spend mana, sprint
         // spends stamina); track them closely without HUD pops.
@@ -2540,9 +2554,15 @@ public class PlayScene extends AbstractScene {
         // decorate. A decorator that does nothing still forces the floor to be
         // repainted cell by cell, because the painter cannot know it is a
         // no-op — so "no open container" has to mean "no decorator".
+        // Anything standing between the camera and the player is drawn
+        // see-through, or walking indoors is walking into nothing: a roof is
+        // geometry nearer the camera than the player under it, and the painter
+        // is right to cover them (O3).
         TerrainPainter.draw(target, level, camera, visibleTileBounds(), animClock,
                 standing, containerPanel == null ? null : this::drawOpenLid,
-                miningStroke(), terrainCache);
+                miningStroke(), terrainCache,
+                TerrainPainter.cutaway(camera, level,
+                        drawX() + hitSize() / 2, drawY() + hitSize(), drawZ()));
     }
 
     /**

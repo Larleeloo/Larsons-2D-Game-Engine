@@ -720,11 +720,59 @@ public class Level {
      * torch on it also answers 1; a wall answers 2 and its top is one block up.
      */
     public int supportHeight(int col, int row) {
-        if (tileAt(col, row) <= 0) return 0;
-        int layers = layerCount();
-        int support = 1;
-        while (support < layers && solidAt(col, row, support)) support++;
-        return support;
+        return supportUnder(col, row, Integer.MAX_VALUE);
+    }
+
+    /**
+     * The support height of the column at (col,row) as seen from
+     * {@code fromLayer} — the top of the run of ground at or below that layer.
+     *
+     * <p><b>The generalisation a gap in a column forces.</b> While every column
+     * is solid from the ground up there is one surface and asking "which one"
+     * is meaningless, which is why {@link #supportHeight} does not ask. Let a
+     * column have a bridge over it and there are two, and which one holds you
+     * up is decided by which one you are under: standing beneath the deck the
+     * ground is the ground, standing on it the ground is the deck.
+     *
+     * <p>Walks down rather than up, so it finds the nearest surface below the
+     * body rather than the lowest in the column. For a column with no gaps the
+     * two are the same answer, which is why every heightfield caller can go on
+     * asking {@link #supportHeight} and get what it always got.
+     */
+    public int supportUnder(int col, int row, int fromLayer) {
+        int top = Math.min(fromLayer, layerCount() - 1);
+        for (int layer = top; layer >= 0; layer--) {
+            if (supports(col, row, layer)) return layer + 1;
+        }
+        return 0;
+    }
+
+    /**
+     * Whether one layer of a column holds a body up.
+     *
+     * <p>The floor counts whatever it is made of — {@code stone_path} is
+     * passable and is still the ground — and above it only solid blocks do, so
+     * a torch lifts nobody. See {@link #supportHeight}.
+     */
+    private boolean supports(int col, int row, int layer) {
+        return layer == LAYER_GROUND ? tileAt(col, row, LAYER_GROUND) > 0
+                : solidAt(col, row, layer);
+    }
+
+    /**
+     * Whether a body {@code height} layers tall standing on layer
+     * {@code onLayer} has room — nothing solid in the layers it would occupy.
+     *
+     * <p>Trivially true in a heightfield, where nothing is ever above a
+     * column's own top. It is what makes a tunnel a tunnel once a column may
+     * have a gap in it ({@code HEIGHT_PLAN.md} O2).
+     */
+    public boolean headRoom(int col, int row, int onLayer, int height) {
+        int limit = Math.min(layerCount(), onLayer + Math.max(1, height));
+        for (int layer = Math.max(0, onLayer); layer < limit; layer++) {
+            if (solidAt(col, row, layer)) return false;
+        }
+        return true;
     }
 
     /**

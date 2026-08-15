@@ -64,9 +64,9 @@ public final class LiquidSim {
      * floor itself — a pool spreading across a room lies <em>on</em> the floor,
      * and a stream that replaced it would eat the room.
      */
-    private record Cells(Level level, boolean perColumn) {
+    private record Cells(Level level, boolean perColumn, int flatLayer) {
         static Cells of(Level level) {
-            return new Cells(level, level.verticality());
+            return new Cells(level, level.verticality(), level.surfaceLayer());
         }
 
         /**
@@ -88,9 +88,18 @@ public final class LiquidSim {
          * could walk on, where today it is a gap with water hanging over it.
          */
         int layerAt(int col, int row) {
-            if (!perColumn) return level.surfaceLayer();
+            if (!perColumn) return flatLayer;
             return Math.max(Level.LAYER_UPPER, level.supportHeight(col, row));
         }
+
+        // The flat layer is resolved once and held, not asked per cell.
+        // Asking per cell put a Level.surfaceLayer() call — and the format
+        // lookup behind it — inside the whole-grid survey scan, which is the
+        // hottest loop in this class and the one SIM_PLAN measured the p95
+        // stall in. It cost 200 ms on a level that had taken 1 ms, and
+        // LiquidSimBoundedTest caught it on the first run after the change:
+        // the work had gone back to scaling with the level rather than with
+        // the liquid, which is the exact defect that test exists for.
 
         /** How high the ground under a cell is, in layers. */
         int surface(int col, int row) {

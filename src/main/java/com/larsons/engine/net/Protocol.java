@@ -217,9 +217,14 @@ public final class Protocol {
 
     /**
      * Client asks to change a block; {@code mode} is "paint" or "play" and
-     * {@code layer} is which of a plan-view level's two layers it means
-     * ({@code "y"}, absent = the ground layer, which is all a side-scroller
-     * has). See {@link com.larsons.engine.level.Level#LAYER_UPPER}.
+     * {@code layer} is which layer of the column it means ({@code "y"}, absent
+     * = the ground layer, which is all a side-scroller has).
+     *
+     * <p>The layer is any non-negative integer and always has been — this
+     * encoding needed no change when columns went from two deep to eight
+     * ({@code HEIGHT_PLAN.md} N1); only the sentence describing it was ever
+     * limited to two. The <em>server</em> decides whether a named layer is
+     * legal, since a client may say anything.
      */
     public static String blockEdit(int col, int row, int blockId, String mode, int layer) {
         Map<String, Object> m = new LinkedHashMap<>();
@@ -263,7 +268,11 @@ public final class Protocol {
         return encode(m);
     }
 
-    /** The layer a block message names; the ground layer when it names none. */
+    /**
+     * The layer a block message names; the ground layer when it names none.
+     * Unbounded on the wire on purpose — bounding it is the server's job, and
+     * doing it here would look like a check while leaving the real one absent.
+     */
     public static int layerOf(Map<String, Object> msg) {
         return msg.get("y") instanceof Number n ? n.intValue() : 0;
     }

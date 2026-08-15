@@ -631,6 +631,42 @@ public final class GameServer {
      * clearing the floor takes the whole cell with it, because a block with
      * nothing under it is neither a wall nor a path.
      */
+    /**
+     * Whether {@code conn}'s player may edit that layer of that cell.
+     *
+     * <p><b>The server cannot recompute the aim, and does not try to.</b> A
+     * client's aim is derived from its own camera, and C10 established that the
+     * camera is per-client state the server is deliberately never sent — two
+     * players may look at one world from different directions, which is correct
+     * behaviour. So this is the first place in this engine where a client sends
+     * a <em>derived</em> value rather than an intent, and the answer is to
+     * bound it rather than to reproduce it.
+     *
+     * <p>Bounding is enough. Reach, the level's ceiling and the cell's own
+     * bounds are all the server's to check, and a client that stays inside them
+     * has asked for nothing a legitimate client could not have asked for. What
+     * it cannot do is reach across the level, build past the ceiling, or name a
+     * layer that is not a layer ({@code HEIGHT_PLAN.md} N2).
+     */
+    private boolean editAllowed(Connection conn, int col, int row, int layer) {
+        if (col < 0 || row < 0 || col >= level.width || row >= level.height) return false;
+        if (layer < 0 || layer >= level.layerLimit()) return false;
+        PlayerState p = conn.state;
+        if (p == null) return true;   // not yet in the world: nothing to reach from
+        double ts = level.tileSize;
+        double dx = (col + 0.5) * ts - (p.x + ts / 2);
+        double dy = (row + 0.5) * ts - (p.y + ts / 2);
+        if (Math.hypot(dx, dy) > EDIT_REACH_TILES * ts) return false;
+        return world == null || world.canReachCell(p, col, row);
+    }
+
+    /**
+     * How far a client may edit from, in tiles. Generous — a creator painting
+     * with a large brush works at arm's length and then some — because the
+     * point is to bound the request, not to reproduce the client's own rule.
+     */
+    private static final double EDIT_REACH_TILES = 12;
+
     private boolean eraseLayer(int col, int row, int layer) {
         if (layer == Level.LAYER_UPPER) return level.setTile(col, row, layer, 0);
         Block mined = world.mineBlock(col, row, false);
@@ -671,6 +707,9 @@ public final class GameServer {
                     // placing lets the world choose (a hole is floored before
                     // anything is stood on it).
                     int layer = paint ? Protocol.layerOf(msg) : world.placeLayer(col, row);
+                    // A painted layer is a number the client chose, so it is
+                    // bounded here before anything is written with it.
+                    if (paint && !editAllowed(conn, col, row, layer)) continue;
                     if (id == 0) {
                         // Creative erase only. Play-mode mining is hold-to-mine
                         // via the input command (see stepMining), so blocks
