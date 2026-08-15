@@ -1460,7 +1460,9 @@ Those decisions used to be made for you and then only changeable afterwards,
 each somewhere else: the name in the editor's *Save* dialog, the size in its
 *New Level* dialog, the toggles in *Load Level → Edit Settings*. When the game
 type's last level is in the format you picked, the screen offers to **continue
-editing it** instead, which is what picking a format used to do by itself.
+editing it** instead, which is what picking a format used to do by itself. Any
+*other* saved level opens in the editor from *Load Level → **Edit in
+Creative***, which loads it in its own format with its own settings in force.
 The editor's own *New Level* and *Generate* dialogs still carry a **Format**
 row, so you can switch modes in place without leaving it.
 
@@ -3152,11 +3154,13 @@ default.
 4. **Main menu** — **Play Level** opens the last level you played; **Load Level**
    lists the game type's individual levels
    ([`LevelSelectScene`](src/main/java/com/larsons/engine/demo/LevelSelectScene.java)).
-   Click a level and you get two buttons: **Play Level** (load and play it) and
-   **Edit Settings** (a form to **rename the level** and edit *that level's* own
-   toggles, saved back into the level). The main menu also has **Rename Game
-   Type**, which renames the folder — its levels, doors, and custom content move
-   with it.
+   Click a level and you get three buttons: **Play Level** (load and play it),
+   **Edit in Creative** (open it in the editor, in the format it was built in,
+   with its own settings in force — the way to go back to building a level
+   without playing it and pausing first), and **Edit Settings** (a form to
+   **rename the level** and edit *that level's* own toggles, saved back into the
+   level). The main menu also has **Rename Game Type**, which renames the
+   folder — its levels, doors, and custom content move with it.
 5. **New level** — **Creative Mode** asks two questions before it builds
    anything: which **format** (side-scroller, top-down, isometric), then the
    **New Level** screen

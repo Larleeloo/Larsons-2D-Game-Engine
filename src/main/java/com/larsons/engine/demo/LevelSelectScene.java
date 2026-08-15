@@ -19,25 +19,35 @@ import java.util.List;
 
 /**
  * "Load Level" screen: lists the individual levels saved inside the active
- * game type and, once you pick one, offers to <b>Play</b> it or <b>Edit
- * Settings</b> for it. Game types are a folder grouping of levels
- * ({@link LevelStore}), and each level carries its own feature toggles — so
- * this is the one place those per-level settings are edited: the toggles live
- * on the level, not the game type or the in-game pause menu.
+ * game type and, once you pick one, offers to <b>Play</b> it, open it in the
+ * <b>creative editor</b>, or <b>Edit Settings</b> for it. Game types are a
+ * folder grouping of levels ({@link LevelStore}), and each level carries its
+ * own feature toggles — so this is the one place those per-level settings are
+ * edited: the toggles live on the level, not the game type or the in-game
+ * pause menu.
  *
  * <p>Three views:
  * <ul>
  *   <li><b>List</b> — the game type's levels; click one.</li>
- *   <li><b>Actions</b> — <i>Play</i> or <i>Edit Settings</i> for that level.</li>
+ *   <li><b>Actions</b> — <i>Play</i>, <i>Edit in Creative</i> or <i>Edit
+ *       Settings</i> for that level.</li>
  *   <li><b>Edit</b> — a feature form bound to the level's own settings, saved
  *       back into the level file.</li>
  * </ul>
+ *
+ * <p>Opening a saved level in the editor is this screen's job because this is
+ * where the game type's levels are listed. Creative mode's own entry on the
+ * main menu builds a <em>new</em> level ({@link NewLevelScene}); the editor
+ * itself reopens whichever level it was left on. Between them there was no way
+ * to say "edit that one" without first playing it and pausing.
  */
 public class LevelSelectScene extends AbstractScene {
 
     private enum View { LIST, ACTIONS, EDIT }
 
     private final GameContext ctx;
+    /** Where this game type's levels live; overridden by tests (see {@link LevelStore}). */
+    private final String levelsRoot;
     private View view = View.LIST;
     private Menu menu;
     private ConfigForm form;
@@ -45,7 +55,13 @@ public class LevelSelectScene extends AbstractScene {
     private Level editLevel;       // the level loaded for settings editing
     private String status = "";
 
-    public LevelSelectScene(GameContext ctx) { this.ctx = ctx; }
+    public LevelSelectScene(GameContext ctx) { this(ctx, LevelStore.DEFAULT_DIR); }
+
+    /** Root-dir override, mirroring {@link LevelStore}'s (used by tests). */
+    LevelSelectScene(GameContext ctx, String levelsRoot) {
+        this.ctx = ctx;
+        this.levelsRoot = levelsRoot;
+    }
 
     @Override
     public void onEnter() {
@@ -56,7 +72,7 @@ public class LevelSelectScene extends AbstractScene {
         buildListMenu();
     }
 
-    private LevelStore store() { return new LevelStore(ctx.profile().name); }
+    private LevelStore store() { return new LevelStore(levelsRoot, ctx.profile().name); }
 
     /**
      * The list of levels in the active game type, each tagged with the format
@@ -90,19 +106,28 @@ public class LevelSelectScene extends AbstractScene {
         menu.add("Back", () -> scenes.transitionTo("menu"));
     }
 
-    /** Play (and, for editable game types, Edit Settings) for the chosen level. */
+    /**
+     * Play (and, for editable game types, build or configure) the chosen level.
+     * The level opens in the creative mode its own format is authored in, so
+     * picking a top-down level here is the same editor picking Top-Down on the
+     * main menu opens.
+     */
     private void openActions(String name) {
         GameProfile p = ctx.profile();
         selectedLevel = name;
         view = View.ACTIONS;
         LevelFormat format = store().formatOf(name);
-        // A finalized (published) game type is play-only — no settings editing.
+        // A finalized (published) game type is play-only — no building, no
+        // settings editing.
         menu = new Menu(name)
                 .subtitle(format.displayName() + " · "
-                        + (p.finalized ? "play this level" : "play or edit this level"))
+                        + (p.finalized ? "play this level" : "play, build or configure this level"))
                 .theme(MenuTheme.dark())
                 .add("Play Level", this::playSelected);
         if (!p.finalized) {
+            if (p.creativeEnabled) {
+                menu.add("Edit in Creative (" + format.displayName() + ")", this::editInCreative);
+            }
             menu.add("Edit Settings", this::openEditor);
         }
         menu.add("Back", () -> { view = View.LIST; buildListMenu(); });
@@ -114,6 +139,45 @@ public class LevelSelectScene extends AbstractScene {
         p.lastLevelPath = store().fileFor(selectedLevel).toString();
         ctx.save();
         scenes.transitionTo("play");
+    }
+
+    /**
+     * Open the chosen level in the creative editor, in the format it was built
+     * in and with its own settings in force — the same thing the pause menu's
+     * <i>Edit in Creative</i> does for the level being played, without having
+     * to play it first.
+     */
+    private void editInCreative() {
+        Level level;
+        try {
+            level = store().load(selectedLevel);
+        } catch (RuntimeException e) {
+            status = "Could not load \"" + selectedLevel + "\": " + e.getMessage();
+            return;
+        }
+        // The level's own creative toggle is what the pause menu obeys, so it
+        // is obeyed here too — and Edit Settings, one row down, is where it is
+        // turned back on.
+        if (level.settings != null && !level.settings.creativeEnabled) {
+            status = "\"" + selectedLevel + "\" has creative mode turned off — "
+                    + "turn it on in Edit Settings to build in it";
+            return;
+        }
+        handToCreative(ctx, store().fileFor(selectedLevel), level);
+        scenes.transitionTo("creative");
+    }
+
+    /**
+     * Make {@code level} the one the editor opens: the game type's current
+     * level (so the editor returns to it), its own settings in force, and the
+     * loaded object itself handed over rather than read from disk again.
+     */
+    static void handToCreative(GameContext ctx, Path file, Level level) {
+        GameProfile p = ctx.profile();
+        p.lastLevelPath = file.toString();
+        ctx.save();
+        ctx.applyLevelSettings(level.settings);
+        ctx.setPendingCreativeLevel(level);
     }
 
     /** Open the per-level editor: rename the level and edit its own settings. */
@@ -212,7 +276,7 @@ public class LevelSelectScene extends AbstractScene {
     private String hint() {
         return switch (view) {
             case LIST -> "Each level loads in its own format, with its own toggles · Esc to go back";
-            case ACTIONS -> "Play the level, or edit the settings it plays with · Esc to go back";
+            case ACTIONS -> "Play the level, build in it, or edit the settings it plays with · Esc to go back";
             case EDIT -> "Rename the level or change its toggles · type to edit the name · Save to keep · Esc to go back";
         };
     }
