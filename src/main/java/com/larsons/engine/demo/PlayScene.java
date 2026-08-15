@@ -1351,11 +1351,16 @@ public class PlayScene extends AbstractScene {
         // would actually close the cell counts. "Where I am" is the shape the
         // step above collided with, which on a plane is the ground under the
         // feet: measured on the body box instead, a plan-view player could
-        // never build on the cell their sprite's head reaches into.
+        // never build on the cell their sprite's head reaches into. And, once a
+        // body can be at a height, at which height (W6): the layer is passed so
+        // a roof four layers up is not refused for the player under it, and a
+        // player standing on a tower blocks the next block on top of it —
+        // which "the layer is 1" stopped being able to say the day a column
+        // could be eight deep.
         boolean overlapsMe = PlayerPhysics.standingIn(level, me.x, me.y, hitSize(),
-                PerspectiveSpace.of(simPerspective()), col, row);
+                PerspectiveSpace.of(simPerspective()), col, row, me.z, layer);
         boolean wouldClose = b.solid()
-                && (!level.layered() || layer == Level.LAYER_UPPER);
+                && (!level.layered() || layer > Level.LAYER_GROUND);
         if (wouldClose && overlapsMe) return;
 
         if (net != null) {

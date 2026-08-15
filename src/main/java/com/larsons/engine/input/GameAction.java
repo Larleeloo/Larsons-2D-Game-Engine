@@ -124,7 +124,17 @@ public enum GameAction {
     EDITOR_BRUSH_SMALLER("editor_brush_smaller", "Smaller Brush", Category.EDITOR,
             InputBinding.key(KeyEvent.VK_OPEN_BRACKET)),
     EDITOR_BRUSH_BIGGER("editor_brush_bigger", "Bigger Brush", Category.EDITOR,
-            InputBinding.key(KeyEvent.VK_CLOSE_BRACKET));
+            InputBinding.key(KeyEvent.VK_CLOSE_BRACKET)),
+    // The landscape tools. A brush that stacks a block is one verb among five,
+    // and the other four are what turn a tower into terrain (HEIGHT_PLAN.md E3).
+    EDITOR_BUILD_TOOL("editor_build_tool", "Next Landscape Tool", Category.EDITOR,
+            InputBinding.key(KeyEvent.VK_H)),
+    // The build height, which is the escape hatch for everything the "build
+    // against the face you point at" rule makes awkward (E4).
+    EDITOR_LAYER_UP("editor_layer_up", "Build Height Up", Category.EDITOR,
+            InputBinding.key(KeyEvent.VK_PAGE_UP)),
+    EDITOR_LAYER_DOWN("editor_layer_down", "Build Height Down", Category.EDITOR,
+            InputBinding.key(KeyEvent.VK_PAGE_DOWN));
 
     /** How the controls menu is grouped, and the scope a conflict is reported in. */
     public enum Category {

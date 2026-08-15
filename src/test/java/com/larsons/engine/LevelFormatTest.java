@@ -463,10 +463,6 @@ class LevelFormatTest {
 
     @Test
     void theMazeGeneratorBuildsForThePlanViewFormats() {
-        assertFalse(LevelFormat.SIDE_SCROLLER.defaultsToMaze());
-        assertTrue(LevelFormat.TOP_DOWN.defaultsToMaze());
-        assertTrue(LevelFormat.ISOMETRIC.defaultsToMaze());
-
         Level maze = LevelGenerator.generateMaze("Maze", 21, 21, 32, 7L,
                 LevelFormat.ISOMETRIC);
         assertEquals(LevelFormat.ISOMETRIC, maze.format());

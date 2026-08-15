@@ -947,6 +947,21 @@ mean and keeps them unchanged. With the axis live the body's vertical extent
 the floor is not in the way of a roof going on over their head — without which
 a tower cannot be built from beside it.
 
+#### W6 — corrected: the overload existed and neither caller passed it
+
+Found while wiring Job E, and stated rather than quietly fixed, because a step
+marked done that is not reachable is worse than one marked open. Both places a
+player places a block — `PlayScene.placeAt` and the editor's play-test — called
+the old signature and then guarded with `layer == LAYER_UPPER`, which is the
+two-layer world speaking: it asks "is this the layer a wall goes in", and with a
+column eight deep the answer is any layer above the ground. So a player standing
+on a tower could place the next block *inside their own feet*, and the overload
+written for exactly that question was never called.
+
+Both now pass `(me.z, layer)` and guard on `layer > LAYER_GROUND`. The change is
+a no-op where the height axis is off — `standingIn` returns the old answer
+there — so no level saved before this plays differently.
+
 ### W7 — Everything else that stands on the ground
 
 **Do.** Mounts, dropped items, containers and the melee reach all assume the
@@ -1690,6 +1705,34 @@ The test is renamed to `placementBuildsToTheCeilingOnlyWhereTheHeightAxisIsOn`
 and asserts both halves, because either alone reads like the other being
 broken.
 
+#### E1 — and then the editor's own brush, which was still stopping at two
+
+The step above wired the aim into `World`, `Level.placeLayer` and the
+play-test's right click. **`CreativeScene`'s paint stroke was not among them.**
+Its `paintLayer` was two lines that answered `LAYER_GROUND` for a bare cell and
+`LAYER_UPPER` for anything else — the shape a plan view had before it had a
+height axis — so no amount of clicking in the editor could put down the third
+block of anything, and the whole job was unreachable from the tool the levels
+are built with. Its eraser had the same shape, and took layer 1 out of a
+six-deep column while the five blocks above it stayed standing.
+
+Both now go through the column. Placement is `Brush.place` (E4 below, which is
+where the rule is written down); erasing bites `Level.topFilledLayer`, the
+geometry twin of `topSolidLayer` — whatever is on top, so a torch standing on a
+wall comes off before the wall does, and read downward from the ceiling so a
+bridge deck is the top of its column even though the run from the ground stopped
+underneath it.
+
+**The editor's ceiling is `layerLimit`, not `placeLayer`'s.** Placing *in play*
+stops at two layers where the height axis is off, and that is right: a level
+that has not asked for height is one where a stack is a wall. A creator is
+authoring, not playing — the landscape generator has always built past two
+regardless, and refusing the editor the same reach would have made the tool
+weaker than the generator it ships with. What the editor does instead is say so:
+the Landscape window's first row is the height axis, and moving the build height
+in a level that has it off adds the sentence about players reading these columns
+as walls they cannot climb.
+
 ### E2 — A cursor that shows what it is about to build
 
 **Do.** The editor's cursor preview borrows `liftPixels` so a brush about to
@@ -1700,17 +1743,41 @@ self-brick), it draws refused rather than drawing nothing.
 **Verify.** `TerrainPainterDrawTest` / `CreativeFeaturesTest`: the preview's
 top face is at the layer the aim resolved to.
 
-#### E2 — partially done: the brush aims through the terrain, the preview does not yet stand up
+#### E2 — done. The cursor is a cube, and a refused cell says so
 
-The editor's hover cell comes from the march now, so the brush acts on the
-column the cursor is on rather than the floor cell behind it — which is the
-half that changes what a stroke *does*. The cursor preview still draws at the
-floor, and the aim it would need is held on the scene (`aimedAt`) ready for it.
+`TerrainPainter.drawGhostColumn` draws a block-shaped ghost over the run of
+layers a placement will occupy, and the editor's preview is a call to it. The
+painter owns it rather than the scene, because where a block lands on screen is
+three pieces of arithmetic that must not have a second copy — the lift per
+layer, the off-by-one that puts layer 1 *on* the floor rather than one block
+above it, and which side faces a heading shows. A preview drawn from its own
+copy of those is right at rest and wrong at a turned heading, which is the class
+of bug a creator blames on placement.
 
-Scoped down deliberately rather than rushed: a preview that draws the column it
-is about to make, and draws *refused* when the aim is refused, is a piece of
-interface design, and the useful version of it is decided by using the editor
-rather than by a plan written before the editor could aim at all.
+The ghost shows **every** camera-facing side, without the neighbour cull a solid
+column does: it is meant to read as a cube hanging in the air even when pressed
+against a cliff, and the faces a solid block would drop are the ones that say
+where it is.
+
+**A refused cell draws refused** — red, on top of the column that has no room —
+because nothing is the same picture as "the cursor is not over the level", and
+the difference between those two is the whole question a creator is asking when
+a click does not do what they expected.
+
+**The sculpting verbs preview too**, which the step did not ask for and which is
+what makes them usable: the layers a brush is about to add are drawn as ghost
+blocks and the ones it is about to remove are outlined in the refusal colour,
+read from `Brush.plannedHeight` — the same arithmetic the stroke runs, so a
+smooth brush shows the hill it is actually going to make.
+
+**And a readout, because a plan view cannot draw a number.** From above, a
+column three deep and one six deep are the same square with a taller side, and
+counting seams is not how anybody answers "how high am I building". The cursor
+carries `h 4/8 · Stack · on top`.
+
+The stamp is drawn back to front on `tileDepth` rather than in the order
+`Brush.cells` produces, which is the same key the terrain and the actors sort
+on: the row-major order only looks right at the heading it was authored at.
 
 ### E3 — The tools that make height worth having
 
@@ -1748,6 +1815,35 @@ happened to be selected. And **lowering stops at the floor** rather than
 punching a hole: it is a sculpting tool, and a hole is somewhere nobody can
 walk.
 
+#### E3 — and then reachable, which they were not
+
+The four verbs existed, were tested, and **nothing called them**. `Brush.Height`
+had no caller outside `HeightEditorTest`: the tools that make height worth
+having were code a creator had no way to run.
+
+They are the editor's *build tool* now — `H` cycles it, the sidebar has a button
+beside the brush shape, the Landscape window names it with the sentence saying
+what it does, and the top bar carries which one is armed. Armed only where the
+palette holds a block, because these verbs move terrain and there is no sense in
+which a mob or a door has a height to raise; arming raise and then selecting a
+mob paints the mob, which is the answer that never surprises anybody.
+
+Two things had to change in `Brush` for them to be reachable rather than merely
+callable:
+
+- **`applyHeight` takes a `LayerWriter`.** It wrote through `level.setTile`,
+  which is outside the undo history and outside the multiplayer wire. These are
+  the first verbs in the engine that write *columns*, so a sculpted landscape
+  would have been un-undoable and invisible to a server — not a thing to find
+  out after building one. The editor passes its own `writeLayer`, and every
+  layer a raise moves joins the open step.
+- **`plannedHeight` is public**, so the cursor previews the same arithmetic the
+  stroke runs (E2).
+
+The stroke records every cell of the stamp *before* any of it moves, for the
+reason V5 gave: the step has to hand back the column that was there, not the one
+halfway through the drag.
+
 ### E4 — The layer the palette is working on
 
 **Do.** A creator needs to build *inside* a shape as well as on top of it. The
@@ -1758,16 +1854,31 @@ rule makes awkward and it costs a field and a HUD line.
 **Verify.** `CreativeFeaturesTest`: with a target layer set, placement lands
 there regardless of the face aimed at, subject to V2's ceiling.
 
-#### E4 — not done, and it is waiting on E2 rather than on itself
+#### E4 — done, once E2 could show it. It is a build *height*, not a layer index
 
-An explicit target layer is the escape hatch for everything E1's face rule
-makes awkward — building *inside* a shape, or under an overhang once Job O
-exists. It is a field and a HUD line, and it is useless without E2's preview:
-a creator setting a layer they cannot see the consequence of is aiming blind,
-and the feature would read as placement going wrong.
+`buildLayer` on the scene: `-1` follows the surface, `0..ceiling-1` builds to
+that layer. On Ctrl+wheel, on PgUp/PgDn, in the sidebar's stepper, in the top
+bar, and in the cursor readout.
 
-So it is deferred behind the preview, not because it is hard but because the
-order is the wrong way round in the plan.
+**One control rather than a lock switch and a number.** "Follow the surface" is
+the layer below the floor, so a creator winds the height down past the ground
+and lands back in the mode they started in, instead of hunting for the toggle
+that turns it off.
+
+**What "build at layer N" means is where the step's own wording had to be
+overruled.** "Placement lands there regardless of the face" would put a block
+at layer 4 over a column two deep — a block floating over a gap, which is
+precisely the shape a heightfield cannot hold, so the rule would have had the
+editor writing states the rest of the engine says are impossible. `Brush.place`
+answers it as a **run**: a column short of the locked height is built up to it,
+every layer on the way, and a column already taller has the block at that height
+**repainted**. Both leave the heightfield intact, and the second one is the
+better feature — a stripe of one material along a cliff face is what a creator
+reaches for a layer lock to do, and "regardless of the face" never described it.
+
+It also generalises `FLATTEN`, whose target was the cursor's own column and is
+now the locked height when there is one: a terrace at a height you chose, rather
+than at whichever column you happened to be over.
 
 ### E5 — Generated terrain with height in it
 
@@ -1792,11 +1903,21 @@ capped with grass over stone. Deterministic in the seed — asserted by
 generating twice and comparing the saved JSON, which is a stronger check than
 comparing a few cells and costs less to write.
 
-**Not wired to the "new level" path yet.** The maze generator is still what a
-new plan-view level opens with, and switching that default is a decision about
-what this engine's levels *are* rather than a step in a rendering plan. The
-generator exists, it is tested, and pointing `defaultsToMaze` at it is one
-line whenever that call is made.
+**Now wired, to the Generate window rather than to the starter canvas.** It is a
+third mode there — "Landscape (hills)" — with a relief slider, offered in the
+plan views only because a side-scroller has one layer to build relief out of. It
+is what the window *opens* on for those formats: a maze is one thing a plan view
+can be, and a landscape is what its height axis is for, with the other mode one
+row away either way.
+
+**Generating one turns the height axis on**, which is the only place in this
+work a tool changes a level setting without being asked. A landscape in a level
+that has not asked for height is a field of cliffs nobody can climb, and a
+creator who has just asked for hills has said plainly enough what they want. The
+status line says it happened.
+
+The starter canvas a brand-new level opens with is left alone: what a blank
+level *is* remains a content decision rather than a rendering one.
 
 **Reachability is not asserted**, and the step asked for it. Every cell has a
 floor, which is what stops a landscape having holes in it; whether every cell
@@ -1822,6 +1943,22 @@ is) in the level settings form, with a note that says what turning it on does
 to the level you are turning it on for — that every wall becomes something a
 jump can clear. A creator meets W0's decision as a sentence rather than as a
 surprise.
+
+#### E6 — and in the editor, which is where a creator is standing when it matters
+
+The level settings form lives in the level *menu*. A creator building a hillside
+is in the editor, and the toggle that decides whether anybody can walk on that
+hillside was two screens away — and off, because a level created in the editor
+has no settings of its own until it is saved, so `Level.verticality()` was false
+for every new level however the game type was configured.
+
+The **Landscape window** (`TOOLS` → Landscape…, and the same tool that holds the
+sculpting verbs) leads with it, with the ceiling under it and the same sentence
+about what turning it on does. Toggling it writes `Level.captureSettings` as
+well as the profile, because `Level.verticality()` reads the level's own copy: a
+toggle that only moved the profile would leave the editor drawing and placing
+under the old rule until the level was saved and re-opened, which is exactly the
+kind of thing that reads as the toggle not working.
 
 ---
 
