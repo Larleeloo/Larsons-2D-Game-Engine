@@ -64,17 +64,45 @@ public final class LiquidSim {
      * floor itself — a pool spreading across a room lies <em>on</em> the floor,
      * and a stream that replaced it would eat the room.
      */
-    private record Cells(Level level, int layer) {
+    private record Cells(Level level, boolean perColumn) {
         static Cells of(Level level) {
-            return new Cells(level, level.surfaceLayer());
+            return new Cells(level, level.verticality());
+        }
+
+        /**
+         * Which layer of a cell the liquid lives in.
+         *
+         * <p>One layer for the whole level while the height axis is off — the
+         * stacked layer on a plane, the only layer in a side view — which is
+         * what every level saved before this behaved like, and changing it
+         * would let their pools climb walls they have always stopped at.
+         *
+         * <p>With the axis on it is per column: the first layer above whatever
+         * holds a body up, so a pool lies <em>on</em> the ground it is on and
+         * a puddle on a plateau stays on the plateau. Stable because a liquid
+         * is not solid, so pouring one into a cell does not raise the surface
+         * the next tick measures from.
+         *
+         * <p>A hole keeps the old answer. Its support height is zero, and
+         * writing liquid into layer 0 would make the hole a floor — water you
+         * could walk on, where today it is a gap with water hanging over it.
+         */
+        int layerAt(int col, int row) {
+            if (!perColumn) return level.surfaceLayer();
+            return Math.max(Level.LAYER_UPPER, level.supportHeight(col, row));
+        }
+
+        /** How high the ground under a cell is, in layers. */
+        int surface(int col, int row) {
+            return perColumn ? level.supportHeight(col, row) : 0;
         }
 
         int get(int col, int row) {
-            return level.tileAt(col, row, layer);
+            return level.tileAt(col, row, layerAt(col, row));
         }
 
         boolean set(int col, int row, int id) {
-            return level.setTile(col, row, layer, id);
+            return level.setTile(col, row, layerAt(col, row), id);
         }
     }
 
@@ -374,7 +402,7 @@ public final class LiquidSim {
                     int nc = c + dc;
                     if (nc < c0 || nc > c1) continue;
                     int ni = cur + dc;
-                    if (passable(cells, nc, r, srcId, flowId) && best[ni] < b - 1) {
+                    if (spreadable(cells, c, r, nc, r, srcId, flowId) && best[ni] < b - 1) {
                         best[ni] = b - 1;
                         if (tail == queue.length) queue = grow(queue);
                         queue[tail++] = ni;
@@ -386,7 +414,7 @@ public final class LiquidSim {
                     int nc = c + d[0], nr = r + d[1];
                     if (nc < c0 || nc > c1 || nr < r0 || nr > r1) continue;
                     int ni = (nr - r0) * bw + (nc - c0);
-                    if (passable(cells, nc, nr, srcId, flowId) && best[ni] < b - 1) {
+                    if (spreadable(cells, c, r, nc, nr, srcId, flowId) && best[ni] < b - 1) {
                         best[ni] = b - 1;
                         if (tail == queue.length) queue = grow(queue);
                         queue[tail++] = ni;
@@ -425,6 +453,24 @@ public final class LiquidSim {
     private static boolean passable(Cells cells, int c, int r, int srcId, int flowId) {
         int id = cells.get(c, r);
         return id == 0 || id == srcId || id == flowId;
+    }
+
+    /**
+     * {@link #passable} for a spread from ({@code fromC}, {@code fromR}) —
+     * the same test, plus the one thing a height axis adds: <b>water does not
+     * climb</b>.
+     *
+     * <p>A pool spreads onto ground level with it or below it and stops at
+     * anything higher, which is what makes a plateau hold a puddle and a
+     * hillside shed one. It does not <em>pour</em> down the drop it is allowed
+     * to spread over — that is a waterfall, and rule (b) of this plan's S1,
+     * refused there because it multiplies the worst case of the one system
+     * this project has already measured an out-of-memory error in.
+     */
+    private static boolean spreadable(Cells cells, int fromC, int fromR,
+                                      int c, int r, int srcId, int flowId) {
+        return passable(cells, c, r, srcId, flowId)
+                && cells.surface(c, r) <= cells.surface(fromC, fromR);
     }
 
     private static boolean isFamily(Cells cells, int c, int r, int srcId, int flowId) {
@@ -477,6 +523,6 @@ public final class LiquidSim {
     }
 
     private static void setCell(Cells cells, int c, int r, int id, List<Change> changes) {
-        if (cells.set(c, r, id)) changes.add(new Change(c, r, id, cells.layer()));
+        if (cells.set(c, r, id)) changes.add(new Change(c, r, id, cells.layerAt(c, r)));
     }
 }

@@ -748,6 +748,9 @@ public final class World {
             double mx = m.x + m.def.hitbox() / 2, my = m.y + m.def.hitbox() / 2;
             double d = Math.hypot(mx - hit[0], my - hit[1]);
             if (d >= m.def.hitbox() / 2 + 24 || d >= bestD) continue;
+            // You cannot hit what is standing on the roof above you, nor what
+            // is in the street below — the melee half of S2's reach.
+            if (!withinArmsReach(m.z, attacker.z)) continue;
             // Anything already touching the fighter is in the arc by
             // definition; only reaching out has a direction to miss in.
             double toMob = Math.hypot(mx - cx, my - cy);
@@ -1221,6 +1224,11 @@ public final class World {
             if (mobShot && m.id == -p.ownerId) continue;
             double d = Math.hypot(m.x + m.def.hitbox() / 2 - p.x, m.y + m.def.hitbox() / 2 - p.y);
             if (d > radius + m.def.hitbox() / 2) continue;
+            // A blast on the street does not reach the roof. This check was
+            // deferred out of W7 rather than written against a constant zero:
+            // mobs had no height then, so it would have read like a rule and
+            // done nothing (HEIGHT_PLAN.md S2).
+            if (!withinArmsReach(m.z, p.z)) continue;
             double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
             applyElementToMob(p, m, profile, false);
             if (m.damage(p.damage * falloff, p.x)) {
@@ -1768,8 +1776,27 @@ public final class World {
      * leaves the hole nobody can cross.
      */
     public int mineLayer(int col, int row) {
-        return level.tileAt(col, row, Level.LAYER_UPPER) > 0
-                ? Level.LAYER_UPPER : Level.LAYER_GROUND;
+        int height = level.stackHeight(col, row);
+        return Math.max(Level.LAYER_GROUND, height - 1);
+    }
+
+    /**
+     * Whether a tool may take the block at (col,row) — the top of the column
+     * and nothing under it.
+     *
+     * <p><b>A hole in the middle of a wall is a shape a heightfield cannot
+     * hold.</b> Mining layer 2 of a five-deep column would leave three blocks
+     * standing on nothing, which is either a physics system that drops them or
+     * a lie about what {@code stackHeight} means. Refusing is a rule; collapsing
+     * is a feature, and it belongs with Job O, where a column may legitimately
+     * have a gap in it.
+     *
+     * <p>So a column comes apart from the top down, which is what it has always
+     * done — this is the same sentence as before, said about eight layers
+     * instead of two ({@code HEIGHT_PLAN.md} E1).
+     */
+    public boolean canMineLayer(int col, int row, int layer) {
+        return layer == mineLayer(col, row);
     }
 
     /**

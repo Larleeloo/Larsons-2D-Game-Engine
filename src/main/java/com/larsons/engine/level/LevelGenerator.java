@@ -77,6 +77,61 @@ public final class LevelGenerator {
     }
 
     /**
+     * A plan-view landscape: rolling ground built out of noise, quantised into
+     * layers, with the level's own palette laid over it.
+     *
+     * <p><b>The change that makes the height axis visible.</b> Everything else
+     * in this job lets a creator build a hill one block at a time; this hands
+     * them one already there, which is the difference between a feature people
+     * find and a feature people are told about. A new top-down or isometric
+     * level opens on terrain that has somewhere to climb.
+     *
+     * <p>Deterministic in {@code seed} — the same seed is the same landscape —
+     * because that is what makes a generated level something a creator can
+     * come back to.
+     *
+     * @param relief how many layers the highest ground stands above the lowest,
+     *               clamped into what the level allows
+     */
+    public static Level generateLandscape(String name, int width, int height,
+                                          int tileSize, long seed,
+                                          LevelFormat format, int relief) {
+        Level lvl = Level.empty(name, width, height, tileSize);
+        lvl.setFormat(format);
+        Block floor = LevelFormat.floorBlock(lvl.blocks);
+        lvl.fillFloor(floor != null ? floor.id() : 0);
+        if (!lvl.layered()) return lvl;
+
+        relief = Math.max(1, Math.min(lvl.layerLimit() - 1, relief));
+        Block stone = lvl.blocks.get("stone");
+        Block grass = lvl.blocks.get("grass");
+        int body = stone != null ? stone.id() : 0;
+        int cap = grass != null ? grass.id() : body;
+        if (body <= 0) return lvl;
+
+        // Two octaves: the first gives the shape of the land, the second the
+        // lumps in it. Sampled per cell rather than smoothed afterwards, so the
+        // terrain is a function of the seed and nothing else.
+        PerlinNoise coarse = new PerlinNoise(seed);
+        PerlinNoise fine = new PerlinNoise(seed * 31 + 7);
+        for (int r = 0; r < lvl.height; r++) {
+            for (int c = 0; c < lvl.width; c++) {
+                double n = coarse.noise(c * 0.055, r * 0.055) * 0.72
+                        + fine.noise(c * 0.15, r * 0.15) * 0.28;
+                int h = (int) Math.round((n + 1) / 2.0 * relief);
+                for (int layer = 1; layer <= h; layer++) {
+                    lvl.setTile(c, r, layer, layer == h ? cap : body);
+                }
+            }
+        }
+        // Stand the player somewhere they can actually be, rather than
+        // wherever the default spawn happens to land on a hillside.
+        lvl.spawnX = (lvl.width / 2.0) * tileSize;
+        lvl.spawnY = (lvl.height / 2.0) * tileSize;
+        return lvl;
+    }
+
+    /**
      * Generate a <em>giant</em> level (beyond {@link Level#DENSE_TILE_LIMIT},
      * up to 65536&times;65536) lazily: nothing is filled up front — a
      * deterministic {@link ChunkGenerator} builds each chunk the first time

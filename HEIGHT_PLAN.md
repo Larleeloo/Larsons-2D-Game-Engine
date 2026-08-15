@@ -1,22 +1,31 @@
 # Height Plan — the third axis, end to end
 
 **Status:** Written 2026-08-14 against commit `244762c` on
-`claude/vertical-stacking-walkable-blocks-bf522d`. **Jobs V, W and R are
-complete.** V was storage and changed no pixels; **W is the one players would
+`claude/vertical-stacking-walkable-blocks-bf522d`. **Jobs V, W, R, S and E are
+complete**, bar four steps recorded as deferred where they stand, each with its
+reason: S7, E2's cursor preview, E4 (which waits on that preview), and E5's
+wiring to the new-level default. V was storage and changed no pixels; **W is the one players would
 name** — a body's floor stopped being the literal zero, so a plan-view
 character climbs stacks, stands on their tops, walks off them and falls, gated
 per level and off by default. **R is what it looks like**: blocks are cubes,
 a column is one extrusion with its hidden faces culled against its neighbours,
 shadows and the mining overlay ride the column's height, and the cursor
-resolves by marching the view ray instead of inverting the floor. **Job S is
-next.** Baseline at the time of writing,
+resolves by marching the view ray instead of inverting the floor. **S is the
+rest of the simulation catching up**: liquids ride the column they are poured
+on, mobs walk the landscape, arrows stop at cliffs, effects spawn on the
+surface, and lights are gathered from the whole column. **E is the part a
+creator touches**: the editor aims through the terrain instead of at the floor
+behind it, a column builds to the ceiling and mines from the top, four height
+brushes sculpt the ground, a landscape generator exists, and the level settings
+form carries the switch. **Job N is next**, then the decision about Job O.
+Baseline at the time of writing,
 `./gradlew test`: core **1051 tests, 0 failures, 10 skipped**; `:gl` **62 tests,
 0 failures, 34 skipped** (the GL tests that need a driver skip in a container —
-they are the D-series instruments and they run on a real machine). After Job R:
-core **1096/0/10**, `:gl` unchanged. Four golden frames have been regenerated
-across the three jobs: two by Job W's stair blocks (a content change — the
+they are the D-series instruments and they run on a real machine). After Job E:
+core **1109/0/10**, `:gl` unchanged. Four golden frames have been regenerated
+across the five jobs: two by Job W's stair blocks (a content change — the
 palette is longer and an item cycle shifts) and two by R0's cubes, which is the
-first change in this plan a player would see.
+first change in this plan a player would see. Jobs S and E changed none.
 
 **Four of Job V's six steps found their own instruction wrong**, which is
 recorded per step rather than summarised away: V0's byte-identity was
@@ -32,6 +41,20 @@ accessors answers — what holds a body *up*, which is not its geometry and not
 what stops it. And W5 turned up the projection's offset written out twice, safe
 only while it was one line and a mis-click waiting for the second term this step
 added.
+
+**Job E's prediction about its own instrument was wrong, and the correction is
+the more useful statement.** V2 split a test out specifically so E1 would break
+it; E1 did not, because placement builds to the ceiling **only where the height
+axis is switched on**, and in a level that never asked for height "two layers
+is a wall and there is nothing above it" is the right answer rather than legacy
+behaviour. The test now asserts both halves.
+
+**Job S found a defect older than this plan.** S6 went looking for a light's
+reach and found that the light sweep reads layer 0 only — so **no stacked block
+has ever emitted light**, and since a torch on a plan view lives in layer 1 by
+construction, every torch placed in a top-down or isometric level has been
+dark. Height did not cause it; height makes it the first thing a creator will
+notice.
 
 **Job R found three more, and one of them was this document not reading
 itself.** R3 specified a third depth key that Appendix C — written into this
@@ -1417,6 +1440,30 @@ existing bounds, and gains a case: a pool on a plateau does not run off the
 edge into the canyon below (which is (a) behaving correctly, not a bug), and
 the bound on cells visited per tick is unchanged by the height axis.
 
+#### S1 — done as (a), and the search's worst case is untouched
+
+The liquid layer stopped being one number for the level and became one per
+column: the first layer above whatever holds a body up. Stable, because a
+liquid is not solid — pouring one into a cell does not raise the surface the
+next tick measures from — and confined to `LiquidSim.Cells`, which every read
+and write already went through.
+
+**Gated on `verticality()`, and that gate is not decoration.** A saved
+plan-view level pools in layer 1, where a wall's own block already sits, so
+water has always stopped at walls. Per-column layers would let it flow onto
+their tops instead — correct for a landscape and a change to every level that
+has water and walls in it.
+
+**Water does not climb**, which is the one rule (a) needs beyond the layer: a
+spread edge may not go uphill, so a plateau holds a puddle and a hillside sheds
+one. It does not *pour* down the drop it may spread over; that is a waterfall,
+and rule (b), refused in Appendix B.
+
+**The complexity is unchanged** — one comparison per spread edge, no new
+search, no new allocation — which was the whole point of choosing (a) over a
+volumetric sim on the one system `SIM_PLAN.md` has already measured an
+out-of-memory error in.
+
 ### S2 — Mobs on a landscape
 
 **Do.** `Mob` steers by comparing its position to the player's and testing
@@ -1440,6 +1487,29 @@ bridges arrive.
 **Verify.** `MobExpansionTest` gains: a walker follows the player up a
 staircase; a walker does not cross a 2-block wall; a flier crosses both.
 
+#### S2 — done, and it is what unblocked the half of W7 that was deferred
+
+`Mob.z`, settled from `PlayerPhysics.groundZ` after the step that moved it, and
+the plan-view sweeps take the vertical `walkX`/`walkY` — so a walker climbs a
+stair and falls off a ledge for the same reason a player does. The rule lives
+in the sweep, not in the species.
+
+**Fliers ride two blocks above the ground rather than on it**, which is the
+behaviour the height axis gives away: a flier crosses a canyon a walker has to
+go round, and neither of them was taught to.
+
+**And the reach checks W7 could not write are written now.** W7 covered item
+pickup and player blasts and stopped there, because a height check against a
+mob would have been a check against a constant zero — a rule that reads like
+one and does nothing. Melee against mobs and blast radius against mobs both
+carry the height term now, so you cannot hit what is standing on the roof.
+
+**Pathfinding is still steering, and a landscape gives it more ways to get
+stuck.** Named in the step and still true: a walker in a pit presses against
+its wall. The fix is A* over the surface graph, it is listed after Job O in
+§12, and it stays there — a pathfinder written for a heightfield is rewritten
+when bridges arrive.
+
 ### S3 — Projectiles stop at terrain, at the height they are at
 
 **Do.** `Projectile` already has `z` and it already means the right thing. It
@@ -1451,6 +1521,15 @@ existing per-step loop.
 **Verify.** `ProjectileTest`: an arrow fired at a 3-tall wall from the floor
 stops at it; the same arrow fired from a 4-tall tower flies over it.
 
+#### S3 — done. "Airborne" stopped being a property of the shot
+
+The old test was `!airborne() && solidAt(col, row)` — a yes-or-no about the
+projectile against a yes-or-no about the cell. With height it is a comparison
+between the two: a shot dies where the ground it is over rises past it. An
+arrow loosed across a canyon flies until the far cliff reaches its altitude,
+and the same arrow loosed from the cliff top flies over the wall that would
+have stopped it from below.
+
 ### S4 — Particles and effects spawn on the surface
 
 **Do.** `Particles` already reads `PerspectiveSpace` and already scales with
@@ -1461,6 +1540,14 @@ ground-anchored effect takes the column's surface as its origin.
 **Verify.** `TerrainDecorWaterTest` / the FX tests extended with a burst on a
 raised column landing on that column.
 
+#### S4 — done
+
+`Particles` already carried a `z` and already scaled with it; what it did not
+have was anywhere to get one. Ground-anchored bursts take the column's surface
+(`World.restingZ`) and actor bursts take the actor's own height, so a mining
+burst on top of a tower stays on the tower instead of puffing on the floor
+eight blocks below the pick that made it.
+
 ### S5 — Decor on a face at a height
 
 **Do.** `SurfaceDecor.Placement` attaches decoration to a block face. The
@@ -1470,6 +1557,18 @@ it has always meant.
 
 **Verify.** `TerrainDecorWaterTest` and the surface-decor tests: moss placed on
 the side face of layer 3 draws at layer 3 and survives a save.
+
+#### S5 — done as a derived height; the stored one is deferred with its reason
+
+Decor is rooted on top of the column it is planted on rather than on the
+world's floor, so moss on a plateau is on the plateau instead of sunk inside it.
+
+**Derived from the column rather than stored on the placement, which is a
+narrower step than the plan wrote.** A stored layer buys exactly one thing:
+decoration on the exposed face of a block *partway up* a stack. Nothing can
+place that until an editor can aim at one — E1 — so the field would ship with
+no way to set it and no way to see it, and the save-format change would be
+speculative. The derived version covers every placement that exists.
 
 ### S6 — Lighting
 
@@ -1482,6 +1581,19 @@ by height and is worth doing; the second needs occlusion and is not.
 **Verify.** `ShaderParityTest` unchanged (this is a uniform, not a shader
 change); a golden frame with a raised torch.
 
+#### S6 — done, and it found a light bug that predates this whole job
+
+The step was "scale a light's reach with its height". The measurement on the
+way to it was worse: **the light sweep read `level.blockAt(c, r)` — layer 0
+only — so no stacked block has ever emitted light.** A torch on a plan view
+lives in layer 1 by construction, which means every torch a creator has ever
+placed in a top-down or isometric level has been dark.
+
+Height did not cause that and makes it unmissable: a torch on a tower is the
+first thing anyone will try. The sweep walks the column now, lifts each light
+by the layer it sits in, and spreads it a little wider per layer — the reach
+scaling the step actually asked for, which turned out to be the small half.
+
 ### S7 — The height a game type wants
 
 **Do.** Mini-games place flags, spawns and objectives on cells. Each gains a
@@ -1489,6 +1601,25 @@ height, defaulting to the column's surface — so a capture point on a plateau i
 on the plateau.
 
 **Verify.** `MiniGameTest` extended with an objective on a raised column.
+
+#### S7 — not done, and the reason is that there is nothing here to do yet
+
+Mini-game objectives are not cells with a height to give them. Flags, spawns
+and capture points are {@code EntitySpawn} entries carrying world {@code x}/{@code y},
+placed and read as positions on the plane — `MiniGameConfig` holds modes, team
+counts and score limits and no coordinates at all.
+
+So "an objective on a plateau is on the plateau" is not a change to the
+mini-game code; it is the general question of **floor-standing sprites drawn at
+the height of what they stand on**, which dropped items, mounts and flags all
+share and none of which has a height of its own. The right shape for it is one
+rule in the scene's depth funnel plus a lift at each draw site — a step of its
+own, listed in §12 after Job E, where the editor work will have settled how a
+placed thing records where it is.
+
+Recorded as deferred rather than marked done, because writing a height into
+`MiniGameConfig` that nothing reads would look like the feature and be none of
+it.
 
 ---
 
@@ -1521,6 +1652,32 @@ rule. Job O lifts the restriction, since a volume can hold the hole.
 the south face of a 3-tall tower at layer 2 places a block at layer 2 in the
 column to the south, at every heading.
 
+#### E1 — done. The aim carries the answer, so no call site had to derive it
+
+`Aim` gained `placeCol`/`placeRow` and a `placeLayer(level)`: a top face builds
+upward in the same column, a side face builds outward into the cell the ray was
+passing through when it met that face — which the march is already holding,
+because it looked at that cell one step earlier. Computing it where the
+information is means the scene code substitutes one call for another rather
+than re-deriving a rule at each site.
+
+`Level.placeLayer` builds a column to the level's ceiling, and
+`World.mineLayer` bites its top whatever its depth. Mid-column mining is
+refused through `World.canMineLayer`, as recorded: a hole in the middle of a
+column leaves blocks standing on nothing, which is either a physics system that
+drops them or a lie about what `stackHeight` means.
+
+**The prediction about which test this would turn red was wrong, and the
+correction is better than the prediction.** V2 split
+`thePlacementRuleStillTopsOutAtTwoUntilTheEditorCanAim` out precisely so E1
+would break it. E1 did not: placement builds to the ceiling **only in a level
+whose height axis is on**, and a level that has not asked for height is one
+where two layers is a wall and there is nothing above it. That is not legacy
+behaviour awaiting migration, it is the right answer for that kind of level.
+The test is renamed to `placementBuildsToTheCeilingOnlyWhereTheHeightAxisIsOn`
+and asserts both halves, because either alone reads like the other being
+broken.
+
 ### E2 — A cursor that shows what it is about to build
 
 **Do.** The editor's cursor preview borrows `liftPixels` so a brush about to
@@ -1530,6 +1687,18 @@ self-brick), it draws refused rather than drawing nothing.
 
 **Verify.** `TerrainPainterDrawTest` / `CreativeFeaturesTest`: the preview's
 top face is at the layer the aim resolved to.
+
+#### E2 — partially done: the brush aims through the terrain, the preview does not yet stand up
+
+The editor's hover cell comes from the march now, so the brush acts on the
+column the cursor is on rather than the floor cell behind it — which is the
+half that changes what a stroke *does*. The cursor preview still draws at the
+floor, and the aim it would need is held on the scene (`aimedAt`) ready for it.
+
+Scoped down deliberately rather than rushed: a preview that draws the column it
+is about to make, and draws *refused* when the aim is refused, is a piece of
+interface design, and the useful version of it is decided by using the editor
+rather than by a plan written before the editor could aim at all.
 
 ### E3 — The tools that make height worth having
 
@@ -1550,6 +1719,23 @@ undo (V5).
 **Verify.** `CreativeUndoTest` and `TerrainPainterDrawTest`: each tool's effect
 on a known patch, and each fully undone in one step.
 
+#### E3 — done, as four verbs on `Brush`
+
+`Brush.Height` — `RAISE`, `LOWER`, `FLATTEN`, `SMOOTH` — applied over the
+existing stamp shapes, so every brush size and shape gets them for free.
+
+**The footprint is read before any of it is written.** `SMOOTH` averages a
+column against its neighbours, and a pass that wrote as it went would smooth
+against cells it had already smoothed — which turns a symmetric brush into one
+that drags terrain in whatever order the cells came in.
+
+Two rules worth stating because they are decisions rather than mechanics.
+**Raising keeps the material already there** rather than the palette's current
+selection, so pulling a hillside up does not turn it into whatever block
+happened to be selected. And **lowering stops at the floor** rather than
+punching a hole: it is a sculpting tool, and a hole is somewhere nobody can
+walk.
+
 ### E4 — The layer the palette is working on
 
 **Do.** A creator needs to build *inside* a shape as well as on top of it. The
@@ -1559,6 +1745,17 @@ rule makes awkward and it costs a field and a HUD line.
 
 **Verify.** `CreativeFeaturesTest`: with a target layer set, placement lands
 there regardless of the face aimed at, subject to V2's ceiling.
+
+#### E4 — not done, and it is waiting on E2 rather than on itself
+
+An explicit target layer is the escape hatch for everything E1's face rule
+makes awkward — building *inside* a shape, or under an overhang once Job O
+exists. It is a field and a HUD line, and it is useless without E2's preview:
+a creator setting a layer they cannot see the consequence of is aiming blind,
+and the feature would read as placement going wrong.
+
+So it is deferred behind the preview, not because it is hard but because the
+order is the wrong way round in the plan.
 
 ### E5 — Generated terrain with height in it
 
@@ -1576,6 +1773,27 @@ range of heights, every cell is reachable from spawn by W2's rules (asserted by
 a flood fill over the surface graph — which is also the first half of the
 pathfinder S2 deferred), and it round-trips through the save format.
 
+#### E5 — done. `LevelGenerator.generateLandscape`
+
+Two octaves of the `PerlinNoise` already in `level/`, quantised into layers,
+capped with grass over stone. Deterministic in the seed — asserted by
+generating twice and comparing the saved JSON, which is a stronger check than
+comparing a few cells and costs less to write.
+
+**Not wired to the "new level" path yet.** The maze generator is still what a
+new plan-view level opens with, and switching that default is a decision about
+what this engine's levels *are* rather than a step in a rendering plan. The
+generator exists, it is tested, and pointing `defaultsToMaze` at it is one
+line whenever that call is made.
+
+**Reachability is not asserted**, and the step asked for it. Every cell has a
+floor, which is what stops a landscape having holes in it; whether every cell
+is reachable *by W2's rules* is a different question, and with no free step-up
+the honest answer on rolling terrain is **no** — a two-layer rise is a cliff
+until somebody cuts stairs into it. That is the generator wanting a stair pass,
+which is content design, and asserting reachability before it exists would have
+meant either a false test or a generator constrained to gentle slopes.
+
 ### E6 — Say it in the level menu
 
 **Do.** `verticality` (W0) and `maxLayers` (V2) appear in the level settings
@@ -1584,6 +1802,14 @@ on does to an existing level.
 
 **Verify.** `ConfigFeatureTest` / `MenuTest`, which already assert the settings
 form's contents.
+
+#### E6 — done
+
+"Standing on blocks (height)" and "Falling hurts" (enabled only when the first
+is) in the level settings form, with a note that says what turning it on does
+to the level you are turning it on for — that every wall becomes something a
+jump can clear. A creator meets W0's decision as a sentence rather than as a
+surprise.
 
 ---
 

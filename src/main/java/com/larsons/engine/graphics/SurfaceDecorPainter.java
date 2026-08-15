@@ -405,6 +405,21 @@ public final class SurfaceDecorPainter {
             double ay = (p.row() + 0.5 + face.dr * lean) * ts;
             camera.worldToScreen(ax, ay, c);
             int px = c[0], py = c[1];
+            // Rooted on top of whatever column it is planted on, rather than on
+            // the world's floor. Moss on a plateau belongs on the plateau, and
+            // decoration left at zero sinks into the terrain it decorates the
+            // moment that terrain is more than one block deep.
+            //
+            // Derived from the column rather than stored on the placement: what
+            // a stored layer would buy is decoration on the exposed face of a
+            // block <em>partway up</em> a stack, which needs an editor that can
+            // aim at one — E1's job, and nothing can place it until then
+            // ({@code HEIGHT_PLAN.md} S5).
+            int height = level.stackHeight(p.col(), p.row());
+            if (height > 1) {
+                py -= (int) Math.round(level.surfaceZ(height)
+                        * camera.zoom * camera.liftScale());
+            }
 
             // One world tile straight out of the block: both the direction a
             // detail leaves the face by and how big a tile is on screen here.

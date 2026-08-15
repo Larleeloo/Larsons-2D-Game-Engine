@@ -143,11 +143,22 @@ public final class TerrainPainter {
      * @param row   the row hit
      * @param layer the layer of the block hit — {@code 0} for a bare floor tile
      * @param top   whether the ray landed on the block's top face rather than
-     *              on one of its sides. This is what block placement needs:
-     *              pointing at a top places on top of the column, pointing at a
-     *              side places against that face, in the neighbouring cell
+     *              on one of its sides
+     * @param placeCol the column a block placed against this aim goes in
+     * @param placeRow the row it goes in — the aimed cell for a top face, the
+     *              cell on the near side of the face for a side. This is the
+     *              rule every block game uses and the only one that is not
+     *              maddening: point at the top of a wall and you build higher,
+     *              point at its face and you build outward from it
      */
-    public record Aim(int col, int row, int layer, boolean top) {}
+    public record Aim(int col, int row, int layer, boolean top,
+                      int placeCol, int placeRow) {
+
+        /** The layer a block placed against this aim would occupy. */
+        public int placeLayer(Level level) {
+            return level.stackHeight(placeCol, placeRow);
+        }
+    }
 
     /**
      * The cell under a screen point, accounting for how tall the terrain is —
@@ -184,7 +195,7 @@ public final class TerrainPainter {
         double lift = BLOCK_HEIGHT * ts;
         if (lift <= 0 || !level.layered()) {
             int col = (int) Math.floor(floor[0] / ts), row = (int) Math.floor(floor[1] / ts);
-            return inside(level, col, row) ? new Aim(col, row, 0, true) : null;
+            return inside(level, col, row) ? new Aim(col, row, 0, true, col, row) : null;
         }
         // Where a block one layer up has to sit to draw over a given floor
         // point. A block at cell T whose top is n layers up projects to the
@@ -198,6 +209,7 @@ public final class TerrainPainter {
         // first column it meets is what the cursor is on. Marching up from the
         // floor instead would return the floor every time, since the floor
         // point under the cursor is itself a floored cell.
+        int lastCol = Integer.MIN_VALUE, lastRow = Integer.MIN_VALUE;
         for (int n = level.tallestColumn(); n >= 0; n--) {
             int col = (int) Math.floor((floor[0] + step[0] * n) / ts);
             int row = (int) Math.floor((floor[1] + step[1] * n) / ts);
@@ -206,8 +218,17 @@ public final class TerrainPainter {
             // Over this cell the ray is n blocks above the floor, so it strikes
             // the column exactly when the column stands at least that tall.
             if (height >= 1 && height - 1 >= n) {
-                return new Aim(col, row, height - 1, height - 1 == n);
+                boolean top = height - 1 == n;
+                // A top face builds upward in the same cell. A side face builds
+                // outward, into the cell the ray was passing through when it
+                // met that face — which the march is already holding, because
+                // it looked at it one step ago.
+                int placeCol = top || lastCol == Integer.MIN_VALUE ? col : lastCol;
+                int placeRow = top || lastRow == Integer.MIN_VALUE ? row : lastRow;
+                return new Aim(col, row, height - 1, top, placeCol, placeRow);
             }
+            lastCol = col;
+            lastRow = row;
         }
         return null;
     }

@@ -192,8 +192,21 @@ public final class Projectile {
         }
         // A shot still in the air passes over walls: it is above the level,
         // not in it.
-        if (!airborne()
-                && level.solidAt((int) Math.floor(x / ts), (int) Math.floor(y / ts))) {
+        //
+        // With the height axis live "in the air" stops being a yes-or-no about
+        // the shot and becomes a comparison against the ground it is over: an
+        // arrow loosed across a canyon flies until the far cliff rises past it,
+        // and the same arrow loosed from the cliff top flies over the wall that
+        // would have stopped it from below. Without this a shot passes through
+        // every cliff in the level at any altitude.
+        int col = (int) Math.floor(x / ts), row = (int) Math.floor(y / ts);
+        if (level.verticality()) {
+            int support = level.supportHeight(col, row);
+            if (support <= 0 || level.surfaceZ(support) > z + 1e-6) {
+                dead = true;
+                return true;
+            }
+        } else if (!airborne() && level.solidAt(col, row)) {
             dead = true;
             return true;
         }
