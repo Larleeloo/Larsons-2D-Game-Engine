@@ -51,12 +51,22 @@ import java.awt.Color;
  * @param sideTexture the block has a plan-view <em>side</em> face texture
  *                    ({@code blocks_side/&lt;key&gt;.png}) — what the raised half
  *                    of a stacked block shows to the camera
+ * @param step        something a body walks <em>up</em> rather than climbs: a
+ *                    stair, a ramp, a slab. On a plane an ordinary block is a
+ *                    wall — you get on top of it by jumping, or you do not get
+ *                    up there — because a free step of one whole block would
+ *                    mean walking up the side of any tower and would delete the
+ *                    one thing plan-view geometry says with height. Stairs are
+ *                    the exception, and they are a property of the block rather
+ *                    than a global step height, because one number is either
+ *                    too small for a staircase or too large for a wall
+ *                    ({@code HEIGHT_PLAN.md} W2)
  */
 public record Block(int id, String key, String displayName, Color color,
                     boolean solid, double lightRadius, Color lightColor,
                     String drops, boolean liquid, double damage,
                     double hardness, String tool, boolean falling,
-                    boolean topTexture, boolean sideTexture) {
+                    boolean topTexture, boolean sideTexture, boolean step) {
 
     public Block {
         if (id <= 0) throw new IllegalArgumentException("Block ids must be > 0 (0 = empty)");
@@ -80,7 +90,20 @@ public record Block(int id, String key, String displayName, Color color,
                  String drops, boolean liquid, double damage,
                  double hardness, String tool, boolean falling) {
         this(id, key, displayName, color, solid, lightRadius, lightColor, drops,
-                liquid, damage, hardness, tool, falling, true, true);
+                liquid, damage, hardness, tool, falling, true, true, false);
+    }
+
+    /**
+     * Pre-step constructor shape. A block that does not say otherwise is a
+     * full block: you climb onto it or you do not get up there.
+     */
+    public Block(int id, String key, String displayName, Color color,
+                 boolean solid, double lightRadius, Color lightColor,
+                 String drops, boolean liquid, double damage,
+                 double hardness, String tool, boolean falling,
+                 boolean topTexture, boolean sideTexture) {
+        this(id, key, displayName, color, solid, lightRadius, lightColor, drops,
+                liquid, damage, hardness, tool, falling, topTexture, sideTexture, false);
     }
 
     /** Pre-falling constructor shape, kept so existing registrations read the same. */
@@ -109,19 +132,28 @@ public record Block(int id, String key, String displayName, Color color,
     /** Copy with the given durability tuning ({@link BlockRegistry#tune}). */
     public Block withDurability(double hardness, String tool) {
         return new Block(id, key, displayName, color, solid, lightRadius, lightColor,
-                drops, liquid, damage, hardness, tool, falling, topTexture, sideTexture);
+                drops, liquid, damage, hardness, tool, falling, topTexture, sideTexture, step);
     }
 
     /** Copy with gravity behaviour toggled ({@link BlockRegistry#setFalling}). */
     public Block withFalling(boolean falling) {
         return new Block(id, key, displayName, color, solid, lightRadius, lightColor,
-                drops, liquid, damage, hardness, tool, falling, topTexture, sideTexture);
+                drops, liquid, damage, hardness, tool, falling, topTexture, sideTexture, step);
+    }
+
+    /**
+     * Copy marked as something a body walks up rather than climbs — a stair, a
+     * ramp, a slab. See the {@code step} component.
+     */
+    public Block withStep(boolean step) {
+        return new Block(id, key, displayName, color, solid, lightRadius, lightColor,
+                drops, liquid, damage, hardness, tool, falling, topTexture, sideTexture, step);
     }
 
     /** Copy declaring which plan-view faces this block supplies art for. */
     public Block withFaceTextures(boolean top, boolean side) {
         return new Block(id, key, displayName, color, solid, lightRadius, lightColor,
-                drops, liquid, damage, hardness, tool, falling, top, side);
+                drops, liquid, damage, hardness, tool, falling, top, side, step);
     }
 
     /** Convenience for plain terrain: solid, no light, drops itself. */

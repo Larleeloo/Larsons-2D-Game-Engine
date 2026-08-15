@@ -4,6 +4,7 @@ import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.level.Level;
+import com.larsons.engine.world.Block;
 
 /**
  * The deterministic player-movement step, extracted from the play scene so the
@@ -157,6 +158,9 @@ public final class PlayerPhysics {
         // they always did. See ActorSize.
         double size = s.hitSize(profile.playerSize);
         double ts = level.tileSize;
+        // A block's height is the level's, not a constant: the state carries it
+        // so a fall can be measured in blocks wherever that measurement lands.
+        s.blockHeight = level.blockHeight();
 
         boolean inLiquid = level.liquidAt(
                 (int) Math.floor((s.x + size / 2.0) / ts),
@@ -173,6 +177,11 @@ public final class PlayerPhysics {
         // side-scroller with gravity switched off still stands its characters
         // edge-on against the screen, and there the box really is the body.
         boolean planView = space.hasElevation();
+        // Whether this level's height axis is somewhere a body can be, or only
+        // something that stops them. Off, every line that reads it reduces to
+        // what it did before there was a third axis: a floor at zero, and a
+        // wall that is a wall from any height because there is only one height.
+        boolean vertical = planView && level.verticality();
         // On a plane every direction is walking, so up/down count as movement
         // for sprinting too — sprinting north in a top-down level is the same
         // act as sprinting east.
@@ -283,16 +292,30 @@ public final class PlayerPhysics {
             s.vz = 0;
         } else {
             double dy = bursting ? s.dashVy * dt : in.moveY() * speed * dt;
-            s.y = planView ? walkY(level, s.x, s.y, size, dy)
+            s.y = planView
+                    ? (vertical ? walkY(level, s.x, s.y, size, dy, s.z)
+                                : walkY(level, s.x, s.y, size, dy))
                     : slideY(level, s.x, s.y, size, size, dy);
             moving = moving || dy != 0;
             steerY = dy;
-            stepHop(s, in, dt);
         }
 
-        s.x = planView ? walkX(level, s.x, s.y, size, dx)
+        s.x = planView
+                ? (vertical ? walkX(level, s.x, s.y, size, dx, s.z)
+                            : walkX(level, s.x, s.y, size, dx))
                 : slideX(level, s.x, s.y, size, size, dx);
         clampToLevel(s, level, size);
+
+        // The hop settles onto the ground under wherever this step actually
+        // left the body, so it resolves after both sweeps rather than between
+        // them: measured against the position the step started from, a
+        // character who has just walked onto a ledge spends a frame falling
+        // through it. With the height axis switched off the floor is the
+        // constant zero it always was, and this is the old stepHop exactly.
+        if (!sideScroll) {
+            stepElevation(s, in, dt, profile,
+                    vertical ? groundZ(level, s.x, s.y, size) : 0);
+        }
         s.moving = moving;
         // Which way the character is drawn facing: left/right in a
         // side-scroller, all eight compass points on the plane. Standing still
@@ -316,12 +339,19 @@ public final class PlayerPhysics {
      * character falls back to Z=0. Steering keeps working mid-air, so a hop
      * carries you across a gap exactly as a side-scroll jump does.
      */
-    private static void stepHop(PlayerState s, PlayerInput in, double dt) {
-        if (s.z <= 0 && s.vz <= 0) {
-            // Standing on the ground: nothing to integrate unless we launch.
-            s.z = 0;
+    private static void stepElevation(PlayerState s, PlayerInput in, double dt,
+                                      GameProfile profile, double floorZ) {
+        // Standing means being on the floor under you rather than at zero.
+        // Stepping onto a stair raises that floor above the feet, and landing
+        // on it is what carries the body up; walking off a ledge drops it
+        // below them, and the body is airborne from that moment with no jump
+        // spent — which is why the reset below lives here and not on a timer.
+        boolean grounded = s.z <= floorZ + STEP_EPS && s.vz <= 0;
+        if (grounded) {
+            s.z = floorZ;
             s.vz = 0;
             s.airJumpsUsed = 0;
+            s.fallPeakZ = floorZ;
             if (!in.jump) return;
             s.vz = HOP_SPEED * s.jumpFactor;
             spendJumpStamina(s);
@@ -334,11 +364,39 @@ public final class PlayerPhysics {
         // airborne (and plays the jump animation) from its very first frame.
         s.vz -= HOP_GRAVITY * dt;
         s.z += s.vz * dt;
-        if (s.z <= 0) {
-            s.z = 0;
+        s.fallPeakZ = Math.max(s.fallPeakZ, s.z);
+        if (s.z <= floorZ) {
+            double drop = s.fallPeakZ - floorZ;
+            s.z = floorZ;
             s.vz = 0;
             s.airJumpsUsed = 0;
+            s.fallPeakZ = floorZ;
+            applyFallDamage(s, profile, drop);
         }
+    }
+
+    /**
+     * How far a body may fall for free, in blocks. A hop's own apex has to fit
+     * under it or jumping would hurt, and a hop clears rather more than one
+     * block — so this is the height a character reaches under their own power,
+     * rounded up, and anything past it is a drop they did not choose.
+     */
+    public static final double SAFE_FALL_BLOCKS = 4;
+
+    /** Health lost per block fallen past {@link #SAFE_FALL_BLOCKS}. */
+    public static final double FALL_DAMAGE_PER_BLOCK = 6;
+
+    /**
+     * Hurt a body that landed harder than it can take — off unless the level
+     * asks for it, because whether a fall is dangerous is a game-type question
+     * and not a physics one.
+     */
+    private static void applyFallDamage(PlayerState s, GameProfile profile, double drop) {
+        if (profile == null || !profile.fallDamageEnabled) return;
+        double blocks = drop / Math.max(1e-9, s.blockHeight);
+        if (blocks <= SAFE_FALL_BLOCKS) return;
+        s.health = Math.max(0,
+                s.health - (blocks - SAFE_FALL_BLOCKS) * FALL_DAMAGE_PER_BLOCK);
     }
 
     /** A jump's stamina bite, which a tireless ultimate waives. */
@@ -356,6 +414,26 @@ public final class PlayerPhysics {
      * a hit).
      */
     public static double slideX(Level level, double x, double y, double w, double h, double dx) {
+        return slideX(level, x, y, w, h, dx, level::solidAt);
+    }
+
+    /**
+     * Which cells stop a body — the one thing that differs between a body
+     * walking a flat plane and one walking a landscape.
+     *
+     * <p>Flat, it is {@link Level#solidAt(int, int)}: a wall is a wall wherever
+     * you are, because there is only one height to be at. With the height axis
+     * live it is {@link #barrierAt}, which needs to know how high the body is
+     * to answer at all — a ledge you cannot walk up is one you can walk along
+     * the top of.
+     */
+    public interface CellTest {
+        boolean blocks(int col, int row);
+    }
+
+    /** {@link #slideX} against an arbitrary notion of what blocks a body. */
+    public static double slideX(Level level, double x, double y, double w, double h,
+                                double dx, CellTest blocked) {
         if (dx == 0) return x;
         double ts = level.tileSize;
         int r0 = (int) Math.floor((y + COLLISION_EPS) / ts);
@@ -368,7 +446,7 @@ public final class PlayerPhysics {
             int end = (int) Math.floor((edge + dx) / ts);
             for (int col = scan; col <= end; col++) {
                 for (int r = r0; r <= r1; r++) {
-                    if (level.solidAt(col, r)) return col * ts - w;
+                    if (blocked.blocks(col, r)) return col * ts - w;
                 }
             }
         } else {
@@ -377,7 +455,7 @@ public final class PlayerPhysics {
             int end = (int) Math.floor((edge + dx) / ts);
             for (int col = scan; col >= end; col--) {
                 for (int r = r0; r <= r1; r++) {
-                    if (level.solidAt(col, r)) return (col + 1) * ts;
+                    if (blocked.blocks(col, r)) return (col + 1) * ts;
                 }
             }
         }
@@ -389,6 +467,12 @@ public final class PlayerPhysics {
      * jumps stop flush under tile bottoms.
      */
     public static double slideY(Level level, double x, double y, double w, double h, double dy) {
+        return slideY(level, x, y, w, h, dy, level::solidAt);
+    }
+
+    /** {@link #slideY} against an arbitrary notion of what blocks a body. */
+    public static double slideY(Level level, double x, double y, double w, double h,
+                                double dy, CellTest blocked) {
         if (dy == 0) return y;
         double ts = level.tileSize;
         int c0 = (int) Math.floor((x + COLLISION_EPS) / ts);
@@ -399,7 +483,7 @@ public final class PlayerPhysics {
             int end = (int) Math.floor((edge + dy) / ts);
             for (int row = scan; row <= end; row++) {
                 for (int c = c0; c <= c1; c++) {
-                    if (level.solidAt(c, row)) return row * ts - h;
+                    if (blocked.blocks(c, row)) return row * ts - h;
                 }
             }
         } else {
@@ -408,7 +492,7 @@ public final class PlayerPhysics {
             int end = (int) Math.floor((edge + dy) / ts);
             for (int row = scan; row >= end; row--) {
                 for (int c = c0; c <= c1; c++) {
-                    if (level.solidAt(c, row)) return (row + 1) * ts;
+                    if (blocked.blocks(c, row)) return (row + 1) * ts;
                 }
             }
         }
@@ -479,6 +563,129 @@ public final class PlayerPhysics {
         return y + (slideY(level, footLeft(x, size), fy, foot, foot, dy) - fy);
     }
 
+    /** {@link #walkX} for a body at height {@code z} on a landscape. */
+    public static double walkX(Level level, double x, double y, double size,
+                               double dx, double z) {
+        double foot = footSize(size);
+        double fx = footLeft(x, size);
+        return x + (slideX(level, fx, footTop(y, size), foot, foot, dx,
+                (c, r) -> barrierAt(level, c, r, z)) - fx);
+    }
+
+    /** {@link #walkY} for a body at height {@code z} on a landscape. */
+    public static double walkY(Level level, double x, double y, double size,
+                               double dy, double z) {
+        double foot = footSize(size);
+        double fy = footTop(y, size);
+        return y + (slideY(level, footLeft(x, size), fy, foot, foot, dy,
+                (c, r) -> barrierAt(level, c, r, z)) - fy);
+    }
+
+    // --- the height axis as a place to be ---------------------------------------
+
+    /**
+     * Slack for "level with the floor", in world units. A body resting on a
+     * surface sits exactly on it, and a step whose top is within this of the
+     * feet is the same height as far as walking is concerned.
+     */
+    public static final double STEP_EPS = 0.001;
+
+    /**
+     * Whether a body whose feet are at world height {@code z} is stopped by the
+     * column at (col,row).
+     *
+     * <p>This is what replaces {@link Level#solidAt(int, int)} once height is
+     * somewhere a body can be, and the difference is that solidity stopped
+     * being a property of the cell alone. The same wall you cannot walk through
+     * is a floor you walk along when you are standing on top of it.
+     *
+     * <ul>
+     *   <li>A <b>hole</b> stops everybody. There is no bottom to a plan view,
+     *       so a gap in the floor is somewhere you cannot go rather than
+     *       somewhere you fall — which is exactly what it has always been.</li>
+     *   <li>A surface <b>at or below</b> the feet is walkable: level ground, or
+     *       a ledge to walk off ({@link #groundZ} then has you falling).</li>
+     *   <li>A surface <b>above</b> the feet is a wall — <em>unless</em> it is a
+     *       stair, and no more than one block up. There is no free step-up for
+     *       ordinary blocks: one would mean walking up the side of any tower,
+     *       and would delete the one thing plan-view geometry says with
+     *       height.</li>
+     * </ul>
+     */
+    public static boolean barrierAt(Level level, int col, int row, double z) {
+        int support = level.supportHeight(col, row);
+        if (support <= 0) return true;
+        double surface = level.surfaceZ(support);
+        if (surface <= z + STEP_EPS) return false;
+        Block top = level.blockAt(col, row, support - 1);
+        return top == null || !top.step()
+                || surface - z > level.blockHeight() + STEP_EPS;
+    }
+
+    /**
+     * The height of the ground under a body's feet — what {@link PlayerState#z}
+     * settles onto, in place of the literal zero it used to settle onto.
+     *
+     * <p>The <b>highest</b> surface the footprint touches, so a body standing
+     * half on a ledge stands on the ledge rather than sinking into the gap
+     * beside it. That is the same rule a platformer applies along its own axis,
+     * and the footprint is already the right shape to ask it of: small, centred
+     * on the feet, and straddling the base line (see {@link #footTop}).
+     */
+    public static double groundZ(Level level, double x, double y, double size) {
+        double ts = level.tileSize;
+        double foot = footSize(size);
+        double fx = footLeft(x, size), fy = footTop(y, size);
+        int c0 = (int) Math.floor(fx / ts);
+        int c1 = (int) Math.floor((fx + foot - COLLISION_EPS) / ts);
+        int r0 = (int) Math.floor(fy / ts);
+        int r1 = (int) Math.floor((fy + foot - COLLISION_EPS) / ts);
+        double best = 0;
+        boolean found = false;
+        for (int c = c0; c <= c1; c++) {
+            for (int r = r0; r <= r1; r++) {
+                int support = level.supportHeight(c, r);
+                if (support <= 0) continue;
+                double surface = level.surfaceZ(support);
+                if (!found || surface > best) {
+                    best = surface;
+                    found = true;
+                }
+            }
+        }
+        return found ? best : 0;
+    }
+
+    /**
+     * How tall a body of {@code size} stands, in world units — its own extent
+     * along the height axis, as opposed to the patch of floor it covers.
+     *
+     * <p>A body is as tall as it is wide here, which is what the billboard is
+     * drawn as. It is a method rather than the expression {@code size} so that
+     * the day a character is two blocks tall there is one place to say so.
+     */
+    public static double bodyHeight(double size) {
+        return size;
+    }
+
+    /**
+     * Whether a body {@code bodyHeight} tall standing at {@code z} has room in
+     * the column at (col,row).
+     *
+     * <p><b>Trivially true above the surface, and that is the point of writing
+     * it now.</b> In a heightfield every column is solid from the ground up, so
+     * there is never anything overhead to bump into and this can only answer
+     * the same thing {@link #barrierAt} already answered. Job O is where a
+     * column may have a gap in it, head-room becomes a real question, and this
+     * is the method that stops being a formality — at which point W2's callers
+     * are already asking it, and none of them has to be found again.
+     */
+    public static boolean clearAt(Level level, int col, int row,
+                                  double z, double bodyHeight) {
+        int support = level.supportHeight(col, row);
+        return support <= 0 || level.surfaceZ(support) <= z + STEP_EPS;
+    }
+
     /** Whether a plan-view body's feet are standing in solid terrain. */
     public static boolean footBlocked(Level level, double x, double y, double size) {
         double foot = footSize(size);
@@ -497,13 +704,37 @@ public final class PlayerPhysics {
      */
     public static boolean standingIn(Level level, double x, double y, double size,
                                      PerspectiveSpace space, int col, int row) {
+        return standingIn(level, x, y, size, space, col, row, 0, -1);
+    }
+
+    /**
+     * {@link #standingIn} for a body at height {@code z}, asked about one
+     * {@code layer} of the cell — {@code -1} meaning the whole column.
+     *
+     * <p>Once a body can be at a height, standing in a <em>cell</em> stops
+     * being the question: a player on the floor is not in the way of a block
+     * laid on the roof above them, and refusing that placement because their
+     * feet share a column with it would make a tower impossible to build from
+     * beside it. So the vertical extent is compared too — the body occupies
+     * {@code z} up to {@link #bodyHeight}, the layer occupies its own block.
+     */
+    public static boolean standingIn(Level level, double x, double y, double size,
+                                     PerspectiveSpace space, int col, int row,
+                                     double z, int layer) {
         boolean onFloor = space.hasElevation();
         double bx = onFloor ? footLeft(x, size) : x;
         double by = onFloor ? footTop(y, size) : y;
         double bs = onFloor ? footSize(size) : size;
         double ts = level.tileSize;
-        return bx + bs > col * ts && bx < (col + 1) * ts
+        boolean overlapsCell = bx + bs > col * ts && bx < (col + 1) * ts
                 && by + bs > row * ts && by < (row + 1) * ts;
+        if (!overlapsCell || layer < 0 || !level.verticality()) return overlapsCell;
+        // The block would occupy [surfaceZ(layer), surfaceZ(layer + 1)); the
+        // body occupies [z, z + bodyHeight). Two intervals miss each other or
+        // they do not.
+        double blockBottom = level.surfaceZ(layer);
+        double blockTop = blockBottom + level.blockHeight();
+        return z < blockTop - STEP_EPS && z + bodyHeight(size) > blockBottom + STEP_EPS;
     }
 
     /** Whether the body rests on solid ground (any tile under its bottom edge). */

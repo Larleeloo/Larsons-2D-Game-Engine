@@ -68,6 +68,32 @@ public class GameProfile {
     public boolean blockEditingEnabled = true; // mine/place blocks while playing
     public boolean creativeEnabled = true;    // creative mode (paint objects)
 
+    /**
+     * Whether a plan-view level's height axis is somewhere a body can <em>be</em>
+     * — climb a stack, stand on its top, walk off and fall — rather than only
+     * something that blocks them.
+     *
+     * <p><b>Off by default, and the default is load-bearing.</b> A plan-view
+     * hop rises about 57 world units against a block of 17.6, so the moment
+     * landing on a column becomes possible every wall in every level already
+     * saved is climbable, and every maze becomes traversable over its own
+     * walls. That is not a bug in the feature, it is the feature — so it is the
+     * level's decision, and a level that predates the decision has not made it.
+     *
+     * <p>An absent key in a saved settings block therefore has to mean "off",
+     * which is why this defaults {@code false} rather than defaulting to what a
+     * newly authored level would want ({@code HEIGHT_PLAN.md} W0).
+     */
+    public boolean verticality = false;
+
+    /**
+     * Whether a long fall hurts. Off by default: whether height is dangerous
+     * is a game-type question rather than a physics one, and a level that
+     * turned the height axis on did not thereby ask for its players to die of
+     * it ({@code HEIGHT_PLAN.md} W3).
+     */
+    public boolean fallDamageEnabled = false;
+
     // Lighting (rendered as a shader pass, so it composes with post-FX).
     public boolean lightingEnabled = false;
     public boolean dayNightCycle = false;     // time-driven darkness
@@ -166,6 +192,8 @@ public class GameProfile {
         m.put("minFps", minFps);
         m.put("maxFps", maxFps);
         m.put("gravityEnabled", gravityEnabled);
+        m.put("verticality", verticality);
+        m.put("fallDamageEnabled", fallDamageEnabled);
         m.put("hudVisible", hudVisible);
         m.put("gridVisible", gridVisible);
         m.put("mobsEnabled", mobsEnabled);
@@ -265,6 +293,8 @@ public class GameProfile {
         minFps = s.minFps;
         maxFps = s.maxFps;
         gravityEnabled = s.gravityEnabled;
+        verticality = s.verticality;
+        fallDamageEnabled = s.fallDamageEnabled;
         hudVisible = s.hudVisible;
         gridVisible = s.gridVisible;
         mobsEnabled = s.mobsEnabled;
@@ -321,6 +351,8 @@ public class GameProfile {
         p.minFps = intg(m, "minFps", p.minFps);
         p.maxFps = intg(m, "maxFps", p.maxFps);
         p.gravityEnabled = bool(m, "gravityEnabled", p.gravityEnabled);
+        p.verticality = bool(m, "verticality", p.verticality);
+        p.fallDamageEnabled = bool(m, "fallDamageEnabled", p.fallDamageEnabled);
         p.hudVisible = bool(m, "hudVisible", p.hudVisible);
         p.gridVisible = bool(m, "gridVisible", p.gridVisible);
         p.mobsEnabled = bool(m, "mobsEnabled", p.mobsEnabled);

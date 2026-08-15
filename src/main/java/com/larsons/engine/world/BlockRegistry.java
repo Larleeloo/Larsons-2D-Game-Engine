@@ -257,6 +257,14 @@ public final class BlockRegistry {
         r.register(Block.terrain(90, "stone_wall", "Stone Wall", new Color(105, 105, 115)));
         r.register(Block.terrain(91, "brick_wall", "Brick Wall", new Color(150, 75, 65)));
         r.register(Block.terrain(92, "hedge_wall", "Hedge Wall", new Color(70, 125, 60)));
+        // Stairs: solid like a wall, and walked up rather than jumped onto.
+        // Without these a plan-view level has exactly one way to get anybody on
+        // top of anything, which is to jump — fine for a single ledge and no
+        // way to build a hill somebody can climb (HEIGHT_PLAN.md W2).
+        r.register(Block.terrain(93, "stone_stairs", "Stone Stairs",
+                new Color(125, 122, 128)).withStep(true));
+        r.register(Block.terrain(94, "wood_stairs", "Wood Stairs",
+                new Color(160, 120, 75)).withStep(true));
 
         tuneDurability(r);
         // Loose granular blocks obey gravity (creators opt custom blocks in
