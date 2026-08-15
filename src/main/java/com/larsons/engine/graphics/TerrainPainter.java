@@ -46,10 +46,14 @@ public final class TerrainPainter {
 
     /**
      * How tall a stacked block stands, as a fraction of a tile in world units.
-     * Tall enough that the side face reads as a wall at a glance, short enough
-     * that a wall does not swallow the row of floor behind it.
+     *
+     * <p>Lives on {@link Level} rather than here, because it stopped being a
+     * drawing constant the moment a body could stand on a block: the physics
+     * needs the same number to know how high that is, and two copies of it
+     * would come apart as soon as one was tuned. Kept as a name here because
+     * this is where it is used most.
      */
-    public static final double BLOCK_HEIGHT = 0.55;
+    public static final double BLOCK_HEIGHT = Level.BLOCK_HEIGHT;
 
     /** How far a shadow reaches from its caster, as a fraction of a tile. */
     private static final double SHADOW_REACH = 0.34;

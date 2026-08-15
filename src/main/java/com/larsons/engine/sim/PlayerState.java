@@ -130,6 +130,25 @@ public final class PlayerState {
      */
     public double z, vz;
 
+    /**
+     * The highest this body has been since it was last on the ground — how far
+     * a landing fell, which is the only thing fall damage needs and is not
+     * something a position alone can answer.
+     *
+     * <p>Not networked and not copied: it describes a fall in progress, the
+     * server computes the damage that matters, and a client that predicts a
+     * landing slightly early reconciles on health like it does on everything
+     * else.
+     */
+    public transient double fallPeakZ;
+
+    /**
+     * How tall one block is in this body's level, in world units — carried on
+     * the state because {@link PlayerPhysics} measures a fall in blocks and a
+     * level's tile size is not a constant.
+     */
+    public double blockHeight = com.larsons.engine.level.Level.BLOCK_HEIGHT * 32;
+
     // Relic passives (simulation-side; not replicated). Refreshed from the
     // carried inventory each tick by Inventory.applyPassivesTo — on the
     // authoritative server from the server-side inventory, locally from the

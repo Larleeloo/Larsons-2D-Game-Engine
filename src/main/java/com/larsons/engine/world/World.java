@@ -1242,6 +1242,9 @@ public final class World {
                 if (!mobShot && !pvpRule.canHurt(p.ownerId, pl)) continue;
                 double d = Math.hypot(pl.x + half - p.x, pl.y + half - p.y);
                 if (d > radius + half) continue;
+                // A blast at ground level does not reach the roof, and one on
+                // the roof does not rain on the street.
+                if (!withinArmsReach(pl.z, p.z)) continue;
                 double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
                 pl.takeBlow(p.damage * falloff);
                 if (!mobShot) pvpRule.damaged(p.ownerId, pl);
@@ -1984,17 +1987,59 @@ public final class World {
      * pickup range, extended per player by a carried Magnet Charm
      * ({@code PlayerState.pickupBonus}).
      */
-    private static PlayerState nearestPickerUpper(List<PlayerState> players,
-                                                  double x, double y) {
+    private PlayerState nearestPickerUpper(List<PlayerState> players,
+                                           double x, double y) {
         PlayerState best = null;
         double bestD = Double.MAX_VALUE;
+        double itemZ = restingZ(x, y);
         for (PlayerState p : players) {
             double d = Math.hypot(p.x - x, p.y - y);
-            if (d <= PICKUP_RANGE + p.pickupBonus && d < bestD) {
-                bestD = d;
-                best = p;
-            }
+            if (d > PICKUP_RANGE + p.pickupBonus || d >= bestD) continue;
+            if (!withinArmsReach(p.z, itemZ)) continue;
+            bestD = d;
+            best = p;
         }
         return best;
+    }
+
+    // --- reach, once there is a height to reach across --------------------------
+
+    /**
+     * How far apart two things may be along the height axis and still touch:
+     * one block, which is a body's own reach up or down.
+     *
+     * <p>Below this everything is as it was, because everything was at the same
+     * height. Above it a player on a roof cannot be hit from the street, cannot
+     * pick up what is lying in it, and cannot open a chest down there — which
+     * is the first rule players will find, and the first they would file a bug
+     * about if it were missing.
+     */
+    private boolean withinArmsReach(double aZ, double bZ) {
+        if (!level.verticality()) return true;
+        return Math.abs(aZ - bZ) <= level.blockHeight() + 1;
+    }
+
+    /**
+     * The height something lying on the floor at (x,y) rests at — the top of
+     * whatever column is under it.
+     */
+    public double restingZ(double x, double y) {
+        if (!level.verticality()) return 0;
+        int col = (int) Math.floor(x / level.tileSize);
+        int row = (int) Math.floor(y / level.tileSize);
+        int support = level.supportHeight(col, row);
+        return support <= 0 ? 0 : level.surfaceZ(support);
+    }
+
+    /**
+     * Whether {@code p} can reach the cell (col,row) to mine it, place against
+     * it, or open what is standing in it. Distance on the plane was the whole
+     * question while everything was at one height; now the column's top has to
+     * be within arm's reach of the player's feet as well.
+     */
+    public boolean canReachCell(PlayerState p, int col, int row) {
+        int support = level.supportHeight(col, row);
+        double top = support <= 0 ? 0 : level.surfaceZ(support);
+        return withinArmsReach(p.z, top);
     }
 }

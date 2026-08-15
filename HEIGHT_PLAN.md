@@ -1,14 +1,20 @@
 # Height Plan — the third axis, end to end
 
 **Status:** Written 2026-08-14 against commit `244762c` on
-`claude/vertical-stacking-walkable-blocks-bf522d`. **Job V is complete** —
-storage, ceiling, save format, accessors, undo record and the measurement — and
-none of it changes a pixel. **Job W is next, and R0 (blocks are cubes) is the
-first step that changes what a player sees.** Baseline at the time of writing,
+`claude/vertical-stacking-walkable-blocks-bf522d`. **Jobs V and W are
+complete.** Job V was storage and changed no pixels; **Job W is the one players
+would name** — a body's floor stopped being the literal zero, so a plan-view
+character now climbs stacks, stands on their tops, walks off them and falls.
+It is gated per level and off by default, so nothing already saved plays
+differently. **Job R is next, starting with R0 (blocks are cubes).** Baseline at
+the time of writing,
 `./gradlew test`: core **1051 tests, 0 failures, 10 skipped**; `:gl` **62 tests,
 0 failures, 34 skipped** (the GL tests that need a driver skip in a container —
-they are the D-series instruments and they run on a real machine). After V6:
-core **1080/0/10**, `:gl` unchanged, all 32 golden frames byte-identical.
+they are the D-series instruments and they run on a real machine). After Job W:
+core **1090/0/10**, `:gl` unchanged. Thirty of the 32 golden frames are still
+byte-identical; two were regenerated because Job W adds two stair blocks to the
+registry, which lengthens the creative palette and shifts an item cycle — a
+content change, not a rendering one (W2).
 
 **Four of Job V's six steps found their own instruction wrong**, which is
 recorded per step rather than summarised away: V0's byte-identity was
@@ -16,6 +22,14 @@ unmeasurable as written, V2's prediction about which test would break was
 backwards, V4's worked example assumed a plan-view floor is solid when it is
 not, and V6's trigger watched a stage that could not see the regression it was
 looking for — then blamed it on the one accessor that had not moved.
+
+**Job W found three more.** W0's "new levels default it on" could not be done
+safely at all, because an absent key in a saved settings block would have turned
+the axis on for every level ever saved. W1 needed a question neither of V4's
+accessors answers — what holds a body *up*, which is not its geometry and not
+what stops it. And W5 turned up the projection's offset written out twice, safe
+only while it was one line and a mis-click waiting for the second term this step
+added.
 
 **V0 could not be done as written and says so in place**: byte-identity had to
 be measured against the save's fixed point rather than against the bundled
@@ -805,6 +819,20 @@ game-type decision and not an engine one.
 cell it walked off toward, having spent no air jumps. Fall damage on: the same
 fall costs health; off: it does not.
 
+#### W3 — done. Falling needed no integrator, and one line of bookkeeping
+
+Walking off a ledge leaves `z` above the new `groundZ` and the existing hop
+integrator carries the body down, exactly as the step predicted. The entry
+condition is the whole change: `airJumpsUsed` resets only when *grounded*, and
+grounded now means "on the floor under you" rather than "at zero", so stepping
+off a ledge no longer hands out a free double jump.
+
+`GameProfile.fallDamageEnabled`, default off, with a four-block free fall —
+chosen so a hop can never hurt, which `aHopIsNeverFarEnoughToHurt` pins. The
+peak height rides on `PlayerState.fallPeakZ`, transient and not networked: it
+describes a fall in progress, the server owns the damage, and a client that
+predicts a landing a tick early already reconciles on health.
+
 ### W4 — The body has a height, even before anything is over it
 
 **Do.** Define `bodyHeight` on the actor (from `ActorSize`, which already
@@ -815,6 +843,14 @@ costs a second pass over everything in W2.
 
 **Verify.** `clearAt` is asserted to be equivalent to `z >= surface` in a
 heightfield world, which is the statement Job O will delete.
+
+#### W4 — done, and it is one method that currently cannot fail
+
+`PlayerPhysics.bodyHeight(size)` and `clearAt(level, col, row, z, bodyHeight)`.
+In a heightfield every column is solid from the ground up, so there is never
+anything overhead and `clearAt` can only repeat what `barrierAt` already said.
+Written now anyway, because O2 is where head-room becomes a real question and
+the alternative is finding W2's callers again to add an argument.
 
 ### W5 — The camera, and what it follows
 
@@ -828,6 +864,21 @@ does not jerk the view.
 camera does not jitter; extend with a climb: ascending a tower moves the view
 monotonically and settles.
 
+#### W5 — done, and it exposed a duplicated expression that was safe only while it was one line
+
+`Camera.setElevation` carries the focus's lift, applied to the camera's single
+offset rather than to each projected point, so the pixel lattice the class note
+is about is untouched.
+
+**The forward projection and `screenToWorld` spelled the same offset out
+twice.** `place()` computed `viewport / 2 - camera * zoom` and `screenToWorld`
+computed it again inline, which was fine while it was one expression and became
+a bug the moment the elevation term joined only one of them: a click would have
+landed a whole tower's worth of pixels from the block under the cursor. Both go
+through `offsetFor` now. That is the D3 lesson from the render plan in
+miniature — an inverse derived by hand from a forward transform stays correct
+only until the forward transform changes.
+
 ### W6 — Building without bricking yourself in
 
 **Do.** `PlayerPhysics.standingIn` decides whether a placement would put a
@@ -838,6 +889,15 @@ intersect a player standing on the floor.
 **Verify.** `CreativeFeaturesTest`: placing a block on top of the column a
 player stands on is refused; placing one at their feet's height on the next
 column over is allowed; placing at layer 4 above them is allowed.
+
+#### W6 — done
+
+`standingIn` gained a `(z, layer)` overload; the old signature delegates with
+`layer = -1`, meaning "the whole column", which is what its existing callers
+mean and keeps them unchanged. With the axis live the body's vertical extent
+(`z` to `z + bodyHeight`) is compared against the block's own, so a player on
+the floor is not in the way of a roof going on over their head — without which
+a tower cannot be built from beside it.
 
 ### W7 — Everything else that stands on the ground
 
@@ -850,6 +910,27 @@ minute.
 
 **Verify.** `MeleeCombatTest` gains a height case; `ContainerUiTest` gains a
 chest on a tower reached from the tower and not from the floor beside it.
+
+#### W7 — done for what has a height; the rest is named rather than half-built
+
+`World` grew the vocabulary — `withinArmsReach`, `restingZ(x, y)` and
+`canReachCell(player, col, row)`, all no-ops when the axis is off — and it is
+applied where both ends of the question already have a height: **item pickup**
+(a player on a roof cannot pick up what is lying in the street) and
+**player-versus-player blasts** (which no longer rain from the street onto the
+roof, or the reverse).
+
+**Mobs are deliberately not included, and the reason is that they have no
+height yet.** `Mob` has no `z` until S2, so "you cannot hit a mob on a roof" is
+not a sentence this engine can currently express — a height check against a mob
+would be a check against the constant zero, which is worse than no check
+because it reads like one. S2 gives mobs the axis and is where their reach
+follows. The same goes for mounts: `Vehicle` moves through the flat
+`walkX`/`walkY` and gets the vertical pair in S2 alongside the mobs.
+
+Dropped items rest at `restingZ` of the column under them rather than carrying
+their own `z` — they are already positioned by the cell they are in, and a
+second stored copy of a derived number is a thing to keep in sync.
 
 ---
 

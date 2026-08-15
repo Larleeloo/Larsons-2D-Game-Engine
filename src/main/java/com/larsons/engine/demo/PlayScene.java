@@ -842,6 +842,11 @@ public class PlayScene extends AbstractScene {
         // and the shimmer is a property of what was *drawn*. See
         // StepInterpolation, and render() for the other half.
         camera.centerOn(me.x + size / 2.0, me.y + size / 2.0);
+        // Climbing moves a character up the screen without moving them on the
+        // plane, so a camera that follows only (x,y) leaves a player on an
+        // eight-deep tower a fifth of a viewport above its centre. The lift is
+        // the same one the sprite is drawn with, so the two cannot disagree.
+        camera.setElevation(me.z * PerspectiveSpace.of(camera.getPerspective()).screenLift());
         // A mounted player sits (idle art); otherwise classify the action so
         // the matching skin animation plays, restarting on state changes.
         String state = riding ? "idle"

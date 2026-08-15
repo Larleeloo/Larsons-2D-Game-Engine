@@ -620,6 +620,78 @@ public class Level {
     }
 
     /**
+     * How tall one block stands, as a fraction of a tile in world units.
+     *
+     * <p>Tall enough that a side face reads as a wall at a glance, short enough
+     * that a wall does not swallow the row of floor behind it — the trade this
+     * was chosen for. {@code HEIGHT_PLAN.md} R0 resolves it the other way and
+     * makes blocks cubes, at which point this is 1 and a layer of height is
+     * exactly a tile.
+     *
+     * <p>It lives on the level rather than on the painter because it is not a
+     * drawing constant: {@link #blockHeight()} is how far a body rises when it
+     * climbs a block, and the renderer and the physics have to be reading the
+     * same number or characters stand in the air.
+     */
+    public static final double BLOCK_HEIGHT = 0.55;
+
+    /** How tall one block stands, in this level's world units. */
+    public double blockHeight() {
+        return BLOCK_HEIGHT * tileSize;
+    }
+
+    /**
+     * Whether this level's height axis is somewhere a body can <em>be</em> —
+     * climbing stacks, standing on their tops, walking off and falling — rather
+     * than only something that stops them.
+     *
+     * <p>False unless the level says otherwise, which is what keeps every level
+     * saved before this existed playing exactly as it did: see
+     * {@link GameProfile#verticality}. Never true in a side-scroller, whose
+     * height axis is the screen's vertical and already has a gravity of its own.
+     */
+    public boolean verticality() {
+        return layered() && settings != null && settings.verticality;
+    }
+
+    /** The world-space height of the top of a column {@code layers} deep. */
+    public double surfaceZ(int layers) {
+        return (layers - 1) * blockHeight();
+    }
+
+    /**
+     * How many blocks of this column hold a body up, counted from the floor:
+     * {@code 0} is a hole and there is nowhere to stand.
+     *
+     * <p><b>The third of the three questions a column answers, and the one
+     * movement asks.</b> {@link #stackHeight} is geometry — everything that is
+     * there, which is what the renderer extrudes. {@link #topSolidLayer} is
+     * what would stop you walking into the column. This is what you would be
+     * standing <em>on</em> if you were there, and it is none of the others:
+     *
+     * <ul>
+     *   <li>The <b>floor</b> holds you up whatever it is made of. {@code
+     *       stone_path} is registered passable — you walk across it, it does
+     *       not block you — and it is still the ground.</li>
+     *   <li><b>Above the floor</b>, only solid blocks hold you up. A torch
+     *       standing on a path is a whole block of geometry and you walk
+     *       straight through it at ground level, so it lifts nobody.</li>
+     *   <li>The run is <b>contiguous</b>: a solid block floating over a gap
+     *       supports nothing, because there is nothing under it to stand on.</li>
+     * </ul>
+     *
+     * <p>So a path answers 1 and its surface is {@code z = 0}; a path with a
+     * torch on it also answers 1; a wall answers 2 and its top is one block up.
+     */
+    public int supportHeight(int col, int row) {
+        if (tileAt(col, row) <= 0) return 0;
+        int layers = layerCount();
+        int support = 1;
+        while (support < layers && solidAt(col, row, support)) support++;
+        return support;
+    }
+
+    /**
      * How many blocks deep the stack at (col,row) is: {@code 0} bare ground,
      * {@code 1} a floor to walk on, {@code 2} a wall. Only meaningful in a
      * {@link #layered()} level; a side-scroller answers 0 or 1.

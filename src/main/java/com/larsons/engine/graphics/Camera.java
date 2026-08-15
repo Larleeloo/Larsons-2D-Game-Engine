@@ -168,6 +168,28 @@ public class Camera {
         this.viewportHeight = h;
     }
 
+    /**
+     * How far up the screen the camera's focus has been carried by the height
+     * axis, in pre-zoom screen pixels — the lift of whatever it is following.
+     *
+     * <p>Zero everywhere the focus is on the floor, which is every level that
+     * has not switched its height axis on and every side-scroller ever. It is
+     * kept apart from {@link #centerOn} because it is not a world position: a
+     * player climbing a tower has not moved on the plane at all, and the camera
+     * still has to follow them up.
+     */
+    private double elevation;
+
+    /** Set the focus's lift; see {@link #elevation}. */
+    public void setElevation(double screenPixels) {
+        this.elevation = screenPixels;
+    }
+
+    /** The focus's lift, in pre-zoom screen pixels. */
+    public double elevation() {
+        return elevation;
+    }
+
     public void centerOn(double wx, double wy) {
         this.x = wx;
         this.y = wy;
@@ -424,9 +446,28 @@ public class Camera {
      * @param planarCamera the camera's focus, projected the same way
      * @param viewport     the viewport's extent on this axis
      */
+    /**
+     * The camera's single offset onto the pixel lattice, for one axis.
+     *
+     * <p>Extracted so the forward projection and {@link #screenToWorld} cannot
+     * arrive at different numbers. They used to spell the same expression out
+     * twice, which was safe only while the expression stayed one line: the
+     * elevation term below would have gone into the forward direction and not
+     * the inverse, and a click would have landed a whole tower's worth of
+     * pixels from the block under the cursor.
+     */
+    private long offsetFor(double planarCamera, int viewport) {
+        long offset = Math.round(viewport / 2.0 - planarCamera * zoom);
+        // The focus's own lift, on the axis that carries it. Applied to the
+        // camera's offset rather than to each point, so the whole world slides
+        // together and the pixel lattice the class note is about is untouched.
+        if (viewport == viewportHeight) offset += Math.round(elevation * zoom);
+        return offset;
+    }
+
     private int place(double planar, double planarCamera, int viewport) {
         long lattice = Math.round(planar * zoom);
-        long offset = Math.round(viewport / 2.0 - planarCamera * zoom);
+        long offset = offsetFor(planarCamera, viewport);
         long screen = lattice + offset;
         // Saturating rather than wrapping. A clipped-off coordinate draws
         // nothing, which is what was wanted; a wrapped one draws it on the
@@ -507,8 +548,8 @@ public class Camera {
      */
     public double[] screenToWorld(int sx, int sy) {
         double[] c = planar(x, y);
-        double px = (sx - Math.round(viewportWidth / 2.0 - c[0] * zoom)) / zoom;
-        double py = (sy - Math.round(viewportHeight / 2.0 - c[1] * zoom)) / zoom;
+        double px = (sx - offsetFor(c[0], viewportWidth)) / zoom;
+        double py = (sy - offsetFor(c[1], viewportHeight)) / zoom;
         return inversePlanar(px, py);
     }
 }
