@@ -1,12 +1,14 @@
 # Height Plan — the third axis, end to end
 
 **Status:** Written 2026-08-14 against commit `244762c` on
-`claude/vertical-stacking-walkable-blocks-bf522d`. **V0 and V1 are done**;
-everything from V2 on is unstarted. Baseline at the time of writing,
+`claude/vertical-stacking-walkable-blocks-bf522d`. **V0 through V3 are done** —
+storage, ceiling and save format, none of which changes a pixel. Everything
+from V4 on is unstarted, and **R0 (blocks are cubes) is the first step that
+changes what a player sees.** Baseline at the time of writing,
 `./gradlew test`: core **1051 tests, 0 failures, 10 skipped**; `:gl` **62 tests,
 0 failures, 34 skipped** (the GL tests that need a driver skip in a container —
-they are the D-series instruments and they run on a real machine). After V1:
-core **1068/0/10**, `:gl` unchanged, all 32 golden frames byte-identical.
+they are the D-series instruments and they run on a real machine). After V3:
+core **1074/0/10**, `:gl` unchanged, all 32 golden frames byte-identical.
 
 **V0 could not be done as written and says so in place**: byte-identity had to
 be measured against the save's fixed point rather than against the bundled
@@ -14,6 +16,16 @@ file, which is hand-authored in a shape the writer does not emit. **V1 found a
 lossy conversion nobody had a test for** — growing a level past the dense
 storage limit named its two layers one at a time, so a third would have been
 dropped by a size slider.
+
+**Two decisions were revised after V1, and both are recorded in Appendix B
+rather than edited silently into the steps that assumed otherwise.** The save
+format no longer has to be backwards compatible, so V3 writes one `layersRle`
+list instead of the append-only shape it was going to bolt on — and V0's churn
+guard, written to forbid exactly that, is rewritten by V3 on purpose. And
+**blocks are cubes**: `BLOCK_HEIGHT` goes from 0.55 of a tile to 1, which is
+now R0, ahead of the rest of Job R. Two arithmetic claims elsewhere in this
+plan moved with it and were corrected in place — V2's ceiling (eight tiles of
+lift, not 4.4) and W0's hop (one block of clearance, not three).
 
 This is the job `RENDER_PLAN.md` Appendix C recorded and deferred:
 
@@ -194,9 +206,20 @@ Recorded so no step "fixes" them:
    you cannot cross, and it stays one. W2's step-up rule and W1's hop ceiling
    are the two places this is at risk, and both are gated on a level flag that
    defaults off (W0).
-3. **A level saved by a build without this job still loads, and a level saved
-   by a build with it still loads in a build without it** — degraded to its
-   bottom two layers, not refused. The save format is append-only (V3).
+3. **The save format may change shape freely.** A level written by this build
+   need not open in a build without this job, and no existing file's bytes are
+   sacred. This was originally the opposite rule — an append-only format, so
+   that old builds kept working and no saved level churned — and it was
+   **relaxed by decision** (Appendix B) because it bought compatibility nobody
+   needs at the price of a format that spells a column as "the floor, the
+   thing on the floor, and then a list of the rest".
+
+   What the relaxation does *not* license is the reader. Every shape this
+   build can read today it still reads — the legacy row-of-arrays `tiles`, the
+   run-length `tilesRle`/`upperRle`, and the chunked forms — because each is
+   one branch in `LevelLoader`, the bundled `sample_level.json` is written in
+   the oldest of them, and deleting them would be a content migration wearing
+   an engineering hat. **Writing is free; reading is additive.**
 4. **No new runtime dependency.** Requirement #4. Nothing here needs one; it is
    written down because a depth buffer is the obvious answer to R3 and reaching
    for one is how the rule gets broken.
@@ -264,6 +287,13 @@ add so much as an empty array to levels that do not. So
 out longhand, and `nothingWritesAThirdLayerYet` asserts the absence of
 `layerRle`, `layerChunks` and `maxLayers` — trivially true today, and exactly
 the assertion that turns red if V3 writes a new key unconditionally.
+
+> **Amended 2026-08-15, after the back-compatibility rule was dropped.** Those
+> two key-set tests were written to *forbid* churn, and churn is now the plan.
+> V3 rewrites them to pin the new shape instead. What survives the revision
+> unchanged, and what was always the more valuable half, is the four
+> fixed-point tests: whatever the format writes, saving a loaded level must be
+> a no-op. That property does not care which keys the writer picked.
 
 ### V1 — One layer list, and the second layer stops having a name of its own
 
@@ -358,12 +388,13 @@ for the plan views. `Level.maxLayers` is the level's own ceiling within that,
 default **8**, saved when it differs from the default.
 
 Eight is a decision, not a limit waiting to be raised, and Appendix B records
-why: it is four times the tallest thing the current art reads as (a wall), it
-is enough for a two-storey building with a roof, and at `BLOCK_HEIGHT = 0.55`
-of a tile a column of eight is 4.4 tiles of screen lift — which is already
-enough to hide the two rows of floor behind it in top-down. A taller ceiling is
-not a rendering problem, it is a *legibility* problem, and the number that
-fixes it is the camera's pitch, not this constant.
+why: it is four times the tallest thing the current art reads as (a wall), and
+it is enough for a two-storey building with a roof. **With cubes (R0) a column
+of eight is eight tiles of screen lift** — 256 px at a 32 px tile, better than
+a third of a 720 px viewport, and it hides the eight rows of floor behind it.
+That is the real ceiling on the ceiling: a taller stack is not a rendering
+problem, it is a *legibility* problem, and the number that fixes it is the
+camera's pitch, not this constant.
 
 `setTile(col, row, layer, id)` refuses `layer >= layerLimit()` exactly as
 `setUpper` refuses a second layer in a side-scroller today — which is the
@@ -376,30 +407,108 @@ side-scroller half unchanged (a side-scroller still tops out at 1). Flag this
 in the commit message: it is the one place in this job where a passing test is
 deliberately made to fail.
 
-### V3 — The save format, append-only
+#### V2 — done. The prediction about the diff held; the one about the test did not
 
-**Do.** The format today writes `rle` (layer 0) and `upperRle` (layer 1), or
-`chunks` / `upperChunks` on a giant level. Add, and only when the level
-actually uses them:
+**The ceiling is `Level.maxLayers`, default `DEFAULT_MAX_LAYERS = 8`, clamped
+by `layerLimit()` — still 1 in a side-scroller.** Core 1070 tests, 0 failures.
+
+**V1 predicted that V2's diff would be `layerLimit()` and one test, and that
+held exactly.** Raising the ceiling turned exactly one assertion red —
+`LevelLayersTest`'s — and `StackedBlockTest`, `LevelBytesTest`, the terrain
+painter, the cache and all 32 golden frames did not move. That is what the
+prediction was for, and it is the strongest evidence available that V1 put the
+height axis in one place.
+
+**The prediction about `StackedBlockTest` was wrong, and the reason is worth
+more than the prediction was.** V2 expected
+`theHeightAxisIsZeroOneOrTwoAndNeverThree` to fail and need rewriting. It
+passed, unchanged — because it never reaches past layer 1. It stacks with what
+was `setUpper`, and it proves the cell is full with `placeLayer`, which still
+returns −1 as soon as anything non-liquid is standing on the floor. **So that
+test does not assert the storage ceiling at all; it asserts the editor's
+placement rule**, and after V2 those are two different numbers: storage tops out
+at eight and placement still tops out at two.
+
+That is not a defect — E1 is where placement learns to aim at a face and the
+rule is replaced wholesale — but it is a misleading name left in the tree, and
+naming it here is cheaper than rediscovering it in Job E. **A test that was
+believed to pin the height axis pins something else**, and the plan's own step
+would have "confirmed" the ceiling by rewriting a test that never measured it.
+
+**Two things had to gain the ceiling check that the step did not list.**
+`setGrid` and `newChunkedLayer` install a layer wholesale for the loader,
+bypassing `setTile`, so without a check a hand-edited file could declare a
+hundred layers and get them. They enforce `layerLimit()` now, which is why V3
+has to read `maxLayers` before it reads any geometry.
+
+### V3 — The save format says what a column is
+
+**Do.** The format today writes `tilesRle` (layer 0) and `upperRle` (layer 1),
+or `chunks` / `upperChunks` on a giant level — two keys naming two layers,
+which is a shape that stops describing the data the moment there can be eight.
+Replace both pairs with one list, indexed by height:
 
 ```
-"layerRle":    [[…layer 2…], […layer 3…], …]     // dense
-"layerChunks": [{…layer 2…}, {…layer 3…}, …]     // chunked
-"maxLayers":   8                                  // when not the default
+"layersRle":    [[…layer 0…], […layer 1…], …]     // dense
+"layerChunks":  [{…layer 0…}, {…layer 1…}, …]     // chunked, one map per layer
+"maxLayers":    8                                  // when not the default
 ```
 
-A level using two layers or fewer writes **no new key** and its file is
-byte-identical to what this build writes today — which is what V0's instrument
-checks, and it is the whole reason for the awkward shape of this format rather
-than a clean `layers: [...]` array. The awkwardness buys invariant 3 in both
-directions: an old build reading a new file finds `rle` and `upperRle` where it
-expects them and ignores `layerRle`, giving a playable level with its towers
-flattened to walls rather than a parse error.
+The list carries exactly `layerCount()` entries, so a flat level writes one and
+a tower level writes as many as it has. **`tilesRle`, `upperRle` and
+`upperChunks` stop being written**, and that is the point of the revision: a
+format that spells a column as "the floor, the thing on the floor, and then a
+list of the others" would have made every later reader ask why, forever, to
+buy compatibility with builds nobody will run.
 
-**Verify.** `LevelFormatTest` gains: a 5-layer level round-trips; a 2-layer
-level's JSON contains no `layerRle`; a new file loaded by the *old* reader
-(exercised by deleting the new keys before parsing) yields the same bottom two
-layers. `LevelBytesTest` green.
+**The reader keeps every path it has.** `tilesRle` + `upperRle`, `chunks` +
+`upperChunks`, and the legacy row-of-arrays `tiles` all still load — one branch
+each, and the bundled `sample_level.json` is written in the last of them.
+Invariant 3 states this asymmetry: writing is free, reading is additive.
+
+**Verify.** `LevelFormatTest` gains a 5-layer round trip and a chunked 3-layer
+round trip. `LevelBytesTest`'s two key-set assertions are **rewritten, by
+design** — they were written to forbid exactly the churn this step now
+performs, and the honest thing is to change them and say so rather than to
+weaken them into something that could not have caught anything. What they
+assert afterwards is the new shape: `layersRle` present with one entry per
+layer, and `tilesRle`/`upperRle` gone. The round-trip fixed-point tests are
+untouched and must stay green — they are the half of V0 that this revision does
+not touch, and they are the half that catches a reader and writer drifting
+apart.
+
+#### V3 — done. The split V0's amendment predicted is exactly the split that happened
+
+**Core 1074 tests, 0 failures, 10 skipped; `:gl` 62/0/34.** A dense level now
+writes `layersRle`, one run list per layer bottom-first; a giant one writes
+`layerChunks`, one chunk map per layer at the layer's own index; `maxLayers`
+rides beside `width` and `height` when the level has an opinion about it.
+`tilesRle`, `upperRle`, `chunks` and `upperChunks` are no longer written and
+are all still read.
+
+**The rewrite landed exactly where the amendment said it would.** Running the
+suite against the new writer turned **three** tests red — the three key-set
+assertions — and **none** of the four fixed-point ones. That split is the
+argument for having written V0 in two halves: the half that encoded a policy
+was repealed with the policy, and the half that encodes a property ("saving a
+loaded level is a no-op") survived a complete change of format without an edit,
+and went on guarding through it.
+
+**One key set replaced two, and it stopped varying.** A side-scroller and an
+eight-deep isometric tower now write the identical key list and differ only in
+how many entries `layersRle` holds — so the file says how tall a level is
+without decoding a run, and `everyLevelWritesTheSameGeometryKeyWhateverItsHeight`
+asserts precisely that.
+
+**A distinction the old format could not express, and the loader needed.** The
+gate on the legacy conversion was `hasUpperLayer` — "does this file mention the
+stacked layer" — which cannot tell a pre-stacking level from one deliberately
+built flat, because both are silent. In the new shape a flat level says
+`layersRle: [[…]]`: it describes one layer, on purpose. The gate is
+`describesItsLayers` now, and a level that names its layers is taken at its
+word however few it names. `aLevelDescribingNoLayersIsStillConvertedOnLoad`
+pins the old path; `theShapesThisBuildNoLongerWritesStillLoad` pins the
+two-key one by re-encoding a real level into it and reading it back.
 
 ### V4 — `heightAt`, and the range it may answer in
 
@@ -470,10 +579,16 @@ in Job W runs. On, Job W's rules apply.
 precise about how. Today a plan-view hop rises and falls back to zero, so a
 wall is impassable *because you cannot land on it*. The moment landing on a
 column's top is possible, `HOP_SPEED = 320` against `HOP_GRAVITY = 900` gives
-an apex of 320²/(2·900) ≈ **57 px**, and one block of lift at a 32 px tile is
-`32 × 0.55 = 17.6` px. **A hop already clears three blocks.** Every maze in
-every saved top-down level becomes traversable over its own walls the day W1
-lands, and no amount of care in W1 avoids that — it is what W1 *means*.
+an apex of 320²/(2·900) ≈ **56.9 world units**, and one cube of relief at a
+32 px tile is **32 units** (R0). **A hop clears one block and most of a
+second** — which is a good number for a platformer and a fatal one for a saved
+maze, because every wall in it is exactly one block of relief. Those levels
+become traversable over their own walls the day W1 lands, and no amount of care
+in W1 avoids that: it is what W1 *means*.
+
+(Before R0 made blocks cubes the same arithmetic gave 3.2 blocks, which was
+worse and differently wrong. The gate is needed either way; only the size of
+the absurdity changed.)
 
 So it is a level's decision. Levels that exist say nothing and get today's
 behaviour; new levels default it on; the creative editor exposes it beside the
@@ -608,6 +723,60 @@ chest on a tower reached from the tower and not from the floor beside it.
 ---
 
 ## 6. Job R — drawing it
+
+### R0 — A block is a cube
+
+**Do.** `TerrainPainter.BLOCK_HEIGHT` is `0.55` of a tile, and its comment
+explains the trade it was chosen for: "tall enough that the side face reads as
+a wall at a glance, short enough that a wall does not swallow the row of floor
+behind it." **The blocks are cubes now** — the same world extent along the
+height axis as along the two ground axes — so that number becomes 1, and the
+trade it was balancing is resolved the other way on purpose: a cube *does*
+swallow the row of floor behind it, because that is what a cube standing on a
+floor does.
+
+**Derive the lift from the projection, not from a constant that happens to
+work.** With today's defaults the screen lift of one unit of height is 32 px in
+both plan views, and it is 32 px for two unrelated reasons:
+
+| | one tile along the ground | one unit of height, for a cube |
+|---|---|---|
+| top-down | `tileSize` = 32 px | `tileSize` = 32 px |
+| isometric | diamond `isoTileWidth` = 64 px wide, `isoTileHeight` = 32 px tall | `isoTileWidth / 2` = 32 px |
+
+In top-down the ground is drawn at world scale, so a cube's vertical edge is
+`tileSize`. In isometric the ground is a 2:1 diamond and the cube's vertical
+edge is **half the diamond's width** — which is the classic 64&times;64 iso
+block sprite sitting on a 64&times;32 top diamond, and it is what makes the
+three visible faces read as one solid. Those two agree at 32 px today only
+because `isoTileWidth` happens to be twice `tileSize`. `liftPixels` currently
+computes `tileSize × BLOCK_HEIGHT × zoom × screenLift()`, which is the top-down
+formula used for both; it must ask the camera for the isometric one instead, or
+the first person to widen the diamond gets rhomboids.
+
+**What this buys beyond the look.** A layer of height becomes exactly one tile
+in world units, so `z` and the layer index share a unit: layer `n`'s surface is
+at `z = n × tileSize`. Every conversion in Jobs W and S is a multiply by the
+tile size rather than by a constant nobody can hold in their head, and W1's
+`groundZ` stops needing to explain itself.
+
+**Two numbers elsewhere in this plan move with it**, and both are recorded
+where they are used rather than only here: V2's ceiling arithmetic (a column of
+eight is eight tiles of lift now, not 4.4) and W0's hop arithmetic (a hop
+clears one block and most of a second, where it used to clear three).
+
+**Why this is R0 and not a line inside R1.** R1 extrudes a whole column in one
+piece and rounds the lift once for it. Doing that against a block height that
+is about to change means measuring the seams twice, and the golden frames have
+to be regenerated either way.
+
+**Verify.** `StackedBlockTest` asserts the lift equals one tile's screen edge
+along the height axis in each projection — the table above, as two assertions
+rather than as a number. Regenerate the golden catalogue: `world-top-down.png`,
+`world-isometric.png`, and every scene frame with terrain in it change by
+design, so the regeneration is reviewed as a picture and not waved through.
+`TurnedTerrainTest` must stay green unchanged: cubes are taller, not differently
+shaped, and nothing about which faces a heading shows moves.
 
 ### R1 — A column is one extrusion, not a stack of blocks
 
@@ -1138,7 +1307,7 @@ here is how this plan says where it stops.
 | Instrument | New? | What it fails on |
 |---|---|---|
 | 32 golden frames | existing | Any step in Job V changing a pixel; the side-scroller changing at all |
-| `LevelBytesTest` | **V0** | A save-format change that churns existing files |
+| `LevelBytesTest` | **V0** | A reader and a writer that have drifted apart — saving a loaded level stops being a no-op. (Its two key-set assertions are rewritten by V3; the four fixed-point ones are not.) |
 | `StackedBlockTest` | existing, extended | The height range; per-column lift rounding; shadows scaling |
 | `CreativeUndoTest` | existing, extended | Undo restoring two layers of an eight-layer column |
 | `WalkableBlockTest` | **W1** | A body settling inside geometry; step-up admitting a wall; a free double jump off a ledge |
@@ -1208,6 +1377,10 @@ sweep — rather than spread across a module boundary.
 
 | Decision | Choice | Why |
 |---|---|---|
+| Keep the save format backwards compatible | **No** — revised 2026-08-15 | Originally yes, append-only, so old builds kept working and no saved file churned. Overruled: it bought compatibility with builds nobody will run, at the price of a format that spells a column as "the floor, the thing on the floor, and then the rest". One `layersRle` list instead (V3). |
+| Stop *reading* the old shapes too | **No** | Not the same question. Each legacy reader is one branch, the bundled level is written in the oldest of them, and deleting them is a content migration wearing an engineering hat. Writing is free; reading is additive. |
+| Blocks are cubes | **Yes** — revised 2026-08-15 | `BLOCK_HEIGHT` was 0.55 of a tile, a compromise between "reads as a wall" and "does not swallow the floor behind it". A cube swallows the row behind it, and that is what a cube does. It also makes a layer of height exactly one tile in world units, so `z` and the layer index share a unit (R0). |
+| Lift derived from `tileSize` in both plan views | **No** | It is `tileSize` in top-down and half the diamond's width in isometric. Those agree at 32 px only because `isoTileWidth` is twice `tileSize` today; ask the camera (R0). |
 | Store a volume, or a heightfield | **Volume, from V1** | Storage is the one thing expensive to revisit; it reaches the save format, the chunk generator and every saved level. Behaviour is cheap to revisit. |
 | Simulate a volume, or a heightfield | **Heightfield, until Job O** | Every algorithm in Jobs W/R/S/E/N is *provably* correct on a heightfield (Appendix C) and a heuristic on a volume. |
 | Layer ceiling | **8, per level, default** | Four times the tallest thing the current art reads as; enough for two storeys and a roof; beyond it the limit is the camera's pitch, not the storage. |

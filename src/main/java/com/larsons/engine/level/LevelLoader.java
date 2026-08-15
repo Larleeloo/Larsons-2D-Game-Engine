@@ -20,10 +20,7 @@ import java.util.Map;
  * {@link Json} parser, so no third-party libraries are required
  * (requirement #4).
  *
- * <p>Expected JSON shape (a tile grid is required — either the legacy
- * {@code tiles} row arrays below, or the RLE form {@code Level.toMap} writes:
- * {@code "tilesRle": [id,runLength, ...]} row-major with explicit
- * {@code width}/{@code height}):
+ * <p>The shape {@link Level#toMap()} writes:
  * <pre>
  * {
  *   "name": "Sample",
@@ -31,21 +28,40 @@ import java.util.Map;
  *   "perspective": "SIDE_SCROLL" | "TOP_DOWN" | "ISOMETRIC",
  *   "tileSize": 32,
  *   "width": 24, "height": 14,
+ *   "maxLayers": 8,                     // only when not the default
  *   "background": "#10141e",
  *   "music": "boss",
  *   "palette": ["#785a3c", "#5aa050", "#6e6e78"],
  *   "spawn": { "x": 64, "y": 96 },
- *   "tiles": [[0,0,1,...], ...],
- *   "upperRle": [id,runLength, ...],
+ *   "layersRle": [ [id,runLength, ...], [id,runLength, ...], ... ],
  *   "entities": [ { "type": "player", "x": 64, "y": 96 } ]
  * }
  * </pre>
  *
- * <p>{@code upperRle} (or {@code upperChunks} on a giant level) carries the
- * second layer of blocks the plan-view formats stack — see
- * {@link Level#walkable}. A top-down or isometric level written before that
- * layer existed has neither key, and is converted on load by
- * {@link Level#liftSolidsToUpperLayer()} so it still plays as drawn.
+ * <p><b>Geometry is one list per layer of height, bottom first.</b>
+ * {@code layersRle} run-length encodes each layer row-major against the
+ * explicit {@code width}/{@code height}; a giant level writes
+ * {@code layerChunks} instead, one chunk map per layer at the same indices.
+ * A side-scroller has exactly one layer; a plan view has as many as something
+ * has been built in, up to the level's {@code maxLayers}.
+ *
+ * <p><b>Three older shapes still load, and none of them is still written.</b>
+ * The reader is additive on purpose ({@code HEIGHT_PLAN.md} invariant 3) —
+ * each is a single branch, and the bundled {@code levels/sample_level.json} is
+ * written in the oldest of them:
+ * <ul>
+ *   <li>{@code tilesRle} + {@code upperRle}, and {@code chunks} +
+ *       {@code upperChunks} on a giant level — from when a column was a floor
+ *       with at most one thing standing on it;</li>
+ *   <li>{@code tiles} as row arrays of ids — the original hand-written form,
+ *       which carries no layers at all.</li>
+ * </ul>
+ *
+ * <p>A top-down or isometric level that describes <em>no</em> layers is from
+ * before blocks stacked, and is converted on load by
+ * {@link Level#liftSolidsToUpperLayer()} so it still plays as drawn. A level
+ * that describes exactly one is taken at its word: it is deliberately flat
+ * rather than merely old.
  */
 public final class LevelLoader {
 
@@ -78,6 +94,11 @@ public final class LevelLoader {
             lvl.authoredHeading = Math.floorMod(h.intValue(), 8);
         }
         if (root.containsKey("tileSize")) lvl.tileSize = intOf(root.get("tileSize"), 32);
+        // Read before any geometry: installing a layer consults the ceiling,
+        // and a file that says how tall it is has to have said so by then.
+        if (root.containsKey("maxLayers")) {
+            lvl.maxLayers = intOf(root.get("maxLayers"), Level.DEFAULT_MAX_LAYERS);
+        }
         if (root.get("background") instanceof String bg) lvl.background = parseColor(bg, lvl.background);
 
         // A level's own feature settings (the per-level toggles). Absent in
@@ -102,10 +123,15 @@ public final class LevelLoader {
             lvl.palette = colors;
         }
 
-        // Whether the file describes the stacked layer at all. A plan-view
-        // level that doesn't is from before blocks stacked and is converted
-        // below; one that does is taken exactly as written, empty layer and all.
-        boolean hasUpperLayer = root.containsKey("upperRle") || root.containsKey("upperChunks");
+        // Whether the file describes its layers at all. A plan-view level that
+        // doesn't is from before blocks stacked and is converted below; one
+        // that does is taken exactly as written, empty layers and all — which
+        // includes a level written in the layer-list form that happens to hold
+        // exactly one layer, because that level is deliberately flat rather
+        // than merely old.
+        boolean describesItsLayers = root.containsKey("layersRle")
+                || root.containsKey("layerChunks")
+                || root.containsKey("upperRle") || root.containsKey("upperChunks");
 
         if (Boolean.TRUE.equals(root.get("chunked"))) {
             // Giant chunked level: bounds + edited chunks + optional generator.
@@ -118,14 +144,38 @@ public final class LevelLoader {
                         : LevelGenerator.chunkGenerator(seed.longValue(),
                         lvl.width, lvl.height));
             }
-            readChunks(root.get("chunks"), floor);
-            if (root.get("upperChunks") instanceof Map<?, ?>) {
-                readChunks(root.get("upperChunks"),
-                        lvl.newChunkedLayer(Level.LAYER_UPPER));
+            if (root.get("layerChunks") instanceof List<?> perLayer) {
+                for (int layer = 0; layer < perLayer.size(); layer++) {
+                    readChunks(perLayer.get(layer),
+                            layer == Level.LAYER_GROUND ? floor : lvl.newChunkedLayer(layer));
+                }
+            } else {
+                // The two-key shape: "chunks" is the floor, "upperChunks" the
+                // one layer that could stand on it.
+                readChunks(root.get("chunks"), floor);
+                if (root.get("upperChunks") instanceof Map<?, ?>) {
+                    readChunks(root.get("upperChunks"),
+                            lvl.newChunkedLayer(Level.LAYER_UPPER));
+                }
+            }
+        } else if (root.get("layersRle") instanceof List<?> perLayer) {
+            // One run-length list per layer, bottom first — what Level.toMap
+            // writes. Pairs of (tileId, runLength) row-major over width x height.
+            int width = intOf(root.get("width"), 0);
+            int height = intOf(root.get("height"), 0);
+            if (width <= 0 || height <= 0) {
+                throw new IllegalArgumentException("RLE level needs width and height");
+            }
+            lvl.width = width;
+            lvl.height = height;
+            for (int layer = 0; layer < perLayer.size(); layer++) {
+                if (perLayer.get(layer) instanceof List<?> runs) {
+                    lvl.setGrid(layer, readRle(runs, width, height));
+                }
             }
         } else if (root.get("tilesRle") instanceof List<?> rle) {
-            // Run-length encoded grid (what Level.toMap writes): pairs of
-            // (tileId, runLength) row-major over width x height.
+            // The two-key shape, from when a column was a floor with at most
+            // one thing standing on it.
             int width = intOf(root.get("width"), 0);
             int height = intOf(root.get("height"), 0);
             if (width <= 0 || height <= 0) {
@@ -250,7 +300,7 @@ public final class LevelLoader {
         // A plan-view level from before blocks stacked reads its geometry the
         // other way round — its corridors are air, which is a hole now — so it
         // is re-cut into layers that mean what its author drew.
-        if (!hasUpperLayer) lvl.liftSolidsToUpperLayer();
+        if (!describesItsLayers) lvl.liftSolidsToUpperLayer();
         return lvl;
     }
 
