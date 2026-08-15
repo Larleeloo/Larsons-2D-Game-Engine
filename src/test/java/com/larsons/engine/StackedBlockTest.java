@@ -78,7 +78,7 @@ class StackedBlockTest {
         for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
             Level flat = floored(format);
             Level wall = floored(format);
-            wall.setUpper(15, 15, wall.blocks.get("stone").id());
+            wall.setTile(15, 15, Level.LAYER_UPPER, wall.blocks.get("stone").id());
 
             int lift = TerrainPainter.liftPixels(camera(flat), TILE);
             assertTrue(lift > 0, format + ": a plan view lifts stacked blocks");
@@ -95,7 +95,7 @@ class StackedBlockTest {
         for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
             Level flat = floored(format);
             Level wall = floored(format);
-            wall.setUpper(15, 15, wall.blocks.get("stone").id());
+            wall.setTile(15, 15, Level.LAYER_UPPER, wall.blocks.get("stone").id());
 
             long flatDark = darkPixels(paint(flat));
             long wallDark = darkPixels(paint(wall));
@@ -126,7 +126,7 @@ class StackedBlockTest {
     void aPlayerPassesBehindAWallAndInFrontOfTheNextOne() {
         for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
             Level lvl = floored(format);
-            lvl.setUpper(15, 15, lvl.blocks.get("stone").id());
+            lvl.setTile(15, 15, Level.LAYER_UPPER, lvl.blocks.get("stone").id());
             Camera cam = camera(lvl);
             int[] feet = project(cam, 15.5 * TILE, 16 * TILE);
 
@@ -163,7 +163,7 @@ class StackedBlockTest {
         for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
             Level lvl = floored(format);
             int stone = lvl.blocks.get("stone").id();
-            for (int c = 13; c <= 17; c++) lvl.setUpper(c, 15, stone);
+            for (int c = 13; c <= 17; c++) lvl.setTile(c, 15, Level.LAYER_UPPER, stone);
             Camera cam = camera(lvl);
 
             for (int step = 0; step <= 32; step++) {
@@ -332,7 +332,7 @@ class StackedBlockTest {
             // the edit, so its height axis tops out at 1. That is the §6.1 scope
             // rule seen from the level format's side: the format with no second
             // layer is exactly the format that does not rotate.
-            boolean stacked = lvl.setUpper(15, 15, stone);
+            boolean stacked = lvl.setTile(15, 15, Level.LAYER_UPPER, stone);
             assertEquals(lvl.layered(), stacked,
                     format + ": only a layered format accepts a stacked block");
             assertEquals(lvl.layered() ? 2 : 1, lvl.stackHeight(15, 15),
@@ -373,11 +373,11 @@ class StackedBlockTest {
     void heightIsGeometryAndWalkabilityIsSolidity() {
         Level lvl = floored(LevelFormat.TOP_DOWN);
 
-        lvl.setUpper(15, 15, lvl.blocks.get("stone").id());
+        lvl.setTile(15, 15, Level.LAYER_UPPER, lvl.blocks.get("stone").id());
         assertEquals(2, lvl.stackHeight(15, 15));
         assertFalse(lvl.walkable(15, 15), "a stone block stood on a path is a wall");
 
-        lvl.setUpper(16, 15, lvl.blocks.get("torch").id());
+        lvl.setTile(16, 15, Level.LAYER_UPPER, lvl.blocks.get("torch").id());
         assertEquals(2, lvl.stackHeight(16, 15),
                 "a torch stands on the floor, so the cell is two blocks deep");
         assertTrue(lvl.walkable(16, 15),
@@ -439,7 +439,7 @@ class StackedBlockTest {
             Level walls = floored(format);
             int stone = walls.blocks.get("stone").id();
             for (int r = 14; r <= 16; r++) {
-                for (int c = 14; c <= 16; c++) walls.setUpper(c, r, stone);
+                for (int c = 14; c <= 16; c++) walls.setTile(c, r, Level.LAYER_UPPER, stone);
             }
             assertTrue(crackPixelsOnBlock(walls, 15, 15) > 20, format
                     + ": a stacked block's cracks are not covered by the stack itself");
@@ -450,7 +450,7 @@ class StackedBlockTest {
         for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
             Level flat = floored(format);
             Level wall = floored(format);
-            wall.setUpper(15, 15, wall.blocks.get("stone").id());
+            wall.setTile(15, 15, Level.LAYER_UPPER, wall.blocks.get("stone").id());
             assertTrue(crackCentreY(wall, 15, 15) < crackCentreY(flat, 15, 15),
                     format + ": cracks rise onto the stacked block");
         }
@@ -495,11 +495,11 @@ class StackedBlockTest {
     void turningTheSunTurnsTheShadows() {
         for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
             Level northWest = floored(format);
-            northWest.setUpper(15, 15, northWest.blocks.get("stone").id());
+            northWest.setTile(15, 15, Level.LAYER_UPPER, northWest.blocks.get("stone").id());
             assertEquals(Level.DEFAULT_LIGHT_ANGLE, northWest.lightAngle);
 
             Level northEast = floored(format);
-            northEast.setUpper(15, 15, northEast.blocks.get("stone").id());
+            northEast.setTile(15, 15, Level.LAYER_UPPER, northEast.blocks.get("stone").id());
             northEast.lightAngle = 45;   // sun swung to the other shoulder
 
             double[] a = shadowCentre(northWest, 15, 15);
@@ -538,7 +538,7 @@ class StackedBlockTest {
      */
     private static int crackPixelsOnBlock(Level lvl, int col, int row) {
         Camera cam = camera(lvl);
-        int lift = lvl.upperAt(col, row) > 0 ? TerrainPainter.liftPixels(cam, TILE) : 0;
+        int lift = lvl.tileAt(col, row, Level.LAYER_UPPER) > 0 ? TerrainPainter.liftPixels(cam, TILE) : 0;
         int[] centre = project(cam, (col + 0.5) * TILE, (row + 0.5) * TILE);
         centre[1] -= lift;
         int[] edge = project(cam, (col + 1.0) * TILE, (row + 0.5) * TILE);
@@ -570,11 +570,11 @@ class StackedBlockTest {
 
     /** The mean position of the shadow a stacked block casts. */
     private static double[] shadowCentre(Level lvl, int col, int row) {
-        int stacked = lvl.upperAt(col, row);
+        int stacked = lvl.tileAt(col, row, Level.LAYER_UPPER);
         BufferedImage with = paint(lvl);
-        lvl.setUpper(col, row, 0);
+        lvl.setTile(col, row, Level.LAYER_UPPER, 0);
         BufferedImage without = paint(lvl);
-        lvl.setUpper(col, row, stacked);
+        lvl.setTile(col, row, Level.LAYER_UPPER, stacked);
         // Below the block's own tile: only its shadow reaches down there, so
         // the block and its side faces can't drag the answer around.
         int[] base = project(camera(lvl), (col + 0.5) * TILE, (row + 1.0) * TILE);
@@ -674,12 +674,12 @@ class StackedBlockTest {
      */
     private static int topOfCell(Level lvl, int col, int row) {
         BufferedImage with = paint(lvl);
-        int floor = lvl.tileAt(col, row), stacked = lvl.upperAt(col, row);
-        lvl.setUpper(col, row, 0);
+        int floor = lvl.tileAt(col, row), stacked = lvl.tileAt(col, row, Level.LAYER_UPPER);
+        lvl.setTile(col, row, Level.LAYER_UPPER, 0);
         lvl.setTile(col, row, 0);
         BufferedImage without = paint(lvl);
         lvl.setTile(col, row, floor);
-        lvl.setUpper(col, row, stacked);
+        lvl.setTile(col, row, Level.LAYER_UPPER, stacked);
         for (int y = 0; y < CANVAS; y++) {
             for (int x = 0; x < CANVAS; x++) {
                 if (with.getRGB(x, y) != without.getRGB(x, y)) return y;

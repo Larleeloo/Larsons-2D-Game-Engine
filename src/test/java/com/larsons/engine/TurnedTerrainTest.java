@@ -114,7 +114,7 @@ class TurnedTerrainTest {
 
         Level stacked = floor(LevelFormat.TOP_DOWN, 60, 60);
         int stone = stacked.blocks.get("stone").id();
-        for (int c = 0; c < stacked.width; c++) stacked.setUpper(c, row, stone);
+        for (int c = 0; c < stacked.width; c++) stacked.setTile(c, row, Level.LAYER_UPPER, stone);
 
         Camera cam = camera(bare, 0);
         cam.centerOn(10.5 * TILE, centreY);
@@ -146,7 +146,7 @@ class TurnedTerrainTest {
         for (LevelFormat format : new LevelFormat[]{LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
             Level lvl = floor(format, 20, 20);
             int stone = lvl.blocks.get("stone").id();
-            lvl.setUpper(10, 10, stone);
+            lvl.setTile(10, 10, Level.LAYER_UPPER, stone);
 
             for (int eighth = 0; eighth < 8; eighth++) {
                 // A lone block on a bare floor: every side face in the frame is
@@ -245,8 +245,8 @@ class TurnedTerrainTest {
                 Level lvl = floor(format, 20, 20);
                 int farBlock = lvl.blocks.get("stone").id();
                 int nearBlock = nearColoured(lvl, farBlock);
-                lvl.setUpper(10, 10, farBlock);
-                lvl.setUpper(10 + stepX, 10 + stepY, nearBlock);
+                lvl.setTile(10, 10, Level.LAYER_UPPER, farBlock);
+                lvl.setTile(10 + stepX, 10 + stepY, Level.LAYER_UPPER, nearBlock);
 
                 int farArgb = lvl.blocks.get(farBlock).color().getRGB();
                 int nearArgb = lvl.blocks.get(nearBlock).color().getRGB();
@@ -289,7 +289,7 @@ class TurnedTerrainTest {
     void aBlocksShadowSwingsWithTheWorldAtEveryHeading() {
         for (LevelFormat format : new LevelFormat[]{LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
             Level lvl = floor(format, 20, 20);
-            lvl.setUpper(10, 10, lvl.blocks.get("stone").id());
+            lvl.setTile(10, 10, Level.LAYER_UPPER, lvl.blocks.get("stone").id());
 
             // The world vector the shadow runs along, recovered from the
             // unturned frame rather than restated from the sun's formula.

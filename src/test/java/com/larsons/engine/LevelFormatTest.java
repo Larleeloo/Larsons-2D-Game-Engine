@@ -206,7 +206,7 @@ class LevelFormatTest {
 
         Level side = LevelFormat.SIDE_SCROLLER.starterLevel("Side", 20, 12, 32);
         assertFalse(side.layered());
-        assertFalse(side.setUpper(5, 5, side.blocks.get("stone").id()),
+        assertFalse(side.setTile(5, 5, Level.LAYER_UPPER, side.blocks.get("stone").id()),
                 "a side-scroller has nowhere to stack a block");
     }
 
@@ -238,19 +238,19 @@ class LevelFormatTest {
             // One layer of either is floor you can walk on, whatever the
             // block's own solid flag says.
             assertTrue(lvl.setTile(5, 5, grass));
-            assertEquals(0, lvl.upperAt(5, 5), "nothing stacked there yet");
+            assertEquals(0, lvl.tileAt(5, 5, Level.LAYER_UPPER), "nothing stacked there yet");
             assertTrue(lvl.walkable(5, 5), "one layer of grass is a path in " + format);
             assertFalse(lvl.solidAt(5, 5));
             assertEquals(1, lvl.stackHeight(5, 5));
 
             // Two layers is a wall.
-            assertTrue(lvl.setUpper(5, 5, grass));
+            assertTrue(lvl.setTile(5, 5, Level.LAYER_UPPER, grass));
             assertFalse(lvl.walkable(5, 5), "a stack is a wall in " + format);
             assertTrue(lvl.solidAt(5, 5));
             assertEquals(2, lvl.stackHeight(5, 5));
 
             // A passable block stacked on a path is dressing, not a wall.
-            assertTrue(lvl.setUpper(5, 5, path));
+            assertTrue(lvl.setTile(5, 5, Level.LAYER_UPPER, path));
             assertTrue(lvl.walkable(5, 5), "a torch on a path leaves it open");
 
             // Bare ground is a hole, and so is anywhere off the map.
@@ -363,7 +363,7 @@ class LevelFormatTest {
         assertTrue(lvl.stackTile(5, 5, stone));
         assertEquals(2, lvl.stackHeight(5, 5));
         assertTrue(lvl.setTile(5, 5, 0));
-        assertEquals(0, lvl.upperAt(5, 5), "the stacked block went with the floor");
+        assertEquals(0, lvl.tileAt(5, 5, Level.LAYER_UPPER), "the stacked block went with the floor");
     }
 
     /** A side-scroller still reads solidity off the block, exactly as before. */

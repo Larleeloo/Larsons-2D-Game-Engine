@@ -1765,7 +1765,8 @@ public final class World {
      * leaves the hole nobody can cross.
      */
     public int mineLayer(int col, int row) {
-        return level.upperAt(col, row) > 0 ? Level.LAYER_UPPER : Level.LAYER_GROUND;
+        return level.tileAt(col, row, Level.LAYER_UPPER) > 0
+                ? Level.LAYER_UPPER : Level.LAYER_GROUND;
     }
 
     /**

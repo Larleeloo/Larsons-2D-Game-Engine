@@ -72,7 +72,7 @@ class CreativeFeaturesTest {
     @Test
     void resizePreservesTilesAndDropsOutOfBoundsEntities() {
         Level lvl = Level.empty("t", 10, 8, 32);
-        lvl.tiles[2][3] = 5;
+        lvl.tiles()[2][3] = 5;
         lvl.entities.add(new Level.EntitySpawn("mob", "zombie", 5 * 32, 2 * 32));
         lvl.entities.add(new Level.EntitySpawn("mob", "zombie", 9 * 32, 2 * 32));
         lvl.spawnX = 9 * 32;
@@ -110,7 +110,7 @@ class CreativeFeaturesTest {
     private static Level liquidArena() {
         Level lvl = Level.empty("liquid", 12, 8, 32);
         int stone = lvl.blocks.get("stone").id();
-        for (int c = 0; c < lvl.width; c++) lvl.tiles[lvl.height - 1][c] = stone;
+        for (int c = 0; c < lvl.width; c++) lvl.tiles()[lvl.height - 1][c] = stone;
         return lvl;
     }
 
@@ -123,7 +123,7 @@ class CreativeFeaturesTest {
         Level lvl = liquidArena();
         int water = lvl.blocks.get("water").id();
         int flow = lvl.blocks.get("water_flow").id();
-        lvl.tiles[2][5] = water;
+        lvl.tiles()[2][5] = water;
 
         LiquidSim sim = new LiquidSim();
         tickLiquids(sim, lvl, 2);
@@ -149,10 +149,10 @@ class CreativeFeaturesTest {
         int water = lvl.blocks.get("water").id();
         int lava = lvl.blocks.get("lava").id();
         int lavaFlow = lvl.blocks.get("lava_flow").id();
-        lvl.tiles[6][4] = water;
-        lvl.tiles[6][5] = lava;
-        lvl.tiles[6][7] = lavaFlow;
-        lvl.tiles[6][6] = water;
+        lvl.tiles()[6][4] = water;
+        lvl.tiles()[6][5] = lava;
+        lvl.tiles()[6][7] = lavaFlow;
+        lvl.tiles()[6][6] = water;
 
         new LiquidSim().step(lvl, LiquidSim.TICK);
         assertEquals(lvl.blocks.get("obsidian").id(), lvl.tileAt(5, 6),
@@ -166,7 +166,7 @@ class CreativeFeaturesTest {
         Level lvl = liquidArena();
         int water = lvl.blocks.get("water").id();
         for (int r = 2; r < 7; r++) {
-            for (int c = 2; c < 9; c++) lvl.tiles[r][c] = water;
+            for (int c = 2; c < 9; c++) lvl.tiles()[r][c] = water;
         }
         GameProfile p = new GameProfile("swim");
         PlayerState s = new PlayerState(0, "", 4 * 32, 3 * 32);
@@ -191,7 +191,7 @@ class CreativeFeaturesTest {
     @Test
     void lavaBurnsPlayersAndRespawnsThemAtSpawnPoints() {
         Level lvl = liquidArena();
-        lvl.tiles[6][5] = lvl.blocks.get("lava").id();
+        lvl.tiles()[6][5] = lvl.blocks.get("lava").id();
         lvl.entities.add(new Level.EntitySpawn("mp_spawn", "mp_spawn", 64, 32));
         GameProfile p = new GameProfile("burn");
         World world = new World(lvl);

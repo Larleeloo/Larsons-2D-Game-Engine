@@ -540,7 +540,7 @@ class PlayerPhysicsTest {
         for (int r = 0; r < lvl.height; r++) {
             for (int c = 0; c < lvl.width; c++) lvl.setTile(c, r, path);
         }
-        lvl.setUpper(5, 5, lvl.blocks.get("stone").id());
+        lvl.setTile(5, 5, Level.LAYER_UPPER, lvl.blocks.get("stone").id());
         assertTrue(lvl.solidAt(5, 5), format + ": the stack is a wall");
         return lvl;
     }

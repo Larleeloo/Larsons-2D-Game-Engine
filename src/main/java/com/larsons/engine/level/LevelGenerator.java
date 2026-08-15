@@ -388,13 +388,13 @@ public final class LevelGenerator {
 
         /** Whether a cell is open to walk through (nothing standing on it). */
         boolean open(int tx, int ty) {
-            return (layered ? lvl.upperAt(tx, ty) : lvl.tileAt(tx, ty)) == 0;
+            return (layered ? lvl.tileAt(tx, ty, Level.LAYER_UPPER) : lvl.tileAt(tx, ty)) == 0;
         }
 
         /** Stand a block up in a cell — the layer that obstructs in this format. */
         void raise(int tx, int ty, int id) {
             if (layered) {
-                lvl.setUpper(tx, ty, id);
+                lvl.setTile(tx, ty, Level.LAYER_UPPER, id);
             } else {
                 lvl.setTile(tx, ty, id);
             }
@@ -618,11 +618,11 @@ public final class LevelGenerator {
                         block = noise.fbm(c * 0.05, r * 0.05, 2, 0.5, 2.0) > 0.38
                                 ? granite : stone;
                     }
-                    lvl.tiles[r][c] = block;
+                    lvl.tiles()[r][c] = block;
                 }
                 // Valleys below sea level fill with real water sources.
                 for (int r = seaLevel; r < surface[c]; r++) {
-                    lvl.tiles[r][c] = water;
+                    lvl.tiles()[r][c] = water;
                 }
             }
         }
@@ -635,7 +635,7 @@ public final class LevelGenerator {
                     double cavern = noise.fbm(c * 0.05 + 200, r * 0.07 + 200, 3, 0.5, 2.0);
                     if (Math.abs(worm) < 0.045 + depthT * 0.03
                             || cavern > 0.42 - depthT * 0.06) {
-                        lvl.tiles[r][c] = 0;
+                        lvl.tiles()[r][c] = 0;
                     }
                 }
             }
@@ -676,7 +676,7 @@ public final class LevelGenerator {
         void carveRect(int c0, int r0, int rw, int rh) {
             for (int r = r0; r < r0 + rh; r++) {
                 for (int c = c0; c < c0 + rw; c++) {
-                    if (inBounds(c, r)) lvl.tiles[r][c] = 0;
+                    if (inBounds(c, r)) lvl.tiles()[r][c] = 0;
                 }
             }
         }
@@ -689,7 +689,7 @@ public final class LevelGenerator {
                 int len = Math.max(3, rw / 3);
                 int start = left ? c0 + 1 : c0 + rw - 1 - len;
                 for (int c = start; c < start + len; c++) {
-                    if (inBounds(c, r)) lvl.tiles[r][c] = platform;
+                    if (inBounds(c, r)) lvl.tiles()[r][c] = platform;
                 }
                 left = !left;
             }
@@ -754,7 +754,7 @@ public final class LevelGenerator {
             boolean left = true;
             for (int r = rBottom - 3; r > rTop + 1; r -= 3) {
                 int c = left ? col - 1 : col + 1;
-                if (inBounds(c, r)) lvl.tiles[r][c] = platform;
+                if (inBounds(c, r)) lvl.tiles()[r][c] = platform;
                 left = !left;
             }
         }
@@ -786,7 +786,7 @@ public final class LevelGenerator {
                 for (int j = 0; j < len; j++) {
                     int cur = lvl.tileAt(c, r);
                     if (cur == stone || cur == deepslate || cur == granite) {
-                        lvl.tiles[r][c] = ore;
+                        lvl.tiles()[r][c] = ore;
                     }
                     c += rng.nextInt(3) - 1;
                     r += rng.nextInt(3) - 1;
@@ -814,7 +814,7 @@ public final class LevelGenerator {
             int lava = id("lava");
             for (int r = h - 6; r < h - 1; r++) {
                 for (int c = 1; c < w - 1; c++) {
-                    if (lvl.tiles[r][c] == 0) lvl.tiles[r][c] = lava;
+                    if (lvl.tiles()[r][c] == 0) lvl.tiles()[r][c] = lava;
                 }
             }
         }
@@ -822,10 +822,10 @@ public final class LevelGenerator {
         /** A basalt frame contains liquids (the top stays open sky). */
         void buildBorder() {
             int basalt = id("basalt");
-            for (int c = 0; c < w; c++) lvl.tiles[h - 1][c] = basalt;
-            for (int r = Math.min(surface[0], seaLevel); r < h; r++) lvl.tiles[r][0] = basalt;
+            for (int c = 0; c < w; c++) lvl.tiles()[h - 1][c] = basalt;
+            for (int r = Math.min(surface[0], seaLevel); r < h; r++) lvl.tiles()[r][0] = basalt;
             for (int r = Math.min(surface[w - 1], seaLevel); r < h; r++) {
-                lvl.tiles[r][w - 1] = basalt;
+                lvl.tiles()[r][w - 1] = basalt;
             }
         }
 
@@ -834,7 +834,7 @@ public final class LevelGenerator {
             for (int[] room : roomCenters) {
                 int c = room[0], r = room[1];
                 if (lvl.tileAt(c, r) == 0 && lvl.solidAt(c, r + 1)) {
-                    lvl.tiles[r][c] = torch;
+                    lvl.tiles()[r][c] = torch;
                 }
             }
         }
@@ -862,9 +862,9 @@ public final class LevelGenerator {
                             rng.nextInt(3) == 0 ? "decor_fg" : "decor_bg",
                             rng.nextBoolean() ? "boulder" : "stones", x, y));
                 } else if (roll < 0.27) {
-                    lvl.tiles[r - 1][c] = flowers[rng.nextInt(flowers.length)];
+                    lvl.tiles()[r - 1][c] = flowers[rng.nextInt(flowers.length)];
                 } else if (roll < 0.36) {
-                    lvl.tiles[r - 1][c] = tallGrass;
+                    lvl.tiles()[r - 1][c] = tallGrass;
                 }
                 // Face-attached surface details generate with the terrain:
                 // tufts and wildflowers on grass tops (they hide automatically
@@ -883,12 +883,12 @@ public final class LevelGenerator {
             int glow = id("glow_mushroom"), shroom = id("mushroom");
             for (int c = 2; c < w - 2; c++) {
                 for (int r = surface[c] + 6; r < h - 7; r++) {
-                    if (lvl.tiles[r][c] != 0 || !lvl.solidAt(c, r + 1)) continue;
+                    if (lvl.tiles()[r][c] != 0 || !lvl.solidAt(c, r + 1)) continue;
                     double roll = rng.nextDouble();
                     if (roll < 0.02) {
-                        lvl.tiles[r][c] = glow;
+                        lvl.tiles()[r][c] = glow;
                     } else if (roll < 0.035) {
-                        lvl.tiles[r][c] = shroom;
+                        lvl.tiles()[r][c] = shroom;
                     } else if (roll < 0.05) {
                         lvl.entities.add(new Level.EntitySpawn("decor_bg",
                                 rng.nextBoolean() ? "stalagmite" : "glow_crystal",

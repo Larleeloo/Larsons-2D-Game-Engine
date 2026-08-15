@@ -202,13 +202,13 @@ class CreativeUndoTest {
         // Clearing the floor takes the stack, the details and the container with
         // it — the whole reason cells are saved whole rather than as tile ids.
         lvl.setTile(4, 4, Level.LAYER_GROUND, 0);
-        assertEquals(0, lvl.upperAt(4, 4));
+        assertEquals(0, lvl.tileAt(4, 4, Level.LAYER_UPPER));
         assertTrue(lvl.surfaceDecor.isEmpty());
         assertNull(lvl.containerAt(4, 4));
 
         lvl.restoreCell(saved);
         assertEquals(dirt, lvl.tileAt(4, 4));
-        assertEquals(stone, lvl.upperAt(4, 4));
+        assertEquals(stone, lvl.tileAt(4, 4, Level.LAYER_UPPER));
         assertEquals(1, lvl.surfaceDecor.size());
         assertEquals(SurfaceDecor.Face.UP, lvl.surfaceDecor.get(0).face());
         assertNotNull(lvl.containerAt(4, 4));
@@ -217,7 +217,7 @@ class CreativeUndoTest {
         // The snapshot stays reusable, so undo → redo → undo lands in one place.
         lvl.setTile(4, 4, Level.LAYER_GROUND, 0);
         lvl.restoreCell(saved);
-        assertEquals(stone, lvl.upperAt(4, 4));
+        assertEquals(stone, lvl.tileAt(4, 4, Level.LAYER_UPPER));
         assertEquals(1, lvl.surfaceDecor.size());
     }
 
