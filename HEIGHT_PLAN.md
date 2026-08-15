@@ -1,14 +1,21 @@
 # Height Plan — the third axis, end to end
 
 **Status:** Written 2026-08-14 against commit `244762c` on
-`claude/vertical-stacking-walkable-blocks-bf522d`. **V0 through V3 are done** —
-storage, ceiling and save format, none of which changes a pixel. Everything
-from V4 on is unstarted, and **R0 (blocks are cubes) is the first step that
-changes what a player sees.** Baseline at the time of writing,
+`claude/vertical-stacking-walkable-blocks-bf522d`. **Job V is complete** —
+storage, ceiling, save format, accessors, undo record and the measurement — and
+none of it changes a pixel. **Job W is next, and R0 (blocks are cubes) is the
+first step that changes what a player sees.** Baseline at the time of writing,
 `./gradlew test`: core **1051 tests, 0 failures, 10 skipped**; `:gl` **62 tests,
 0 failures, 34 skipped** (the GL tests that need a driver skip in a container —
-they are the D-series instruments and they run on a real machine). After V3:
-core **1074/0/10**, `:gl` unchanged, all 32 golden frames byte-identical.
+they are the D-series instruments and they run on a real machine). After V6:
+core **1080/0/10**, `:gl` unchanged, all 32 golden frames byte-identical.
+
+**Four of Job V's six steps found their own instruction wrong**, which is
+recorded per step rather than summarised away: V0's byte-identity was
+unmeasurable as written, V2's prediction about which test would break was
+backwards, V4's worked example assumed a plan-view floor is solid when it is
+not, and V6's trigger watched a stage that could not see the regression it was
+looking for — then blamed it on the one accessor that had not moved.
 
 **V0 could not be done as written and says so in place**: byte-identity had to
 be measured against the save's fixed point rather than against the bundled
@@ -534,6 +541,43 @@ from the ground) and 3 for `topSolidLayer` — **the first place in this plan
 where the volume and the heightfield disagree**, and it is asserted now so that
 Job O finds the semantics already pinned rather than having to invent them.
 
+#### V4 — done. The floor of a plan view is not solid, and this step's own example was wrong
+
+**`solidAt(col, row, layer)` and `topSolidLayer(col, row)` added;
+`stackHeight` was already widened by V1.** The two-argument `solidAt` keeps its
+name and its documented assumption — a body on the ground, asking whether the
+column ahead is a barrier — because that is what its 20 call sites have always
+meant.
+
+**The step's worked example was false, and finding out sharpened the
+distinction it was trying to draw.** V4 said a torch on a path would answer
+`stackHeight` 2 and `topSolidLayer` 0, taking for granted that the floor
+underneath counts as the top barrier. It does not: `stone_path` is registered
+`Block.passable`, so **the floor of a plan-view level is not solid**, and the
+honest answer for that column is −1 — nothing in it stops anybody. The first
+version of the test asserted 0, failed, and was right to.
+
+So the division is not "height minus the dressing". It is:
+
+- **`stackHeight` is what holds a body up** — the run of blocks that are
+  *there*, barrier or not. An ordinary floored cell answers 1.
+- **`topSolidLayer` is the highest thing that would stop them** — and on that
+  same ordinary floored cell it answers −1.
+
+That is the sharper statement, and it is the one Jobs W and S need: W1's
+`groundZ` wants the first and W2's step-up test wants the second, and an
+implementation that reached for "the top of the column" without knowing which
+would have put every character ankle-deep in the floor. Pinned by
+`heightIsWhatHoldsYouUpAndSolidityIsWhatStopsYou`, both directions, including
+the floating block that O1 will make ordinary.
+
+**A second test came out of V2's finding.** `theHeightAxisIsZeroOneOrTwoAndNeverThree`
+was renamed to `theHeightAxisRunsFromAHoleToTheLevelsCeiling` and had the
+placement half split out of it into
+`thePlacementRuleStillTopsOutAtTwoUntilTheEditorCanAim` — named for what it
+actually measures, and left deliberately shaped so that **E1 is the step that
+turns it red**.
+
 ### V5 — The generators, the borders and the undo record
 
 **Do.** Three places construct or record stacks and each assumes exactly two:
@@ -549,6 +593,31 @@ Job O finds the semantics already pinned rather than having to invent them.
 **Verify.** `CreativeUndoTest` gains a column case: build a 5-tall tower, undo,
 assert the column is exactly as it was including layers the edit never touched.
 
+#### V5 — done. Undo compares snapshots, which an array quietly breaks
+
+**`CellState` is `(col, row, int[] column, decor, container)`.** Its blast
+radius was one method each side plus a single test — `EditHistory` never looks
+inside it, it goes through `field(supplier, consumer)` — so the generators and
+the border-laying code named in this step needed no change at all.
+
+**Two things the step did not list, both of which would have shipped as editor
+bugs.**
+
+- **`EditHistory.FieldEdit.changed()` decides whether an edit happened by
+  `Objects.equals` on two snapshots.** A record holding an `int[]` compares
+  that array by identity, so every snapshot would differ from every other and
+  **every brush stroke that changed nothing would still push an undo step** —
+  which the player meets as Ctrl+Z doing nothing several times in a row.
+  `CellState` spells out `equals`/`hashCode` over `Arrays.equals`, and
+  `anUnchangedCellSnapshotsEqual` pins it.
+- **Restoring has to clear layers the level grew after the snapshot.** Writing
+  back what was saved and stopping leaves anything above untouched, so undoing
+  the stroke that *raised* a tower would put the old floor back and leave the
+  tower standing on it. `undoingAStrokeThatBuiltUpwardTakesTheNewLayersDown`.
+
+The record also spells out `toString`, because these turn up in assertion
+failures and `column=[I@61b83fef` is not a test failure anybody can read.
+
 ### V6 — Measure, before Job R makes it hard to attribute
 
 **Do.** With storage widened and behaviour unchanged, take a frame profile on a
@@ -560,6 +629,68 @@ that claim is either true or where the layer list's indirection shows up.
 this document. If `scene` moved by more than noise, V1's dense-list indirection
 is the suspect and the fix is a flattened `int[layer][row][col]` — cheap to
 make now and expensive after R1 is written against the list.
+
+#### V6 — done. The trigger did not fire, the regression was real anyway, and it was not where it was blamed
+
+Measured by building `244762c` — the commit before V0 — in a git worktree and
+compiling **one** benchmark source against both, using only API that exists on
+either side, so the two numbers are comparable rather than merely adjacent.
+Three interleaved rounds each, best-of-15 after warm-up. This container, not
+the M1 Air the render plan's numbers came from; the *ratio* is the result, not
+the absolute.
+
+| | before Job V | after | |
+|---|---:|---:|---|
+| `scene` — one 256&times;256 terrain frame, queued and flushed | 5.80 ms | 5.82 ms | **unmoved** |
+| `cells` — full-grid sweep of five accessors | 0.505 ms | 1.055 ms | **2.1&times;** |
+
+**The step's own trigger was `scene`, and `scene` did not move.** By the letter
+of V6 there was nothing to do. That would have been the wrong call, and the
+reason is that the trigger was watching the wrong stage: the render is
+dominated by rasterisation, so it cannot see an accessor getting twice as
+expensive, and a cell sweep is exactly what `LiquidSim` does to the whole grid
+every tick — the scan `SIM_PLAN.md` already measures as this project's p95
+update stall.
+
+**So the flatten was taken** — `List<int[][]>` → `int[][][]`, `List<ChunkedTiles>`
+→ `ChunkedTiles[]`, public API unchanged — and it recovered about a fifth of
+the gap (1.055 → 0.914 ms). **Then the per-accessor measurement said the
+justification for it was wrong:**
+
+| accessor, full-grid sweep | before | after |
+|---|---:|---:|
+| `tileAt(c, r, layer)` — *what LiquidSim calls* | 0.006 ms | **0.005 ms** |
+| `tileAt(c, r)` | 0.005 ms | 0.036 ms |
+| `stackHeight` | 0.229 ms | **0.371 ms** |
+| `solidAt` | 0.499 ms | 0.542 ms |
+| `walkable` | 0.334 ms | 0.369 ms |
+
+**`LiquidSim`'s accessor did not regress at all.** The survey scan calls
+`tileAt(col, row, layer)` through `Cells`, and that path is unchanged — so the
+hot path the flatten was justified by was never affected. The regression is
+concentrated in **`stackHeight`, +62%**, which stopped being an O(1) special
+case (`floor <= 0 ? 0 : upper > 0 ? 2 : 1`) and became a loop up the column.
+That is not a defect to fix; it is what makes it a height rather than a
+two-valued flag, and V1 changed it deliberately.
+
+**The flatten is kept and its reason is corrected.** Arrays rather than lists
+for the storage of the most-read structure in the engine is right on its own
+terms, it measurably helped, and V6 is the last cheap moment to do it — R1 will
+be written against whatever this is. But it was adopted on a hypothesis about
+`LiquidSim` that the next measurement falsified, and recording that is worth
+more than the 13% was.
+
+**What the remaining regression costs where it is actually used: nothing
+reachable.** `stackHeight`'s extra 0.14 ms is over all 65,536 cells. Every
+per-frame sweep in the engine runs over *visible* bounds — roughly 23&times;23
+cells on a 720 px viewport at a 32 px tile, about 0.8% of that grid — so the
+real per-frame cost is on the order of **3 µs**. Nothing else walks the whole
+grid through `stackHeight`.
+
+**Decision recorded rather than optimised:** no per-cell height cache. It would
+buy back microseconds nobody can measure in a frame, at the price of a parallel
+structure that has to be invalidated in step with every terrain write — which
+is precisely the drift V1 existed to remove.
 
 ---
 
@@ -1381,6 +1512,8 @@ sweep — rather than spread across a module boundary.
 | Stop *reading* the old shapes too | **No** | Not the same question. Each legacy reader is one branch, the bundled level is written in the oldest of them, and deleting them is a content migration wearing an engineering hat. Writing is free; reading is additive. |
 | Blocks are cubes | **Yes** — revised 2026-08-15 | `BLOCK_HEIGHT` was 0.55 of a tile, a compromise between "reads as a wall" and "does not swallow the floor behind it". A cube swallows the row behind it, and that is what a cube does. It also makes a layer of height exactly one tile in world units, so `z` and the layer index share a unit (R0). |
 | Lift derived from `tileSize` in both plan views | **No** | It is `tileSize` in top-down and half the diamond's width in isometric. Those agree at 32 px only because `isoTileWidth` is twice `tileSize` today; ask the camera (R0). |
+| A per-cell height cache | **No** (V6) | `stackHeight` costs 0.14 ms over a whole 256² grid and about 3 µs over a frame's visible bounds. A cache buys back nothing measurable and adds a structure to invalidate in step with every terrain write — the drift V1 existed to remove. |
+| Layers in a `List` or an array | **Array** (V6) | Measured: arrays recovered ~13% of a cell-sweep regression, and V6 is the last cheap moment — R1 is written against whatever this is. Adopted on a hypothesis about `LiquidSim` that the next measurement falsified; kept on its own terms. |
 | Store a volume, or a heightfield | **Volume, from V1** | Storage is the one thing expensive to revisit; it reaches the save format, the chunk generator and every saved level. Behaviour is cheap to revisit. |
 | Simulate a volume, or a heightfield | **Heightfield, until Job O** | Every algorithm in Jobs W/R/S/E/N is *provably* correct on a heightfield (Appendix C) and a heuristic on a volume. |
 | Layer ceiling | **8, per level, default** | Four times the tallest thing the current art reads as; enough for two storeys and a roof; beyond it the limit is the camera's pitch, not the storage. |

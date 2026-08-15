@@ -299,7 +299,7 @@ class StackedBlockTest {
 
     /**
      * The stack, read as a height: 0 is a hole, 1 is floor, 2 is a wall, and
-     * there is no 3.
+     * it goes on up to the level's ceiling.
      *
      * <p>C2 of the render plan asks for "a {@code heightAt(col, row)} accessor
      * returning 0/1/2" before the camera can rotate, because a rotated view has
@@ -308,16 +308,18 @@ class StackedBlockTest {
      * mining, which takes a stack apart from the top down, and the two uses want
      * the same number. What was missing is this: the range it may answer in was
      * documented and never asserted, and C4 is about to depend on it. A cell
-     * that answered 3 would be a face-visibility bug rather than a level-format
-     * one, and it would surface as geometry drawn at the wrong height.
+     * that answered past the ceiling would be a face-visibility bug rather than
+     * a level-format one, and it would surface as geometry drawn at the wrong
+     * height.
      *
-     * <p><b>The ceiling of two is a decision, not a limit waiting to be
-     * raised</b> — recorded in the plan at C2. It is asserted here because a
-     * third layer would arrive as a silently taller answer from this method,
-     * long before anything drew it.
+     * <p><b>The ceiling of two was a decision, and it has since been taken.</b>
+     * C2 recorded "keep it at two and revisit separately"; {@code HEIGHT_PLAN.md}
+     * is that separate revisit, and V2 raised it to a per-level
+     * {@link Level#maxLayers}. What this test asserts is unchanged in shape — a
+     * cell cannot answer taller than its level allows — only the number moved.
      */
     @Test
-    void theHeightAxisIsZeroOneOrTwoAndNeverThree() {
+    void theHeightAxisRunsFromAHoleToTheLevelsCeiling() {
         for (LevelFormat format : LevelFormat.values()) {
             Level lvl = floored(format);
             int stone = lvl.blocks.get("stone").id();
@@ -338,17 +340,140 @@ class StackedBlockTest {
             assertEquals(lvl.layered() ? 2 : 1, lvl.stackHeight(15, 15),
                     format + ": two layers is a wall");
 
-            // Nothing can go on top of a full cell, so nothing can answer 3.
-            assertEquals(-1, lvl.placeLayer(15, 15), format + ": the cell is full");
-            assertTrue(lvl.stackHeight(15, 15) <= 2, format
-                    + ": the stack limit is two, and raising it is a decision C2 recorded "
-                    + "against — it reaches liquids, pathfinding, the palette and the "
-                    + "save format");
+            // Up to the ceiling and not past it, whatever the ceiling is.
+            for (int layer = 2; layer < lvl.layerLimit(); layer++) {
+                assertTrue(lvl.setTile(15, 15, layer, stone),
+                        format + ": layer " + layer + " takes a block");
+            }
+            assertEquals(lvl.layerLimit(), lvl.stackHeight(15, 15),
+                    format + ": the column reaches the ceiling");
+            assertFalse(lvl.setTile(15, 15, lvl.layerLimit(), stone),
+                    format + ": and nothing goes above it");
 
             // Outside the level is a hole too, which is what the sweep meets
             // first when the view turns and its bounds stop being the grid's.
             assertEquals(0, lvl.stackHeight(-1, 15), format + ": off the west edge");
             assertEquals(0, lvl.stackHeight(lvl.width, 15), format + ": off the east edge");
+        }
+    }
+
+    /**
+     * The placement rule tops out at two, and that is now a different statement
+     * from the one above.
+     *
+     * <p>This split out of {@code theHeightAxisIsZeroOneOrTwoAndNeverThree},
+     * which asserted both at once and was believed to be pinning the height
+     * axis. It was not: it stacked one block and then proved the cell full with
+     * {@link Level#placeLayer}, so it went on passing when V2 raised the
+     * storage ceiling to eight — because the number it was actually measuring
+     * had not moved. <b>Storage tops out at the level's ceiling; placement
+     * still tops out at two.</b>
+     *
+     * <p>Kept, named for what it measures, and deliberately left failing-shaped
+     * for E1: that step replaces the placement rule with one that aims at a
+     * face, and when it does, this test is the one that should turn red.
+     */
+    @Test
+    void thePlacementRuleStillTopsOutAtTwoUntilTheEditorCanAim() {
+        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+            Level lvl = floored(format);
+            int stone = lvl.blocks.get("stone").id();
+
+            assertEquals(Level.LAYER_UPPER, lvl.placeLayer(15, 15),
+                    format + ": a floored cell takes a block on top");
+            lvl.setTile(15, 15, Level.LAYER_UPPER, stone);
+            assertEquals(-1, lvl.placeLayer(15, 15),
+                    format + ": and then placement says the cell is full");
+            assertTrue(lvl.layerLimit() > 2,
+                    format + ": while the storage still has six layers of room");
+            assertTrue(lvl.setTile(15, 15, 2, stone),
+                    format + ": which a direct write can reach and placement cannot");
+        }
+
+        // A side-scroller's placement rule and its ceiling agree, and always did.
+        Level side = floored(LevelFormat.SIDE_SCROLLER);
+        assertEquals(-1, side.placeLayer(15, 15), "one layer, and it is full");
+        assertEquals(1, side.layerLimit());
+    }
+
+    /**
+     * Height is what holds you up, solidity is what stops you, and they are
+     * different questions asked of the same column.
+     *
+     * <p><b>The floor of a plan-view level is not solid.</b> That is the fact
+     * this test exists to write down, and it caught the plan out: V4 of
+     * {@code HEIGHT_PLAN.md} predicted a torch on a path would answer
+     * {@code stackHeight} 2 and {@code topSolidLayer} 0, on the assumption that
+     * the floor under it counts as the top barrier. It does not — {@code
+     * stone_path} is registered {@link com.larsons.engine.world.Block#passable}
+     * — so the honest answer is −1: nothing in that column stops anybody.
+     *
+     * <p>Which makes the division sharper than the plan had it, and the
+     * sharper version is what Jobs W and S need. <b>{@link Level#stackHeight}
+     * is the surface a body stands on</b> — the run of blocks that are
+     * <em>there</em>, whether or not they are barriers — and
+     * <b>{@link Level#topSolidLayer} is the highest thing that would stop
+     * them</b>. On an ordinary floored plan-view cell those are 1 and −1, and
+     * anything reaching for "the top of the column" wants the first.
+     *
+     * <p>The floating-block case is the first place in this engine where the
+     * volume and the heightfield disagree. Nothing can produce it through the
+     * editor; a hand-edited file can, and O1 will produce it on purpose. It is
+     * pinned now so that step finds the semantics already decided.
+     */
+    @Test
+    void heightIsWhatHoldsYouUpAndSolidityIsWhatStopsYou() {
+        Level lvl = floored(LevelFormat.TOP_DOWN);
+        int stone = lvl.blocks.get("stone").id();
+
+        assertEquals(1, lvl.stackHeight(15, 15), "a bare path is one block of floor");
+        assertEquals(-1, lvl.topSolidLayer(15, 15),
+                "and nothing in the column is a barrier — you walk across it");
+
+        lvl.setTile(16, 15, Level.LAYER_UPPER, lvl.blocks.get("torch").id());
+        assertEquals(2, lvl.stackHeight(16, 15), "a torch on a path is two blocks deep");
+        assertEquals(-1, lvl.topSolidLayer(16, 15),
+                "and still stops nobody, because dressing is not a barrier");
+        assertFalse(lvl.solidAt(16, 15, Level.LAYER_UPPER), "the torch itself is not solid");
+        assertTrue(lvl.walkable(16, 15), "which is why you walk straight through it");
+
+        lvl.setTile(17, 15, Level.LAYER_UPPER, stone);
+        assertEquals(2, lvl.stackHeight(17, 15), "a wall is two blocks deep as well");
+        assertEquals(1, lvl.topSolidLayer(17, 15), "but it is a barrier at its top layer");
+        assertFalse(lvl.walkable(17, 15), "and that is the whole difference");
+
+        // A block with nothing under it: no height, and solid where it sits.
+        Level floating = floored(LevelFormat.TOP_DOWN);
+        floating.setTile(15, 15, 0);
+        floating.setTile(15, 15, 3, stone);
+        assertEquals(0, floating.stackHeight(15, 15),
+                "the run up from the ground never starts, so there is nothing to stand on");
+        assertEquals(3, floating.topSolidLayer(15, 15),
+                "and the block is still a barrier in the layer it is floating in");
+
+        // Nothing at all, anywhere in the column.
+        Level empty = floored(LevelFormat.TOP_DOWN);
+        empty.setTile(15, 15, 0);
+        assertEquals(0, empty.stackHeight(15, 15), "a hole holds nobody up");
+        assertEquals(-1, empty.topSolidLayer(15, 15), "and stops nobody either");
+    }
+
+    /** A column of any depth reads its height as the depth it was built to. */
+    @Test
+    void aTallColumnReadsItsOwnHeight() {
+        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+            Level lvl = floored(format);
+            int stone = lvl.blocks.get("stone").id();
+            for (int layer = 1; layer < 5; layer++) lvl.setTile(15, 15, layer, stone);
+
+            assertEquals(5, lvl.stackHeight(15, 15), format + ": five blocks deep");
+            assertEquals(4, lvl.topSolidLayer(15, 15), format + ": a barrier to its top");
+            assertFalse(lvl.walkable(15, 15), format + ": and still a barrier on the ground");
+
+            // Mining takes it apart from the top, one layer at a time.
+            lvl.setTile(15, 15, 4, 0);
+            assertEquals(4, lvl.stackHeight(15, 15), format + ": four after the top comes off");
+            assertEquals(3, lvl.topSolidLayer(15, 15), format + ": and the barrier came down with it");
         }
     }
 

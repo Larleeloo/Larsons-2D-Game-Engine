@@ -141,10 +141,13 @@ public class Level {
      * chunked — and a caller holding one of them directly is a caller that can
      * be handed the wrong one.
      */
-    private List<int[][]> layers = new ArrayList<>();
+    private int[][][] layers = NO_LAYERS;
 
     /** The same layers in sparse chunk storage (giant levels); else empty. */
-    private List<ChunkedTiles> layerChunks = new ArrayList<>();
+    private ChunkedTiles[] layerChunks = NO_CHUNKS;
+
+    private static final int[][][] NO_LAYERS = new int[0][][];
+    private static final ChunkedTiles[] NO_CHUNKS = new ChunkedTiles[0];
 
     public Color background = new Color(24, 28, 38);
     public Color[] palette = defaultPalette();
@@ -271,7 +274,7 @@ public class Level {
         lvl.width = widthTiles;
         lvl.height = heightTiles;
         lvl.tileSize = tileSize;
-        lvl.layers.add(new int[lvl.height][lvl.width]);
+        lvl.layers = new int[][][]{new int[lvl.height][lvl.width]};
         lvl.registryTiles = true;
         lvl.spawnX = tileSize * 2;
         lvl.spawnY = tileSize * 2;
@@ -292,7 +295,7 @@ public class Level {
         lvl.tileSize = tileSize;
         ChunkedTiles floor = new ChunkedTiles(lvl.width, lvl.height);
         floor.setGenerator(generator);
-        lvl.layerChunks.add(floor);
+        lvl.layerChunks = new ChunkedTiles[]{floor};
         lvl.registryTiles = true;
         lvl.spawnX = tileSize * 2;
         lvl.spawnY = tileSize * 2;
@@ -301,7 +304,7 @@ public class Level {
 
     /** True when this level uses sparse chunked storage (giant maps). */
     public boolean isChunked() {
-        return !layerChunks.isEmpty();
+        return layerChunks.length > 0;
     }
 
     // --- layer storage ----------------------------------------------------------
@@ -316,7 +319,7 @@ public class Level {
      * that were never allocated.
      */
     public int layerCount() {
-        return isChunked() ? layerChunks.size() : layers.size();
+        return layerChunks.length > 0 ? layerChunks.length : layers.length;
     }
 
     /**
@@ -336,12 +339,12 @@ public class Level {
 
     /** One layer's dense grid, or {@code null} (chunked, or no such layer). */
     public int[][] grid(int layer) {
-        return layer >= 0 && layer < layers.size() ? layers.get(layer) : null;
+        return layer >= 0 && layer < layers.length ? layers[layer] : null;
     }
 
     /** One layer's chunk storage, or {@code null} (dense, or no such layer). */
     public ChunkedTiles chunks(int layer) {
-        return layer >= 0 && layer < layerChunks.size() ? layerChunks.get(layer) : null;
+        return layer >= 0 && layer < layerChunks.length ? layerChunks[layer] : null;
     }
 
     /**
@@ -355,10 +358,15 @@ public class Level {
      */
     public void setGrid(int layer, int[][] grid) {
         if (layer < 0 || layer >= layerLimit() || grid == null) return;
-        layerChunks.clear();
-        while (layers.size() < layer) layers.add(new int[height][width]);
-        if (layers.size() == layer) layers.add(grid);
-        else layers.set(layer, grid);
+        layerChunks = NO_CHUNKS;
+        if (layer >= layers.length) {
+            int[][][] grown = java.util.Arrays.copyOf(layers, layer + 1);
+            for (int i = 0; i < grown.length; i++) {
+                if (grown[i] == null) grown[i] = new int[height][width];
+            }
+            layers = grown;
+        }
+        layers[layer] = grid;
         bumpTerrainRevision();
     }
 
@@ -369,12 +377,16 @@ public class Level {
      */
     public ChunkedTiles newChunkedLayer(int layer) {
         if (layer < 0 || layer >= layerLimit()) return new ChunkedTiles(width, height);
-        layers.clear();
-        while (layerChunks.size() <= layer) {
-            layerChunks.add(new ChunkedTiles(width, height));
+        layers = NO_LAYERS;
+        if (layer >= layerChunks.length) {
+            ChunkedTiles[] grown = java.util.Arrays.copyOf(layerChunks, layer + 1);
+            for (int i = 0; i < grown.length; i++) {
+                if (grown[i] == null) grown[i] = new ChunkedTiles(width, height);
+            }
+            layerChunks = grown;
         }
         bumpTerrainRevision();
-        return layerChunks.get(layer);
+        return layerChunks[layer];
     }
 
     /**
@@ -385,11 +397,19 @@ public class Level {
     private void ensureLayer(int layer) {
         if (layer < 0 || layer >= layerLimit()) return;
         if (isChunked()) {
-            while (layerChunks.size() <= layer) {
-                layerChunks.add(new ChunkedTiles(width, height));
+            if (layer >= layerChunks.length) {
+                ChunkedTiles[] grown = java.util.Arrays.copyOf(layerChunks, layer + 1);
+                for (int i = 0; i < grown.length; i++) {
+                    if (grown[i] == null) grown[i] = new ChunkedTiles(width, height);
+                }
+                layerChunks = grown;
             }
-        } else if (!layers.isEmpty()) {
-            while (layers.size() <= layer) layers.add(new int[height][width]);
+        } else if (layers.length > 0 && layer >= layers.length) {
+            int[][][] grown = java.util.Arrays.copyOf(layers, layer + 1);
+            for (int i = 0; i < grown.length; i++) {
+                if (grown[i] == null) grown[i] = new int[height][width];
+            }
+            layers = grown;
         }
     }
 
@@ -544,9 +564,16 @@ public class Level {
      * cell outside the level, and for a layer this level has not built at.
      */
     public int tileAt(int col, int row, int layer) {
-        ChunkedTiles sparse = chunks(layer);
-        if (sparse != null) return sparse.get(col, row);
-        int[][] dense = grid(layer);
+        if (layer < 0) return 0;
+        // Written against the fields rather than through grid()/chunks()
+        // because this is the hottest read in the engine — LiquidSim surveys
+        // the whole grid through it every tick, and SIM_PLAN.md already has
+        // that scan as the p95 stall. The two arrays are mutually exclusive, so
+        // the dense path costs one length check against an empty array
+        // (HEIGHT_PLAN.md V6, which measured the difference at 2x).
+        if (layer < layerChunks.length) return layerChunks[layer].get(col, row);
+        if (layer >= layers.length) return 0;
+        int[][] dense = layers[layer];
         if (dense == null || row < 0 || row >= dense.length
                 || col < 0 || col >= dense[row].length) {
             return 0;
@@ -634,15 +661,67 @@ public class Level {
     }
 
     /**
-     * Whether the tile at (col,row) blocks movement. Layered plan-view levels
-     * ask the stack ({@link #walkable}); the side-scroller asks the block
-     * definition, and palette mode keeps the legacy "any tile is solid".
+     * Whether the tile at (col,row) blocks movement <em>for a body standing on
+     * the ground</em>. Layered plan-view levels ask the stack
+     * ({@link #walkable}); the side-scroller asks the block definition, and
+     * palette mode keeps the legacy "any tile is solid".
+     *
+     * <p><b>This is a question with a missing argument, and it is kept anyway.</b>
+     * Once a body can stand at a height, "is this cell solid" needs to say
+     * <em>at what height</em> — which is {@link #solidAt(int, int, int)}. The
+     * two-argument form is what its callers have always meant: a body walking
+     * the floor, asking whether the column in front of it is a barrier. Most of
+     * them go on meaning exactly that, so it keeps the short name and the
+     * documented assumption rather than being renamed into something every call
+     * site has to be re-read to understand.
      */
     public boolean solidAt(int col, int row) {
         if (layered()) return !walkable(col, row);
         int id = tileAt(col, row);
         if (id <= 0) return false;
         return !registryTiles || blocks.isSolid(id);
+    }
+
+    /**
+     * Whether one layer of (col,row) is filled with something a body cannot
+     * pass through — the question {@link #solidAt(int, int)} asks of a whole
+     * column, asked of a single block.
+     *
+     * <p>Empty is not solid, and neither is dressing: a torch or a flower
+     * standing in a layer leaves it open, which is the same rule
+     * {@link #walkable} applies and the reason height and walkability are not
+     * the same question.
+     */
+    public boolean solidAt(int col, int row, int layer) {
+        int id = tileAt(col, row, layer);
+        if (id <= 0) return false;
+        if (!registryTiles) return true;   // palette mode: any tile is solid
+        return blocks.isSolid(id);
+    }
+
+    /**
+     * The highest layer at (col,row) holding something solid, or {@code -1}
+     * when the column holds nothing to stand on or walk into.
+     *
+     * <p><b>Deliberately not {@link #stackHeight} minus one.</b> Height is
+     * geometry and solidity is what stops you, and the two come apart in both
+     * directions. A torch on a path is two blocks of geometry with nothing
+     * solid above the floor, so the column is {@code stackHeight} 2 and this
+     * answers 0 — the torch has a face to draw and no barrier to collide with.
+     * A block left floating over a hole is {@code stackHeight} 0, because the
+     * run from the ground never starts, and this answers whichever layer it is
+     * sitting in.
+     *
+     * <p>That second case is the first place in this engine where the volume
+     * and the heightfield disagree, and it is pinned by a test rather than left
+     * to be discovered: {@code HEIGHT_PLAN.md} O1 is where a column is allowed
+     * a gap on purpose, and it should find the semantics already decided.
+     */
+    public int topSolidLayer(int col, int row) {
+        for (int layer = layerCount() - 1; layer >= 0; layer--) {
+            if (solidAt(col, row, layer)) return layer;
+        }
+        return -1;
     }
 
     /** The block definition at (col,row), or {@code null} (empty / palette mode). */
@@ -736,15 +815,17 @@ public class Level {
             // Growing past the dense limit converts to chunked storage, every
             // layer of it — a level that dropped its stack on the way past the
             // limit would lose its walls to a slider.
-            List<ChunkedTiles> converted = new ArrayList<>(layers.size());
-            for (int[][] layer : layers) {
-                converted.add(toChunked(layer, newWidth, newHeight));
+            ChunkedTiles[] converted = new ChunkedTiles[layers.length];
+            for (int i = 0; i < layers.length; i++) {
+                converted[i] = toChunked(layers[i], newWidth, newHeight);
             }
             layerChunks = converted;
-            layers = new ArrayList<>();
+            layers = NO_LAYERS;
         } else {
-            List<int[][]> next = new ArrayList<>(layers.size());
-            for (int[][] layer : layers) next.add(resized(layer, newWidth, newHeight));
+            int[][][] next = new int[layers.length][][];
+            for (int i = 0; i < layers.length; i++) {
+                next[i] = resized(layers[i], newWidth, newHeight);
+            }
             layers = next;
         }
         width = newWidth;
@@ -1014,18 +1095,60 @@ public class Level {
     // --- editor undo snapshots -------------------------------------------------
 
     /**
-     * Everything one cell holds: both block layers, plus the data that hangs
-     * off them. This is the unit the creative editor's undo saves terrain in
-     * ({@link EditHistory}) — one of these per cell a stroke is about to touch,
-     * because a level has millions of cells and a stroke touches a handful.
+     * Everything one cell holds: its whole column of blocks, plus the data that
+     * hangs off them. This is the unit the creative editor's undo saves terrain
+     * in ({@link EditHistory}) — one of these per cell a stroke is about to
+     * touch, because a level has millions of cells and a stroke touches a
+     * handful.
      *
      * <p>It is the whole cell rather than a tile id because clearing a cell's
-     * floor takes the block stacked on it, its surface details and its
+     * floor takes everything standing on it, its surface details and its
      * container with it ({@link #setTile}): put back only the id and a mined
      * wall comes back as a path with its moss gone.
+     *
+     * <p>It is the whole <em>column</em> rather than a floor and a lid because
+     * a column is eight deep now. Undo that restored two layers of a five-deep
+     * tower would be a corruption bug wearing an editor bug's clothes: the
+     * stroke would come back looking undone and the cell would be three blocks
+     * shorter than it started.
+     *
+     * <p><b>{@code equals} is spelled out because the array would otherwise
+     * compare by identity</b>, and {@link EditHistory}'s {@code FieldEdit}
+     * decides whether an edit happened at all by comparing a fresh snapshot
+     * against the one it took. Left to a record's default, every brush stroke
+     * that changed nothing would still push an undo step — a defect that shows
+     * up as Ctrl+Z doing nothing several times in a row.
      */
-    public record CellState(int col, int row, int ground, int stacked,
-                            List<SurfaceDecor.Placement> decor, List<ItemStack> container) {}
+    public record CellState(int col, int row, int[] column,
+                            List<SurfaceDecor.Placement> decor, List<ItemStack> container) {
+
+        /** Copies the column, so a snapshot cannot be edited from underneath. */
+        public CellState {
+            column = column == null ? new int[0] : column.clone();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            return o instanceof CellState c && col == c.col && row == c.row
+                    && java.util.Arrays.equals(column, c.column)
+                    && java.util.Objects.equals(decor, c.decor)
+                    && java.util.Objects.equals(container, c.container);
+        }
+
+        @Override
+        public int hashCode() {
+            return java.util.Objects.hash(col, row, java.util.Arrays.hashCode(column),
+                    decor, container);
+        }
+
+        /** Spells the column out, because these turn up in test failures. */
+        @Override
+        public String toString() {
+            return "CellState[" + col + "," + row + " column="
+                    + java.util.Arrays.toString(column) + " decor=" + decor
+                    + " container=" + container + "]";
+        }
+    }
 
     /** Save everything at (col,row) — see {@link CellState}. */
     public CellState captureCell(int col, int row) {
@@ -1038,8 +1161,11 @@ public class Level {
             if (!found.isEmpty()) decor = List.copyOf(found);
         }
         List<ItemStack> held = containerAt(col, row);
-        return new CellState(col, row, tileAt(col, row),
-                tileAt(col, row, LAYER_UPPER),
+        int[] column = new int[layerCount()];
+        for (int layer = 0; layer < column.length; layer++) {
+            column[layer] = tileAt(col, row, layer);
+        }
+        return new CellState(col, row, column,
                 decor, held == null ? null : List.copyOf(held));
     }
 
@@ -1047,11 +1173,20 @@ public class Level {
     public void restoreCell(CellState state) {
         if (state == null) return;
         int col = state.col(), row = state.row();
+        int[] column = state.column();
         // The floor goes back first: writing it can clear the whole cell
         // (see clearCellAttachments), so everything else has to be laid on top
         // of that cascade rather than under it.
-        setTile(col, row, LAYER_GROUND, state.ground());
-        setTile(col, row, LAYER_UPPER, state.stacked());
+        setTile(col, row, LAYER_GROUND, column.length > 0 ? column[0] : 0);
+        for (int layer = 1; layer < column.length; layer++) {
+            setTile(col, row, layer, column[layer]);
+        }
+        // Layers the level has grown since the snapshot are cleared rather than
+        // left standing: undoing the stroke that built a tower has to take the
+        // whole tower down, not just the part the snapshot happened to describe.
+        for (int layer = Math.max(1, column.length); layer < layerCount(); layer++) {
+            setTile(col, row, layer, 0);
+        }
         if (!surfaceDecor.isEmpty()) {
             surfaceDecor.removeIf(sd -> sd.col() == col && sd.row() == row);
         }
@@ -1147,26 +1282,33 @@ public class Level {
         width = saved.width();
         height = saved.height();
         List<Object> savedLayers = saved.layers();
-        layers = new ArrayList<>();
-        layerChunks = new ArrayList<>();
+        layers = NO_LAYERS;
+        layerChunks = NO_CHUNKS;
+        // A snapshot always describes at least the floor, even when the level
+        // it came from had nothing in it.
+        int depth = Math.max(1, savedLayers.size());
         if (saved.chunkedStorage()) {
-            for (int layer = 0; layer < Math.max(1, savedLayers.size()); layer++) {
+            List<ChunkedTiles> rebuilt = new ArrayList<>(depth);
+            for (int layer = 0; layer < depth; layer++) {
                 ChunkedTiles next = new ChunkedTiles(width, height);
                 if (layer == LAYER_GROUND) next.setGenerator(saved.generator());
                 Object s = layer < savedLayers.size() ? savedLayers.get(layer) : null;
                 if (s instanceof ChunkedTiles.Snapshot snap) next.restore(snap);
                 else if (layer > LAYER_GROUND) continue;   // no such layer to reinstate
-                layerChunks.add(next);
+                rebuilt.add(next);
             }
+            layerChunks = rebuilt.toArray(new ChunkedTiles[0]);
         } else {
-            for (int layer = 0; layer < Math.max(1, savedLayers.size()); layer++) {
+            List<int[][]> rebuilt = new ArrayList<>(depth);
+            for (int layer = 0; layer < depth; layer++) {
                 Object s = layer < savedLayers.size() ? savedLayers.get(layer) : null;
                 if (s instanceof int[][] g) {
-                    layers.add(denseCopy(g));
+                    rebuilt.add(denseCopy(g));
                 } else if (layer == LAYER_GROUND) {
-                    layers.add(new int[height][width]);
+                    rebuilt.add(new int[height][width]);
                 }
             }
+            layers = rebuilt.toArray(new int[0][][]);
         }
         refill(entities, saved.entities());
         refill(surfaceDecor, saved.surfaceDecor());
