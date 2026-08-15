@@ -295,6 +295,62 @@ class StackedBlockTest {
         assertFalse(lvl.solidAt(15, 15), "and mining it leaves open air, not a hole");
     }
 
+    // --- blocks are cubes -------------------------------------------------------
+
+    /**
+     * A block is as tall as it is wide: one layer of height draws exactly one
+     * tile's worth of screen edge along the axis that carries height.
+     *
+     * <p><b>Asserted per projection, because the two arrive at the same number
+     * by different routes.</b> Top-down draws the ground at world scale, so a
+     * unit of height is a unit of screen. Isometric's ground is a diamond
+     * {@code isoTileWidth} across, and a cube's vertical edge there is
+     * <em>half the diamond's width</em> — the classic 64&times;64 block sprite
+     * on a 64&times;32 top face. They agree at 32 px today only because the
+     * diamond happens to be twice the tile; asserting the number alone would
+     * pass just as happily on a formula that draws rhomboids the moment
+     * somebody widens it.
+     */
+    @Test
+    void oneLayerOfHeightIsOneTileOfScreenEdge() {
+        Level topDown = floored(LevelFormat.TOP_DOWN);
+        Camera flat = camera(topDown);
+        assertEquals((int) Math.round(TILE * flat.zoom),
+                TerrainPainter.liftPixels(flat, TILE),
+                "top-down: the ground is drawn at world scale, so a block is a tile tall");
+
+        Level iso = floored(LevelFormat.ISOMETRIC);
+        Camera diamond = camera(iso);
+        assertEquals((int) Math.round(diamond.isoTileWidth / 2 * diamond.zoom),
+                TerrainPainter.liftPixels(diamond, TILE),
+                "isometric: a cube's vertical edge is half the diamond's width");
+
+        // And a side view has no height axis to lift along at all.
+        assertEquals(0, TerrainPainter.liftPixels(
+                camera(floored(LevelFormat.SIDE_SCROLLER)), TILE));
+    }
+
+    /** A column of N blocks stands N times as tall, with no seams down it. */
+    @Test
+    void aColumnStandsAsManyBlocksTallAsItIsDeep() {
+        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+            Level lvl = floored(format);
+            int stone = lvl.blocks.get("stone").id();
+            for (int layer = 1; layer <= 4; layer++) lvl.setTile(15, 15, layer, stone);
+
+            Camera cam = camera(lvl);
+            int lift = TerrainPainter.liftPixels(cam, TILE);
+            int flatTop = topOfCell(floored(format), 15, 15);
+            int tallTop = topOfCell(lvl, 15, 15);
+
+            // Four blocks above the floor, rounded once for the whole column
+            // rather than once per block — which is what stops seams opening
+            // between the runs of a tall stack.
+            assertEquals(flatTop - 4 * lift, tallTop, 1,
+                    format + ": a five-deep column stands four blocks above its floor");
+        }
+    }
+
     // --- the height axis, as rotation has to address it -------------------------
 
     /**

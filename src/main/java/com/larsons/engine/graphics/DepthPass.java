@@ -111,11 +111,48 @@ public final class DepthPass {
      * {@link #TERRAIN} for the floor's own geometry.
      */
     public void at(int depth, int within, Runnable sprite) {
+        at(depth, 0, within, sprite);
+    }
+
+    /**
+     * Draw {@code sprite} at {@code depth}, {@code layers} of height above the
+     * floor, breaking ties on {@code within}.
+     *
+     * <p><b>Height is the last key, not the second, and the difference is a
+     * bug this engine already had a test for.</b> The obvious reading of "a
+     * higher thing is nearer" puts height straight after the cell depth. That
+     * breaks the rule C4 established and {@code StackedBlockTest} guards: in
+     * isometric a tile and its <em>diagonal</em> neighbour sit at the same
+     * depth, so a wall in one and an actor on the floor of the other tie on the
+     * primary key — and promoting the wall on height draws it over a character
+     * who is beside it rather than behind it. That is the "block ate a fifth of
+     * them" defect, back again by a different route.
+     *
+     * <p>It is also unnecessary. {@code HEIGHT_PLAN.md} Appendix C proves that
+     * for a heightfield the <em>cell depth alone</em> already orders terrain
+     * against actors correctly: a nearer column can only overlap something
+     * standing behind it when that column's top rises above the thing's feet on
+     * screen, and when it does the column genuinely is both nearer and taller,
+     * so covering it is right. Screen overlap and true occlusion are the same
+     * condition. No pairwise test, no topological sort, and no depth buffer —
+     * which Java2D does not have and requirement #4 says must not be needed.
+     *
+     * <p>So what this key actually settles is the residue the proof does not
+     * reach: two things on the <em>same</em> tile at the same foot row and
+     * different heights — two players sharing a tile with one of them
+     * mid-hop. Last place in the sort, where it can only break ties.
+     *
+     * <p>The proof uses one thing only: that every column is solid from the
+     * ground up, so its drawn extent starts at its own floor row. Job O lets a
+     * column have a gap in it and cell depth stops being sufficient at that
+     * exact moment — which is what O4 is for.
+     */
+    public void at(int depth, int layers, int within, Runnable sprite) {
         if (queue == null) {
             sprite.run();
             return;
         }
-        queue.add(new Entry(depth, within, queue.size(), sprite));
+        queue.add(new Entry(depth, layers, within, queue.size(), sprite));
     }
 
     /** Draw everything queued, back to front, and empty the queue. */
@@ -125,10 +162,11 @@ public final class DepthPass {
         // pieces (a mob and its health bar) never comes apart.
         queue.sort(Comparator.comparingInt(Entry::depth)
                 .thenComparingInt(Entry::within)
+                .thenComparingInt(Entry::layers)
                 .thenComparingInt(Entry::seq));
         for (Entry e : queue) e.sprite().run();
         queue.clear();
     }
 
-    private record Entry(int depth, int within, int seq, Runnable sprite) {}
+    private record Entry(int depth, int layers, int within, int seq, Runnable sprite) {}
 }

@@ -258,6 +258,9 @@ public class Level {
         terrainRevision++;
         terrainGeneration++;
         if (regionRevisions != null) regionRevisions.clear();
+        // The grid is being replaced, so the old high-water mark describes a
+        // level that no longer exists. It rebuilds as the new one is written.
+        tallestColumn = 1;
     }
     /** Resolves block ids in registry mode. */
     public BlockRegistry blocks = BlockRegistry.standard();
@@ -597,7 +600,10 @@ public class Level {
             // unallocated layer has no grid to check them against.
             if (col < 0 || row < 0 || col >= width || row >= height) return false;
         }
-        if (id != 0) ensureLayer(layer);
+        if (id != 0) {
+            ensureLayer(layer);
+            if (layer + 1 > tallestColumn) tallestColumn = layer + 1;
+        }
         ChunkedTiles sparse = chunks(layer);
         if (sparse != null) {
             boolean changed = sparse.set(col, row, id);
@@ -622,18 +628,48 @@ public class Level {
     /**
      * How tall one block stands, as a fraction of a tile in world units.
      *
-     * <p>Tall enough that a side face reads as a wall at a glance, short enough
-     * that a wall does not swallow the row of floor behind it — the trade this
-     * was chosen for. {@code HEIGHT_PLAN.md} R0 resolves it the other way and
-     * makes blocks cubes, at which point this is 1 and a layer of height is
-     * exactly a tile.
+     * <p><b>One: blocks are cubes.</b> This was 0.55, chosen as a trade — tall
+     * enough that a side face reads as a wall at a glance, short enough that a
+     * wall does not swallow the row of floor behind it. {@code HEIGHT_PLAN.md}
+     * R0 resolves that trade the other way on purpose: a cube <em>does</em>
+     * swallow the row behind it, because that is what a cube standing on a
+     * floor does, and a world built of half-height slabs never reads as one
+     * built of blocks.
+     *
+     * <p>It also makes a layer of height exactly a tile, so {@code z} and the
+     * layer index share a unit: layer {@code n}'s surface is at
+     * {@code n * tileSize}, and every conversion in the simulation is a
+     * multiply by the tile size rather than by a constant nobody can hold in
+     * their head.
      *
      * <p>It lives on the level rather than on the painter because it is not a
      * drawing constant: {@link #blockHeight()} is how far a body rises when it
      * climbs a block, and the renderer and the physics have to be reading the
      * same number or characters stand in the air.
      */
-    public static final double BLOCK_HEIGHT = 0.55;
+    public static final double BLOCK_HEIGHT = 1.0;
+
+    /**
+     * The deepest column this level is known to hold — a high-water mark, not
+     * a survey.
+     *
+     * <p>Anything reasoning about how far a column can reach off its own cell
+     * needs this: the terrain sweep culls a cell on its own projected corners,
+     * and a tall column paints far above them, so the cull margin has to be
+     * told how tall the level gets. Asking for the true maximum would mean
+     * sweeping the level, which is what culling exists to avoid.
+     *
+     * <p>So it only ever rises, and it is reset when the grid is replaced
+     * wholesale. Mining a level's one tower leaves this reading the tower's
+     * height until something reloads it, which costs a slightly generous margin
+     * and never a missing block — the direction to be wrong in.
+     */
+    private transient int tallestColumn = 1;
+
+    /** The deepest column this level is known to hold; see {@link #tallestColumn}. */
+    public int tallestColumn() {
+        return Math.max(1, Math.min(layerLimit(), tallestColumn));
+    }
 
     /** How tall one block stands, in this level's world units. */
     public double blockHeight() {

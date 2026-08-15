@@ -6372,7 +6372,7 @@ public class CreativeScene extends AbstractScene {
         int w = Math.max(8, (int) Math.round(pr.def.radius() * 3.5 * camera.zoom
                 * space.heightScale(pr.z, level.tileSize)));
         camera.worldToScreen(pr.x, pr.y, pcorner);
-        int lift = (int) Math.round(pr.z * space.screenLift() * camera.zoom);
+        int lift = (int) Math.round(pr.z * camera.liftScale() * camera.zoom);
         if (lift > 0) {
             double shrink = Math.max(0.3, 1 - pr.z / (level.tileSize * 8.0));
             int sw = Math.max(3, (int) (w * 0.6 * shrink));
