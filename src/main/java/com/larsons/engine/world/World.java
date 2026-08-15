@@ -748,6 +748,9 @@ public final class World {
             double mx = m.x + m.def.hitbox() / 2, my = m.y + m.def.hitbox() / 2;
             double d = Math.hypot(mx - hit[0], my - hit[1]);
             if (d >= m.def.hitbox() / 2 + 24 || d >= bestD) continue;
+            // You cannot hit what is standing on the roof above you, nor what
+            // is in the street below — the melee half of S2's reach.
+            if (!withinArmsReach(m.z, attacker.z)) continue;
             // Anything already touching the fighter is in the arc by
             // definition; only reaching out has a direction to miss in.
             double toMob = Math.hypot(mx - cx, my - cy);
@@ -1221,6 +1224,11 @@ public final class World {
             if (mobShot && m.id == -p.ownerId) continue;
             double d = Math.hypot(m.x + m.def.hitbox() / 2 - p.x, m.y + m.def.hitbox() / 2 - p.y);
             if (d > radius + m.def.hitbox() / 2) continue;
+            // A blast on the street does not reach the roof. This check was
+            // deferred out of W7 rather than written against a constant zero:
+            // mobs had no height then, so it would have read like a rule and
+            // done nothing (HEIGHT_PLAN.md S2).
+            if (!withinArmsReach(m.z, p.z)) continue;
             double falloff = 1.0 - Math.min(1, d / radius) * 0.75;
             applyElementToMob(p, m, profile, false);
             if (m.damage(p.damage * falloff, p.x)) {

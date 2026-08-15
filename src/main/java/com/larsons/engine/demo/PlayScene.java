@@ -791,9 +791,9 @@ public class PlayScene extends AbstractScene {
             // the Tremor Totem) shower shards like hand-mined blocks do.
             for (var change : world.pollBlockChanges()) {
                 if (p.particlesEnabled && change.id() == 0) {
-                    particles.burst((change.col() + 0.5) * ts(),
-                            (change.row() + 0.5) * ts(),
-                            new Color(150, 130, 100), 5);
+                    double bx = (change.col() + 0.5) * ts(), by = (change.row() + 0.5) * ts();
+                    particles.burst(bx, by, surfaceZ(bx, by),
+                            new Color(150, 130, 100), 5, Particles.Style.BURST);
                 }
                 // Water finding its way into a new cell: the liquid's own
                 // trickle, rate-limited so a draining lake is a stream and
@@ -1220,7 +1220,9 @@ public class PlayScene extends AbstractScene {
                     stats.add("blocks_mined", 1);
                     playerSound("mine_break");
                     if (p.particlesEnabled) {
-                        particles.burst((col + 0.5) * ts, (row + 0.5) * ts, Color.GRAY, 10);
+                        particles.burst((col + 0.5) * ts, (row + 0.5) * ts,
+                                surfaceZ((col + 0.5) * ts, (row + 0.5) * ts),
+                                Color.GRAY, 10, Particles.Style.BURST);
                     }
                 }
             } else {
@@ -1237,7 +1239,9 @@ public class PlayScene extends AbstractScene {
                     stats.add("blocks_mined", 1);
                     blockSound(mined, "break", "mine_break");
                     if (p.particlesEnabled) {
-                        particles.burst((col + 0.5) * ts, (row + 0.5) * ts, mined.color(), 10);
+                        particles.burst((col + 0.5) * ts, (row + 0.5) * ts,
+                                surfaceZ((col + 0.5) * ts, (row + 0.5) * ts),
+                                mined.color(), 10, Particles.Style.BURST);
                     }
                     wearHeldTool(held);
                 }
@@ -1454,8 +1458,8 @@ public class PlayScene extends AbstractScene {
                     hit.mob().weaponKey(), MeleeAction.PARRY));
             if (p.particlesEnabled) {
                 particles.burst(hit.mob().x + hit.mob().def.size() / 2,
-                        hit.mob().y + hit.mob().def.size() / 2,
-                        new Color(255, 240, 190), 10);
+                        hit.mob().y + hit.mob().def.size() / 2, hit.mob().z,
+                        new Color(255, 240, 190), 10, Particles.Style.BURST);
             }
             return;
         }
@@ -1465,8 +1469,8 @@ public class PlayScene extends AbstractScene {
             Sounds.actor(character.key,
                     SoundKeys.mob(m.def.key(), m.dead() ? "death" : "hurt"), "attack_hit");
             if (p.particlesEnabled) {
-                particles.burst(m.x + m.def.size() / 2, m.y + m.def.size() / 2,
-                        m.def.body(), 8);
+                particles.burst(m.x + m.def.size() / 2, m.y + m.def.size() / 2, m.z,
+                        m.def.body(), 8, Particles.Style.BURST);
             }
             return;
         }
@@ -2262,11 +2266,26 @@ public class PlayScene extends AbstractScene {
         int[] b = visibleTileBounds();
         for (int r = b[1]; r <= b[3]; r++) {
             for (int c = b[0]; c <= b[2]; c++) {
-                Block block = level.blockAt(c, r);
-                if (block == null || !block.emitsLight()) continue;
-                camera.worldToScreen((c + 0.5) * ts, (r + 0.5) * ts, corner);
-                lighting.addLight(corner[0], corner[1],
-                        block.lightRadius() * ts * camera.zoom, block.lightColor());
+                // The whole column, not just the floor. A torch is something
+                // you stand ON the ground, so on a plane it lives in layer 1 or
+                // above and this loop — which only ever read layer 0 — has been
+                // walking past every one of them. Height makes that visible
+                // rather than causing it: a torch on a tower is exactly the
+                // case a creator will try first.
+                for (int layer = level.layerCount() - 1; layer >= 0; layer--) {
+                    Block block = level.blockAt(c, r, layer);
+                    if (block == null || !block.emitsLight()) continue;
+                    camera.worldToScreen((c + 0.5) * ts, (r + 0.5) * ts, corner);
+                    int lift = (int) Math.round(level.surfaceZ(layer + 1)
+                            * camera.zoom * camera.liftScale());
+                    // A light further off the floor pools wider and no
+                    // brighter, which is what a lamp on a pole does.
+                    double spread = 1 + 0.12 * layer;
+                    lighting.addLight(corner[0], corner[1] - lift,
+                            block.lightRadius() * ts * camera.zoom * spread,
+                            block.lightColor());
+                }
+                continue;
             }
         }
         // Coloured rarity lighting: uncommon+ drops shine with their tier's
@@ -2589,6 +2608,19 @@ public class PlayScene extends AbstractScene {
      * plan view's depth — which tile you are on, and where on it — are decided
      * in one place rather than at twenty call sites.
      */
+    /**
+     * The height something happening on the ground at (wx,wy) sits at — the top
+     * of the column under it.
+     *
+     * <p>Every ground-anchored effect needs it. A mining burst on top of a
+     * tower spawned at zero falls out of the bottom of the tower and puffs on
+     * the floor eight blocks below the pick that made it, which is the sort of
+     * thing nobody files a bug about and everybody notices.
+     */
+    private double surfaceZ(double wx, double wy) {
+        return world == null ? 0 : world.restingZ(wx, wy);
+    }
+
     private void standingAt(DepthPass into, double x, double y, double size, Runnable sprite) {
         standingAt(into, x, y, size, 0, sprite);
     }

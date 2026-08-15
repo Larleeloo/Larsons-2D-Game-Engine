@@ -88,6 +88,13 @@ public final class Mob {
     public enum AIState { IDLE, WANDER, CHASE, ATTACK, FLEE, DEAD }
 
     private static final double GRAVITY = 1500;
+
+    /**
+     * How many blocks above the ground a flier rides on a plane, so it clears
+     * the walls a walker has to go round. Low enough that it still reads as
+     * hovering over the terrain rather than as a thing painted on the sky.
+     */
+    private static final double FLIER_ALTITUDE = 2;
     /** How far past detect range a chased player must get to be dropped. */
     private static final double LOSE_FACTOR = 1.5;
     private static final double ATTACK_COOLDOWN = 1.0;   // seconds between hits
@@ -136,6 +143,20 @@ public final class Mob {
     public final int id;
     public final MobDef def;
     public double x, y;        // top-left, world px
+
+    /**
+     * How far above the floor this body is, in world units — the plan views'
+     * third axis, the same one {@link com.larsons.engine.sim.PlayerState#z}
+     * uses and drawn with the same lift.
+     *
+     * <p>Zero everywhere the height axis is off, and zero in a side view, whose
+     * height <em>is</em> the screen's vertical. A walker's is the top of the
+     * column under its feet; a flier's is that plus whatever it is hovering at,
+     * which is what lets a flier cross a canyon a walker has to go round —
+     * behaviour the height axis gives away for free
+     * ({@code HEIGHT_PLAN.md} S2).
+     */
+    public double z;
     /**
      * Where this mob stood one fixed step ago, for the renderer only. See
      * {@link com.larsons.engine.sim.StepInterpolation}; captured for every mob
@@ -647,7 +668,10 @@ public final class Mob {
         // mobs against the screen, where the box really is the body.
         boolean onFloor = planar && PerspectiveSpace.of(level.format()).hasElevation();
 
-        double nx = onFloor ? PlayerPhysics.walkX(level, x, y, size, dx * dt)
+        boolean vertical = onFloor && level.verticality();
+        double nx = onFloor
+                ? (vertical ? PlayerPhysics.walkX(level, x, y, size, dx * dt, z)
+                            : PlayerPhysics.walkX(level, x, y, size, dx * dt))
                 : PlayerPhysics.slideX(level, x, y, size, size, dx * dt);
         boolean blockedSideways = dx != 0 && nx == x;
         boolean movedShort = dx != 0 && Math.abs(nx - x) < Math.abs(dx * dt) - 0.0001;
@@ -658,10 +682,20 @@ public final class Mob {
             // the same wall collision the first axis gets. This is where every
             // species ends up in these formats — there is no height to fly at
             // and no floor to fall to when the screen shows the ground.
-            double ny = onFloor ? PlayerPhysics.walkY(level, x, y, size, dyPlanar * dt)
+            double ny = onFloor
+                    ? (vertical ? PlayerPhysics.walkY(level, x, y, size, dyPlanar * dt, z)
+                                : PlayerPhysics.walkY(level, x, y, size, dyPlanar * dt))
                     : PlayerPhysics.slideY(level, x, y, size, size, dyPlanar * dt);
             boolean blockedY = dyPlanar != 0 && ny == y;
             y = ny;
+            if (vertical) {
+                // Settle onto whatever this step left them standing on. A
+                // walker steps up a stair and falls off a ledge for the same
+                // reason a player does — the rule is in the sweep, not in the
+                // species — and a flier rides a fixed height above it.
+                double ground = PlayerPhysics.groundZ(level, x, y, size);
+                z = def.flying() ? ground + level.blockHeight() * FLIER_ALTITUDE : ground;
+            }
             if ((blockedSideways || blockedY) && state == AIState.WANDER) {
                 pickWanderTarget(level); // walled in: pick somewhere else
             }
