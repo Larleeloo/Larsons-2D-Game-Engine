@@ -221,6 +221,86 @@ class CreativeUndoTest {
         assertEquals(1, lvl.surfaceDecor.size());
     }
 
+    /**
+     * A cell snapshot is the whole column, not the floor and whatever was
+     * standing on it.
+     *
+     * <p>The record used to be {@code (ground, stacked)}, which was the whole
+     * of a cell when a cell was two blocks deep. Undoing a stroke against a
+     * five-deep tower with that shape would put two layers back and leave three
+     * standing — a corruption bug that reads as an editor bug, because the
+     * stroke looks undone and the cell is quietly the wrong height.
+     */
+    @Test
+    void aCellSnapshotIsTheWholeColumnHoweverDeepItIs() {
+        Level lvl = LevelFormat.ISOMETRIC.starterLevel("Tower", 16, 16, 32);
+        int stone = lvl.blocks.get("stone").id();
+        int dirt = lvl.blocks.get("dirt").id();
+        lvl.setTile(4, 4, Level.LAYER_GROUND, dirt);
+        for (int layer = 1; layer < 5; layer++) lvl.setTile(4, 4, layer, stone);
+        assertEquals(5, lvl.stackHeight(4, 4));
+
+        Level.CellState saved = lvl.captureCell(4, 4);
+        lvl.setTile(4, 4, Level.LAYER_GROUND, 0);
+        assertEquals(0, lvl.stackHeight(4, 4), "clearing the floor took the tower with it");
+
+        lvl.restoreCell(saved);
+        assertEquals(5, lvl.stackHeight(4, 4), "and undo brings the whole tower back");
+        assertEquals(dirt, lvl.tileAt(4, 4, Level.LAYER_GROUND));
+        for (int layer = 1; layer < 5; layer++) {
+            assertEquals(stone, lvl.tileAt(4, 4, layer), "layer " + layer);
+        }
+    }
+
+    /**
+     * Undoing a stroke that <em>built</em> takes down what it built, including
+     * layers the level did not have when the snapshot was taken.
+     *
+     * <p>The naive restore writes back what it saved and stops, which leaves
+     * anything above untouched — so undoing the brush that raised a tower would
+     * leave the tower standing on a restored floor.
+     */
+    @Test
+    void undoingAStrokeThatBuiltUpwardTakesTheNewLayersDown() {
+        Level lvl = LevelFormat.TOP_DOWN.starterLevel("Grow", 16, 16, 32);
+        int stone = lvl.blocks.get("stone").id();
+        lvl.setTile(4, 4, Level.LAYER_GROUND, lvl.blocks.get("dirt").id());
+        assertEquals(1, lvl.stackHeight(4, 4));
+
+        Level.CellState beforeTheStroke = lvl.captureCell(4, 4);
+        for (int layer = 1; layer < 6; layer++) lvl.setTile(4, 4, layer, stone);
+        assertEquals(6, lvl.stackHeight(4, 4));
+
+        lvl.restoreCell(beforeTheStroke);
+        assertEquals(1, lvl.stackHeight(4, 4),
+                "the cell is back to the floor it was, not the floor plus the tower");
+    }
+
+    /**
+     * A snapshot compares equal to an unchanged cell, which is what stops a
+     * brush stroke that changed nothing from pushing an undo step.
+     *
+     * <p>{@code EditHistory.FieldEdit.changed()} asks {@code Objects.equals} of
+     * a fresh snapshot against the one it took. A column held in an array
+     * compares by identity unless the record says otherwise, so without an
+     * explicit {@code equals} every stroke would be undoable and Ctrl+Z would
+     * appear to do nothing several times in a row.
+     */
+    @Test
+    void anUnchangedCellSnapshotsEqual() {
+        Level lvl = LevelFormat.ISOMETRIC.starterLevel("Same", 16, 16, 32);
+        int stone = lvl.blocks.get("stone").id();
+        for (int layer = 1; layer < 4; layer++) lvl.setTile(4, 4, layer, stone);
+
+        assertEquals(lvl.captureCell(4, 4), lvl.captureCell(4, 4),
+                "two snapshots of an untouched cell are the same state");
+        assertEquals(lvl.captureCell(4, 4).hashCode(), lvl.captureCell(4, 4).hashCode());
+
+        Level.CellState before = lvl.captureCell(4, 4);
+        lvl.setTile(4, 4, 4, stone);   // one layer taller than the setup built
+        assertNotEquals(before, lvl.captureCell(4, 4), "and a changed one is not");
+    }
+
     @Test
     void aDocSnapshotBringsBackMarkersRulesCutscenesAndTheMiniGame() {
         Level lvl = Level.empty("Doc", 20, 20, 32);
