@@ -39,7 +39,7 @@ import com.larsons.engine.input.KeyBinds;
  * <pre>
  *   ./gradlew run
  *   # or, after `./gradlew jar`:
- *   java -jar build/libs/Larsons-2D-Game-Engine-0.1.0.jar
+ *   java -jar build/libs/Larsons-Game-Engine-0.1.0.jar
  * </pre>
  */
 public class Main {
@@ -110,7 +110,7 @@ public class Main {
         KeyBinds.install(new KeyBindStore().load());
 
         EngineConfig config = new EngineConfig()
-                .title("Larson's 2D Game Engine")
+                .title("Larson's Game Engine")
                 .size(1280, 720)
                 .targetFps(120)
                 .updateRate(120);

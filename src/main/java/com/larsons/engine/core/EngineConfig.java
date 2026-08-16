@@ -13,7 +13,7 @@ import java.awt.Color;
  * which can be changed per game/level).
  */
 public class EngineConfig {
-    public String title = "Larson's 2D Game Engine";
+    public String title = "Larson's Game Engine";
     public int width = 1280;
     public int height = 720;
 

@@ -78,7 +78,7 @@ class HeightEditorTest {
         World world = new World(lvl);
         int stone = lvl.blocks.get("stone").id();
 
-        for (int expected = 2; expected <= Level.DEFAULT_MAX_LAYERS; expected++) {
+        for (int expected = 2; expected <= Level.MAX_LAYERS; expected++) {
             assertEquals(expected - 1, lvl.placeLayer(10, 10),
                     "the next block goes on top of what is there");
             assertTrue(world.placeBlock(10, 10, stone), "and it goes");
@@ -160,8 +160,11 @@ class HeightEditorTest {
         assertEquals(1, inside.layers());
 
         // The level's ceiling still bounds it: a lock set past the top clamps
-        // rather than writing outside the storage.
-        Brush.Placement past = Brush.place(lvl, 12, 10, 99);
+        // rather than writing outside the storage. Taken from the ceiling
+        // rather than written as a number — 99 was "past the top" while the
+        // top was eight, and is an ordinary height now that it is
+        // Level.MAX_LAYERS.
+        Brush.Placement past = Brush.place(lvl, 12, 10, lvl.layerLimit() + 50);
         assertFalse(past.refused());
         assertEquals(lvl.layerLimit() - 1, past.toLayer());
     }

@@ -563,7 +563,10 @@ public class PlayScene extends AbstractScene {
                 cutscenes.advance(dt);
             }
             CutscenePlayer cut = cutscenes.active();
-            if (cut != null) camera.centerOn(cut.cameraX(), cut.cameraY());
+            // The director's mark is a point on the ground, not a body — so the
+            // lift goes back to zero rather than staying wherever the player
+            // was standing when the cutscene started.
+            if (cut != null) camera.frameOn(cut.cameraX(), cut.cameraY());
             return;
         }
         if (KeyBinds.pressed(input, GameAction.PAUSE)
@@ -841,12 +844,11 @@ public class PlayScene extends AbstractScene {
         // authoritative step rather than with a frame drawn between two of them,
         // and the shimmer is a property of what was *drawn*. See
         // StepInterpolation, and render() for the other half.
-        camera.centerOn(me.x + size / 2.0, me.y + size / 2.0);
         // Climbing moves a character up the screen without moving them on the
-        // plane, so a camera that follows only (x,y) leaves a player on an
-        // eight-deep tower a fifth of a viewport above its centre. The lift is
-        // the same one the sprite is drawn with, so the two cannot disagree.
-        camera.setElevation(me.z * camera.liftScale());
+        // plane, so a camera that follows only (x,y) leaves a player on a tall
+        // tower above the top of its own viewport. Plane and lift are taken
+        // together (Camera.follow) so neither can be updated without the other.
+        camera.follow(me.x + size / 2.0, me.y + size / 2.0, me.z);
         // A mounted player sits (idle art); otherwise classify the action so
         // the matching skin animation plays, restarting on state changes.
         String state = riding ? "idle"
@@ -2084,7 +2086,12 @@ public class PlayScene extends AbstractScene {
         // left alone: its director drives it from a timeline of its own.
         if (cutscenes == null || cutscenes.active() == null) {
             double size = hitSize();
-            camera.centerOn(drawX() + size / 2.0, drawY() + size / 2.0);
+            // Including the lift, which used to be left on whatever the last
+            // simulation step set while the plane moved every frame. That is
+            // the defect StepInterpolation exists to remove, applied to one
+            // axis and not the other: the ground scrolled evenly and a
+            // climbing player's height stepped at the sim-vs-frame beat.
+            camera.follow(drawX() + size / 2.0, drawY() + size / 2.0, drawZ());
         }
         feedLighting(p);
 
@@ -2526,26 +2533,12 @@ public class PlayScene extends AbstractScene {
     /**
      * The tile-index rectangle that can possibly be visible, found by
      * inverse-projecting the viewport corners into world space (for isometric,
-     * the corners map to a diamond; its bounding box is a conservative cover).
-     * Rendering cost then scales with the screen, not the level size.
+     * the corners map to a diamond; its bounding box is a conservative cover)
+     * and then reaching out along the height axis. Rendering cost then scales
+     * with the screen, not the level size.
      */
     private int[] visibleTileBounds() {
-        double ts = ts();
-        double minX = Double.POSITIVE_INFINITY, maxX = Double.NEGATIVE_INFINITY;
-        double minY = Double.POSITIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY;
-        int[][] cornersPx = {{0, 0}, {viewportWidth, 0}, {0, viewportHeight}, {viewportWidth, viewportHeight}};
-        for (int[] c : cornersPx) {
-            double[] wp = camera.screenToWorld(c[0], c[1]);
-            minX = Math.min(minX, wp[0]);
-            maxX = Math.max(maxX, wp[0]);
-            minY = Math.min(minY, wp[1]);
-            maxY = Math.max(maxY, wp[1]);
-        }
-        int col0 = Math.max(0, (int) Math.floor(minX / ts) - 1);
-        int col1 = Math.min(level.width - 1, (int) Math.floor(maxX / ts) + 1);
-        int row0 = Math.max(0, (int) Math.floor(minY / ts) - 1);
-        int row1 = Math.min(level.height - 1, (int) Math.floor(maxY / ts) + 1);
-        return new int[]{col0, row0, col1, row1};
+        return TerrainPainter.visibleBounds(camera, level, viewportWidth, viewportHeight);
     }
 
     /**

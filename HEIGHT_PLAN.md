@@ -2206,7 +2206,335 @@ both are known.
 
 ---
 
-## 11. What each instrument proves
+## 11. Job T — the tall world, and a camera that keeps up
+
+**The ask.** The engine is not a 2D engine any more, so it stops being called
+one; a column may be built **512** blocks high instead of eight; and the camera
+follows the player — including up, which is the half it currently does not do.
+
+**Why these three are one job and not three.** The ceiling is four characters
+of diff. Everything expensive about it is downstream: storage sized for eight
+layers is 2 GB at 512 (measured, T2), a sweep that walks every layer of every
+visible cell is 3 ms a frame at 512 (measured, T2), and a camera that follows a
+body on the plane but not up the height axis loses the player off the top of
+the screen at about layer 20 — which is why nobody has noticed, and why raising
+the ceiling is what makes it a bug rather than a rounding error.
+
+**What this job does not do.** It does not pitch the camera. V2 recorded that
+the real ceiling on the ceiling is legibility — a column of *n* stands *n*
+tiles up the screen and hides the *n* rows of floor behind it — and that "the
+number that would fix a taller stack is the camera's pitch, not this constant".
+That is still true, and it is still not this job. 512 is what the *storage,*
+the *sweep* and the *camera* can now afford; whether a 400-block tower reads
+well is a question for whoever builds one.
+
+### T0 — The name
+
+**Do.** `Larson's 2D Game Engine` → `Larson's Game Engine`, everywhere it is a
+name rather than a path: the window title, the start menu, the backend
+chooser's dialog, the frame-profile header, `ShareJar.JAR_NAME`, and
+`rootProject.name`.
+
+**Verify.** `ShareJarTest` names the jar; it moves with it. Nothing else in the
+suite reads the title.
+
+
+#### T0 — done, and one golden frame moved on purpose
+
+Eight strings, the jar name and `rootProject.name`. The only test that moved
+was `scene-startup`, whose golden frame draws the start menu's title: 12,623
+pixels inside `y = [84, 129]`, which is the title row and nothing else.
+Regenerated and diffed rather than rewritten on faith.
+
+### T1 — The ceiling: eight becomes 512
+
+**Do.** `Level.DEFAULT_MAX_LAYERS = 8` becomes `Level.MAX_LAYERS = 512`, and it
+is both the format's hard ceiling (what `layerLimit()` clamps a hand-edited
+file to) and what a level with no stated ceiling gets.
+
+**Those two being the same number is a decision.** `maxLayers` is written to
+the save file *only when it differs from the default* (V3), so the default is
+also what "unspecified" means for every level ever saved. Raising it therefore
+raises the ceiling of every existing level — which is the point: a level that
+means to stay flat says so with `maxLayers`, and one that never said anything
+was never asked. A level that wants the old ceiling can still set 8.
+
+**Verify.** `LevelLayersTest` pins `layerLimit()` against the format and the
+clamp; `LevelBytesTest` pins the omit-when-default rule. Both move to the new
+number and neither changes shape.
+
+
+#### T1 — done. `Level.MAX_LAYERS = 512`, and it is the default as well
+
+Two test assertions moved and neither changed shape, which is the same
+evidence V2 took from the same place: the height axis is still in one method.
+
+**One test failed that was not about the ceiling at all, and it is the useful
+part.** `HeightEditorTest.aLockedBuildHeightFillsUpToItAndRepaintsWhatIsAlreadyTaller`
+locked the build height to **99** and asserted the placement clamped to the
+level's ceiling. It passed for the reason that 99 was past eight — and at 512,
+99 is an ordinary height, so the clamp correctly did not fire and the assertion
+broke. The test now takes its "past the top" from `layerLimit()` instead of
+writing a number down. Worth naming because it is the second time in this plan
+a test believed to pin the ceiling turned out to pin something else (V2 found
+the first), and both times the number was a literal.
+
+### T2 — Storage and a sweep that can afford it
+
+**This step is why the job is not four characters.** Measured on the baseline
+with the ceiling temporarily raised, before any of it was written:
+
+| At a 512 ceiling | Cost |
+|---|---|
+| One 512-tower, 240×140 dense level | **+67.3 MB** |
+| One 512-tower, 512×512 dense level | **+516.6 MB** |
+| One 512-tower, 1024×1024 dense level (the dense limit) | **+2054.8 MB** |
+| **One single block** placed at layer 511, 240×140 | **+67.2 MB** |
+| `queueRaised`-shaped sweep, 2000 visible cells | **3.02 ms/frame** |
+
+Three separate defects, and the fourth row is the one that gives the game away.
+
+**(a) `ensureLayer` back-fills.** Writing layer 511 allocates a full
+`int[height][width]` for *every* layer below it, so one block costs 67 MB and
+511 empty grids. Layers allocate on demand already; they must allocate
+*individually*. `tileAt` already returns `0` for a null grid — the fast path
+was written for it — so the change is to stop filling the holes, not to teach
+anything to read them.
+
+**(b) A dense level cannot pay for 512 layers of its own footprint.** With (a)
+fixed, a genuine 512-tower still costs one grid per layer built, and at
+1024×1024 that is 2 GB. So `layerLimit()` gains a second clamp: a dense level's
+ceiling is what its footprint can pay for out of a fixed volume budget, and a
+chunked level — whose storage is already sparse in exactly this dimension —
+gets the full 512. This is the same rule `DENSE_TILE_LIMIT` already encodes,
+asked about volume instead of area.
+
+It is a real constraint and it is stated rather than hidden: **a bigger floor
+buys fewer floors.** The editor says so where the ceiling is set.
+
+**(c) The sweep walks empty air.** `queueRaised` runs `layer` from 1 to
+`layerCount()` for every visible cell, so one 512-tower anywhere in the level
+costs every cell on screen 512 reads — 3.02 ms a frame, 18% of a 60 Hz budget,
+to discover that 511 of them are empty. The walk is bounded by the column's own
+contents instead.
+
+**Verify.** A new `TallWorldTest`: one block at the ceiling of a dense level
+allocates one layer and not 512; a level's ceiling never exceeds what its
+footprint can pay for; and the per-cell layer walk is bounded by the column
+rather than by the level. Re-measured in T6.
+
+
+#### T2 — done. All three, and the fourth row was the one that mattered
+
+Re-measured on the finished code, same probe as the table above:
+
+| At a 512 ceiling | Before | After |
+|---|---|---|
+| One 512-tower, 240×140 dense | +67.3 MB | +67.4 MB *(the budget, spent on a real tower)* |
+| One 512-tower, 512×512 dense | +516.6 MB | **+128.5 MB** (ceiling 128) |
+| One 512-tower, 1024×1024 dense | +2054.8 MB | **+125.4 MB** (ceiling 32) |
+| **One single block** at layer 511, 240×140 | +67.2 MB | **+0.1 MB** |
+| `queueRaised`-shaped sweep, 2000 cells | 2.43 ms/frame | **0.083 ms/frame** |
+
+**(a) is the row worth reading twice.** 67.2 MB to hold one block was not a
+tall-world problem at all — it was `ensureLayer` filling every layer it grew
+past with a real grid, which was invisible at a ceiling of eight because there
+were never more than seven holes to fill. `tileAt`'s fast path had read a null
+grid as empty since V6, so the holes were pure cost and nothing had to learn
+anything to stop paying it.
+
+**(b) is a constraint, and it is stated where it bites.** `Level.storageCeiling()`
+gives a chunked level the full 512 and a dense level whatever
+`DENSE_VOLUME_LIMIT` buys at its footprint. The editor's Landscape window
+bounds its ceiling slider by it and says so in a note when it is below 512.
+**A bigger floor buys fewer floors** — and the 240×140 map the editor actually
+generates buys the whole 512.
+
+**(c) needed a per-cell bound, which Appendix B had refused.** It refused it on
+a measurement — `stackHeight` at 0.14 ms over a 256² grid — and that
+measurement is linear in the ceiling and was taken at eight. At 512 the same
+sweep is 9 ms. `Level.columnDepth` is the reversal, and it is written so it can
+only ever be **too high** (a few empty layers walked) and never too low (dropped
+geometry): writes raise it, clearing a column's top forgets it, and anything
+that replaces terrain wholesale drops the table with the generation.
+
+**Two pre-existing bugs fell out of asking who writes terrain without
+`setTile`.** `restoreTiles` and `resize` both replace terrain and neither
+bumped the revision — so a play-test that mined a wall left `TerrainCache` still
+holding the mined picture after the level was put back. That predates this job
+entirely; it was found because a cache that has to be correct forced the
+question.
+
+### T3 — The sweep has to include what rises into view
+
+**R2 is half-built, and 512 is what makes it visible.** That step reasoned
+exactly right about a column reaching up the screen — "a column eight tall
+whose *cell* is off the bottom of the visible rectangle still paints 141 px
+into the top of the screen" — and grew `cullMarginUp` to match. But the margin
+is applied in `TerrainPainter.Pass.offScreen()`, which only ever sees cells the
+scene put in `bounds`, and both scenes compute `bounds` by inverse-projecting
+the four viewport corners onto **the floor plane**. The cells the margin exists
+to keep are the cells the bounds never offered it.
+
+At eight layers that is seven rows of pop-in at the bottom edge, which reads as
+a decoration appearing late. At 512 it is a tower that vanishes the moment its
+base leaves the screen.
+
+**Do.** `visibleTileBounds()` — in `PlayScene` and `CreativeScene`, which hold
+the same method twice — extends the swept rectangle along the axis height
+lifts things *from*, by as many cells as the level is known to be tall
+(`tallestColumn()`, the same high-water mark R2 derived the margin from, so the
+two cannot disagree). Taken through `inversePlanar` so it turns with the camera
+rather than assuming a heading.
+
+**Verify.** A tall column whose base is below the viewport still paints into
+it, and the frame is identical to one rendered with an untruncated sweep —
+which is the verification R2 wrote down and did not get.
+
+
+#### T3 — done, and R2 turns out to have been half-built
+
+The margin R2 grew was never offered the cells it existed to keep, because both
+scenes computed `bounds` from the viewport corners projected onto the floor
+plane. `TerrainPainter.visibleBounds` now reaches out along
+`inversePlanar(0, lift)` by `tallestColumn() - 1` — the same vector `pick` and
+`cutaway` march along, and the same high-water mark R2 took the margin from.
+
+It also stopped being two copies. The method was duplicated verbatim in
+`PlayScene` and `CreativeScene`, and one of them would have been fixed.
+
+**The test found the fix's own edge before the fix found it.** Written first
+against top-down, `theBoundsReachOutAsFarAsTheLevelIsTall` searched for a cell
+below the viewport by stepping a row *and* a column — which walks diagonally
+out of the horizontal bounds, and the height axis extends the sweep only along
+the direction it lifts from. Correctly so: a column reaches up the screen and
+nowhere else. The test now derives its cell from the lift vector itself, which
+is the same arithmetic the fix encodes and is different in each format.
+
+### T4 — The camera follows the player up
+
+`Camera.elevation` exists, W5 built it, and it is fed from exactly one place:
+`PlayScene.update()`, from the simulation's `z`. Three things follow from that,
+and all three are invisible at eight layers.
+
+1. **It is not interpolated.** `render()` re-centres the camera on the
+   *interpolated* draw position every frame — that is what `StepInterpolation`
+   is for, and the class note explains at length why sampling the camera at an
+   uneven cadence makes the whole world shake — and then leaves `elevation` on
+   whatever the last simulation step set. So the plane is smooth and the height
+   axis judders, at the sim-vs-frame beat rate.
+2. **The creative play-test never sets it at all.** `CreativeScene` follows
+   `testMe` on the plane in both `update()` and `render()` and never calls
+   `setElevation`, so climbing in a play-test walks the player off the top of
+   the screen. This is the plainest reading of "make the camera follow the
+   player" and it is currently false.
+3. **A cutscene inherits the player's lift.** Both scenes hand the camera to
+   the cutscene director with `centerOn` and leave `elevation` where the player
+   left it, so a cutscene played from a tower is framed hundreds of pixels off.
+   Same for the editor camera the moment a play-test exits.
+
+**Do.** Elevation is set wherever the focus is set, from the same position the
+focus is taken from — interpolated in `render`, simulated in `update`, zero
+whenever the camera is following something that is not a body.
+
+**Not smoothed, deliberately.** A follow camera with a spring on it is a
+different feel and a different bug surface, and this engine has spent two plan
+documents making the camera a rigid sheet on a pixel lattice. The height axis
+follows the same rule the plane already does: rigidly, one frame behind, like
+everything else.
+
+**Verify.** A new `CameraFollowTest`: the elevation the camera is placed at
+tracks the interpolated `z` rather than the stepped one; a player at layer 400
+is at the same place on screen as a player at layer 0; and a cutscene's framing
+does not depend on how high the player was standing when it started.
+
+
+#### T4 — done as one call, and it uncovered a fourth defect nobody was looking for
+
+`Camera.follow(x, y, z)` and `Camera.frameOn(x, y)` replace the pairs of
+`centerOn`/`setElevation` calls. All three known defects were the same shape —
+two facts about one focus, set from different places at different moments — so
+the fix is that they can no longer be set apart, rather than three call sites
+being corrected.
+
+**And then `CameraFollowTest` failed on a bug that had nothing to do with any
+of them.** `Camera.offsetFor` decided which axis it was on by asking whether
+the extent it had been handed equalled `viewportHeight` — true for the vertical
+axis, and *also true for the horizontal one whenever the window is square*. A
+square viewport therefore applied the focus's lift to `x` as well as `y`, and
+the world slid sideways as a player climbed. Nothing had caught it because
+nothing had a reason to: the lift is zero in every level with its height axis
+off, and a square window is unusual outside a test. Raising the ceiling makes
+both ordinary. The axis is now passed rather than inferred.
+
+That is the case for writing the instrument even when the change looks like
+three one-line edits: the test was aimed at the three known defects and found a
+fourth that was older than all of them.
+
+### T5 — The editor's controls at 512
+
+The ceiling and build-height rows are sliders over `[2, 8]` and `[0, 7]`.
+`SliderOption` already steps by `(max - min) / 50`, so a widened range stays
+usable by keyboard and exact by drag, and `[`/`]`/Ctrl-wheel already nudge the
+build height by one. What actually needs deciding:
+
+- The build-height row is bounded by **this level's** ceiling, not by the
+  format constant — those were the same number and now are not.
+- **Generation is not.** `Relief (layers of rise)` feeds
+  `LevelGenerator.generateLandscape`, which builds relief across the *whole
+  map*: 512 layers of relief is not a landscape, it is every row of (b) above
+  at once. It keeps an authoring bound of its own.
+
+
+#### T5 — done. `SliderOption` already scaled; the bounds were the work
+
+`addSlider` steps by `(max - min) / 50`, so a widened range needed no new
+control — a keyboard press moves ten layers and a drag lands exactly. What
+changed is what bounds each row: the ceiling by `storageCeiling()`, the build
+height by **this level's** `layerLimit()` (those were the same number and now
+are not), and relief by an authoring bound of its own, because the ceiling is
+how tall *a* column may be and relief is how tall the generator makes *every*
+column across the whole map.
+
+### T6 — Re-measure
+
+Re-run T2's five rows and the suite. The ceiling is only raised if the numbers
+say it can be.
+
+
+#### T6 — done. 1152 tests, 0 failures; 31 of 32 golden frames byte-identical
+
+The measurements are in T2. The suite went from 1135 tests to 1152 — the twelve
+of `TallWorldTest` and five of `CameraFollowTest`, less the ones already there.
+
+**What a tall level costs a frame, end to end.** The bounds reaching out along
+the height axis (T3) means one tall spire widens the sweep for the whole level,
+so the thing worth measuring is not the sweep but the frame. Full
+`TerrainPainter.draw` at 1280×720 over a 240×140 level holding a 50×70 town
+eight blocks deep, floor cache off — the uncached worst case:
+
+| Scene | `tallestColumn` | Cells swept | Frame |
+|---|---|---|---|
+| town only, flat sky | 8 | 1419 | 16.03 ms |
+| town + an 8-block tower | 8 | 1419 | 14.84 ms |
+| town + a **300**-block spire | 300 | 3784 | 17.45 ms |
+| town + a **512**-block spire | 512 | 3784 | 17.57 ms |
+
+The sweep grows 2.7× and the frame grows **10%**, because the cells it grows by
+are bare floor and `columnDepth` costs nothing to reject them. And 512 costs
+what 300 costs: the reach clamps to the level's own bounds, so the price is
+capped by how big the map is rather than by how high the ceiling goes.
+
+**The strongest single result is the golden frames.** Only `scene-startup`
+moved, and only in the title row: the ceiling, the storage, the per-column
+sweep bound, the bounds reaching out along the height axis, the camera's
+elevation and the axis fix in `offsetFor` together changed **no pixel of any of
+the other 31 frames**. That is what a change to a projection is supposed to
+look like when it is a fix rather than a redesign.
+
+---
+
+## 12. What each instrument proves
 
 | Instrument | New? | What it fails on |
 |---|---|---|
@@ -2232,7 +2560,7 @@ sampled test would have called green.
 
 ---
 
-## 12. Order of record
+## 13. Order of record
 
 Within a job the steps are ordered; across jobs the constraints are:
 

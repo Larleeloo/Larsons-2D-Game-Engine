@@ -354,20 +354,18 @@ public class Level {
      * Install one layer's dense grid wholesale — how {@link LevelLoader} lays
      * a level down as it reads it, and the only way in from outside.
      *
-     * <p>Layers below {@code layer} that the file did not describe are filled
-     * with empty grids rather than left missing, because {@link #layerCount()}
-     * is a count and not a highest index: a level whose second layer existed
-     * and whose first did not is not a shape this engine has any meaning for.
+     * <p>Layers below {@code layer} that the file did not describe are left
+     * missing rather than filled with empty grids. {@link #layerCount()} is
+     * still a count and not a highest index — the array is grown to reach the
+     * index — but a hole in it reads as empty everywhere ({@link #tileAt}),
+     * which is what lets a file describe a tower without paying a full grid
+     * for each of the layers it happens to be built out of.
      */
     public void setGrid(int layer, int[][] grid) {
         if (layer < 0 || layer >= layerLimit() || grid == null) return;
         layerChunks = NO_CHUNKS;
         if (layer >= layers.length) {
-            int[][][] grown = java.util.Arrays.copyOf(layers, layer + 1);
-            for (int i = 0; i < grown.length; i++) {
-                if (grown[i] == null) grown[i] = new int[height][width];
-            }
-            layers = grown;
+            layers = java.util.Arrays.copyOf(layers, layer + 1);
         }
         layers[layer] = grid;
         bumpTerrainRevision();
@@ -382,54 +380,81 @@ public class Level {
         if (layer < 0 || layer >= layerLimit()) return new ChunkedTiles(width, height);
         layers = NO_LAYERS;
         if (layer >= layerChunks.length) {
-            ChunkedTiles[] grown = java.util.Arrays.copyOf(layerChunks, layer + 1);
-            for (int i = 0; i < grown.length; i++) {
-                if (grown[i] == null) grown[i] = new ChunkedTiles(width, height);
-            }
-            layerChunks = grown;
+            layerChunks = java.util.Arrays.copyOf(layerChunks, layer + 1);
         }
+        if (layerChunks[layer] == null) layerChunks[layer] = new ChunkedTiles(width, height);
         bumpTerrainRevision();
         return layerChunks[layer];
     }
 
     /**
-     * Allocate everything up to and including {@code layer}, matching the
-     * floor's storage shape. Layers arrive empty and in order, so a level never
-     * holds a grid for a height nothing has been built at.
+     * Allocate the storage for {@code layer}, matching the floor's storage
+     * shape, so that something can be written into it.
+     *
+     * <p><b>This layer, and not the ones under it.</b> The array has to grow to
+     * reach the index, but the layers it grows past are left {@code null} —
+     * every reader already treats a missing grid as empty, because
+     * {@link #tileAt}'s fast path was written that way from V6. Filling the
+     * holes with real grids was affordable at a ceiling of eight and is not at
+     * one of {@value #MAX_LAYERS}: measured on the way into Job T, a single
+     * block placed at layer 511 of a 240&times;140 level allocated 511 empty
+     * grids and <b>67.2 MB</b> to hold one block. It now allocates one.
      */
     private void ensureLayer(int layer) {
         if (layer < 0 || layer >= layerLimit()) return;
         if (isChunked()) {
             if (layer >= layerChunks.length) {
-                ChunkedTiles[] grown = java.util.Arrays.copyOf(layerChunks, layer + 1);
-                for (int i = 0; i < grown.length; i++) {
-                    if (grown[i] == null) grown[i] = new ChunkedTiles(width, height);
-                }
-                layerChunks = grown;
+                layerChunks = java.util.Arrays.copyOf(layerChunks, layer + 1);
             }
-        } else if (layers.length > 0 && layer >= layers.length) {
-            int[][][] grown = java.util.Arrays.copyOf(layers, layer + 1);
-            for (int i = 0; i < grown.length; i++) {
-                if (grown[i] == null) grown[i] = new int[height][width];
+            if (layerChunks[layer] == null) layerChunks[layer] = new ChunkedTiles(width, height);
+        } else if (layers.length > 0) {
+            if (layer >= layers.length) {
+                layers = java.util.Arrays.copyOf(layers, layer + 1);
             }
-            layers = grown;
+            if (layers[layer] == null) layers[layer] = new int[height][width];
         }
     }
 
     /**
-     * The tallest a plan-view level may be built, in layers, unless it says
-     * otherwise in {@link #maxLayers}.
+     * The tallest a plan-view level may be built, in layers — the format's
+     * ceiling, and what a level that does not name one of its own gets.
      *
-     * <p><b>Eight is a decision, not a limit waiting to be raised.</b> It is
-     * four times the tallest thing the art currently reads as — a wall — and
-     * enough for a two-storey building with a roof. What stops it going
-     * further is legibility rather than storage: a block is a cube, so a column
-     * of eight stands eight tiles up the screen (256 px at a 32 px tile, better
-     * than a third of a 720 px viewport) and hides the eight rows of floor
-     * behind it. The number that would fix a taller stack is the camera's
-     * pitch, not this constant.
+     * <p><b>Eight was a decision; 512 is the same decision taken again with the
+     * bill paid.</b> The original reasoning stands and is worth keeping: a
+     * block is a cube, so a column of <i>n</i> stands <i>n</i> tiles up the
+     * screen and hides the <i>n</i> rows of floor behind it, and what limits a
+     * tall stack is legibility rather than storage — the number that would fix
+     * it is the camera's pitch, not this constant. None of that says eight in
+     * particular, and a world advertised as three-dimensional whose sky is two
+     * storeys up is not one.
+     *
+     * <p>What eight <em>was</em> load-bearing for was the arithmetic underneath
+     * it, all of which was linear in this number and none of which said so:
+     * {@link #ensureLayer} allocated a full grid per layer, {@code layerLimit}
+     * asked nothing about what a level's footprint could afford, and the
+     * terrain sweep walked every layer of every visible cell. Job T of
+     * {@code HEIGHT_PLAN.md} has the measurements; this constant only moved
+     * once they did.
+     *
+     * <p>It is also, deliberately, what {@link #maxLayers} defaults to — see
+     * that field for why the two must be the same number.
      */
-    public static final int DEFAULT_MAX_LAYERS = 8;
+    public static final int MAX_LAYERS = 512;
+
+    /**
+     * How many tiles of dense layer storage a level may hold in total —
+     * {@code width * height * layers}, the budget that decides how tall a
+     * <em>dense</em> level is allowed to be.
+     *
+     * <p>32M tiles is 128 MB of {@code int[]} at the very worst, and it is a
+     * volume limit for the same reason {@link #DENSE_TILE_LIMIT} is an area
+     * one: dense storage costs the whole footprint per layer whether or not
+     * anything is standing in it, so the two dimensions trade. At the default
+     * 240&times;140 editor map it buys the full {@value #MAX_LAYERS}; at the
+     * 1024&times;1024 dense limit it buys 32, and the level that wants both is
+     * the level that wants chunked storage, where height is free.
+     */
+    public static final long DENSE_VOLUME_LIMIT = 32L * 1024 * 1024;
 
     /**
      * How tall <em>this</em> level may be built, in layers — its own ceiling
@@ -438,14 +463,24 @@ public class Level {
      * <p>A level that wants to be flat says so here rather than relying on
      * nobody stacking, which is what makes "this is a maze, not a mountain" a
      * property of the level instead of a convention. Clamped into range by
-     * {@link #layerLimit()}, so a hand-edited file cannot ask for a hundred.
+     * {@link #layerLimit()}, so a hand-edited file cannot ask for a hundred
+     * thousand.
+     *
+     * <p><b>Its default is the format ceiling, and that is what makes raising
+     * the ceiling reach old levels.</b> This field is written to the save file
+     * only when it differs from the default (V3), so the default is also what
+     * "unspecified" means for every level ever saved — and every level saved
+     * before Job T said nothing. Raising the ceiling therefore raises theirs
+     * too, which is the intent: a level that meant to stay flat said so here,
+     * and one that never said anything was never asked.
      */
-    public int maxLayers = DEFAULT_MAX_LAYERS;
+    public int maxLayers = MAX_LAYERS;
 
     /**
      * How many layers this level allows: one in a side-scroller, whose screen
      * <em>is</em> the vertical plane and which therefore has no height axis to
-     * stack along, and this level's {@link #maxLayers} on a plane.
+     * stack along, and this level's {@link #maxLayers} on a plane — capped by
+     * what its storage can afford ({@link #storageCeiling()}).
      *
      * <p>The side-scroller's one is not a placeholder. A second height axis on
      * top of a view that already draws height as the screen's vertical is a
@@ -455,7 +490,28 @@ public class Level {
      */
     public int layerLimit() {
         if (!layered()) return 1;
-        return Math.max(1, Math.min(DEFAULT_MAX_LAYERS, maxLayers));
+        return Math.max(1, Math.min(storageCeiling(), maxLayers));
+    }
+
+    /**
+     * The tallest this level's <em>storage</em> can be asked to go, whatever
+     * {@link #maxLayers} says.
+     *
+     * <p>{@value #MAX_LAYERS} on a chunked level, whose layers are sparse maps
+     * of 64&times;64 chunks and cost only what is built in them. On a dense
+     * level a layer is a full {@code int[height][width]} whether or not
+     * anything stands in it, so the ceiling is what {@link #DENSE_VOLUME_LIMIT}
+     * buys at this footprint — <b>a bigger floor buys fewer floors</b>, which
+     * the editor says out loud where the ceiling is set.
+     *
+     * <p>Never below two, so no level is silently robbed of the one stacked
+     * layer every plan view has always had; a footprint that large is over
+     * {@link #DENSE_TILE_LIMIT} and is chunked anyway.
+     */
+    public int storageCeiling() {
+        if (isChunked()) return MAX_LAYERS;
+        long area = Math.max(1L, (long) width * height);
+        return (int) Math.max(2, Math.min(MAX_LAYERS, DENSE_VOLUME_LIMIT / area));
     }
 
     // --- level format ----------------------------------------------------------
@@ -609,6 +665,7 @@ public class Level {
             boolean changed = sparse.set(col, row, id);
             if (changed) {
                 markTerrainChanged(col, row);
+                noteColumnWrite(col, row, layer, id);
                 if (id == 0 && layer == LAYER_GROUND) clearCellAttachments(col, row);
             }
             return changed;
@@ -621,6 +678,7 @@ public class Level {
         if (dense[row][col] == id) return false;
         dense[row][col] = id;
         markTerrainChanged(col, row);
+        noteColumnWrite(col, row, layer, id);
         if (id == 0 && layer == LAYER_GROUND) clearCellAttachments(col, row);
         return true;
     }
@@ -669,6 +727,107 @@ public class Level {
     /** The deepest column this level is known to hold; see {@link #tallestColumn}. */
     public int tallestColumn() {
         return Math.max(1, Math.min(layerLimit(), tallestColumn));
+    }
+
+    /**
+     * How many layers of <em>this</em> column anything need look at: one past
+     * its highest filled layer, and {@code 0} for a column with nothing in it
+     * at all.
+     *
+     * <p><b>What this is for.</b> The terrain sweep visits every layer of every
+     * visible cell, and its bound used to be {@link #layerCount()} — the number
+     * of layers <em>the level</em> has. Those are the same number only while
+     * every column is about as tall as the tallest one. Put one 512-block tower
+     * in a level of eight-block buildings and every cell on screen walks 512
+     * layers to find seven blocks: measured at <b>2.59 ms a frame</b> over 2000
+     * visible cells, which is 15% of a 60 Hz budget spent discovering that the
+     * sky is empty. Asked per column instead, the same sweep costs 0.06 ms.
+     *
+     * <p><b>Why this is a cache and {@code stackHeight} is not.</b> Appendix B
+     * of {@code HEIGHT_PLAN.md} refused a per-cell height cache at V6, and was
+     * right to: it measured {@code stackHeight} at 0.14 ms over a whole 256²
+     * grid and judged that a structure to invalidate in step with every terrain
+     * write bought nothing. That measurement is linear in the layer ceiling and
+     * was taken when the ceiling was eight. At 512 the same sweep is 9 ms. The
+     * decision is reversed on the arithmetic that made it, not against it.
+     *
+     * <p><b>Why it cannot go stale low, which is the only direction that
+     * matters.</b> Too high costs a few empty layers of walking; too low drops
+     * geometry off the screen. So every way the terrain can change either
+     * maintains this or discards it:
+     *
+     * <ul>
+     *   <li>{@link #setTile} <b>raises</b> the bound when it fills a layer, and
+     *       <b>forgets</b> the cell when it clears the top one — a clear below
+     *       the top cannot move it.</li>
+     *   <li>Everything that replaces terrain wholesale — {@link #setGrid},
+     *       {@link #newChunkedLayer}, {@link #restoreTiles}, {@link #resize},
+     *       {@link #restoreBounds} — goes through {@link #bumpTerrainRevision},
+     *       and the whole table is dropped when the generation moves.</li>
+     *   <li>The one writer that does neither is {@link LevelGenerator}, which
+     *       assigns into {@code tiles()} directly — and only ever into the
+     *       <b>floor</b>. This bounds the walk <em>above</em> the floor, where
+     *       the floor pass never looks, so a floor write cannot invalidate it.
+     *       {@code TallWorldTest} pins that, rather than trusting it.</li>
+     * </ul>
+     *
+     * <p>A cell that was never told anything computes itself exactly, once.
+     */
+    public int columnDepth(int col, int row) {
+        if (col < 0 || row < 0 || col >= width || row >= height) return 0;
+        int[] bounds = columnBounds();
+        if (bounds == null) return layerCount();
+        int at = row * width + col;
+        int known = bounds[at];
+        if (known != COLUMN_UNKNOWN) return known;
+        int depth = topFilledLayer(col, row) + 1;
+        bounds[at] = depth;
+        return depth;
+    }
+
+    /** Sentinel for a column whose depth has not been worked out yet. */
+    private static final int COLUMN_UNKNOWN = -1;
+
+    /** Per-cell {@link #columnDepth}, and the generation it was built for. */
+    private transient int[] columnBounds;
+    private transient long columnBoundsGeneration = -1;
+
+    /**
+     * The per-cell depth table, rebuilt empty when the terrain was replaced
+     * under it, or {@code null} when this level is too large to hold one.
+     *
+     * <p>The size guard is not defensive dressing: a giant level is up to
+     * 65536² cells, and a table over that is 16 GB. Those levels are chunked,
+     * which is the storage whose layers are cheap in the first place, so they
+     * simply go on paying {@link #layerCount()} — the bound this had before.
+     */
+    private int[] columnBounds() {
+        long cells = (long) width * height;
+        if (cells <= 0 || cells > DENSE_TILE_LIMIT) return null;
+        if (columnBounds == null || columnBounds.length != (int) cells
+                || columnBoundsGeneration != terrainGeneration) {
+            columnBounds = new int[(int) cells];
+            java.util.Arrays.fill(columnBounds, COLUMN_UNKNOWN);
+            columnBoundsGeneration = terrainGeneration;
+        }
+        return columnBounds;
+    }
+
+    /** Keep {@link #columnDepth} honest across one cell write; see its note. */
+    private void noteColumnWrite(int col, int row, int layer, int id) {
+        if (columnBounds == null || columnBoundsGeneration != terrainGeneration) return;
+        if (col < 0 || row < 0 || col >= width || row >= height) return;
+        int at = row * width + col;
+        if (at >= columnBounds.length) return;
+        int known = columnBounds[at];
+        if (known == COLUMN_UNKNOWN) return;
+        if (id != 0) {
+            if (layer + 1 > known) columnBounds[at] = layer + 1;
+        } else if (layer + 1 >= known) {
+            // The top of the column just went; where the new top is takes a
+            // scan, and the next reader is the one who needs the answer.
+            columnBounds[at] = COLUMN_UNKNOWN;
+        }
     }
 
     /** How tall one block stands, in this level's world units. */
@@ -997,7 +1156,12 @@ public class Level {
         if (newWidth == width && newHeight == height) return;
         if (isChunked()) {
             // Chunked levels resize in place: chunks outside the bounds unload.
-            for (ChunkedTiles layer : layerChunks) layer.resize(newWidth, newHeight);
+            // A null layer is one nothing was ever built in (ensureLayer) and
+            // has no chunks to unload, so it stays null rather than being
+            // materialized by a slider.
+            for (ChunkedTiles layer : layerChunks) {
+                if (layer != null) layer.resize(newWidth, newHeight);
+            }
         } else if ((long) newWidth * newHeight > DENSE_TILE_LIMIT) {
             // Growing past the dense limit converts to chunked storage, every
             // layer of it — a level that dropped its stack on the way past the
@@ -1017,6 +1181,10 @@ public class Level {
         }
         width = newWidth;
         height = newHeight;
+        // Every grid was re-cut and every cell moved, so anything holding a
+        // picture of this terrain is stale — including the column bounds
+        // below, which are indexed by a width that has just changed.
+        bumpTerrainRevision();
         double maxX = width * (double) tileSize - 1;
         double maxY = height * (double) tileSize - 1;
         spawnX = Math.max(0, Math.min(spawnX, maxX));
@@ -1027,25 +1195,27 @@ public class Level {
                 (k & 0xFFFFFFFFL) >= width || (k >>> 32) >= height);
     }
 
-    /** One layer, re-cut to new bounds, keeping the overlapping region. */
+    /**
+     * One layer, re-cut to new bounds, keeping the overlapping region. A layer
+     * nothing was ever built in stays unbuilt: allocating a grid for it here
+     * would undo {@link #ensureLayer}'s sparsity every time a size slider moved.
+     */
     private int[][] resized(int[][] layer, int newWidth, int newHeight) {
+        if (layer == null) return null;
         int[][] next = new int[newHeight][newWidth];
-        if (layer != null) {
-            for (int r = 0; r < Math.min(height, newHeight); r++) {
-                System.arraycopy(layer[r], 0, next[r], 0, Math.min(width, newWidth));
-            }
+        for (int r = 0; r < Math.min(height, newHeight); r++) {
+            System.arraycopy(layer[r], 0, next[r], 0, Math.min(width, newWidth));
         }
         return next;
     }
 
     /** One dense layer converted to chunked storage at the new bounds. */
     private ChunkedTiles toChunked(int[][] layer, int newWidth, int newHeight) {
+        if (layer == null) return null;
         ChunkedTiles next = new ChunkedTiles(newWidth, newHeight);
-        if (layer != null) {
-            for (int r = 0; r < Math.min(height, newHeight); r++) {
-                for (int c = 0; c < Math.min(width, newWidth); c++) {
-                    if (layer[r][c] != 0) next.set(c, r, layer[r][c]);
-                }
+        for (int r = 0; r < Math.min(height, newHeight); r++) {
+            for (int c = 0; c < Math.min(width, newWidth); c++) {
+                if (layer[r][c] != 0) next.set(c, r, layer[r][c]);
             }
         }
         return next;
@@ -1221,7 +1391,18 @@ public class Level {
         return new TerrainSnapshot(snapshotLayers());
     }
 
-    /** Restore terrain saved by {@link #snapshotTiles} (no-op on mismatch). */
+    /**
+     * Restore terrain saved by {@link #snapshotTiles} (no-op on mismatch).
+     *
+     * <p><b>Bumps the generation, which it did not used to.</b> This writes
+     * whole layers straight into their grids rather than going through
+     * {@link #setTile}, so nothing downstream heard about it: a play-test that
+     * mined a wall left {@link com.larsons.engine.graphics.TerrainCache} still
+     * holding the mined picture after the level was put back, and the editor
+     * drew a hole that was no longer there until something else happened to
+     * dirty that chunk. Replacing the terrain wholesale is exactly what
+     * {@link #bumpTerrainRevision} is for.
+     */
     public void restoreTiles(Object snapshot) {
         if (snapshot instanceof TerrainSnapshot saved) {
             restoreLayers(saved.layers());
@@ -1229,6 +1410,7 @@ public class Level {
             // A snapshot from before the second layer existed: ground only.
             restoreLayer(LAYER_GROUND, snapshot);
         }
+        bumpTerrainRevision();
     }
 
     /** Every layer of a play-test terrain snapshot; any entry may be null. */
@@ -1555,7 +1737,7 @@ public class Level {
         m.put("height", height);
         // The third dimension, written beside the other two and only when the
         // level has an opinion about it.
-        if (maxLayers != DEFAULT_MAX_LAYERS) m.put("maxLayers", maxLayers);
+        if (maxLayers != MAX_LAYERS) m.put("maxLayers", maxLayers);
         m.put("background", hex(background));
         // Each level stores its own feature toggles so game types can hold a
         // diverse mix of levels; loading a level loads its settings.
@@ -1588,10 +1770,13 @@ public class Level {
             }
             // One chunk map per layer, indexed by height. Empty maps are kept
             // rather than skipped, because the index is what says which layer
-            // a map belongs to.
+            // a map belongs to — and a layer nothing was ever built in has no
+            // storage at all (ensureLayer), which is the same empty map.
             List<Object> perLayer = new ArrayList<>(layerCount());
             for (int layer = 0; layer < layerCount(); layer++) {
-                perLayer.add(new LinkedHashMap<>(chunks(layer).dirtyChunksRle()));
+                ChunkedTiles sparse = chunks(layer);
+                perLayer.add(sparse == null ? new LinkedHashMap<String, Object>()
+                        : new LinkedHashMap<>(sparse.dirtyChunksRle()));
             }
             m.put("layerChunks", perLayer);
         } else {

@@ -219,6 +219,47 @@ public class Camera {
         this.y = wy;
     }
 
+    /**
+     * Follow a body: centred on {@code (wx, wy)} on the plane and carried up
+     * the screen by however far {@code z} has lifted it off the floor.
+     *
+     * <p><b>One call, because two calls were the bug.</b> Following something
+     * is two facts — where it is on the ground and how high it is standing —
+     * and they were set from two different places, at two different moments,
+     * by whichever call sites remembered. The results were exactly what that
+     * arrangement predicts: the play scene set the lift once per <em>simulation
+     * step</em> while re-centring on the plane once per <em>frame</em>, so the
+     * ground scrolled smoothly and the height axis juddered at the beat
+     * between the two rates; the creative play-test never set the lift at all,
+     * so climbing walked the player off the top of the screen; and a cutscene
+     * kept whatever lift the player happened to have been standing at.
+     *
+     * <p>None of those are visible while a column is eight blocks tall, which
+     * is why all three survived. At {@value com.larsons.engine.level.Level#MAX_LAYERS}
+     * they are the difference between a camera that follows a climbing player
+     * and one that loses them. Taking both numbers together is what makes them
+     * impossible to set out of step; use {@link #frameOn} for a focus that is
+     * not a body.
+     *
+     * @param z the focus's height in world units — {@code 0} on the floor
+     */
+    public void follow(double wx, double wy, double z) {
+        centerOn(wx, wy);
+        setElevation(z * liftScale());
+    }
+
+    /**
+     * Frame a point that is not a body — a cutscene's mark, a level's spawn,
+     * an editor's free camera. The same as {@link #centerOn} except that it
+     * says so about the height axis: whatever the camera was following before,
+     * this point is on the floor, and a frame inherited from the last thing
+     * followed is a frame nobody chose.
+     */
+    public void frameOn(double wx, double wy) {
+        centerOn(wx, wy);
+        setElevation(0);
+    }
+
     /** The camera's heading, radians clockwise from world north. */
     public double yaw() { return yaw; }
 
@@ -447,13 +488,13 @@ public class Camera {
     public int worldToScreenX(double wx, double wy) {
         double[] p = planar(wx, wy);
         double[] c = planar(x, y);
-        return place(p[0], c[0], viewportWidth);
+        return place(p[0], c[0], viewportWidth, false);
     }
 
     public int worldToScreenY(double wx, double wy) {
         double[] p = planar(wx, wy);
         double[] c = planar(x, y);
-        return place(p[1], c[1], viewportHeight);
+        return place(p[1], c[1], viewportHeight, true);
     }
 
     /**
@@ -479,19 +520,30 @@ public class Camera {
      * elevation term below would have gone into the forward direction and not
      * the inverse, and a click would have landed a whole tower's worth of
      * pixels from the block under the cursor.
+     *
+     * <p><b>Which axis this is, is a fact about the axis and not about how big
+     * it happens to be.</b> This used to decide by asking whether the extent it
+     * had been handed equalled {@link #viewportHeight} — true for the vertical
+     * axis, and also true for the horizontal one <em>whenever the window was
+     * square</em>. A square window therefore applied the focus's lift to
+     * {@code x} as well as to {@code y}, and the whole world slid sideways as a
+     * player climbed. Nothing caught it because nothing had a reason to: the
+     * lift is zero in every level that has not switched its height axis on, and
+     * a square viewport is unusual outside a test. Raising the ceiling makes
+     * both of those ordinary.
      */
-    private long offsetFor(double planarCamera, int viewport) {
+    private long offsetFor(double planarCamera, int viewport, boolean vertical) {
         long offset = Math.round(viewport / 2.0 - planarCamera * zoom);
         // The focus's own lift, on the axis that carries it. Applied to the
         // camera's offset rather than to each point, so the whole world slides
         // together and the pixel lattice the class note is about is untouched.
-        if (viewport == viewportHeight) offset += Math.round(elevation * zoom);
+        if (vertical) offset += Math.round(elevation * zoom);
         return offset;
     }
 
-    private int place(double planar, double planarCamera, int viewport) {
+    private int place(double planar, double planarCamera, int viewport, boolean vertical) {
         long lattice = Math.round(planar * zoom);
-        long offset = offsetFor(planarCamera, viewport);
+        long offset = offsetFor(planarCamera, viewport, vertical);
         long screen = lattice + offset;
         // Saturating rather than wrapping. A clipped-off coordinate draws
         // nothing, which is what was wanted; a wrapped one draws it on the
@@ -538,8 +590,8 @@ public class Camera {
                 cy = rcy;
             }
         }
-        out[0] = place(px, cx, viewportWidth);
-        out[1] = place(py, cy, viewportHeight);
+        out[0] = place(px, cx, viewportWidth, false);
+        out[1] = place(py, cy, viewportHeight, true);
     }
 
     /**
@@ -572,8 +624,8 @@ public class Camera {
      */
     public double[] screenToWorld(int sx, int sy) {
         double[] c = planar(x, y);
-        double px = (sx - offsetFor(c[0], viewportWidth)) / zoom;
-        double py = (sy - offsetFor(c[1], viewportHeight)) / zoom;
+        double px = (sx - offsetFor(c[0], viewportWidth, false)) / zoom;
+        double py = (sy - offsetFor(c[1], viewportHeight, true)) / zoom;
         return inversePlanar(px, py);
     }
 }

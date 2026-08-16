@@ -97,7 +97,7 @@ public final class LevelLoader {
         // Read before any geometry: installing a layer consults the ceiling,
         // and a file that says how tall it is has to have said so by then.
         if (root.containsKey("maxLayers")) {
-            lvl.maxLayers = intOf(root.get("maxLayers"), Level.DEFAULT_MAX_LAYERS);
+            lvl.maxLayers = intOf(root.get("maxLayers"), Level.MAX_LAYERS);
         }
         if (root.get("background") instanceof String bg) lvl.background = parseColor(bg, lvl.background);
 

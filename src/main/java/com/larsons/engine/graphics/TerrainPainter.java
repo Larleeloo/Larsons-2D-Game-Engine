@@ -264,6 +264,69 @@ public final class TerrainPainter {
      * @return what is under the point, or {@code null} when the ray leaves the
      *         level without meeting anything
      */
+    /**
+     * The tile-index rectangle a sweep has to visit to draw this viewport:
+     * the four screen corners carried back into the world, plus the reach of
+     * the height axis.
+     *
+     * <p><b>The second half is the half that was missing, and R2 is where it
+     * should have gone.</b> That step reasoned correctly that "a column eight
+     * tall whose <em>cell</em> is off the bottom of the visible rectangle still
+     * paints 141 px into the top of the screen", and grew {@link Pass#cullMarginUp}
+     * to keep such a cell. But the margin is applied in {@link Pass#offScreen},
+     * which only ever sees cells a scene has already put in {@code bounds} —
+     * and both scenes computed those by inverse-projecting the viewport corners
+     * onto the <b>floor plane</b> alone. The cells the margin exists to keep
+     * were the cells it was never offered. At eight layers that is a few rows
+     * of pop-in along one edge; at {@value com.larsons.engine.level.Level#MAX_LAYERS}
+     * it is a tower that vanishes the moment its base leaves the screen.
+     *
+     * <p>The reach is taken through {@link Camera#inversePlanar}, the same way
+     * {@link #pick} and {@link #cutaway} take theirs, so it turns with the
+     * camera instead of assuming a heading — and it is scaled by
+     * {@link Level#tallestColumn()}, the same high-water mark R2 derived the
+     * margin from, so the bounds and the margin cannot disagree about how tall
+     * the level is.
+     *
+     * <p>Lives here rather than in either scene because it did live in both
+     * scenes, copied, and only one copy would have been fixed.
+     */
+    public static int[] visibleBounds(Camera camera, Level level,
+                                      int viewportWidth, int viewportHeight) {
+        double ts = level.tileSize;
+        double minX = Double.POSITIVE_INFINITY, maxX = Double.NEGATIVE_INFINITY;
+        double minY = Double.POSITIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY;
+        int[][] cornersPx = {{0, 0}, {viewportWidth, 0}, {0, viewportHeight},
+                {viewportWidth, viewportHeight}};
+        for (int[] c : cornersPx) {
+            double[] wp = camera.screenToWorld(c[0], c[1]);
+            minX = Math.min(minX, wp[0]);
+            maxX = Math.max(maxX, wp[0]);
+            minY = Math.min(minY, wp[1]);
+            maxY = Math.max(maxY, wp[1]);
+        }
+        if (level.layered()) {
+            // A block at cell T drawn n layers up lands on the floor point
+            // T − n·step, so the cells that can paint over this viewport run
+            // out to its corners + n·step. Along the step and not against it:
+            // the sign is what decides whether this reaches the towers below
+            // the screen or the empty ground above it.
+            double[] step = camera.inversePlanar(0,
+                    BLOCK_HEIGHT * ts * camera.liftScale());
+            double reach = Math.max(0, level.tallestColumn() - 1);
+            double dx = step[0] * reach, dy = step[1] * reach;
+            minX = Math.min(minX, minX + dx);
+            maxX = Math.max(maxX, maxX + dx);
+            minY = Math.min(minY, minY + dy);
+            maxY = Math.max(maxY, maxY + dy);
+        }
+        int col0 = Math.max(0, (int) Math.floor(minX / ts) - 1);
+        int col1 = Math.min(level.width - 1, (int) Math.floor(maxX / ts) + 1);
+        int row0 = Math.max(0, (int) Math.floor(minY / ts) - 1);
+        int row1 = Math.min(level.height - 1, (int) Math.floor(maxY / ts) + 1);
+        return new int[]{col0, row0, col1, row1};
+    }
+
     public static Aim pick(Camera camera, Level level, int screenX, int screenY) {
         double[] floor = camera.screenToWorld(screenX, screenY);
         int ts = level.tileSize;
@@ -844,9 +907,15 @@ public final class TerrainPainter {
          * on which is nearer.
          */
         private void queueRaised(int[] bounds, DepthPass raisedPass) {
+            if (level.layerCount() <= 1) return;
             for (int r = bounds[1]; r <= bounds[3]; r++) {
                 for (int c = bounds[0]; c <= bounds[2]; c++) {
-                    int layers = level.layerCount();
+                    // How far up *this* column, not how far up the level. They
+                    // are the same number only while every column is as tall as
+                    // the tallest one; one 512-block tower in a level of
+                    // eight-block buildings made every cell on screen walk 512
+                    // layers to find seven blocks (Level.columnDepth).
+                    int layers = level.columnDepth(c, r);
                     if (layers <= 1) continue;
                     project(c, r);
                     if (offScreen()) continue;

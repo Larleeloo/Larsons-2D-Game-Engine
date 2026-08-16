@@ -33,7 +33,7 @@ import java.util.stream.Stream;
  * containing everything a friend needs to play:
  *
  * <ul>
- *   <li>{@code larsons-2d-game-engine.jar} — the whole game, runnable with
+ *   <li>{@code larsons-game-engine.jar} — the whole game, runnable with
  *       {@code java -jar} on any machine with Java 21+ (the engine has no
  *       other dependencies by design);</li>
  *   <li>{@code run.bat} / {@code run.sh} — double-click launchers;</li>
@@ -61,7 +61,7 @@ import java.util.stream.Stream;
  */
 public final class ShareJar {
 
-    public static final String JAR_NAME = "larsons-2d-game-engine.jar";
+    public static final String JAR_NAME = "larsons-game-engine.jar";
     public static final String DEFAULT_DIR = "share";
 
     /** {@code -Dlarsons.share=true|false} overrides the IntelliJ check. */

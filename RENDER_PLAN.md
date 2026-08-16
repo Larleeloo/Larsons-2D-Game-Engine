@@ -2054,7 +2054,7 @@ jars hold the same engine classes; only the classpath differs.
 
 | Launch | What it printed |
 |---|---|
-| `java -jar Larsons-2D-Game-Engine-0.1.0.jar` | `backend: java2d — no GPU backend on the classpath` |
+| `java -jar Larsons-Game-Engine-0.1.0.jar` | `backend: java2d — no GPU backend on the classpath` |
 | `java -jar larsons-engine-gl.jar` | `backend: gl (Mesa / llvmpipe … / 4.5 (Core Profile) …) — probed and selected automatically` |
 | plain jar, `-Dlarsons.render.backend=gl` | `backend: java2d — -Dlarsons.render.backend=gl names a backend that is not on the classpath (none is)` |
 | GL jar, `-Dlarsons.render.gl.version=9.9` | `backend: java2d — no usable GPU context — gl: no GL 9.9 core context` |

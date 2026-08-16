@@ -519,6 +519,19 @@ public class CreativeScene extends AbstractScene {
     private LevelFormat pendingFormat = LevelFormat.SIDE_SCROLLER;
     private int genWidth = 240, genHeight = 140, genSeed = 1;
     /**
+     * The tallest relief the landscape generator is offered, in layers.
+     *
+     * <p>Deliberately not {@link Level#MAX_LAYERS}, and not the level's own
+     * ceiling either. The ceiling says how tall <em>a</em> column may be built;
+     * relief is how tall the generator makes <em>every</em> column, over the
+     * whole map, and the two do not scale together — at 512 the generator would
+     * fill every cell of the map to the ceiling, which is neither a landscape
+     * nor something the storage budget is sized for. 32 layers is a mountain
+     * range at a 32 px tile; anything taller is a building, and buildings are
+     * built by hand.
+     */
+    private static final int MAX_GENERATED_RELIEF = 32;
+    /**
      * Generate dialog mode: rolling landscape, Perlin terrain, or the maze.
      *
      * <p>Held as the label the form shows rather than as an enum, because the
@@ -728,7 +741,7 @@ public class CreativeScene extends AbstractScene {
         camera = new Camera(level.perspective, viewportWidth, viewportHeight);
         camera.tileSize = level.tileSize;
         camera.zoom = 1.0;
-        camera.centerOn(level.spawnX, level.spawnY);
+        camera.frameOn(level.spawnX, level.spawnY);
         // Creative mode has music of its own, so building a level doesn't
         // have to happen in silence — drop music/creative.mp3 in the pack.
         ctx.music(SoundKeys.music("creative"));
@@ -2738,6 +2751,12 @@ public class CreativeScene extends AbstractScene {
         ctx.applyLevelSettings(level.settings);
         camera.tileSize = level.tileSize;
         camera.setPerspective(level.perspective);
+        // The editor's camera is panned by hand across the ground; it is not
+        // following a body and has no lift of its own. Without this it would
+        // inherit whatever height the play-test's player was standing at, and
+        // an editor opened after testing on a tower would be framed above the
+        // level it is editing.
+        camera.frameOn(camera.x, camera.y);
         buildPalette();
         setStatus("Back to editing — " + format().displayName() + " creative mode");
     }
@@ -2780,11 +2799,12 @@ public class CreativeScene extends AbstractScene {
             }
             CutscenePlayer cut = cutsceneDirector.active();
             if (cut != null) {
-                camera.centerOn(cut.cameraX(), cut.cameraY());
+                camera.frameOn(cut.cameraX(), cut.cameraY());
                 particles.update(dt);
                 return;
             }
-            camera.centerOn(testMe.x + testHitSize() / 2.0, testMe.y + testHitSize() / 2.0);
+            camera.follow(testMe.x + testHitSize() / 2.0,
+                    testMe.y + testHitSize() / 2.0, testMe.z);
             return; // resume normal play next tick
         }
         if (KeyBinds.pressed(input, GameAction.MENU_BACK)
@@ -2942,7 +2962,11 @@ public class CreativeScene extends AbstractScene {
 
         if (swingTime > 0) swingTime -= dt;
         particles.update(dt);
-        camera.centerOn(testMe.x + testHitSize() / 2.0, testMe.y + testHitSize() / 2.0);
+        // The play-test follows the body it is testing, up the height axis
+        // as well as across the plane — it followed only the plane before,
+        // so climbing a tower in a play-test walked off the top of the view.
+        camera.follow(testMe.x + testHitSize() / 2.0,
+                testMe.y + testHitSize() / 2.0, testMe.z);
 
         // Cutscene triggers watch the player: zones fire on entry, INTERACT
         // ones on E (doors and stations already had their chance above).
@@ -3693,11 +3717,20 @@ public class CreativeScene extends AbstractScene {
         dialogForm.addToggle("Falling hurts", () -> p.fallDamageEnabled,
                         v -> p.fallDamageEnabled = v)
                 .enabledWhen(() -> p.verticality);
+        // Bounded by what this level's storage can pay for, not by the format
+        // constant: a dense level buys layers out of a volume budget, so a
+        // bigger floor buys fewer floors (Level.storageCeiling).
         dialogForm.addSlider("Ceiling (layers)", () -> level.maxLayers,
-                v -> level.maxLayers = v, 2, Level.DEFAULT_MAX_LAYERS);
-        dialogForm.addNote("How tall a column in this level may be built. Eight is"
-                + " two storeys and a roof; a level that means to stay flat says"
-                + " so here rather than relying on nobody stacking.");
+                v -> level.maxLayers = v, 2, level.storageCeiling());
+        dialogForm.addNote("How tall a column in this level may be built, up to "
+                + level.storageCeiling() + " at this map size. Eight is two storeys"
+                + " and a roof; a level that means to stay flat says so here rather"
+                + " than relying on nobody stacking.");
+        if (level.storageCeiling() < Level.MAX_LAYERS) {
+            dialogForm.addNote("This map is large enough that each layer costs its"
+                    + " whole footprint, so it tops out below " + Level.MAX_LAYERS
+                    + ". A smaller map — or a giant chunk-loaded one — builds higher.");
+        }
 
         String[] tools = new String[Brush.Height.values().length];
         for (Brush.Height h : Brush.Height.values()) tools[h.ordinal()] = Brush.label(h);
@@ -3710,8 +3743,10 @@ public class CreativeScene extends AbstractScene {
         dialogForm.addToggle("Lock the build height",
                 () -> buildLayer >= 0,
                 v -> buildLayer = v ? Math.max(0, buildLayer) : -1);
+        // This level's ceiling rather than the format's — they were the same
+        // number while every level shared one ceiling, and are not now.
         dialogForm.addSlider("Build height (layer)", () -> Math.max(0, buildLayer),
-                        v -> buildLayer = v, 0, Level.DEFAULT_MAX_LAYERS - 1)
+                        v -> buildLayer = v, 0, level.layerLimit() - 1)
                 .enabledWhen(() -> buildLayer >= 0);
         dialogForm.addNote("Unlocked, a block lands on whatever it is dropped on."
                 + " Locked, every stroke builds to that layer — a terrace across"
@@ -3770,7 +3805,7 @@ public class CreativeScene extends AbstractScene {
         // rather than sliding into it — setYaw is the teleport, turn() is what
         // a player does. C9.
         camera.setYaw(level.authoredHeading * Camera.EIGHTH_TURN);
-        camera.centerOn(level.spawnX, level.spawnY);
+        camera.frameOn(level.spawnX, level.spawnY);
         pendingLevelW = level.width;
         pendingLevelH = level.height;
         buildPalette(); // the CUTSCENES palette lists this level's cutscenes
@@ -3820,12 +3855,18 @@ public class CreativeScene extends AbstractScene {
             openDialog(Dialog.GENERATE);   // the relief row belongs to one mode
         });
         if (GEN_LANDSCAPE.equals(genMode) && pendingFormat.layered()) {
+            // Relief keeps an authoring bound of its own rather than following
+            // the ceiling. The ceiling is how tall one column *may* be built;
+            // this is how tall the generator makes *every* column, across the
+            // whole map, so the two scale differently — 500 layers of relief is
+            // not a landscape, it is every cell of the map paying for a tower.
             dialogForm.addSlider("Relief (layers of rise)", () -> genRelief,
-                    v -> genRelief = v, 1, Level.DEFAULT_MAX_LAYERS - 1);
+                    v -> genRelief = v, 1, MAX_GENERATED_RELIEF);
             dialogForm.addNote("Rolling ground in stacked layers, capped with grass"
                     + " over stone — the same seed is the same landscape. Turns the"
                     + " height axis on, since terrain nobody can climb is a maze of"
-                    + " cliffs.");
+                    + " cliffs. Build higher than this by hand; the ceiling is set"
+                    + " in the landscape settings.");
         }
         dialogForm.addToggle("Override map size (giant, chunk-loaded)",
                 () -> overrideMapSize, v -> {
@@ -6123,8 +6164,8 @@ public class CreativeScene extends AbstractScene {
         // panned by hand and its own note says why that is left alone.
         if (testing && testMe != null
                 && (cutsceneDirector == null || cutsceneDirector.active() == null)) {
-            camera.centerOn(testDrawX() + testHitSize() / 2.0,
-                    testDrawY() + testHitSize() / 2.0);
+            camera.follow(testDrawX() + testHitSize() / 2.0,
+                    testDrawY() + testHitSize() / 2.0, testDrawZ());
         }
         feedLighting(p);
 
@@ -6258,23 +6299,7 @@ public class CreativeScene extends AbstractScene {
     }
 
     private int[] visibleTileBounds() {
-        double ts = level.tileSize;
-        double minX = Double.POSITIVE_INFINITY, maxX = Double.NEGATIVE_INFINITY;
-        double minY = Double.POSITIVE_INFINITY, maxY = Double.NEGATIVE_INFINITY;
-        int[][] cornersPx = {{0, 0}, {viewportWidth, 0}, {0, viewportHeight},
-                {viewportWidth, viewportHeight}};
-        for (int[] c : cornersPx) {
-            double[] wp = camera.screenToWorld(c[0], c[1]);
-            minX = Math.min(minX, wp[0]);
-            maxX = Math.max(maxX, wp[0]);
-            minY = Math.min(minY, wp[1]);
-            maxY = Math.max(maxY, wp[1]);
-        }
-        int col0 = Math.max(0, (int) Math.floor(minX / ts) - 1);
-        int col1 = Math.min(level.width - 1, (int) Math.floor(maxX / ts) + 1);
-        int row0 = Math.max(0, (int) Math.floor(minY / ts) - 1);
-        int row1 = Math.min(level.height - 1, (int) Math.floor(maxY / ts) + 1);
-        return new int[]{col0, row0, col1, row1};
+        return TerrainPainter.visibleBounds(camera, level, viewportWidth, viewportHeight);
     }
 
     private final int[] pxs = new int[4];
