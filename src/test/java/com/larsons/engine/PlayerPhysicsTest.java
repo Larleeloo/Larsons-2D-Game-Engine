@@ -390,6 +390,16 @@ class PlayerPhysicsTest {
      * camera pan several thousand lines earlier — which turned out to want the
      * same rotation for the same reason, and is why the scan is written this
      * way rather than tightened until it went quiet.
+     *
+     * <p><b>Two spellings are accepted, because there are now two cameras.</b>
+     * A scene that can be played in a first-person view has a heading in the
+     * flat {@code Camera} and another in the {@code EyeCamera}, and only one of
+     * them is the one the player is looking along; {@code PlayScene.viewYaw()}
+     * is the accessor that picks. The property being scanned for is unchanged —
+     * the heading of the camera being looked through, attached to the input
+     * built from that frame's keys — and naming the accessor as well as the
+     * bare call is what keeps the scan on that property rather than on the
+     * spelling it had when there was only one camera to ask.
      */
     @Test
     void everySceneStampsTheHeadingOnTheInputItSteps() throws IOException {
@@ -406,7 +416,8 @@ class PlayerPhysicsTest {
                 // tick with no movement in it is neither required nor wrong.
                 if (!after.contains("GameAction.MOVE_LEFT")) continue;
                 checked++;
-                assertTrue(after.contains("yaw = camera.viewYaw()"), scene + " builds an "
+                assertTrue(after.contains("yaw = camera.viewYaw()")
+                                || after.contains("yaw = viewYaw()"), scene + " builds an "
                         + "input from the movement keys without stamping the heading on "
                         + "it. Every test in this class sets the heading itself and would "
                         + "still pass; what would not work is the game, where pressing up "
