@@ -1,4 +1,4 @@
-rootProject.name = "Larsons-2D-Game-Engine"
+rootProject.name = "Larsons-Game-Engine"
 
 // The GL backend, in its own project so it cannot contaminate the core's
 // zero-dependency guarantee (invariant 1). `:gl` depends on the root; the root

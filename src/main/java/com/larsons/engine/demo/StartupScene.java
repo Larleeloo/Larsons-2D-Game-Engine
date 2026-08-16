@@ -24,7 +24,7 @@ public class StartupScene extends AbstractScene {
     @Override
     public void onEnter() {
         // Rebuild every time so newly created/saved game types appear.
-        menu = new Menu("Larson's 2D Game Engine")
+        menu = new Menu("Larson's Game Engine")
                 .subtitle("Choose a game type to continue, or create a new one")
                 .theme(MenuTheme.dark());
 

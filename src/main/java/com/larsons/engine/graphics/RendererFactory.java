@@ -15,7 +15,7 @@ import java.awt.Color;
  * implementations on the classpath it was launched with:
  *
  * <pre>
- *   java -jar build/libs/Larsons-2D-Game-Engine-0.1.0.jar   → nothing found, Java2D
+ *   java -jar build/libs/Larsons-Game-Engine-0.1.0.jar   → nothing found, Java2D
  *   java -jar gl/build/libs/larsons-engine-gl.jar           → one found, GL
  * </pre>
  *

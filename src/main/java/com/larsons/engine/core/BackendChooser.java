@@ -234,7 +234,7 @@ public final class BackendChooser {
                     This is remembered. To change it later, delete
                     config/render.json or launch with
                     -Dlarsons.render.chooser=always""",
-                    "Larson's 2D Game Engine — renderer",
+                    "Larson's Game Engine — renderer",
                     javax.swing.JOptionPane.DEFAULT_OPTION,
                     javax.swing.JOptionPane.QUESTION_MESSAGE,
                     null, options, options[0]);

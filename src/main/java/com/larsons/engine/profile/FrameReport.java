@@ -44,7 +44,7 @@ public final class FrameReport {
     public static String render(Snapshot snapshot, DeviceProfile device, String context) {
         StringBuilder out = new StringBuilder();
 
-        out.append("Larson's 2D Game Engine — frame profile\n");
+        out.append("Larson's Game Engine — frame profile\n");
         out.append("=".repeat(64)).append('\n');
         out.append("taken    : ")
                 .append(ZonedDateTime.now().format(DateTimeFormatter.RFC_1123_DATE_TIME))

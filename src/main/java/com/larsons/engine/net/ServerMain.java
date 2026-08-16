@@ -16,7 +16,7 @@ import java.io.IOException;
  *   gradle runServer --args="--port 7777 --level levels/sample_level.json --gametype platformer"
  *
  *   # or with a built jar / plain classes
- *   java -cp build/libs/Larsons-2D-Game-Engine-0.1.0.jar com.larsons.engine.net.ServerMain --port 7777
+ *   java -cp build/libs/Larsons-Game-Engine-0.1.0.jar com.larsons.engine.net.ServerMain --port 7777
  * </pre>
  *
  * All arguments are optional: the port defaults to {@value Protocol#DEFAULT_PORT},

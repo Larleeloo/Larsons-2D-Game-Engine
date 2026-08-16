@@ -126,7 +126,7 @@ class LevelLayersTest {
             lvl.fillFloor(lvl.blocks.get("stone_path").id());
             int stone = lvl.blocks.get("stone").id();
 
-            assertEquals(format.layered() ? Level.DEFAULT_MAX_LAYERS : 1, lvl.layerLimit(),
+            assertEquals(format.layered() ? Level.MAX_LAYERS : 1, lvl.layerLimit(),
                     format + ": the ceiling");
             assertFalse(lvl.setTile(4, 4, lvl.layerLimit(), stone),
                     format + ": a block above the ceiling is refused");
@@ -145,13 +145,13 @@ class LevelLayersTest {
         lvl.fillFloor(lvl.blocks.get("stone_path").id());
         int stone = lvl.blocks.get("stone").id();
 
-        for (int layer = 1; layer < Level.DEFAULT_MAX_LAYERS; layer++) {
+        for (int layer = 1; layer < Level.MAX_LAYERS; layer++) {
             assertTrue(lvl.setTile(4, 4, layer, stone), "layer " + layer + " accepts a block");
         }
-        assertEquals(Level.DEFAULT_MAX_LAYERS, lvl.stackHeight(4, 4),
+        assertEquals(Level.MAX_LAYERS, lvl.stackHeight(4, 4),
                 "the column is as deep as it was built");
-        assertEquals(Level.DEFAULT_MAX_LAYERS, lvl.layerCount());
-        assertFalse(lvl.setTile(4, 4, Level.DEFAULT_MAX_LAYERS, stone),
+        assertEquals(Level.MAX_LAYERS, lvl.layerCount());
+        assertFalse(lvl.setTile(4, 4, Level.MAX_LAYERS, stone),
                 "and the next block has nowhere to go");
     }
 
@@ -173,7 +173,7 @@ class LevelLayersTest {
         assertFalse(flat.setTile(4, 4, 2, stone), "a tower does not");
 
         flat.maxLayers = 900;
-        assertEquals(Level.DEFAULT_MAX_LAYERS, flat.layerLimit(),
+        assertEquals(Level.MAX_LAYERS, flat.layerLimit(),
                 "a level cannot vote itself past the engine's ceiling");
         flat.maxLayers = 0;
         assertEquals(1, flat.layerLimit(), "nor below a single layer of floor");

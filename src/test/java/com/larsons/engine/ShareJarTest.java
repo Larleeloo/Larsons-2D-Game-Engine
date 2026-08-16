@@ -74,7 +74,7 @@ class ShareJarTest {
     void theShareFolderIsAnIntelliJOnlyConvenience() {
         // A plain `java -jar` run on a player's machine: none of the signals.
         Properties plain = new Properties();
-        plain.setProperty("java.class.path", "larsons-2d-game-engine.jar");
+        plain.setProperty("java.class.path", "larsons-game-engine.jar");
         plain.setProperty("sun.java.command", "com.larsons.engine.core.Main");
         assertFalse(ShareJar.launchedByIntelliJ(plain, List.of(), Map.of()),
                 "a shipped game builds nothing");

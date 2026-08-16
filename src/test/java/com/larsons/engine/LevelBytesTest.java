@@ -159,7 +159,7 @@ class LevelBytesTest {
 
         assertEquals(1, layerRunsOf(furnished(LevelFormat.SIDE_SCROLLER)).size(),
                 "a side-scroller is one layer and can never be two");
-        assertEquals(Level.DEFAULT_MAX_LAYERS, layerRunsOf(tower()).size(),
+        assertEquals(Level.MAX_LAYERS, layerRunsOf(tower()).size(),
                 "and a tower is as deep as it was built");
     }
 
@@ -197,7 +197,7 @@ class LevelBytesTest {
                 }
             }
         }
-        assertEquals(Level.DEFAULT_MAX_LAYERS, after.stackHeight(4, 4),
+        assertEquals(Level.MAX_LAYERS, after.stackHeight(4, 4),
                 "the column is as deep as it was saved");
         assertFixedPoint(before, "tower");
     }
@@ -208,7 +208,7 @@ class LevelBytesTest {
         Level plain = furnished(LevelFormat.ISOMETRIC);
         assertFalse(keysOf(plain).contains("maxLayers"),
                 "a level that never moved its ceiling says nothing");
-        assertEquals(Level.DEFAULT_MAX_LAYERS,
+        assertEquals(Level.MAX_LAYERS,
                 LevelLoader.parse(plain.toJson()).maxLayers);
 
         Level flat = furnished(LevelFormat.ISOMETRIC);
@@ -318,7 +318,7 @@ class LevelBytesTest {
     private static Level tower() {
         Level lvl = furnished(LevelFormat.ISOMETRIC);
         int stone = lvl.blocks.get("stone").id();
-        for (int layer = 1; layer < Level.DEFAULT_MAX_LAYERS; layer++) {
+        for (int layer = 1; layer < Level.MAX_LAYERS; layer++) {
             lvl.setTile(4, 4, layer, stone);
         }
         return lvl;

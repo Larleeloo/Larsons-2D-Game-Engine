@@ -1,7 +1,8 @@
-# Larson's 2D Game Engine
+# Larson's Game Engine
 
-A **generic** 2D game engine in pure Java. It provides a clean game loop
-and the building blocks for any 2D game — sprite sheets, level loading,
+A **generic** game engine in pure Java. It provides a clean game loop
+and the building blocks for any 2D or plan-view 3D game — sprite sheets,
+level loading, a height axis you can build up to 512 blocks along,
 cameras with multiple perspectives, scenes, input, a customizable menu
 system, **online multiplayer** (host a server, friends join by IP + port,
 Minecraft-style), a **shader system** (GLSL-first post-processing that runs as
@@ -262,8 +263,8 @@ This engine was built against six explicit requirements:
 ```bash
 ./gradlew run          # launch the demo (menu -> playable level)
 ./gradlew test         # run the headless smoke tests
-./gradlew jar          # build build/libs/Larsons-2D-Game-Engine-0.1.0.jar
-java -jar build/libs/Larsons-2D-Game-Engine-0.1.0.jar
+./gradlew jar          # build build/libs/Larsons-Game-Engine-0.1.0.jar
+java -jar build/libs/Larsons-Game-Engine-0.1.0.jar
 
 # headless dedicated multiplayer server (see "Online play"):
 ./gradlew runServer --args="--port 7777 --level levels/sample_level.json"
@@ -308,7 +309,7 @@ between them, and each report names its own backend and driver at the head.
 Both jars contain the same engine. The GL one also contains the backend and a
 `META-INF/services` entry naming it, and that entry is the whole of the coupling
 — the core discovers backends with `ServiceLoader` and does not know this one
-exists. So `java -jar Larsons-2D-Game-Engine-0.1.0.jar` finds nothing and runs
+exists. So `java -jar Larsons-Game-Engine-0.1.0.jar` finds nothing and runs
 Java2D, and the GL distribution finds one and probes it.
 
 **Choosing, at the command line:**
@@ -1289,7 +1290,7 @@ without the project checked out:
 ```bash
 java -Dlarsons.profile.seconds=30 \
      -Dlarsons.profile.out=frame-profile.txt \
-     -jar build/libs/Larsons-2D-Game-Engine-0.1.0.jar
+     -jar build/libs/Larsons-Game-Engine-0.1.0.jar
 ```
 
 Add `-Dlarsons.profile=true` to that if you want recording to begin at launch
@@ -1503,7 +1504,9 @@ it — so the editor builds along that axis rather than along a floor.
 - **Stack.** A click puts a block **against the face you are pointing at**:
   point at a column's top and it grows taller, point at its side and the
   block goes into the cell beside it, all the way to the level's ceiling
-  (eight blocks by default). The cursor is aimed by a ray marched *through*
+  (**512 blocks** by default — a large map buys fewer layers, since a dense
+  layer costs its whole footprint, and the Landscape window says what yours
+  allows). The cursor is aimed by a ray marched *through*
   the terrain, so what you click is what you see, not the floor tile hidden
   behind the tower. Right-click takes the top block off, whatever height it
   is at.
@@ -1527,10 +1530,12 @@ it — so the editor builds along that axis rather than along a floor.
   at, in the block's own colour; a cell with nowhere left to build draws
   **red**; a sculpting brush ghosts the layers it is about to add and
   outlines the ones it is about to remove; and a readout beside the pointer
-  says `h 4/8 · Stack · on top`.
+  says `h 4/512 · Stack · on top`.
 - **Landscape…** (Tools) holds the two settings the tools need: **Standing
   on blocks (height)** — off, stacks are walls nobody can climb; on, they
-  are terrain — and **Ceiling (layers)**, how tall this level may be built.
+  are terrain — and **Ceiling (layers)**, how tall this level may be built,
+  up to 512. A level that means to stay flat says so here rather than relying
+  on nobody stacking.
 - **Generate → Landscape (hills)** rolls a whole one: two octaves of Perlin
   noise quantised into layers, grass over stone, deterministic in the seed,
   with a relief slider for how much rise you want. It switches the height
@@ -2971,7 +2976,7 @@ when nothing changed):
 
 ```
 share/
-├── larsons-2d-game-engine.jar   # the whole game: java -jar, Java 21+, no deps
+├── larsons-game-engine.jar      # the whole game: java -jar, Java 21+, no deps
 ├── run.bat                      # double-click launcher (Windows)
 ├── run.sh                       # double-click launcher (Mac/Linux)
 ├── HOW_TO_PLAY_ONLINE.txt       # hosting/joining instructions + your LAN IP
@@ -3047,7 +3052,7 @@ exactly the world the host configured.
 ```bash
 ./gradlew runServer --args="--port 7777 --level levels/sample_level.json --gametype platformer"
 # or from the jar:
-java -cp build/libs/Larsons-2D-Game-Engine-0.1.0.jar com.larsons.engine.net.ServerMain --port 7777
+java -cp build/libs/Larsons-Game-Engine-0.1.0.jar com.larsons.engine.net.ServerMain --port 7777
 ```
 
 ### How the netcode works
