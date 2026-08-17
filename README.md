@@ -3617,6 +3617,24 @@ true before it starts and the instrument that proves it worked.
   and the terrain painter already derives visible faces from the projection
   rather than from the heading — and that the one genuinely missing thing is
   that a body's floor is the literal number zero, everywhere.
+- **The run that survives the session — a saved game.** The engine persists the
+  *world* and never persists the *run*. `PlayScene.onEnter` builds a fresh
+  `PlayerStats`, a fresh `Inventory` and a `PlayerState` at the level's spawn
+  every single time, the character profile restores full health, and the world
+  clock starts at the same morning — so inventory, health, position, the
+  character you chose and every stat-rule counter are discarded on exit, with no
+  prompt and no slot to put them in. The pause menu's *Save Level* saves the
+  mountain you dug and loses the diamonds you dug out of it, and it writes back
+  over the level's *authored* copy while doing it. Doors compound it: a level
+  you walk out of is re-read from disk when you walk back in, so a game type of
+  linked levels — sold here as "one continuous world" — is a set of rooms that
+  reset, and one-shot stat rules can be re-fired by walking through a door and
+  back. It has its own plan of record, **[`SAVE_PLAN.md`](SAVE_PLAN.md)**,
+  written the same way `RENDER_PLAN.md` and `HEIGHT_PLAN.md` are. The
+  measurement that opens it is that the hard part is already built: `Level` ↔
+  JSON already round-trips everything a world is, and `LevelStore` already takes
+  its root as an argument — so **a save slot is just a second levels root**, and
+  what is genuinely missing is an object that means "this run".
 - **Netcode next steps:** interest management for large worlds, lag
   compensation for hit detection.
 - **Deeper ports from the Side-Scroller engine:** alchemy/crafting recipes,
