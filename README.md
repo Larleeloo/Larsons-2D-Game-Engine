@@ -64,6 +64,18 @@ over in a generic, data-driven form and wired to the same toggles:
   gravity and land as recoverable drops, magic glows through the lighting
   shader pass. Simulated by the same `World` everywhere, so it all works
   online (server-side ammo, snapshot replication, impact FX broadcasts).
+- **First and third person** — `[F5]` cycles the viewpoint the way every 3D
+  game does: plan view, first person, third person behind, third person in
+  front. The blocks a top-down or isometric level is already built out of are
+  drawn as solid cubes seen from *inside* the world through a real perspective
+  camera ([`EyeCamera`](src/main/java/com/larsons/engine/graphics/EyeCamera.java)
+  + [`SolidPainter`](src/main/java/com/larsons/engine/graphics/SolidPainter.java))
+  — mouse-look, a crosshair that mines and places what it is pointed at, face
+  shading, distance fog, and every mob, drop and player billboarded out of the
+  sprites the flat view already draws them with. Nothing about the level
+  changes; a side-scroller, which has no third axis to stand an eye in, keeps
+  its one view. See
+  [First and third person](#first-and-third-person-the-f5-view).
 - **Lighting** — day/night cycle and point lights, implemented as a
   [`LightingPass`](src/main/java/com/larsons/engine/graphics/shader/LightingPass.java)
   in the GLSL-first shader chain, so it composes with every other effect.
@@ -240,7 +252,7 @@ This engine was built against six explicit requirements:
 | # | Requirement | How it's addressed |
 |---|-------------|--------------------|
 | 1 | **120 FPS** | A fixed-timestep [`GameLoop`](src/main/java/com/larsons/engine/core/GameLoop.java) renders with a configurable cap (default **120**). The limiter schedules frames on an absolute timeline and uses a hybrid coarse-sleep / fine-park wait, so the cap is hit precisely without pegging a CPU. |
-| 2 | **Multiple 2D perspectives** | Three **distinct level formats** ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)) — side-scroller, top-down, isometric — each with its own creative mode, movement model and **number of block layers**, all loading and playing through the same code. [`Camera`](src/main/java/com/larsons/engine/graphics/Camera.java) + [`Perspective`](src/main/java/com/larsons/engine/graphics/Perspective.java) supply the projections (`SIDE_SCROLL`, `TOP_DOWN`, `ISOMETRIC`). A level's format is fixed for its lifetime — the three are different worlds, not three views of one — and a door into a level of another format is how a game changes perspective. |
+| 2 | **Multiple 2D perspectives** | Three **distinct level formats** ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)) — side-scroller, top-down, isometric — each with its own creative mode, movement model and **number of block layers**, all loading and playing through the same code. [`Camera`](src/main/java/com/larsons/engine/graphics/Camera.java) + [`Perspective`](src/main/java/com/larsons/engine/graphics/Perspective.java) supply the projections (`SIDE_SCROLL`, `TOP_DOWN`, `ISOMETRIC`). A level's format is fixed for its lifetime — the three are different worlds, not three views of one — and a door into a level of another format is how a game changes perspective. What the player *can* switch mid-play is where they stand to look: `[F5]` cycles plan view / first person / third person, drawn from inside the level by [`EyeCamera`](src/main/java/com/larsons/engine/graphics/EyeCamera.java) + [`SolidPainter`](src/main/java/com/larsons/engine/graphics/SolidPainter.java) wherever there is a height axis to stand an eye in. See [First and third person](#first-and-third-person-the-f5-view). |
 | 3 | **Online play** | ✅ Implemented — see [Online play](#online-play). An authoritative [`GameServer`](src/main/java/com/larsons/engine/net/GameServer.java) ticks the same deterministic [`PlayerPhysics`](src/main/java/com/larsons/engine/sim/PlayerPhysics.java) clients predict with; host in-game or run a headless dedicated server; friends join by IP + port like Minecraft Java edition. |
 | 4 | **Out of the box on any Java machine** | The engine uses **only the JDK** (Java2D / AWT / Swing / sockets). No third-party runtime dependencies — JSON parsing, networking, and shader execution are all in-engine. The optional GL backend lives in a separate Gradle project and a separate jar, so this stays true of the one a player double-clicks — checked on every build by `:verifyNoRuntimeDependencies`, which fails the `jar` task if anything external reaches the runtime classpath. |
 | 5 | **Shader support** | ✅ Implemented — see [Shaders](#shaders). Every [`ShaderPass`](src/main/java/com/larsons/engine/graphics/shader/ShaderPass.java) is defined **GLSL-first** (real GPU fragment-shader source, exportable as `.frag` files) beside a multithreaded CPU implementation, and every pass is compiled on a real driver and diffed against its CPU twin (`ShaderCompileTest`, `ShaderParityTest`: five passes at 0.00 mean channel error out of 255, worst 3.58). **Both sides now execute**: the GL backend compiles each pass's `glsl()` once and runs the chain as a framebuffer ping-pong over the scene texture, and the Java2D backend runs the CPU implementation in parallel row stripes. `GlShaderChainTest` renders every pass both ways through the shipping chain and reproduces those same per-pass errors — which is what says the backend is right, since the shaders were measured before it existed. |
@@ -451,6 +463,13 @@ launch menu, every game's main menu, and the in-game pause menu — see
   [Melee combat](#melee-combat-swing-parry-lunge-dash-shield)): **left-click**
   swings, **V** parries (catches a blow outright and turns shots around),
   **X** lunges, **Z** dashes, and **holding C** raises the guard.
+- **Camera:** **`,` / `.`** turn the camera (a plan view snaps between eight
+  compass points; a solid view turns freely). **F5** cycles the viewpoint —
+  plan view, first person, third person, third person from the front — in any
+  level with a height axis; move the mouse to look, and **Home / End** tilt if
+  you would rather not. In first and third person the crosshair in the middle
+  of the screen is what you are aiming at, not the pointer. See
+  [First and third person](#first-and-third-person-the-f5-view).
 - **Starting a level:** if its creator put more than one character on the
   level's roster, a **character picker** opens first — arrow keys or the
   mouse to choose, Enter to drop in (see
@@ -821,7 +840,103 @@ switch, because the three formats are not three views of one world: they differ
 in which axis is up, in what a block *means*, and in how many layers of them a
 level is written in, so there is nothing coherent for a mid-level switch to
 show. Walking through a door into a level of another format is how a game
-changes perspective, and that works mid-play with no reload.
+changes perspective, and that works mid-play with no reload. What *can* be
+switched mid-play is where you stand to look at that world — see below, and
+note that the two are different questions: a level's format is what the world
+*is*, a viewpoint is where the camera is.
+
+### First and third person (the `[F5]` view)
+
+**`[F5]` cycles the camera the way every 3D game does** — plan view, first
+person, third person behind, third person in front — in any level with a height
+axis (top-down and isometric). It is the same world, the same blocks and the
+same simulation; what changes is that the second, third and fourth stops are
+drawn from *inside* the level through
+[`EyeCamera`](src/main/java/com/larsons/engine/graphics/EyeCamera.java) and
+[`SolidPainter`](src/main/java/com/larsons/engine/graphics/SolidPainter.java)
+rather than flattened onto it by `Camera`.
+
+| Stop | What you see |
+|---|---|
+| **Plan view** | The level's own projection — everything above, unchanged. Where a session starts, so nothing looks different until you press the key. |
+| **First person** | Behind the eyes. Your body is not drawn; the object in your hands is, in the corner of the screen. |
+| **Third person** | Over the shoulder, looking the way you look. |
+| **Third person, front** | In front, looking back at you. |
+
+A **side-scroller cycles nothing** and says so. Its screen *is* the vertical
+plane: there is no third axis to stand an eye in and no heading to look along,
+which is the same reason its camera does not rotate.
+
+**What makes it 3D is one divide.** `Camera` is a parallel projection — a block
+a hundred tiles away is drawn exactly as large as the one under your feet.
+`EyeCamera` has a position in three dimensions, a heading, a tilt and a field of
+view, and it divides by depth. That divide is the whole feature: parallel lines
+converge, a corridor narrows, walking forward makes things grow. The two are
+separate classes because they share nothing but a viewport — the flat camera's
+pixel lattice, its eight-point heading and its terrain cache all exist to stop a
+*parallel* projection shimmering, and none of it means anything once there is a
+perspective divide.
+
+**Two culls do all the work, and neither is a heuristic.** A face with a solid
+block against it can never be seen, so it is never queued — a hillside of ten
+thousand blocks has a few hundred exposed faces, and the rest cost one array
+read each to reject. Of the six faces of a box the eye can see only those whose
+outward normal points at it, and for an axis-aligned box that is a comparison
+rather than a dot product: the top is visible when the eye is above it, the
+north face when the eye is north of it. Side faces are merged over vertical runs
+the way the plan view merges them, so a wall eight blocks tall is one quad down
+its side. Measured on a 128×128 level of rolling terrain at 1280×720 with a
+20-tile view distance: **2.8 ms a frame** through Java2D, sky and all.
+
+**Depth without a depth buffer.** Requirement #4 says the JDK-only build is the
+one that must work and Java2D has no depth buffer, so this is a painter's
+algorithm like every other pass in the engine. It sorts on the distance from the
+eye to the *nearest point of each face's box* rather than to the face's centre —
+because a merged run's centre can be a long way from the part that does the
+occluding, and a tall wall beside you has its centre overhead while its bottom is
+at your elbow.
+
+**Actors are the scene's own sprites, billboarded.** A mob is not just an image:
+it is an image plus a health bar plus status tints plus whatever it is holding,
+drawn by a method the plan view needs to go on using. So the scene draws exactly
+what it always draws and the painter puts a transform under it — every sprite in
+this engine is an upright box around a *ground contact point* scaled by the flat
+camera's zoom, so mapping that one point to where the perspective camera puts it
+turns the whole sprite into a correct billboard. A billboard is a sprite that
+always faces the viewer, which is what a flat sprite already was.
+
+**The crosshair replaces the mouse pointer.** In a plan view the mouse points at
+the world; in a solid view it is steering the eye, so what you are aiming at is
+whatever the middle of the screen is on. That is found by marching the eye's ray
+through the block volume (`SolidPainter.pick`), which answers with the same
+`TerrainPainter.Aim` the plan view's own pick returns — so mining, placing, the
+reach test and everything downstream is written once and never learns which
+camera asked. The ground is given the box below zero it would have if it were a
+block, because layer 0 is a *surface* with no thickness and a ray aimed at the
+ground would otherwise go straight through the world.
+
+**Looking around.** Move the mouse to look; resting the pointer in the outer
+tenth of the window keeps turning, so a turn is never cut short by running out
+of window. (Every 3D game locks the pointer to the middle of the screen and
+reads its motion forever; this engine draws through two window systems and
+neither offers that, so the edge is the answer to what happens when you reach
+it.) `,` and `.` — the plan view's camera-rotate keys — turn the eye too, and
+`Home`/`End` tilt it, for anyone who would rather not steer with the mouse.
+Everything about the view is **local to the client**: like the flat camera's
+heading it is never networked, so two players in one world can be standing in
+entirely different views.
+
+**What the solid views do not draw yet.** Scenery and surface decor, the editor
+grid, painted doors, the parallax backdrop, particles and the mini-game's
+floor markings are all plan-view painters that project through the flat camera;
+they are skipped rather than drawn in the wrong place. Block *face textures* are
+skipped too, and that one is not effort: a perspective quad's texture mapping is
+not affine, and the only warping blit `DrawTarget` has is — splitting each face
+into affinely-blitted triangles is the PlayStation-1 answer and it warps visibly
+at exactly the range you spend the most time at. Faces are filled with the
+block's own colour instead, shaded by which way they face and faded into the
+fog, which is the look these games have anyway. Creative mode still builds in
+the plan view; the toggle is a play-mode one.
 
 ### Stacked blocks (the plan views' geometry)
 
@@ -3545,6 +3660,7 @@ true before it starts and the instrument that proves it worked.
 [`SpriteEditorTest`](src/test/java/com/larsons/engine/SpriteEditorTest.java),
 [`MeleeCombatTest`](src/test/java/com/larsons/engine/MeleeCombatTest.java),
 [`CreativeUndoTest`](src/test/java/com/larsons/engine/CreativeUndoTest.java),
+[`SolidViewTest`](src/test/java/com/larsons/engine/SolidViewTest.java),
 [`KeyBindTest`](src/test/java/com/larsons/engine/KeyBindTest.java))
 covering JSON read/write, level loading (both tile modes + round-trips),
 sprite-sheet slicing, input edge detection, custom key binds (what ships

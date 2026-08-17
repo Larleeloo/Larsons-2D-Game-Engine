@@ -44,14 +44,17 @@ import com.larsons.engine.graphics.DecorPainter;
 import com.larsons.engine.graphics.DepthPass;
 import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.graphics.EntitySprites;
+import com.larsons.engine.graphics.EyeCamera;
 import com.larsons.engine.graphics.Facing;
 import com.larsons.engine.graphics.ParallaxBackground;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.PlayerSprites;
 import com.larsons.engine.graphics.Skins;
+import com.larsons.engine.graphics.SolidPainter;
 import com.larsons.engine.graphics.SurfaceDecorPainter;
 import com.larsons.engine.graphics.TerrainCache;
 import com.larsons.engine.graphics.TerrainPainter;
+import com.larsons.engine.graphics.Viewpoint;
 import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
@@ -186,6 +189,39 @@ public class PlayScene extends AbstractScene {
 
     private Level level;
     private Camera camera;
+
+    // --- the view the player is looking through (F5) --------------------------
+    //
+    // Per client and never networked, exactly like the flat camera's heading:
+    // two players in one world may be standing in entirely different views, and
+    // the server neither knows nor needs to.
+
+    /** Where the player's camera stands. Starts on the level's own view. */
+    private Viewpoint viewpoint = Viewpoint.PLAN;
+    /** The eye the solid views are drawn through; idle while {@link #viewpoint} is flat. */
+    private final EyeCamera eye = new EyeCamera();
+    /** The renderer behind the solid views. */
+    private final SolidPainter solid = new SolidPainter();
+    /**
+     * Where the player is looking, radians clockwise from north — the solid
+     * views' heading, and what movement is steered by while one is on.
+     *
+     * <p>Kept apart from {@link Camera#yaw()} because the two turn differently
+     * and must not fight: the flat camera snaps between eight compass points,
+     * because its terrain cache, its tile blits and its golden frames all
+     * depend on resting exactly on one, while an eye that a mouse is steering
+     * has to be free to sit anywhere. They are exchanged when the view is
+     * toggled — see {@link #cycleViewpoint} — so turning around in one view and
+     * switching to the other leaves you facing the same way.
+     */
+    private double lookYaw;
+    /** How far the eye is tilted, radians, positive looking up. */
+    private double lookPitch;
+    /** Last frame's pointer position, for the mouse-look delta. -1 = no reading yet. */
+    private int lookFromX = -1, lookFromY = -1;
+    /** Whether the pointer has moved since this view was entered; see {@link #steerLook}. */
+    private boolean pointerMoved;
+
     // The player's current action state (idle/walk/run/jump/fall/swim) and
     // how long it has played — picks which skin animation draws, and from
     // which frame (the clock resets whenever the state changes).
@@ -659,14 +695,45 @@ public class PlayScene extends AbstractScene {
                     p);
         }
 
-        // The eight-point camera: a press aims it one compass point round and
-        // the animation carries it there over the next fifth of a second. Both
-        // are per-frame because a snap in flight has to keep going while the
-        // player is doing something else — and both are no-ops in a level whose
-        // projection does not turn. C8.
-        if (KeyBinds.pressed(input, GameAction.ROTATE_LEFT)) camera.turn(-1);
-        if (KeyBinds.pressed(input, GameAction.ROTATE_RIGHT)) camera.turn(1);
-        camera.stepYaw(dt);
+        // [F5] cycles the view: the level's own plan projection, first person,
+        // third person behind, third person in front.
+        if (KeyBinds.pressed(input, GameAction.TOGGLE_VIEW)) cycleViewpoint();
+
+        if (solidView()) {
+            // The eye is steered rather than snapped; the flat camera is left
+            // exactly where it was, because the pivot a billboard is placed
+            // against is measured through it (SolidPainter.billboard) and
+            // spinning it would thrash TerrainCache for a view it is not
+            // drawing.
+            //
+            // Not while a panel is open: the pointer is arranging stacks in an
+            // inventory then, and every pixel it travels would also be a turn
+            // of the world behind it. Forgetting the last reading is what stops
+            // closing the panel from banking the whole journey as one flick.
+            if (showInventory || craftingPanel != null || containerPanel != null) {
+                lookFromX = -1;
+                lookFromY = -1;
+            } else {
+                steerLook(input, dt);
+            }
+            // Placed now as well as at render time, and from the simulation's
+            // own position rather than the interpolated one: everything below
+            // that maps between the screen and the world — what the crosshair
+            // is on, where a block goes, the aim of a shot — has to agree with
+            // the authoritative step rather than with a frame drawn between two
+            // of them. This is the eye's half of what camera.follow does for
+            // the flat camera further down.
+            placeEye(me.x + hitSize() / 2.0, me.y + hitSize() / 2.0, me.z);
+        } else {
+            // The eight-point camera: a press aims it one compass point round
+            // and the animation carries it there over the next fifth of a
+            // second. Both are per-frame because a snap in flight has to keep
+            // going while the player is doing something else — and both are
+            // no-ops in a level whose projection does not turn. C8.
+            if (KeyBinds.pressed(input, GameAction.ROTATE_LEFT)) camera.turn(-1);
+            if (KeyBinds.pressed(input, GameAction.ROTATE_RIGHT)) camera.turn(1);
+            camera.stepYaw(dt);
+        }
 
         if (craftingPanel != null) {
             updateCrafting(input);
@@ -700,7 +767,9 @@ public class PlayScene extends AbstractScene {
         in.sprint = KeyBinds.down(input, GameAction.SPRINT);
         // The heading these keys were pressed at. It travels with the tick
         // because the server has no camera to ask — see PlayerInput.yaw (C7).
-        in.yaw = camera.viewYaw();
+        // In a solid view that is where the player is *looking*, which is what
+        // makes W walk into the screen the way it does in every 3D game.
+        in.yaw = viewYaw();
         // Space is the jump key, and the only one: W/Up steer, swim and climb.
         // A fresh press is what drives mid-air jumps (double jump and beyond),
         // so holding Space doesn't burn the whole allowance in one tick.
@@ -1190,15 +1259,15 @@ public class PlayScene extends AbstractScene {
         boolean leftClick = KeyBinds.pressed(input, GameAction.ATTACK);
         boolean rightClick = KeyBinds.pressed(input, GameAction.PLACE);
 
-        double[] aim = camera.screenToWorld(input.getMouseX(), input.getMouseY());
+        double[] aim = aimPoint();
         double ts = ts();
-        // What the cursor is on, and where a block placed against it goes.
-        // Inverting the floor answers neither once the terrain has height: the
-        // pixels showing a tower's side belong to the floor cell behind it, so
-        // a click on a wall used to mine a block a cell or more away — further
-        // the taller the wall (HEIGHT_PLAN.md R7/E1).
-        TerrainPainter.Aim at = TerrainPainter.pick(camera, level,
-                input.getMouseX(), input.getMouseY());
+        // What the cursor — or, in a solid view, the crosshair — is on, and
+        // where a block placed against it goes. Inverting the floor answers
+        // neither once the terrain has height: the pixels showing a tower's
+        // side belong to the floor cell behind it, so a click on a wall used to
+        // mine a block a cell or more away — further the taller the wall
+        // (HEIGHT_PLAN.md R7/E1).
+        TerrainPainter.Aim at = aimBlock();
         int col = at != null ? at.col() : (int) Math.floor(aim[0] / ts);
         int row = at != null ? at.row() : (int) Math.floor(aim[1] / ts);
         int placeCol = at != null ? at.placeCol() : col;
@@ -1403,7 +1472,7 @@ public class PlayScene extends AbstractScene {
                 : KeyBinds.pressed(input, GameAction.DASH) ? MeleeAction.DASH
                 : MeleeAction.NONE;
         if (requested == MeleeAction.NONE) return;
-        double[] aim = camera.screenToWorld(mouseX, mouseY);
+        double[] aim = aimPoint();
         meleeAimX = aim[0];
         meleeAimY = aim[1];
         if (Melee.start(me, melee, meleeProfile(p), requested)) {
@@ -1604,7 +1673,7 @@ public class PlayScene extends AbstractScene {
             ruleStatusTime = 2;
             return;
         }
-        double[] aim = camera.screenToWorld(mouseX, mouseY);
+        double[] aim = aimPoint();
         double aimX = aim[0], aimY = aim[1];
         if (net != null) {
             net.client().sendUltimate(aimX, aimY);
@@ -2093,7 +2162,19 @@ public class PlayScene extends AbstractScene {
             // climbing player's height stepped at the sim-vs-frame beat.
             camera.follow(drawX() + size / 2.0, drawY() + size / 2.0, drawZ());
         }
+        // The eye is placed from the same interpolated position the flat camera
+        // was, and before the lighting pass, which projects through whichever
+        // of the two this frame is drawn with.
+        if (solidView()) {
+            placeEye(drawX() + hitSize() / 2.0, drawY() + hitSize() / 2.0, drawZ());
+        }
         feedLighting(p);
+
+        if (solidView()) {
+            renderSolid(target, p);
+            renderOverlay(target, p);
+            return;
+        }
 
         target.fillRect(0, 0, viewportWidth, viewportHeight, level.background);
 
@@ -2154,6 +2235,123 @@ public class PlayScene extends AbstractScene {
         }
         phase("decor", () -> drawDecorLayer(target, true)); // foreground covers players
         if (p.particlesEnabled) phase("particles", () -> particles.render(target, camera));
+        renderOverlay(target, p);
+    }
+
+    /**
+     * The world seen from inside it — the first- and third-person frame.
+     *
+     * <p>Short, and deliberately: the sky and the blocks are
+     * {@link SolidPainter}'s, and every actor is drawn by exactly the same
+     * methods the plan view draws them with, routed through
+     * {@link #standingAt} into the painter's queue instead of the flat depth
+     * pass. What is missing rather than reimplemented is listed on
+     * {@link Viewpoint} — scenery, the grid, painted doors, the parallax
+     * backdrop and particles are all plan-view painters that project through
+     * the flat camera, and giving each of them a second projection is a job of
+     * its own rather than a line here.
+     */
+    private void renderSolid(DrawTarget target, GameProfile p) {
+        solid.begin(target, eye, level);
+        phase("terrain", solid::terrain);
+        // Nothing queues into this in a solid view — standingAt routes to the
+        // painter instead — but it is passed and flushed all the same, so that
+        // anything that ever did queue into it directly would be drawn rather
+        // than silently dropped.
+        DepthPass standing = DepthPass.sorted();
+        phase("entities", () -> drawWorldEntities(target, p, standing));
+        if (net != null) drawRemotePlayers(target, standing);
+        if (drawsOwnBody()) {
+            double meX = drawX(), meY = drawY(), meZ = drawZ();
+            standingAt(standing, meX, meY, hitSize(), meZ, () -> {
+                drawPlayer(target, meX, meY, meZ, hitSize(), drawSize(),
+                        MeleeSprites.playerFrame(me.characterKey, meleeItem, animState,
+                                seen(me.facing), animStateClock, melee.progress(),
+                                (int) drawSize(), character.body), null);
+                drawHeldObject(target, meX, meY, meZ, hitSize(), drawSize(), seen(me.facing),
+                        meleeItem, melee.action(), melee.progress(), meleeProfile(p));
+            });
+        }
+        phase("depth-flush", () -> {
+            solid.flush();
+            standing.flush();
+        });
+        drawCrosshair(target);
+        if (viewpoint == Viewpoint.FIRST_PERSON) drawHandItem(target, p);
+    }
+
+    /**
+     * The crosshair: what a solid view aims with, because the mouse is steering
+     * the eye rather than pointing at the world.
+     *
+     * <p>Drawn as a dark cross with a lighter one inside it rather than as one
+     * bright shape, because a single-colour crosshair disappears against
+     * whatever happens to be that colour — which on a sky-blue level is the
+     * sky, and on a stone one is every wall. Two colours are always visible
+     * against one background.
+     */
+    private void drawCrosshair(DrawTarget target) {
+        int cx = viewportWidth / 2, cy = viewportHeight / 2;
+        int arm = 8, gap = 2;
+        int dark = new Color(0, 0, 0, 150).getRGB();
+        int light = new Color(255, 255, 255, 210).getRGB();
+        for (int pass = 0; pass < 2; pass++) {
+            int argb = pass == 0 ? dark : light;
+            float thickness = pass == 0 ? 3f : 1.4f;
+            target.drawLine(cx - arm, cy, cx - gap, cy, argb, thickness);
+            target.drawLine(cx + gap, cy, cx + arm, cy, argb, thickness);
+            target.drawLine(cx, cy - arm, cx, cy - gap, argb, thickness);
+            target.drawLine(cx, cy + gap, cx, cy + arm, argb, thickness);
+        }
+    }
+
+    /**
+     * The held object, drawn in the corner of the screen — the first-person
+     * view's hand.
+     *
+     * <p>The body is not drawn in first person ({@link Viewpoint#showsSelf}),
+     * so without this a player has nothing on screen that says what they are
+     * holding, which is exactly the gap the view model fills in every game that
+     * has one. It bobs with the walk and swings on a swing, from the clocks the
+     * scene already keeps, so it reads as a hand rather than as a sticker.
+     */
+    private void drawHandItem(DrawTarget target, GameProfile p) {
+        ItemDef def = p.itemsEnabled ? inventory.selectedDef() : null;
+        String key = def != null ? def.key() : "";
+        BufferedImage img = key.isEmpty() ? null : Skins.frame("item/" + key, animClock);
+        if (img == null && def != null) img = EntitySprites.item(def, 32);
+        if (img == null) return;
+        int size = Math.max(48, Math.min(viewportWidth, viewportHeight) / 4);
+        // The walk bob, and the swing: a swing pulls the hand back and down
+        // and lets it come forward again over its own fifth of a second.
+        boolean walking = "walk".equals(animState) || "run".equals(animState);
+        double bob = walking ? Math.sin(animClock * 9) * size * 0.045 : 0;
+        double swing = swingTime > 0 ? Math.sin(Math.min(1, swingTime / 0.2) * Math.PI) : 0;
+        // Held clear of the right edge and running off the bottom one, which is
+        // where a hand comes from. The tilt swings the corners out, so the
+        // inset is measured against the sprite rather than being a constant.
+        int x = viewportWidth - size - (int) Math.round(size * (0.30 - swing * 0.24));
+        int y = viewportHeight - size + (int) Math.round(size * (0.05 + swing * 0.32) + bob);
+        AffineTransform tilt = AffineTransform.getTranslateInstance(x + size / 2.0,
+                y + size / 2.0);
+        tilt.rotate(Math.toRadians(-22 + swing * 34));
+        target.pushTransform(tilt);
+        target.drawImage(img, -size / 2, -size / 2, size, size);
+        target.popTransform();
+    }
+
+    /**
+     * Everything drawn <em>over</em> the world: the door and mount prompts, the
+     * whole HUD, the panels and the pause screen.
+     *
+     * <p>Split out of {@link #render} when the solid views arrived, because it
+     * is the half of a frame that does not care how the world behind it was
+     * drawn. A first-person frame paints its world through {@link SolidPainter}
+     * and then runs exactly this, unchanged — which is what keeps the hotbar,
+     * the health bar and the inventory from needing a second implementation for
+     * the second camera.
+     */
+    private void renderOverlay(DrawTarget target, GameProfile p) {
         if (net == null) drawDoorHint(target, p);
         drawVehicleHint(target, p);
         // Everything from here down is screen-space overlay rather than world
@@ -2310,15 +2508,12 @@ public class PlayScene extends AbstractScene {
                 for (int layer = level.layerCount() - 1; layer >= 0; layer--) {
                     Block block = level.blockAt(c, r, layer);
                     if (block == null || !block.emitsLight()) continue;
-                    camera.worldToScreen((c + 0.5) * ts, (r + 0.5) * ts, corner);
-                    int lift = (int) Math.round(level.surfaceZ(layer + 1)
-                            * camera.zoom * camera.liftScale());
                     // A light further off the floor pools wider and no
                     // brighter, which is what a lamp on a pole does.
                     double spread = 1 + 0.12 * layer;
-                    lighting.addLight(corner[0], corner[1] - lift,
-                            block.lightRadius() * ts * camera.zoom * spread,
-                            block.lightColor());
+                    addWorldLight(lighting, (c + 0.5) * ts, (r + 0.5) * ts,
+                            level.surfaceZ(layer + 1),
+                            block.lightRadius() * ts * spread, block.lightColor());
                 }
                 continue;
             }
@@ -2329,11 +2524,9 @@ public class PlayScene extends AbstractScene {
             for (DroppedItem item : world.items()) {
                 ItemDef def = world.itemTypes.get(item.key);
                 if (def == null || def.rarity() == ItemDef.Rarity.COMMON) continue;
-                camera.worldToScreen(item.x + DroppedItem.SIZE / 2,
-                        item.y + DroppedItem.SIZE / 2, corner);
-                lighting.addLight(corner[0], corner[1],
-                        (1.0 + def.rarity().ordinal() * 0.6) * ts * camera.zoom,
-                        def.rarity().color);
+                addWorldLight(lighting, item.x + DroppedItem.SIZE / 2,
+                        item.y + DroppedItem.SIZE / 2, 0,
+                        (1.0 + def.rarity().ordinal() * 0.6) * ts, def.rarity().color);
             }
         }
         // Glowing projectiles (fireballs, magic bolts) carry their own light —
@@ -2355,17 +2548,46 @@ public class PlayScene extends AbstractScene {
             }
         }
         // Player glow.
-        camera.worldToScreen(drawX() + hitSize() / 2, drawY() + hitSize() / 2, corner);
-        lighting.addLight(corner[0], corner[1], 2.5 * ts * camera.zoom,
-                new Color(255, 240, 210));
+        addWorldLight(lighting, drawX() + hitSize() / 2, drawY() + hitSize() / 2, 0,
+                2.5 * ts, new Color(255, 240, 210));
     }
 
     private void addProjectileLight(LightingPass lighting, ProjectileDef def,
                                     double x, double y, double ts) {
         if (def == null || !def.glows()) return;
-        camera.worldToScreen(x, y, corner);
-        lighting.addLight(corner[0], corner[1],
-                def.lightRadius() * ts * camera.zoom, def.lightColor());
+        addWorldLight(lighting, x, y, 0, def.lightRadius() * ts, def.lightColor());
+    }
+
+    /** Scratch for the eye's projection of a light; see {@link #addWorldLight}. */
+    private final double[] lightPoint = new double[3];
+
+    /**
+     * A light at a world position, sized in world units, projected through
+     * whichever camera this frame is being drawn with.
+     *
+     * <p>{@link LightingPass} works in screen pixels — it is a shader pass over
+     * the finished frame — so every light has to be projected, and the four
+     * places that feed it were each doing that projection by hand against the
+     * flat camera. One of them even had to spell out the height lift itself. In
+     * a solid view all four would have lit the wrong pixels; asking here
+     * instead means the answer is right in both views and is only written once.
+     *
+     * @param radiusWorld the light's reach in world units, before either
+     *                    camera's scaling
+     */
+    private void addWorldLight(LightingPass lighting, double wx, double wy, double wz,
+                               double radiusWorld, Color color) {
+        if (radiusWorld <= 0) return;
+        if (solidView()) {
+            if (!eye.project(wx, wy, wz, lightPoint)) return;
+            double scale = eye.scaleAt(lightPoint[2]);
+            if (scale <= 0) return;
+            lighting.addLight(lightPoint[0], lightPoint[1], radiusWorld * scale, color);
+            return;
+        }
+        camera.worldToScreen(wx, wy, corner);
+        int lift = (int) Math.round(wz * camera.zoom * camera.liftScale());
+        lighting.addLight(corner[0], corner[1] - lift, radiusWorld * camera.zoom, color);
     }
 
     // --- pause ---
@@ -2505,6 +2727,257 @@ public class PlayScene extends AbstractScene {
         return level.perspective;
     }
 
+    // --- the view the player is looking through ---
+
+    /**
+     * Whether this frame is drawn through the eye rather than the flat camera.
+     *
+     * <p>Three conditions rather than one, and they are here rather than at the
+     * dozen call sites because every one of them has to agree — the renderer,
+     * the aim, the lighting and the depth queue all branch on this, and two of
+     * them answering differently in one frame is a picture drawn through one
+     * camera and lit through the other.
+     *
+     * <ul>
+     *   <li>The player has chosen a solid view.</li>
+     *   <li>The level has a height axis to stand an eye in. Walking through a
+     *       door into a side-scroller has to put the view back, and this is
+     *       what makes that impossible to forget; {@link #syncCameraFromProfile}
+     *       resets the choice as well, so the HUD says the same thing.</li>
+     *   <li>No cutscene is running. A cutscene's director drives the flat
+     *       camera along a timeline authored through it, and its actors are
+     *       painted through it too — so the plan view is not a fallback here,
+     *       it is the view the scene was written for.</li>
+     * </ul>
+     */
+    private boolean solidView() {
+        return viewpoint.solid() && hasElevation()
+                && (cutscenes == null || cutscenes.active() == null);
+    }
+
+    /**
+     * Whether this level has a height axis for an eye to stand in — the
+     * question {@link Viewpoint#availableIn} asks, answered from the level's
+     * own format rather than from the camera, so it is the same answer online
+     * and off.
+     */
+    private boolean hasElevation() {
+        return PerspectiveSpace.of(basePerspective()).hasElevation();
+    }
+
+    /**
+     * The heading anything looking at the world should use: where the player is
+     * looking in a solid view, and the flat camera's own settled heading
+     * otherwise.
+     *
+     * <p>Asked rather than picked at each call site for the reason
+     * {@link Camera#viewYaw()} exists: there are two headings in this scene
+     * and only one of them is the one the picture is actually drawn at.
+     */
+    private double viewYaw() {
+        return solidView() ? lookYaw : camera.viewYaw();
+    }
+
+    /**
+     * [F5]: the next view this level can show.
+     *
+     * <p>The two cameras hand each other the heading as they swap. Going in,
+     * the eye starts facing wherever the flat camera was pointing, so the world
+     * does not spin under the player at the moment they press the key; coming
+     * out, the flat camera is <em>set</em> to the nearest compass point to
+     * where they were looking rather than turned toward it, because {@code
+     * setYaw} is the teleport and {@code turn} is what a player does — and a
+     * snap animation starting on the first frame of a new view is an animation
+     * of something that never moved.
+     */
+    private void cycleViewpoint() {
+        Viewpoint next = viewpoint.next(hasElevation());
+        if (next == viewpoint) {
+            // A side-scroller has one view and this is it. Say so rather than
+            // swallowing the press: a key that does nothing and does not
+            // explain itself reads as a broken key.
+            ruleStatus = "This level is a side-scroller — no first-person view here";
+            ruleStatusTime = 2.5;
+            return;
+        }
+        boolean wasSolid = viewpoint.solid();
+        viewpoint = next;
+        if (!wasSolid && viewpoint.solid()) {
+            lookYaw = camera.viewYaw();
+            lookPitch = 0;
+            lookFromX = -1;
+            lookFromY = -1;
+            pointerMoved = false;
+        } else if (wasSolid && !viewpoint.solid()) {
+            camera.setYaw(Math.floorMod((int) Math.round(lookYaw / Camera.EIGHTH_TURN), 8)
+                    * Camera.EIGHTH_TURN);
+        }
+        ctx.sfx(Sfx.CLICK);
+        ruleStatus = "View: " + viewpoint.label();
+        ruleStatusTime = 1.6;
+    }
+
+    /** How fast the look keys turn the eye, radians per second. */
+    private static final double LOOK_KEY_SPEED = Math.toRadians(120);
+
+    /** Radians of turn per pixel of pointer movement. */
+    private static final double LOOK_SENSITIVITY = Math.toRadians(0.22);
+
+    /**
+     * The fraction of the window at each edge that keeps turning the view while
+     * the pointer rests in it.
+     */
+    private static final double LOOK_EDGE = 0.10;
+
+    /**
+     * Aim the eye: the mouse turns it, and the rotate/look keys turn it too.
+     *
+     * <p><b>Why the mouse both drags and steers.</b> Every 3D game locks the
+     * pointer to the middle of the window and reads its motion forever. This
+     * engine cannot: it draws through two window systems — an AWT canvas and
+     * the GL backend's GLFW window — and neither the {@code BackendWindow}
+     * interface nor AWT without a {@code Robot} has a way to say "hold the
+     * cursor here". Reading the raw motion alone is most of the feel and fails
+     * at exactly one moment, the one where the pointer reaches the edge of the
+     * window and the turn stops halfway round. So resting in the outer tenth of
+     * the window keeps turning, at a rate set by how far into it you are —
+     * which is a control anyone who has played a game with a stick already has,
+     * and which makes running out of desk a non-event rather than the thing
+     * that ends the turn.
+     *
+     * <p>Nothing here is bound to a level or a session: it is the local
+     * player's view and stays entirely on this client (C10).
+     */
+    private void steerLook(InputManager input, double dt) {
+        int mx = input.getMouseX(), my = input.getMouseY();
+        if (lookFromX >= 0) {
+            if (mx != lookFromX || my != lookFromY) pointerMoved = true;
+            lookYaw += (mx - lookFromX) * LOOK_SENSITIVITY;
+            lookPitch -= (my - lookFromY) * LOOK_SENSITIVITY;
+        }
+        lookFromX = mx;
+        lookFromY = my;
+
+        // Steering from the edges, so a turn is never cut short by the window
+        // — but only once the pointer has been moved at least once since this
+        // view was entered. Without that a cursor that simply happens to be
+        // resting in a corner when the key is pressed spins the world on its
+        // own, which is the one way this control can behave like a fault.
+        int w = Math.max(1, viewportWidth), h = Math.max(1, viewportHeight);
+        double marginX = w * LOOK_EDGE, marginY = h * LOOK_EDGE;
+        if (pointerMoved) {
+            if (mx < marginX) lookYaw -= edgePush(marginX - mx, marginX) * dt;
+            else if (mx > w - marginX) lookYaw += edgePush(mx - (w - marginX), marginX) * dt;
+            if (my < marginY) lookPitch += edgePush(marginY - my, marginY) * dt;
+            else if (my > h - marginY) lookPitch -= edgePush(my - (h - marginY), marginY) * dt;
+        }
+
+        // The keys, for anyone who would rather not steer with the mouse.
+        if (KeyBinds.down(input, GameAction.ROTATE_LEFT)) lookYaw -= LOOK_KEY_SPEED * dt;
+        if (KeyBinds.down(input, GameAction.ROTATE_RIGHT)) lookYaw += LOOK_KEY_SPEED * dt;
+        if (KeyBinds.down(input, GameAction.LOOK_UP)) lookPitch += LOOK_KEY_SPEED * dt;
+        if (KeyBinds.down(input, GameAction.LOOK_DOWN)) lookPitch -= LOOK_KEY_SPEED * dt;
+
+        // Wrapped rather than left to run on, so the number a save or a HUD
+        // reads is always a heading and never an accumulated total.
+        lookYaw = wrapAngle(lookYaw);
+        lookPitch = Math.max(-EyeCamera.MAX_PITCH, Math.min(EyeCamera.MAX_PITCH, lookPitch));
+    }
+
+    /** Turn rate for a pointer {@code into} pixels inside an edge of {@code margin}. */
+    private static double edgePush(double into, double margin) {
+        double t = Math.max(0, Math.min(1, into / Math.max(1, margin)));
+        return LOOK_KEY_SPEED * 1.6 * t * t;
+    }
+
+    /** An angle folded back into [0, 2π). */
+    private static double wrapAngle(double radians) {
+        double full = Math.PI * 2;
+        double a = radians % full;
+        return a < 0 ? a + full : a;
+    }
+
+    /**
+     * How far above their own feet a character's eyes are, as a fraction of
+     * their drawn height. Just under the top of the sprite, which is where
+     * eyes are.
+     */
+    private static final double EYE_HEIGHT = 0.82;
+
+    /**
+     * How close the camera may end up to the player before their own body
+     * stops being drawn, in tiles. Nearer than this a billboard is most of the
+     * screen and the player cannot see what they are walking into, which is
+     * why every third-person game hides the model when its camera is pushed
+     * in this far.
+     */
+    private static final double BODY_FADE_TILES = 1.5;
+
+    /** How far the camera stands from the player this frame, world units. */
+    private double eyeDistance;
+
+    /**
+     * Place the eye for this frame: at the player's own eyes in first person,
+     * and pulled back along the view for the third-person stops.
+     *
+     * <p><b>The pull-back is shortened by whatever it would otherwise pass
+     * through.</b> A camera three tiles behind you is inside the wall three
+     * tiles behind you as soon as you stand with your back to one, and a camera
+     * inside a block sees the inside of a block — every face around it is
+     * back-facing, so the screen goes to whatever the sky happens to be. So the
+     * same march the crosshair uses is run backwards along the view, and the
+     * camera stops just short of the first thing it meets. This is what every
+     * third-person game does and it is the reason they all pull in when you
+     * back into a corner.
+     *
+     * @param cx     the player's centre on the world plane
+     * @param cy     the same, on the other axis
+     * @param bodyZ  how high their feet are above the floor
+     */
+    private void placeEye(double cx, double cy, double bodyZ) {
+        double ts = ts();
+        double eyeZ = bodyZ + drawSize() * EYE_HEIGHT;
+        double yaw = viewpoint.reversed() ? wrapAngle(lookYaw + Math.PI) : lookYaw;
+        double pitch = viewpoint.reversed() ? -lookPitch : lookPitch;
+        eye.setViewport(viewportWidth, viewportHeight);
+        eye.look(yaw, pitch);
+        eyeDistance = 0;
+        double back = viewpoint.distanceTiles() * ts;
+        if (back <= 0) {
+            eye.place(cx, cy, eyeZ);
+            return;
+        }
+        // Over the shoulder rather than out of the eyes: the camera is lifted
+        // clear of the head before it is pulled back, so on the broken ground
+        // this engine's height axis makes ordinary it is looking over the next
+        // step up rather than into it.
+        double from = eyeZ + ts * 0.35;
+        eye.place(cx, cy, from);
+        // Backwards: the eye looks the other way, marches, and turns round
+        // again. Reusing the forward march is what keeps "what the camera can
+        // pass through" the same answer as "what the crosshair can reach".
+        eye.look(wrapAngle(yaw + Math.PI), -pitch);
+        double[] behind = SolidPainter.aimPoint(eye, level, back);
+        double blocked = Math.hypot(Math.hypot(behind[0] - cx, behind[1] - cy),
+                behind[2] - from) - ts * 0.3;
+        // Never all the way in. A camera that collapses onto the player when
+        // the ground behind them rises is worse than one that clips a corner
+        // of it, and the body stops being drawn below BODY_FADE_TILES anyway.
+        eyeDistance = Math.max(ts * 0.9, Math.min(back, blocked));
+        eye.look(yaw, pitch);
+        eye.place(cx - eye.dirX() * eyeDistance, cy - eye.dirY() * eyeDistance,
+                Math.max(0.1, from - eye.dirZ() * eyeDistance));
+    }
+
+    /**
+     * Whether the player's own body is drawn this frame: not in first person,
+     * and not when the camera has been pushed in close enough that it would
+     * fill the screen. See {@link #BODY_FADE_TILES}.
+     */
+    private boolean drawsOwnBody() {
+        return viewpoint.showsSelf() && eyeDistance >= BODY_FADE_TILES * ts();
+    }
+
     private void enforceProfileConstraints(GameProfile p) {
         camera.setPerspective(basePerspective());
         camera.zoom = p.zoomEnabled ? clampZoom(camera.zoom, p) : clampZoom(p.defaultZoom, p);
@@ -2522,6 +2995,17 @@ public class PlayScene extends AbstractScene {
         // Walking through a door into a level authored from another heading
         // lands settled on that one rather than sliding into it. C9.
         camera.setYaw(level.authoredHeading * Camera.EIGHTH_TURN);
+        // A door can lead from a plan-view level into a side-scroller, which
+        // has no height axis and so no solid view to be in. The choice goes
+        // back to the level's own view rather than being held in reserve: a
+        // player who walks back out should be told what they are looking
+        // through, and the HUD reads this field.
+        if (!hasElevation()) viewpoint = Viewpoint.PLAN;
+        lookYaw = camera.viewYaw();
+        lookPitch = 0;
+        lookFromX = -1;
+        lookFromY = -1;
+        pointerMoved = false;
     }
 
     private double clampZoom(double z, GameProfile p) {
@@ -2538,7 +3022,67 @@ public class PlayScene extends AbstractScene {
      * with the screen, not the level size.
      */
     private int[] visibleTileBounds() {
+        if (solidView()) {
+            // The eye sees a disc of the world rather than a projected
+            // rectangle of it, so the square around that disc is the bound.
+            // Only the lighting sweep asks in this view; the terrain painter
+            // trims the same square to the circle itself.
+            double reach = solid.viewTiles() * (double) level.tileSize;
+            return new int[]{
+                    Math.max(0, (int) Math.floor((eye.x() - reach) / level.tileSize)),
+                    Math.max(0, (int) Math.floor((eye.y() - reach) / level.tileSize)),
+                    Math.min(level.width - 1,
+                            (int) Math.floor((eye.x() + reach) / level.tileSize)),
+                    Math.min(level.height - 1,
+                            (int) Math.floor((eye.y() + reach) / level.tileSize))};
+        }
         return TerrainPainter.visibleBounds(camera, level, viewportWidth, viewportHeight);
+    }
+
+    // --- what the player is aiming at ---
+
+    /**
+     * The world point being aimed at — where a shot goes, what a swing is
+     * pointed at, where an ultimate is called down.
+     *
+     * <p>Two entirely different questions wearing one name, which is why it is
+     * a method rather than a line repeated at each call site. In a plan view
+     * the mouse points <em>at the world</em> and the answer is the projection
+     * inverted under the cursor. In a solid view the mouse is steering the eye
+     * instead, so it points at nothing; what is being aimed at is whatever the
+     * crosshair — the middle of the screen — is on, found by marching the eye's
+     * own ray into the terrain.
+     */
+    private double[] aimPoint() {
+        if (solidView()) {
+            double[] hit = SolidPainter.aimPoint(eye, level, REACH_TILES * ts() * 4);
+            return new double[]{hit[0], hit[1]};
+        }
+        return camera.screenToWorld(mouseX, mouseY);
+    }
+
+    /**
+     * The block being aimed at, and where one placed against it would go.
+     *
+     * <p>{@link TerrainPainter#pick} marches a parallel projection back from
+     * the floor point under the cursor; {@link SolidPainter#pick} marches the
+     * eye's ray forward through the volume. Both answer with the same
+     * {@link TerrainPainter.Aim}, so everything downstream — mining, placing,
+     * the reach test — is written once and does not know which camera asked.
+     *
+     * <p><b>The march is given the camera's own set-back as well as the
+     * player's reach.</b> Reach is measured from the player and the ray starts
+     * at the camera, and in a third-person view those are three tiles apart —
+     * so a march bounded by the reach alone would stop short of blocks the
+     * player can perfectly well touch, and the caller would fall back to the
+     * floor cell under the aim point and place a block on top of the wall
+     * instead of against it.
+     */
+    private TerrainPainter.Aim aimBlock() {
+        if (solidView()) {
+            return SolidPainter.pick(eye, level, REACH_TILES * ts() + eyeDistance);
+        }
+        return TerrainPainter.pick(camera, level, mouseX, mouseY);
     }
 
     /**
@@ -2663,6 +3207,18 @@ public class PlayScene extends AbstractScene {
      */
     private void standingAt(DepthPass into, double x, double y, double size,
                             double z, Runnable sprite) {
+        if (solidView()) {
+            // Same sprite, same code, drawn as a billboard: the anchor is the
+            // ground contact point every sprite in this scene is drawn around,
+            // and the pivot is where this frame's flat camera would have put
+            // it — including the lift, which every one of those call sites
+            // applies with the same three factors. See SolidPainter.billboard.
+            double ax = x + size / 2.0, ay = y + size;
+            int lift = (int) Math.round(z * camera.zoom * camera.liftScale());
+            solid.billboard(ax, ay, z, camera.worldToScreenX(ax, ay),
+                    camera.worldToScreenY(ax, ay) - lift, camera.zoom, sprite);
+            return;
+        }
         into.at(standDepth(x, y, size), TerrainPainter.standingLayer(level, z),
                 footDepth(x, y, size), sprite);
     }
@@ -3079,7 +3635,7 @@ public class PlayScene extends AbstractScene {
      * sword points somewhere their arm does not.
      */
     private Facing seen(Facing facing) {
-        return facing == null ? null : facing.asSeenFrom(camera.viewYaw());
+        return facing == null ? null : facing.asSeenFrom(viewYaw());
     }
 
     private void drawMeleeArc(DrawTarget target, MeleeProfile profile) {
@@ -3190,7 +3746,11 @@ public class PlayScene extends AbstractScene {
             CharacterProfile theirs = Characters.getOrDefault(ps.characterKey);
             double hit = ActorSize.pixels(theirs.hitboxScale, ts());
             double draw = ActorSize.pixels(theirs.spriteScale, ts());
-            if (mgView != null) {
+            // The team ring is painted on the floor through the flat camera,
+            // so it is left out of a solid view rather than drawn in the wrong
+            // place: it is a plan-view marker, and a ring under someone's feet
+            // seen from their own eye height is a line.
+            if (mgView != null && !solidView()) {
                 MiniGameHud.drawTeamRing(target, camera, x + hit / 2, y + hit,
                         draw, mgView.teamOf(ps.id), camera.zoom);
             }
@@ -3295,6 +3855,11 @@ public class PlayScene extends AbstractScene {
         hud.append(profile().name)
                 .append("    |    ").append(camera.getPerspective())
                 .append(" · up is ").append(space.upLabel());
+        if (hasElevation()) {
+            hud.append("    |    ").append(viewpoint.label())
+                    .append("  [").append(KeyBinds.label(GameAction.TOGGLE_VIEW))
+                    .append("] view");
+        }
         if (net != null) {
             Snapshot snap = net.client().latest();
             int online = snap != null ? snap.players().size() : 1;

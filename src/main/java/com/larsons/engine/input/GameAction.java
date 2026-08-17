@@ -81,6 +81,28 @@ public enum GameAction {
             InputBinding.key(KeyEvent.VK_COMMA)),
     ROTATE_RIGHT("rotate_right", "Rotate Camera Right", Category.CAMERA,
             InputBinding.key(KeyEvent.VK_PERIOD)),
+    /*
+     * The view cycle: plan view, first person, third person behind, third
+     * person in front. F5 because that is the key every player of a 3D game
+     * already has in their fingers for exactly this, and because — unlike the
+     * two above — nothing in this engine had claimed it.
+     *
+     * A side-scroller cycles nothing: its screen *is* the vertical plane, so
+     * there is no third axis to stand an eye in (Viewpoint.availableIn). The
+     * key is harmless there rather than hidden, on the same grounds the rotate
+     * keys are: a player who rebinds it keeps the binding when they walk
+     * through a door into a level that does have a height axis.
+     */
+    TOGGLE_VIEW("toggle_view", "First / Third Person View", Category.CAMERA,
+            InputBinding.key(KeyEvent.VK_F5)),
+    /*
+     * Look up and down in the solid views, for anyone who would rather not
+     * steer with the mouse — and the only way to pitch the eye at all on a
+     * setup with no mouse. Page Up/Down are the editor's build-height keys,
+     * which is a different category and so not a conflict.
+     */
+    LOOK_UP("look_up", "Look Up", Category.CAMERA, InputBinding.key(KeyEvent.VK_HOME)),
+    LOOK_DOWN("look_down", "Look Down", Category.CAMERA, InputBinding.key(KeyEvent.VK_END)),
 
     // --- menus & interface ----------------------------------------------------------
     MENU_UP("menu_up", "Menu: Previous Item", Category.INTERFACE,
