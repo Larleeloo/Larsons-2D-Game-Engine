@@ -1,17 +1,17 @@
 package com.larsons.engine.graphics;
 
 /**
- * A 2D camera that supports multiple perspectives (requirement #2).
+ * A 2D camera that supports both of the engine's perspectives (requirement #2).
  *
  * <p>World coordinates are mapped to the screen in two steps:
  * <ol>
- *   <li>a per-perspective "planar" projection (identity for orthographic
- *       perspectives; a diamond transform for {@link Perspective#ISOMETRIC}),</li>
+ *   <li>a per-perspective "planar" projection (identity for the side view; a
+ *       turned and foreshortened ground plane for {@link Perspective#THREE_D}),</li>
  *   <li>then zoom and centering on the camera focus.</li>
  * </ol>
  * Because the projection is the only thing that changes between perspectives,
- * the same tile/sprite drawing code renders correctly in side-scroll, top-down,
- * and isometric views.
+ * the same tile/sprite drawing code renders correctly in the side view and at
+ * every heading and tilt of the 3D one.
  *
  * <p><b>The world lands on a pixel lattice the camera cannot move, and that is
  * the fix for the shimmer.</b> The obvious way to write step 2 is to round the
@@ -76,15 +76,53 @@ package com.larsons.engine.graphics;
  * what a camera does. At {@code yaw = π/2} the camera looks east, so world east
  * is the direction that now points up the screen.
  *
- * <p><b>Rotation belongs to the plan views only.</b> {@link Perspective#SIDE_SCROLL}
+ * <p><b>Rotation belongs to the 3D view only.</b> {@link Perspective#SIDE_SCROLL}
  * ignores yaw entirely: the screen there <em>is</em> the vertical plane, +y is
  * the direction gravity pulls rather than a ground-plane axis, and there is no
  * vertical axis on screen to turn around. Rotating it would tip the world over
- * rather than turn it. {@link Perspective#TOP_DOWN} and
- * {@link Perspective#ISOMETRIC} rotate; the isometric case rotates the grid on
- * the ground plane <em>first</em> and then views the result through the fixed
- * diamond, because the camera turns around the world's vertical axis and not
- * around the screen's.
+ * rather than turn it. {@link Perspective#THREE_D} rotates, on the ground plane,
+ * because the camera turns around the world's vertical axis and not around the
+ * screen's.
+ *
+ * <h2>Pitch</h2>
+ *
+ * <p>{@link #pitch()} is how high the camera stands over the floor it is looking
+ * at, in radians: {@link #MAX_PITCH} is straight down and {@link #MIN_PITCH} is
+ * nearly edge-on. Unlike the yaw, which rests only on the eight compass points,
+ * it moves <em>freely</em> — a player holding the look keys sweeps the camera up
+ * and over the world and stops wherever they like.
+ *
+ * <p>Two numbers carry it into the picture, and they are the whole of the tilt:
+ *
+ * <pre>
+ *   ground depth × sin(pitch)     how far a step north travels up the screen
+ *   height       × cos(pitch)     how far a block's top rises above its floor
+ * </pre>
+ *
+ * <p>That is an orthographic camera raised over a plane, and it is why the two
+ * plan views this engine used to keep apart are one view here. Bring the camera
+ * most of the way down and the floor squashes while blocks stand tall — the
+ * oblique three-quarter picture that used to be a separate "isometric" format.
+ * Take it to the top of its travel and the floor opens out while the blocks
+ * flatten into their own top faces — the old "top-down" format. Nothing switched;
+ * the camera moved.
+ *
+ * <p><b>The lift never quite reaches zero</b> ({@link #MIN_LIFT}). Straight down
+ * is exactly where {@code cos(pitch)} vanishes, and a wall drawn zero pixels tall
+ * is a wall a player cannot see: the geometry that makes a plan-view level
+ * readable — one layer is floor, two is a wall — would stop being visible at the
+ * one angle a player is most likely to build from. The floor keeps a block's
+ * face on screen at the cost of the projection being cavalier rather than
+ * strictly orthographic in the last fifteen degrees of travel, which is the
+ * trade every game with a straight-down view makes.
+ *
+ * <h2>The board diamond</h2>
+ *
+ * <p>{@link #useBoardDiamond} replaces the tilt with a fixed diamond: one world
+ * tile projects to an {@code isoTileWidth × isoTileHeight} rhombus, whatever the
+ * pitch says. It is <em>not</em> a level format and no level uses it — it is for
+ * the board games (the auto battler's arena), which want one unchanging
+ * projection rather than a camera a player can move. A board is not a world.
  */
 public class Camera {
     /**
@@ -92,6 +130,42 @@ public class Camera {
      * press of the rotate key once C8 binds it.
      */
     public static final double EIGHTH_TURN = Math.PI / 4;
+
+    /**
+     * The lowest the camera may be brought over the floor — 20°, a strongly
+     * raking view where the ground has squashed to about a third of its depth.
+     * Lower than this the floor is nearly edge-on, tiles collapse into stripes,
+     * and picking a cell under the cursor stops being a thing a player can do.
+     */
+    public static final double MIN_PITCH = Math.toRadians(20);
+
+    /** Straight down: the camera directly over the floor it is looking at. */
+    public static final double MAX_PITCH = Math.toRadians(90);
+
+    /**
+     * Where a 3D camera starts: high enough that the floor plan reads, low
+     * enough that walls stand up in it and the world is obviously not flat.
+     */
+    public static final double DEFAULT_PITCH = Math.toRadians(60);
+
+    /**
+     * The tilt at and above which the world reads as being seen from
+     * <em>overhead</em> rather than from over the shoulder — 75°, at which the
+     * ground has opened to within four percent of its full depth and a block
+     * stands barely a quarter of its own height.
+     *
+     * <p>Consumed by {@code PlayerSprites}, which draws the character from a
+     * different pool of art on either side of it: past this angle you are
+     * looking at the top of someone's head, and art drawn for a shoulder-height
+     * camera is the wrong picture of them.
+     */
+    public static final double OVERHEAD_PITCH = Math.toRadians(75);
+
+    /** How fast the look keys sweep the tilt, radians per second. */
+    public static final double TILT_SPEED = Math.toRadians(60);
+
+    /** The least a block's height may be drawn at; see the class note. */
+    public static final double MIN_LIFT = 0.2;
 
     /** Focus position in world coordinates (the point centred on screen). */
     public double x, y;
@@ -117,6 +191,24 @@ public class Camera {
     // cos/sin of yaw, maintained by setYaw. See snap() for why they are not
     // simply Math.cos/Math.sin of it.
     private double cosYaw = 1.0, sinYaw = 0.0;
+
+    /**
+     * How high the camera stands over the floor, radians; see the class note.
+     * Private for the same reason {@link #yaw} is — the projection reads its
+     * sine on the hot path, and {@link #setPitch} is what keeps the two in step.
+     */
+    private double pitch = DEFAULT_PITCH;
+
+    // sin/cos of pitch: the ground's foreshortening and the height's lift.
+    private double sinPitch = snap(Math.sin(DEFAULT_PITCH));
+    private double cosPitch = snap(Math.cos(DEFAULT_PITCH));
+
+    /**
+     * Whether this camera projects the ground into a fixed diamond instead of
+     * tilting over it — the board games' projection, never a level's. See the
+     * class note and {@link #useBoardDiamond}.
+     */
+    private boolean boardDiamond;
 
     /**
      * The compass point the camera is settled on or turning to, 0–7.
@@ -184,24 +276,29 @@ public class Camera {
      * Screen pixels of lift per world unit of height, before zoom — how far up
      * the screen something rises by being one unit above the floor.
      *
-     * <p><b>The two plan views arrive at the same number by different routes,
-     * and asking the projection is what keeps them right.</b> Top-down draws
-     * the ground at world scale, so a unit of height is a unit of screen. The
-     * isometric ground is a diamond {@link #isoTileWidth} across per tile, and
-     * the vertical edge of a cube in that projection is <em>half the diamond's
-     * width</em> — the classic 64&times;64 block sprite standing on a
-     * 64&times;32 top face. Those agree at 32 px only because the diamond is
-     * currently twice the tile size; widen it and the naive formula draws
-     * rhomboids instead of cubes.
+     * <p><b>This is the tilt's half of the projection</b>, and asking the camera
+     * is what keeps every painter's idea of "up" the same one. An orthographic
+     * camera raised {@link #pitch()} above the floor draws a vertical world
+     * edge at {@code cos(pitch)} of its length: lower the camera and blocks
+     * stand up, raise it and they flatten into their own top faces. The floor
+     * at {@link #MIN_LIFT} is why they never flatten <em>away</em> — see the
+     * class note.
+     *
+     * <p>A board diamond keeps the fixed relationship its projection implies:
+     * the vertical edge of a cube in a diamond {@link #isoTileWidth} wide is
+     * <em>half that width</em> — the classic 64&times;64 block sprite standing
+     * on a 64&times;32 top face. That agrees with the tile size at 32 px only
+     * because the diamond is twice it; widen the diamond and the naive formula
+     * draws rhomboids instead of cubes.
      *
      * <p>Zero in a side view, which has no height axis to lift along.
      */
     public double liftScale() {
         if (perspective == Perspective.SIDE_SCROLL) return 0;
-        if (perspective == Perspective.ISOMETRIC) {
+        if (boardDiamond) {
             return tileSize <= 0 ? 0 : (isoTileWidth / 2.0) / tileSize;
         }
-        return 1.0;
+        return Math.max(MIN_LIFT, cosPitch);
     }
 
     /** Set the focus's lift; see {@link #elevation}. */
@@ -258,6 +355,91 @@ public class Camera {
     public void frameOn(double wx, double wy) {
         centerOn(wx, wy);
         setElevation(0);
+    }
+
+    /**
+     * Project the ground into a fixed {@code tileWidth × tileHeight} diamond
+     * rather than tilting over it — the board games' projection. Also sets
+     * {@link #isoTileWidth}/{@link #isoTileHeight}, since a diamond with no
+     * dimensions is not one.
+     *
+     * <p>One way in and no way out: a camera is a board camera or a world
+     * camera for its whole life, and a board that could be un-boarded is a
+     * projection that can change under a layout measured against it.
+     */
+    public void useBoardDiamond(double tileWidth, double tileHeight) {
+        this.boardDiamond = true;
+        this.isoTileWidth = tileWidth;
+        this.isoTileHeight = tileHeight;
+    }
+
+    /** Whether this camera draws a fixed board diamond; see {@link #useBoardDiamond}. */
+    public boolean boardDiamond() { return boardDiamond; }
+
+    /** How high the camera stands over the floor, radians; see the class note. */
+    public double pitch() { return pitch; }
+
+    /** {@link #pitch()} in degrees, which is what a HUD and a player think in. */
+    public double pitchDegrees() { return Math.toDegrees(pitch); }
+
+    /**
+     * Whether the tilt reaches the picture at all here. False in a side view,
+     * which has no floor to stand over, and on a board, whose diamond is fixed.
+     */
+    public boolean tilts() {
+        return perspective != Perspective.SIDE_SCROLL && !boardDiamond;
+    }
+
+    /**
+     * Raise or lower the camera to {@code radians} over the floor, clamped to
+     * [{@link #MIN_PITCH}, {@link #MAX_PITCH}].
+     *
+     * <p>Stored whatever the perspective, like {@link #setYaw}: a camera can be
+     * carried between levels of different kinds without a tilt silently
+     * disappearing, and the projection simply ignores it where it means nothing.
+     */
+    public void setPitch(double radians) {
+        this.pitch = Math.max(MIN_PITCH, Math.min(MAX_PITCH, radians));
+        this.sinPitch = snap(Math.sin(this.pitch));
+        this.cosPitch = snap(Math.cos(this.pitch));
+    }
+
+    /**
+     * The tilt a level opens at, from the degrees it was authored with: that
+     * angle, or {@link #DEFAULT_PITCH} when it has none.
+     *
+     * <p>A level saved before the camera could tilt carries {@code 0}, and zero
+     * is not a tilt anyone could have chosen — a camera flat on the floor sees
+     * nothing — so it can stand for "unwritten" without ambiguity. Here rather
+     * than in each scene because both of them load levels and one of them
+     * getting this wrong would open half the game at the wrong angle.
+     */
+    public static double pitchFor(double authoredDegrees) {
+        return authoredDegrees > 0 ? Math.toRadians(authoredDegrees) : DEFAULT_PITCH;
+    }
+
+    /**
+     * Move the camera {@code radians} up (positive, toward straight down) or
+     * down (negative, toward edge-on) — what a held look key does, once per
+     * frame. Unlike {@link #turn} there is nothing to queue and nothing to
+     * animate: the tilt <em>is</em> the animation, because it rests wherever
+     * the player stops rather than at eight fixed points.
+     */
+    public void tilt(double radians) {
+        if (!tilts() || radians == 0) return;
+        setPitch(pitch + radians);
+    }
+
+    /**
+     * Whether the camera has been raised far enough that the world reads as
+     * seen from overhead — {@link #OVERHEAD_PITCH} or higher. What decides
+     * which pool of art a character is drawn from.
+     */
+    public boolean overhead() {
+        // The tolerance is what makes "75 degrees" mean 75 degrees: the tilt
+        // arrives as a sum of per-frame steps, so the frame that lands on the
+        // threshold lands a few ulps either side of it.
+        return tilts() && pitch >= OVERHEAD_PITCH - 1e-9;
     }
 
     /** The camera's heading, radians clockwise from world north. */
@@ -454,7 +636,7 @@ public class Camera {
         double rx = wx * cosYaw + wy * sinYaw;
         double ry = -wx * sinYaw + wy * cosYaw;
 
-        if (perspective == Perspective.ISOMETRIC) {
+        if (boardDiamond) {
             double tx = rx / tileSize;
             double ty = ry / tileSize;
             return new double[]{
@@ -462,7 +644,9 @@ public class Camera {
                     (tx + ty) * (isoTileHeight / 2.0)
             };
         }
-        return new double[]{rx, ry}; // TOP_DOWN: orthographic, turned
+        // Then the tilt, on the turned plane: the depth axis is the one the
+        // camera is looking along, so that is the one it foreshortens.
+        return new double[]{rx, ry * sinPitch};
     }
 
     /** The exact inverse of {@link #planar}, undone in the opposite order. */
@@ -470,14 +654,15 @@ public class Camera {
         if (perspective == Perspective.SIDE_SCROLL) return new double[]{px, py};
 
         double rx, ry;
-        if (perspective == Perspective.ISOMETRIC) {
+        if (boardDiamond) {
             double a = px / (isoTileWidth / 2.0);
             double b = py / (isoTileHeight / 2.0);
             rx = (a + b) / 2.0 * tileSize;
             ry = (b - a) / 2.0 * tileSize;
         } else {
             rx = px;
-            ry = py;
+            // Never a divide by zero: MIN_PITCH keeps the sine above a third.
+            ry = py / sinPitch;
         }
         return new double[]{
                 rx * cosYaw - ry * sinYaw,
@@ -575,7 +760,7 @@ public class Camera {
             double ry = -wx * sinYaw + wy * cosYaw;
             double rcx = x * cosYaw + y * sinYaw;
             double rcy = -x * sinYaw + y * cosYaw;
-            if (perspective == Perspective.ISOMETRIC) {
+            if (boardDiamond) {
                 double hw = isoTileWidth / 2.0, hh = isoTileHeight / 2.0;
                 double tx = rx / tileSize, ty = ry / tileSize;
                 px = (tx - ty) * hw;
@@ -585,9 +770,9 @@ public class Camera {
                 cy = (ctx + cty) * hh;
             } else {
                 px = rx;
-                py = ry;
+                py = ry * sinPitch;
                 cx = rcx;
-                cy = rcy;
+                cy = rcy * sinPitch;
             }
         }
         out[0] = place(px, cx, viewportWidth, false);

@@ -50,9 +50,15 @@ class TerrainPainterDrawTest {
 
     /** Paint a whole level into a recorder, flushing the depth pass. */
     private static RecordingTarget paint(Level lvl, TerrainPainter.Mining mining) {
+        return paint(lvl, mining, 0);
+    }
+
+    private static RecordingTarget paint(Level lvl, TerrainPainter.Mining mining, double yaw) {
         RecordingTarget target = new RecordingTarget(400, 300);
         DepthPass pass = DepthPass.of(lvl.perspective);
-        TerrainPainter.draw(target, lvl, camera(lvl), new int[]{0, 0, lvl.width - 1, lvl.height - 1},
+        Camera cam = camera(lvl);
+        cam.setYaw(yaw);
+        TerrainPainter.draw(target, lvl, cam, new int[]{0, 0, lvl.width - 1, lvl.height - 1},
                 0.0, pass, null, mining);
         pass.flush();
         return target;
@@ -82,7 +88,7 @@ class TerrainPainterDrawTest {
     void everyShadowInAFrameIsFilledAsOneRegion() {
         // Filling them separately would stack translucent black where two
         // overlap and band the floor — the reason fillShape exists at all.
-        Level lvl = level(LevelFormat.TOP_DOWN, false);
+        Level lvl = level(LevelFormat.THREE_D, false);
         Block solid = lvl.blocks.all().stream().filter(b -> !b.liquid()).findFirst().orElseThrow();
         lvl.setTile(1, 1, Level.LAYER_UPPER, solid.id());
         lvl.setTile(2, 1, Level.LAYER_UPPER, solid.id());
@@ -96,8 +102,8 @@ class TerrainPainterDrawTest {
 
     @Test
     void aStackedBlockDrawsItsSideFaceAndItsLiftedTop() {
-        Level lvl = level(LevelFormat.TOP_DOWN, true);
-        RecordingTarget flat = paint(level(LevelFormat.TOP_DOWN, false), null);
+        Level lvl = level(LevelFormat.THREE_D, true);
+        RecordingTarget flat = paint(level(LevelFormat.THREE_D, false), null);
         RecordingTarget stacked = paint(lvl, null);
 
         // The raised block adds a side face and a top, each a fill plus an
@@ -108,18 +114,22 @@ class TerrainPainterDrawTest {
     }
 
     @Test
-    void anIsometricStackShowsTwoSideFacesNotOne() {
-        // The diamond turns two of its lower edges toward the viewer; a
-        // top-down block only ever shows its southern face.
-        RecordingTarget iso = paint(level(LevelFormat.ISOMETRIC, true), null);
-        RecordingTarget isoFlat = paint(level(LevelFormat.ISOMETRIC, false), null);
-        RecordingTarget top = paint(level(LevelFormat.TOP_DOWN, true), null);
-        RecordingTarget topFlat = paint(level(LevelFormat.TOP_DOWN, false), null);
+    void aTurnedStackShowsTwoSideFacesNotOne() {
+        // Square to the world a block shows one face, its southern one. Turned
+        // an eighth, two of its lower edges come round toward the viewer and
+        // both have to be drawn — which is the case the face-selection code
+        // exists for, and the one an unturned camera never exercises.
+        RecordingTarget square = paint(level(LevelFormat.THREE_D, true), null);
+        RecordingTarget squareFlat = paint(level(LevelFormat.THREE_D, false), null);
+        RecordingTarget turned = paint(level(LevelFormat.THREE_D, true), null,
+                Camera.EIGHTH_TURN);
+        RecordingTarget turnedFlat = paint(level(LevelFormat.THREE_D, false), null,
+                Camera.EIGHTH_TURN);
 
-        assertEquals(3, iso.count("fillPolygon") - isoFlat.count("fillPolygon"),
-                "two side faces plus the top");
-        assertEquals(2, top.count("fillPolygon") - topFlat.count("fillPolygon"),
+        assertEquals(2, square.count("fillPolygon") - squareFlat.count("fillPolygon"),
                 "one side face plus the top");
+        assertEquals(3, turned.count("fillPolygon") - turnedFlat.count("fillPolygon"),
+                "two side faces plus the top");
     }
 
     @Test
@@ -168,7 +178,7 @@ class TerrainPainterDrawTest {
     void aWrappedGraphics2DStillReachesTheSamePainter() {
         // B4 deleted the Graphics2D overload; a caller that has one — a bake,
         // or a test like this — wraps it and gets the same full terrain pass.
-        Level lvl = level(LevelFormat.TOP_DOWN, true);
+        Level lvl = level(LevelFormat.THREE_D, true);
         java.awt.image.BufferedImage img =
                 new java.awt.image.BufferedImage(400, 300,
                         java.awt.image.BufferedImage.TYPE_INT_RGB);
@@ -193,7 +203,7 @@ class TerrainPainterDrawTest {
     void theRecordedOrderPutsFloorBeforeWalls() {
         // The floor is the ground everything stands on; a wall queued into the
         // depth pass must land after it, never under it.
-        Level lvl = level(LevelFormat.TOP_DOWN, true);
+        Level lvl = level(LevelFormat.THREE_D, true);
         RecordingTarget target = paint(lvl, null);
         List<String> ops = target.ops();
 

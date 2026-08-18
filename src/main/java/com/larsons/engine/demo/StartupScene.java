@@ -25,18 +25,25 @@ public class StartupScene extends AbstractScene {
     public void onEnter() {
         // Rebuild every time so newly created/saved game types appear.
         menu = new Menu("Larson's Game Engine")
-                .subtitle("Choose a game type to continue, or create a new one")
+                .subtitle("Choose a game to continue, or create a new one")
                 .theme(MenuTheme.dark());
 
         List<GameProfile> profiles = ctx.store().listProfiles();
         for (GameProfile p : profiles) {
-            menu.add(p.name + "   (" + p.perspective + ")", () -> {
+            // The name and nothing else. A game type used to be listed with the
+            // perspective its profile happened to carry — "Dungeon Crawl
+            // (SIDE_SCROLL)" — which was three kinds of wrong at once: it was an
+            // enum constant shown to a player, it named a *level's* property on
+            // a row that stands for a folder of levels, and a game type holding
+            // a side-scrolling dungeon and a 3D overworld could only ever
+            // display one of them. What a game is called is what it is called.
+            menu.add(p.name, () -> {
                 ctx.setProfile(p);
                 scenes.transitionTo("menu");
             });
         }
 
-        menu.add("+ Create New Game Type", () -> {
+        menu.add("+ Create New Game", () -> {
             ctx.setProfile(new GameProfile());
             scenes.transitionTo("editor");
         });

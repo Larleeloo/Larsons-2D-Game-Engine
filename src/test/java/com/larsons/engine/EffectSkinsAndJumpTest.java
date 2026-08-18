@@ -149,7 +149,7 @@ class EffectSkinsAndJumpTest {
         // paints magenta, where an unskinned burst would paint its own colour.
         BufferedImage canvas = new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = canvas.createGraphics();
-        Camera camera = new Camera(Perspective.TOP_DOWN, 64, 64);
+        Camera camera = new Camera(Perspective.THREE_D, 64, 64);
         camera.centerOn(32, 32);
         Particles particles = new Particles();
         particles.burst(32, 32, Color.GREEN, 40, Particles.Style.EMBERS);
@@ -165,7 +165,7 @@ class EffectSkinsAndJumpTest {
     void anUnskinnedBurstStillDrawsItsColouredFleck() {
         BufferedImage canvas = new BufferedImage(64, 64, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = canvas.createGraphics();
-        Camera camera = new Camera(Perspective.TOP_DOWN, 64, 64);
+        Camera camera = new Camera(Perspective.THREE_D, 64, 64);
         camera.centerOn(32, 32);
         Particles particles = new Particles();
         particles.burst(32, 32, Color.GREEN, 60, Particles.Style.MOTES);
@@ -193,7 +193,7 @@ class EffectSkinsAndJumpTest {
 
     @Test
     void spaceHopsInTopDownAndIsometricLevels() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = format.starterLevel("Hop", 40, 30, 32);
             GameProfile profile = profileFor(lvl.perspective);
             PlayerState s = new PlayerState(0, "", 300, 300);
@@ -221,25 +221,25 @@ class EffectSkinsAndJumpTest {
 
     @Test
     void aHopSteersMidAirAndHonoursTheDoubleJump() {
-        Level lvl = LevelFormat.TOP_DOWN.starterLevel("Hop", 60, 40, 32);
-        GameProfile profile = profileFor(Perspective.TOP_DOWN);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Hop", 60, 40, 32);
+        GameProfile profile = profileFor(Perspective.THREE_D);
         PlayerState s = new PlayerState(0, "", 300, 300);
         double startX = s.x;
 
         PlayerInput jump = new PlayerInput(false, true, false, false, 1);
         jump.jump = true;
-        PlayerPhysics.step(s, jump, lvl, profile, Perspective.TOP_DOWN, 1 / 60.0);
+        PlayerPhysics.step(s, jump, lvl, profile, Perspective.THREE_D, 1 / 60.0);
         double firstRise = s.vz;
 
         // Falling back down, a second press spends the double jump.
         for (int i = 0; i < 40; i++) {
             PlayerPhysics.step(s, new PlayerInput(false, true, false, false, i + 2),
-                    lvl, profile, Perspective.TOP_DOWN, 1 / 60.0);
+                    lvl, profile, Perspective.THREE_D, 1 / 60.0);
         }
         assertTrue(s.vz < 0, "past the peak and falling");
         PlayerInput second = new PlayerInput(false, true, false, false, 100);
         second.jump = true;
-        PlayerPhysics.step(s, second, lvl, profile, Perspective.TOP_DOWN, 1 / 60.0);
+        PlayerPhysics.step(s, second, lvl, profile, Perspective.THREE_D, 1 / 60.0);
         assertTrue(s.vz > 0, "the double jump fires mid-hop");
         assertTrue(s.vz < firstRise, "…a shade weaker than the first, as in side-scroll");
 
@@ -247,33 +247,33 @@ class EffectSkinsAndJumpTest {
         PlayerInput third = new PlayerInput(false, true, false, false, 101);
         third.jump = true;
         double before = s.vz;
-        PlayerPhysics.step(s, third, lvl, profile, Perspective.TOP_DOWN, 1 / 60.0);
+        PlayerPhysics.step(s, third, lvl, profile, Perspective.THREE_D, 1 / 60.0);
         assertTrue(s.vz < before, "no third jump: gravity keeps eating the rise");
         assertTrue(s.x > startX, "steering keeps working through the whole hop");
     }
 
     @Test
     void aHopReadsAsAirborneSoTheJumpAndFallAnimationsPlay() {
-        Level lvl = LevelFormat.TOP_DOWN.starterLevel("Hop", 40, 30, 32);
-        GameProfile profile = profileFor(Perspective.TOP_DOWN);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Hop", 40, 30, 32);
+        GameProfile profile = profileFor(Perspective.THREE_D);
         PlayerState s = new PlayerState(0, "", 300, 300);
 
         assertEquals("idle", PlayerSprites.actionState(s, lvl, profile,
-                Perspective.TOP_DOWN, false));
+                Perspective.THREE_D, false));
 
         PlayerInput jump = new PlayerInput(false, false, false, false, 1);
         jump.jump = true;
-        PlayerPhysics.step(s, jump, lvl, profile, Perspective.TOP_DOWN, 1 / 60.0);
+        PlayerPhysics.step(s, jump, lvl, profile, Perspective.THREE_D, 1 / 60.0);
         assertEquals("jump", PlayerSprites.actionState(s, lvl, profile,
-                        Perspective.TOP_DOWN, false),
+                        Perspective.THREE_D, false),
                 "rising on a hop plays the jump animation");
 
         for (int i = 0; i < 40; i++) {
             PlayerPhysics.step(s, new PlayerInput(false, false, false, false, i + 2),
-                    lvl, profile, Perspective.TOP_DOWN, 1 / 60.0);
+                    lvl, profile, Perspective.THREE_D, 1 / 60.0);
         }
         assertEquals("fall", PlayerSprites.actionState(s, lvl, profile,
-                        Perspective.TOP_DOWN, false),
+                        Perspective.THREE_D, false),
                 "coming back down plays the fall animation");
     }
 
@@ -281,12 +281,12 @@ class EffectSkinsAndJumpTest {
     void aSideScrollLevelNeverLeavesTheSpriteFloating() {
         // A player who hopped in a top-down level and walked through a door
         // into a side-scrolling one must land, not hover.
-        Level plan = LevelFormat.TOP_DOWN.starterLevel("Plan", 40, 30, 32);
+        Level plan = LevelFormat.THREE_D.starterLevel("Plan", 40, 30, 32);
         PlayerState s = new PlayerState(0, "", 300, 300);
         PlayerInput jump = new PlayerInput(false, false, false, false, 1);
         jump.jump = true;
-        PlayerPhysics.step(s, jump, plan, profileFor(Perspective.TOP_DOWN),
-                Perspective.TOP_DOWN, 1 / 60.0);
+        PlayerPhysics.step(s, jump, plan, profileFor(Perspective.THREE_D),
+                Perspective.THREE_D, 1 / 60.0);
         assertTrue(s.z > 0);
 
         Level side = LevelFormat.SIDE_SCROLLER.starterLevel("Side", 40, 20, 32);

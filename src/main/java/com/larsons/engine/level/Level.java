@@ -116,6 +116,29 @@ public class Level {
      */
     public int authoredHeading;
 
+    /**
+     * How high the camera stood over the floor when the level was saved, in
+     * <em>degrees</em> — where its camera starts, the way
+     * {@link #authoredHeading} is where its heading starts.
+     *
+     * <p>The companion to that field, and it exists for the same reason: a 3D
+     * level's camera tilts freely, and a maze laid out to be read from directly
+     * above is a different thing seen from a camera brought down over it. What
+     * the creator was looking at is part of the level.
+     *
+     * <p>Also not a constraint on the player, who may tilt wherever they like
+     * from there, and also not networked. Zero means "not written", which is
+     * every level saved before the camera could tilt and which loads at
+     * {@code Camera.DEFAULT_PITCH} — the tilt has no meaningful zero of its own
+     * (a camera flat on the floor sees nothing), so the absent value can stand
+     * for the default without ambiguity.
+     *
+     * <p>Stored in degrees rather than radians because a level file is
+     * something a person reads and edits, and {@code 90} says what
+     * {@code 1.5707963267948966} does not.
+     */
+    public double authoredPitchDegrees;
+
     public int tileSize = 32;
     public int width;          // in tiles
     public int height;         // in tiles
@@ -1577,7 +1600,8 @@ public class Level {
      * a window that was opened and cancelled leaves no undo step behind.
      */
     public record Doc(String name, String music, double lightAngle,
-                      int authoredHeading, double spawnX, double spawnY,
+                      int authoredHeading, double authoredPitchDegrees,
+                      double spawnX, double spawnY,
                       List<EntitySpawn> entities,
                       List<SurfaceDecor.Placement> surfaceDecor,
                       List<StatRule> statRules, List<String> characters,
@@ -1588,7 +1612,8 @@ public class Level {
     public Doc snapshotDoc() {
         List<Map<String, Object>> scenes = new ArrayList<>(cutscenes.size());
         for (Cutscene cs : cutscenes) scenes.add(cs.toMap());
-        return new Doc(name, music, lightAngle, authoredHeading, spawnX, spawnY,
+        return new Doc(name, music, lightAngle, authoredHeading, authoredPitchDegrees,
+                spawnX, spawnY,
                 List.copyOf(entities), List.copyOf(surfaceDecor),
                 List.copyOf(statRules), List.copyOf(characters),
                 List.copyOf(scenes), minigame == null ? null : minigame.toMap());
@@ -1601,6 +1626,7 @@ public class Level {
         music = doc.music();
         lightAngle = doc.lightAngle();
         authoredHeading = doc.authoredHeading();
+        authoredPitchDegrees = doc.authoredPitchDegrees();
         spawnX = doc.spawnX();
         spawnY = doc.spawnY();
         refill(entities, doc.entities());
@@ -1732,6 +1758,7 @@ public class Level {
         // Absent when the level was built square to the world, which is every
         // level written before headings existed and every side-scroller ever.
         if (authoredHeading != 0) m.put("heading", authoredHeading);
+        if (authoredPitchDegrees > 0) m.put("pitch", authoredPitchDegrees);
         m.put("tileSize", tileSize);
         m.put("width", width);
         m.put("height", height);

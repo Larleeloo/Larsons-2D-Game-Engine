@@ -57,7 +57,7 @@ class CameraSnapTest {
     void anySequenceOfPressesSettlesOnACompassPoint() {
         Random rnd = new Random(20260814);
         for (int run = 0; run < 40; run++) {
-            Camera cam = camera(Perspective.TOP_DOWN);
+            Camera cam = camera(Perspective.THREE_D);
             int lastHeading = cam.heading();
 
             for (int press = 0; press < 30; press++) {
@@ -100,7 +100,7 @@ class CameraSnapTest {
     void onePressTurnsOnePointFromEveryHeading() {
         for (int from = 0; from < 8; from++) {
             for (int step : new int[]{1, -1}) {
-                Camera cam = camera(Perspective.TOP_DOWN);
+                Camera cam = camera(Perspective.THREE_D);
                 cam.setYaw(from * Camera.EIGHTH_TURN);
                 cam.turn(step);
 
@@ -140,7 +140,7 @@ class CameraSnapTest {
      */
     @Test
     void aTurnTakesTimeRatherThanHappeningOnThePress() {
-        Camera cam = camera(Perspective.TOP_DOWN);
+        Camera cam = camera(Perspective.THREE_D);
         cam.turn(1);
         assertEquals(0.0, cam.yaw(), 0.0, "the press alone moved the camera");
         assertTrue(cam.turning(), "the press did not start a turn");
@@ -159,7 +159,7 @@ class CameraSnapTest {
     /** And it eases: the middle of a turn moves faster than either end. */
     @Test
     void theTurnEasesInAndOutRatherThanSweepingFlat() {
-        Camera cam = camera(Perspective.TOP_DOWN);
+        Camera cam = camera(Perspective.THREE_D);
         cam.turn(1);
 
         List<Double> steps = new ArrayList<>();
@@ -192,7 +192,7 @@ class CameraSnapTest {
      */
     @Test
     void oneTurnIsQueuedAndTheRestAreDropped() {
-        Camera cam = camera(Perspective.TOP_DOWN);
+        Camera cam = camera(Perspective.THREE_D);
         cam.turn(1);
         cam.turn(1);
         cam.turn(1);
@@ -208,7 +208,7 @@ class CameraSnapTest {
     /** The queued press may be the other way, and is honoured as pressed. */
     @Test
     void aQueuedTurnMayBeBackTheWayItCame() {
-        Camera cam = camera(Perspective.TOP_DOWN);
+        Camera cam = camera(Perspective.THREE_D);
         cam.turn(1);
         cam.stepYaw(Camera.SNAP_SECONDS / 3);
         cam.turn(-1);
@@ -230,7 +230,7 @@ class CameraSnapTest {
      */
     @Test
     void afullCircleReturnsToTheExactHeadingItLeft() {
-        Camera cam = camera(Perspective.TOP_DOWN);
+        Camera cam = camera(Perspective.THREE_D);
         cam.centerOn(400, 300);
         int[] before = new int[2];
         cam.worldToScreen(5 * 32, 3 * 32, before);

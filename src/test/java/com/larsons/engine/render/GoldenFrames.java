@@ -175,10 +175,15 @@ public final class GoldenFrames {
         // decor and an entity — the four things B3's scene ports move.
         frames.add(new Frame("world-side-scroll", 480, 320,
                 t -> paintWorld(t, LevelFormat.SIDE_SCROLLER)));
-        frames.add(new Frame("world-top-down", 480, 320,
-                t -> paintWorld(t, LevelFormat.TOP_DOWN)));
-        frames.add(new Frame("world-isometric", 480, 320,
-                t -> paintWorld(t, LevelFormat.ISOMETRIC)));
+        // The 3D world at both ends of the camera's travel. It used to be two
+        // formats here; it is one format at two tilts, which is what the two
+        // formats always were — and keeping both frames is worth more now than
+        // it was, because the tilt is something a player moves rather than
+        // something a level was born with.
+        frames.add(new Frame("world-3d-lowered", 480, 320,
+                t -> paintWorld(t, LevelFormat.THREE_D, Camera.MIN_PITCH)));
+        frames.add(new Frame("world-3d-overhead", 480, 320,
+                t -> paintWorld(t, LevelFormat.THREE_D, Camera.MAX_PITCH)));
         frames.add(new Frame("world-crowd", 480, 320, GoldenFrames::paintCrowd));
 
         // B2, in the order B2 ports them.
@@ -252,9 +257,15 @@ public final class GoldenFrames {
 
     /** The world phases in the order {@code PlayScene} runs them. */
     private static void paintWorld(DrawTarget target, LevelFormat format) {
+        paintWorld(target, format, Camera.DEFAULT_PITCH);
+    }
+
+    /** {@link #paintWorld(DrawTarget, LevelFormat)} from a camera at {@code pitch}. */
+    private static void paintWorld(DrawTarget target, LevelFormat format, double pitch) {
         Level level = worldLevel(format);
         Camera camera = new Camera(level.perspective, target.width(), target.height());
         camera.tileSize = level.tileSize;
+        camera.setPitch(pitch);
         camera.centerOn(level.width * 32 / 2.0, level.height * 32 / 2.0);
 
         target.clear(level.background.getRGB());
@@ -306,7 +317,7 @@ public final class GoldenFrames {
      */
     private static void paintCrowd(DrawTarget target) {
         Level level = Level.empty("crowd", 15, 10, 32);
-        level.setFormat(LevelFormat.TOP_DOWN);
+        level.setFormat(LevelFormat.THREE_D);
         level.background = new Color(30, 38, 54);
         int grass = level.blocks.get("grass").id();
         for (int row = 0; row < level.height; row++) {

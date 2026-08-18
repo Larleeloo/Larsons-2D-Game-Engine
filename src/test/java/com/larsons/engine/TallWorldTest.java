@@ -58,7 +58,7 @@ class TallWorldTest {
      */
     @Test
     void aLevelThatNamesNoCeilingGetsTheFormats() {
-        Level plain = tall(LevelFormat.TOP_DOWN);
+        Level plain = tall(LevelFormat.THREE_D);
         assertFalse(plain.toJson().contains("maxLayers"),
                 "a level at the default does not write one");
         assertEquals(Level.MAX_LAYERS, LevelLoader.parse(plain.toJson()).layerLimit());
@@ -81,7 +81,7 @@ class TallWorldTest {
      */
     @Test
     void aBlockAtTheCeilingAllocatesOneLayerAndNotTheFiveHundredUnderIt() {
-        Level lvl = tall(LevelFormat.TOP_DOWN);
+        Level lvl = tall(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         int top = lvl.layerLimit() - 1;
 
@@ -108,7 +108,7 @@ class TallWorldTest {
     /** A level saved with a hole in its layers loads back exactly as it was. */
     @Test
     void aSparseTowerSurvivesASaveAndALoad() {
-        Level lvl = tall(LevelFormat.ISOMETRIC);
+        Level lvl = tall(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         int[] at = {1, 5, 40, 300, lvl.layerLimit() - 1};
         for (int layer : at) lvl.setTile(6, 7, layer, stone);
@@ -136,12 +136,12 @@ class TallWorldTest {
     @Test
     void aDenseLevelsCeilingIsWhatItsFootprintCanPayFor() {
         Level small = Level.empty("small", 240, 140, TILE);
-        small.setFormat(LevelFormat.TOP_DOWN);
+        small.setFormat(LevelFormat.THREE_D);
         assertEquals(Level.MAX_LAYERS, small.layerLimit(),
                 "an ordinary editor map builds the whole way up");
 
         Level big = Level.empty("big", 1024, 1024, TILE);
-        big.setFormat(LevelFormat.TOP_DOWN);
+        big.setFormat(LevelFormat.THREE_D);
         assertTrue(big.layerLimit() < Level.MAX_LAYERS,
                 "a level at the dense limit does not promise 512 layers of itself");
         assertTrue(big.layerLimit() >= 2,
@@ -151,7 +151,7 @@ class TallWorldTest {
                 "and what it does promise fits the budget");
 
         Level giant = Level.emptyChunked("giant", 4096, 4096, TILE, null);
-        giant.setFormat(LevelFormat.TOP_DOWN);
+        giant.setFormat(LevelFormat.THREE_D);
         assertEquals(Level.MAX_LAYERS, giant.layerLimit(),
                 "chunked storage is sparse in exactly this dimension, so height is free");
 
@@ -173,7 +173,7 @@ class TallWorldTest {
      */
     @Test
     void oneTowerDoesNotMakeEveryOtherColumnDeep() {
-        Level lvl = tall(LevelFormat.TOP_DOWN);
+        Level lvl = tall(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         for (int layer = 0; layer < lvl.layerLimit(); layer++) lvl.setTile(2, 2, layer, stone);
         for (int layer = 0; layer < 8; layer++) lvl.setTile(9, 9, layer, stone);
@@ -193,7 +193,7 @@ class TallWorldTest {
      */
     @Test
     void theColumnBoundNeverFallsBehindTheTerrain() {
-        Level lvl = tall(LevelFormat.TOP_DOWN);
+        Level lvl = tall(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         int path = lvl.blocks.get("stone_path").id();
         Random rng = new Random(20260816L);
@@ -228,7 +228,7 @@ class TallWorldTest {
      */
     @Test
     void replacingTheTerrainWholesaleDoesNotStrandTheColumnBound() {
-        Level lvl = tall(LevelFormat.TOP_DOWN);
+        Level lvl = tall(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         for (int layer = 0; layer < 60; layer++) lvl.setTile(5, 5, layer, stone);
         assertEquals(60, lvl.columnDepth(5, 5), "read it, so there is something to strand");
@@ -275,7 +275,7 @@ class TallWorldTest {
      */
     @Test
     void theBoundsReachOutAsFarAsTheLevelIsTall() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = tall(format, 60, 60);
             int stone = lvl.blocks.get("stone").id();
             Camera cam = new Camera(lvl.perspective, 480, 480);
@@ -339,7 +339,7 @@ class TallWorldTest {
     /** A body climbs to the ceiling and stands on it, rather than at layer eight. */
     @Test
     void aColumnIsClimbableAllTheWayUp() {
-        Level lvl = tall(LevelFormat.TOP_DOWN);
+        Level lvl = tall(LevelFormat.THREE_D);
         lvl.fillFloor(lvl.blocks.get("stone_path").id());
         int stone = lvl.blocks.get("stone").id();
         int height = 400;
@@ -356,7 +356,7 @@ class TallWorldTest {
     /** The editor's cursor still resolves a column of hundreds, top face and side. */
     @Test
     void pickingStillFindsTheTopOfAVeryTallTower() {
-        Level lvl = tall(LevelFormat.TOP_DOWN);
+        Level lvl = tall(LevelFormat.THREE_D);
         lvl.fillFloor(lvl.blocks.get("stone_path").id());
         int stone = lvl.blocks.get("stone").id();
         int height = 200;
@@ -382,7 +382,7 @@ class TallWorldTest {
     /** The server still validates a client's layer against the level's ceiling. */
     @Test
     void theCeilingIsStillTheRuleABlockEditIsCheckedAgainst() {
-        Level lvl = tall(LevelFormat.TOP_DOWN);
+        Level lvl = tall(LevelFormat.THREE_D);
         lvl.fillFloor(lvl.blocks.get("stone_path").id());
         World world = new World(lvl);
         int stone = lvl.blocks.get("stone").id();

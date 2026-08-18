@@ -148,7 +148,7 @@ class LevelBytesTest {
     @Test
     void theGeometryListHasOneEntryPerLayer() {
         Level bare = Level.empty("Bare", 12, 12, 32);
-        bare.setFormat(LevelFormat.TOP_DOWN);
+        bare.setFormat(LevelFormat.THREE_D);
         bare.fillFloor(bare.blocks.get("stone_path").id());
         assertEquals(1, layerRunsOf(bare).size(),
                 "a plan-view level nobody has built in is one layer deep");
@@ -205,13 +205,13 @@ class LevelBytesTest {
     /** A level's own ceiling is saved when it has an opinion, and not otherwise. */
     @Test
     void theCeilingIsSavedOnlyWhenTheLevelHasAnOpinionAboutIt() {
-        Level plain = furnished(LevelFormat.ISOMETRIC);
+        Level plain = furnished(LevelFormat.THREE_D);
         assertFalse(keysOf(plain).contains("maxLayers"),
                 "a level that never moved its ceiling says nothing");
         assertEquals(Level.MAX_LAYERS,
                 LevelLoader.parse(plain.toJson()).maxLayers);
 
-        Level flat = furnished(LevelFormat.ISOMETRIC);
+        Level flat = furnished(LevelFormat.THREE_D);
         flat.maxLayers = 2;
         assertTrue(keysOf(flat).contains("maxLayers"));
         Level reloaded = LevelLoader.parse(flat.toJson());
@@ -230,7 +230,7 @@ class LevelBytesTest {
      */
     @Test
     void theShapesThisBuildNoLongerWritesStillLoad() {
-        Level source = furnished(LevelFormat.TOP_DOWN);
+        Level source = furnished(LevelFormat.THREE_D);
         String legacy = twoKeyForm(source);
         assertTrue(legacy.contains("tilesRle") && legacy.contains("upperRle"),
                 "the fixture really is in the old shape");
@@ -316,7 +316,7 @@ class LevelBytesTest {
 
     /** A plan-view level with one column built all the way to the ceiling. */
     private static Level tower() {
-        Level lvl = furnished(LevelFormat.ISOMETRIC);
+        Level lvl = furnished(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         for (int layer = 1; layer < Level.MAX_LAYERS; layer++) {
             lvl.setTile(4, 4, layer, stone);
@@ -360,7 +360,7 @@ class LevelBytesTest {
         int side = (int) Math.sqrt(Level.DENSE_TILE_LIMIT) + ChunkedTiles.CHUNK;
         Level lvl = Level.emptyChunked("Giant", side, side, 32,
                 Level.flatGenerator(1));
-        lvl.setFormat(LevelFormat.TOP_DOWN);
+        lvl.setFormat(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         int path = lvl.blocks.get("stone_path").id();
         for (int r = 0; r < 6; r++) {

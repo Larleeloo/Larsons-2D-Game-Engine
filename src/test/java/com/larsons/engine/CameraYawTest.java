@@ -59,10 +59,17 @@ class CameraYawTest {
         return yaws;
     }
 
-    /** The two formats §6.1 puts in scope. Side-scroll is tested separately. */
-    private static final Perspective[] ROTATING = {
-            Perspective.TOP_DOWN, Perspective.ISOMETRIC
-    };
+    /**
+     * The format §6.1 puts in scope. Side-scroll is tested separately, and does
+     * not turn at all.
+     *
+     * <p>An array of one, kept as an array: this was two entries when the plan
+     * views were two formats, and every claim below is a claim about a
+     * <em>rotating projection</em> rather than about a particular one. It is
+     * also the tilts that make several projections out of the one format, and
+     * those are covered by {@code CameraTiltTest}.
+     */
+    private static final Perspective[] ROTATING = {Perspective.THREE_D};
 
     // --- the projection inverts ----------------------------------------------------
 
@@ -148,10 +155,13 @@ class CameraYawTest {
                         cam.worldToScreen(w[0], w[1], out);
                         double[] back = cam.screenToWorld(out[0], out[1]);
                         // Two roundings forward, so two pixels' worth of world
-                        // units back. Isometric spends its rounding on both axes
-                        // at once, as CameraStabilityTest also allows for.
-                        double tolerance = 2.5 / cam.zoom
-                                * (perspective == Perspective.ISOMETRIC ? 2 : 1);
+                        // units back — doubled because a turned or tilted plane
+                        // spends its rounding on both axes at once, as
+                        // CameraStabilityTest also allows for. The tilt widens
+                        // it in the same way and for the same reason: a
+                        // foreshortened depth axis magnifies a screen pixel's
+                        // worth of world when it is carried back.
+                        double tolerance = 2.5 / cam.zoom * 2 / Math.sin(cam.pitch());
                         assertTrue(Math.abs(back[0] - w[0]) <= tolerance
                                         && Math.abs(back[1] - w[1]) <= tolerance,
                                 perspective + " at " + degrees(yaw) + "°: (" + w[0] + "," + w[1]
@@ -290,12 +300,20 @@ class CameraYawTest {
      * these four headings for essentially the whole of play. Snapping the
      * cosine and sine keeps the turned projection <em>exactly</em> the unturned
      * one with its axes exchanged, which is what lets the world's pixel lattice
-     * survive a turn unchanged. Stated in top-down, where the expected values
-     * can be written down.
+     * survive a turn unchanged.
+     *
+     * <p>Stated with the camera at the top of its travel, where the tilt
+     * contributes a factor of exactly one and the expected values can be
+     * written down. That is not a way of avoiding the tilt: it is the other
+     * half of the same projection, it scales the depth axis by a number the
+     * heading does not touch, and holding it fixed is what leaves the heading
+     * as the only thing under test here. {@code CameraTiltTest} makes the
+     * matching claim about the tilt.
      */
     @Test
     void theCardinalHeadingsAreExactAxisSwaps() {
-        Camera cam = camera(Perspective.TOP_DOWN);
+        Camera cam = camera(Perspective.THREE_D);
+        cam.setPitch(Camera.MAX_PITCH);
         double wx = 137.25, wy = -48.5;
 
         cam.setYaw(0);
@@ -402,7 +420,7 @@ class CameraYawTest {
      */
     @Test
     void theHeadingBeingTurnedTowardsDoesNotItselfProject() {
-        Camera cam = camera(Perspective.TOP_DOWN);
+        Camera cam = camera(Perspective.THREE_D);
         cam.centerOn(400, 300);
         int[] out = new int[2];
         List<int[]> before = project(cam, out);

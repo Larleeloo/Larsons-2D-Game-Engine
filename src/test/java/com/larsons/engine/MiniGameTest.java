@@ -416,7 +416,7 @@ class MiniGameTest {
     @Test
     void projectilesHitEnemyPlayersButNeverTeammates() {
         Level lvl = Level.empty("Duel", 60, 20, TS);
-        lvl.perspective = com.larsons.engine.graphics.Perspective.TOP_DOWN;
+        lvl.perspective = com.larsons.engine.graphics.Perspective.THREE_D;
         // A plan-view level's floor is its ground layer; bare ground is a hole
         // there, and duellists need somewhere to stand.
         lvl.fillFloor(lvl.blocks.get("stone_path").id());

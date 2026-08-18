@@ -9,6 +9,7 @@ import com.larsons.engine.entity.DroppedItem;
 import com.larsons.engine.entity.Mob;
 import com.larsons.engine.entity.MobDef;
 import com.larsons.engine.entity.MobRegistry;
+import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.level.DoorDirectory;
 import com.larsons.engine.level.Level;
@@ -60,8 +61,7 @@ class LevelFormatTest {
     void onlyTheSideScrollerSimulatesGravity() {
         assertTrue(LevelFormat.SIDE_SCROLLER.gravity());
         assertFalse(LevelFormat.SIDE_SCROLLER.planar());
-        assertTrue(LevelFormat.TOP_DOWN.planar());
-        assertTrue(LevelFormat.ISOMETRIC.planar());
+        assertTrue(LevelFormat.THREE_D.planar());
     }
 
     @Test
@@ -85,14 +85,14 @@ class LevelFormatTest {
         Level old = LevelLoader.parse("""
                 { "perspective": "ISOMETRIC", "tileSize": 32, "tiles": [[0,0],[1,1]] }
                 """);
-        assertEquals(LevelFormat.ISOMETRIC, old.format());
+        assertEquals(LevelFormat.THREE_D, old.format());
     }
 
     @Test
     void unknownFormatTextFallsBackInsteadOfFailing() {
-        assertEquals(LevelFormat.TOP_DOWN, LevelFormat.of("holographic", LevelFormat.TOP_DOWN));
-        assertEquals(LevelFormat.ISOMETRIC, LevelFormat.of("isometric", LevelFormat.SIDE_SCROLLER));
-        assertEquals(LevelFormat.ISOMETRIC, LevelFormat.of("ISOMETRIC", LevelFormat.SIDE_SCROLLER));
+        assertEquals(LevelFormat.THREE_D, LevelFormat.of("holographic", LevelFormat.THREE_D));
+        assertEquals(LevelFormat.THREE_D, LevelFormat.of("isometric", LevelFormat.SIDE_SCROLLER));
+        assertEquals(LevelFormat.THREE_D, LevelFormat.of("ISOMETRIC", LevelFormat.SIDE_SCROLLER));
     }
 
     @Test
@@ -102,10 +102,10 @@ class LevelFormatTest {
             Level lvl = format.starterLevel(format.displayName() + " map", 24, 16, 32);
             store.save(lvl);
         }
-        assertEquals(3, store.list().size());
+        assertEquals(LevelFormat.values().length, store.list().size());
         for (LevelFormat format : LevelFormat.values()) {
             // list(format) returns saved file stems; each must report its own
-            // format, and each format must claim exactly one of the three.
+            // format, and each format must claim exactly one of them.
             List<String> ofFormat = store.list(format);
             assertEquals(1, ofFormat.size(), format + " should have one level");
             assertEquals(format, store.formatOf(ofFormat.get(0)));
@@ -163,18 +163,18 @@ class LevelFormatTest {
         GameProfile gameType = new GameProfile("side-scrolling game type");
         gameType.perspective = Perspective.SIDE_SCROLL;
 
-        Level iso = LevelFormat.ISOMETRIC.starterLevel("Town", 20, 12, 32);
+        Level iso = LevelFormat.THREE_D.starterLevel("Town", 20, 12, 32);
         iso.captureSettings(gameType);
-        assertEquals(Perspective.ISOMETRIC, iso.settings.perspective);
+        assertEquals(Perspective.THREE_D, iso.settings.perspective);
 
         Level reloaded = LevelLoader.parse(iso.toJson());
-        assertEquals(LevelFormat.ISOMETRIC, reloaded.format());
-        assertEquals(Perspective.ISOMETRIC, reloaded.settings.perspective);
+        assertEquals(LevelFormat.THREE_D, reloaded.format());
+        assertEquals(Perspective.THREE_D, reloaded.settings.perspective);
 
         // Applying those settings is what a scene does on load: it must arrive
         // in the level's format, not the game type's.
         gameType.applyFeaturesFrom(reloaded.settings);
-        assertEquals(Perspective.ISOMETRIC, gameType.perspective);
+        assertEquals(Perspective.THREE_D, gameType.perspective);
     }
 
     /**
@@ -187,8 +187,8 @@ class LevelFormatTest {
         GameContext ctx = new GameContext(null, new GameTypeStore(dir.toString()));
         assertNull(ctx.takeCreativeFormat(), "nothing requested by default");
 
-        ctx.setCreativeFormat(LevelFormat.TOP_DOWN);
-        assertEquals(LevelFormat.TOP_DOWN, ctx.takeCreativeFormat());
+        ctx.setCreativeFormat(LevelFormat.THREE_D);
+        assertEquals(LevelFormat.THREE_D, ctx.takeCreativeFormat());
         assertNull(ctx.takeCreativeFormat(), "the request is spent");
     }
 
@@ -201,8 +201,7 @@ class LevelFormatTest {
     @Test
     void onlyThePlanViewFormatsStackBlocks() {
         assertFalse(LevelFormat.SIDE_SCROLLER.layered());
-        assertTrue(LevelFormat.TOP_DOWN.layered());
-        assertTrue(LevelFormat.ISOMETRIC.layered());
+        assertTrue(LevelFormat.THREE_D.layered());
 
         Level side = LevelFormat.SIDE_SCROLLER.starterLevel("Side", 20, 12, 32);
         assertFalse(side.layered());
@@ -230,7 +229,7 @@ class LevelFormatTest {
     /** In the plan views the stack is the geometry, not the block's own flag. */
     @Test
     void oneLayerIsAPathTwoIsAWallAndBareGroundIsAHole() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = format.starterLevel("Stacks", 20, 12, 32);
             int grass = lvl.blocks.get("grass").id();   // a solid block…
             int path = lvl.blocks.get("stone_path").id(); // …and a passable one
@@ -279,13 +278,13 @@ class LevelFormatTest {
      */
     @Test
     void theAuthoringHeadingSurvivesASaveAndIsAbsentWhenItIsZero() {
-        Level built = LevelFormat.TOP_DOWN.starterLevel("Turned", 20, 12, 32);
+        Level built = LevelFormat.THREE_D.starterLevel("Turned", 20, 12, 32);
         built.authoredHeading = 3;
         String json = built.toJson();
         assertTrue(json.contains("heading"), "the heading was not written at all");
         assertEquals(3, LevelLoader.parse(json).authoredHeading);
 
-        Level square = LevelFormat.TOP_DOWN.starterLevel("Square", 20, 12, 32);
+        Level square = LevelFormat.THREE_D.starterLevel("Square", 20, 12, 32);
         assertEquals(0, square.authoredHeading, "a fresh level is built square to the world");
         assertFalse(square.toJson().contains("heading"),
                 "a level built square to the world writes a heading anyway, which makes "
@@ -294,12 +293,45 @@ class LevelFormatTest {
     }
 
     /**
+     * The camera's other axis is authored the same way, and answers the same
+     * two questions: does it survive a save, and does a level written before it
+     * existed open sensibly?
+     *
+     * <p>The second one differs from the heading's, and that is the point.
+     * Absent means "before this existed" for both, but zero is a real heading
+     * (square to the world) and is <em>not</em> a real tilt — a camera flat on
+     * the floor sees nothing — so an unwritten tilt opens at the engine's
+     * default rather than at the value in the slot.
+     */
+    @Test
+    void theAuthoringTiltSurvivesASaveAndFallsBackToTheDefaultWhenAbsent() {
+        Level built = LevelFormat.THREE_D.starterLevel("Overhead", 20, 12, 32);
+        built.authoredPitchDegrees = 90;
+        String json = built.toJson();
+        assertTrue(json.contains("pitch"), "the tilt was not written at all");
+        assertEquals(90, LevelLoader.parse(json).authoredPitchDegrees, 1e-9);
+        assertEquals(Camera.MAX_PITCH,
+                Camera.pitchFor(LevelLoader.parse(json).authoredPitchDegrees), 1e-9,
+                "a level built from overhead opens from overhead");
+
+        Level fresh = LevelFormat.THREE_D.starterLevel("Fresh", 20, 12, 32);
+        assertEquals(0, fresh.authoredPitchDegrees, 1e-9);
+        assertFalse(fresh.toJson().contains("pitch"),
+                "an unauthored tilt writes a key anyway, which makes an optional field "
+                        + "a format change");
+        assertEquals(Camera.DEFAULT_PITCH,
+                Camera.pitchFor(LevelLoader.parse(fresh.toJson()).authoredPitchDegrees), 1e-9,
+                "a level from before the camera could tilt opens at the default tilt, "
+                        + "not flat on the floor");
+    }
+
+    /**
      * A level from a build that had never heard of headings opens square to the
      * world, rather than at a heading read out of whatever was in that slot.
      */
     @Test
     void aLevelFromBeforeHeadingsOpensSquareToTheWorld() {
-        Level old = LevelFormat.ISOMETRIC.starterLevel("Ancient", 20, 12, 32);
+        Level old = LevelFormat.THREE_D.starterLevel("Ancient", 20, 12, 32);
         String json = old.toJson();
         assertFalse(json.contains("heading"), "this fixture is meant to have no heading");
 
@@ -347,7 +379,7 @@ class LevelFormatTest {
     /** An out-of-range heading in a file is read as one of the eight, not as itself. */
     @Test
     void aHeadingOutsideTheEightIsFoldedOntoThem() {
-        Level lvl = LevelFormat.TOP_DOWN.starterLevel("Wrapped", 20, 12, 32);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Wrapped", 20, 12, 32);
         lvl.authoredHeading = 11;          // three quarters of a turn past a full one
         assertEquals(3, LevelLoader.parse(lvl.toJson()).authoredHeading);
 
@@ -358,7 +390,7 @@ class LevelFormatTest {
     /** Clearing a floor takes what stood on it: a block over a hole is neither. */
     @Test
     void clearingTheFloorClearsWhatStoodOnIt() {
-        Level lvl = LevelFormat.TOP_DOWN.starterLevel("Stacks", 20, 12, 32);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Stacks", 20, 12, 32);
         int stone = lvl.blocks.get("stone").id();
         assertTrue(lvl.stackTile(5, 5, stone));
         assertEquals(2, lvl.stackHeight(5, 5));
@@ -381,7 +413,7 @@ class LevelFormatTest {
     /** Both layers survive a save, and a plan-view level's geometry with them. */
     @Test
     void theStackedLayerSurvivesTheSaveFileRoundTrip() {
-        Level lvl = LevelFormat.ISOMETRIC.starterLevel("Town", 20, 12, 32);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Town", 20, 12, 32);
         int stone = lvl.blocks.get("stone").id();
         lvl.stackTile(5, 5, stone);
         lvl.setTile(6, 5, stone);
@@ -421,7 +453,7 @@ class LevelFormatTest {
      */
     @Test
     void aGiantPlanViewLevelKeepsItsFloorAcrossASave() {
-        Level giant = LevelFormat.TOP_DOWN.starterLevel("Giant", 2048, 2048, 32);
+        Level giant = LevelFormat.THREE_D.starterLevel("Giant", 2048, 2048, 32);
         assertTrue(giant.isChunked(), "a level this size is chunked");
         assertTrue(giant.walkable(1500, 1500), "its floor reaches everywhere");
 
@@ -452,7 +484,7 @@ class LevelFormatTest {
         assertTrue(side.solidAt(10, side.height - 1), "side-scroll canvas has a floor");
         assertFalse(side.solidAt(10, 0), "and open sky above it");
 
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level plan = format.starterLevel("Plan", 20, 12, 32);
             assertTrue(plan.solidAt(0, 6), "plan-view canvas is walled at the edge");
             assertTrue(plan.solidAt(19, 6));
@@ -464,8 +496,8 @@ class LevelFormatTest {
     @Test
     void theMazeGeneratorBuildsForThePlanViewFormats() {
         Level maze = LevelGenerator.generateMaze("Maze", 21, 21, 32, 7L,
-                LevelFormat.ISOMETRIC);
-        assertEquals(LevelFormat.ISOMETRIC, maze.format());
+                LevelFormat.THREE_D);
+        assertEquals(LevelFormat.THREE_D, maze.format());
     }
 
     // --- shared objects behaving in every format --------------------------------
@@ -482,7 +514,7 @@ class LevelFormatTest {
         DroppedItem sideDrop = side.items().get(0);
         assertTrue(sideDrop.vy < 0, "gravity worlds toss drops upward to fall back");
 
-        World plan = worldOf(LevelFormat.TOP_DOWN);
+        World plan = worldOf(LevelFormat.THREE_D);
         plan.mineBlock(3, 3, true);
         assertEquals(1, plan.items().size());
         DroppedItem planDrop = plan.items().get(0);
@@ -497,7 +529,7 @@ class LevelFormatTest {
 
     @Test
     void planViewDropsSlideToRestInsteadOfFalling() {
-        Level lvl = LevelFormat.TOP_DOWN.starterLevel("Drops", 20, 12, 32);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Drops", 20, 12, 32);
         DroppedItem drop = new DroppedItem(1, "coal", 1, 160, 160).toss(0, -260, false);
         for (int i = 0; i < 240; i++) drop.step(lvl, false, 1 / 60.0);
         assertTrue(Math.abs(drop.vx) < 1 && Math.abs(drop.vy) < 1, "the skid damps out");
@@ -521,7 +553,7 @@ class LevelFormatTest {
 
         // On a plane a pool lies *on* the floor rather than replacing it, so
         // its source goes into the level's surface layer — the stacked one.
-        Level plan = openLevel(LevelFormat.TOP_DOWN);
+        Level plan = openLevel(LevelFormat.THREE_D);
         plan.setTile(10, 2, plan.surfaceLayer(), water);
         settleLiquids(plan, false);
         assertTrue(isWater(plan, 9, 2) && isWater(plan, 11, 2),
@@ -533,7 +565,7 @@ class LevelFormatTest {
 
     @Test
     void wallsStopAPlanViewLiquidFromSpreadingThrough() {
-        Level plan = openLevel(LevelFormat.TOP_DOWN);
+        Level plan = openLevel(LevelFormat.THREE_D);
         int wall = plan.blocks.get("stone_wall").id();
         for (int r = 0; r < plan.height; r++) plan.stackTile(12, r, wall);
         plan.setTile(10, 5, plan.surfaceLayer(), plan.blocks.get("water").id());
@@ -560,7 +592,7 @@ class LevelFormatTest {
     /** Mobs walk the whole plane in the plan-view formats, not just sideways. */
     @Test
     void mobsNavigateBothAxesOnAPlane() {
-        Level plan = openLevel(LevelFormat.TOP_DOWN);
+        Level plan = openLevel(LevelFormat.THREE_D);
         MobDef def = MobRegistry.standard().get("zombie");
         assertNotNull(def);
         Mob mob = new Mob(1, def, 10 * 32, 8 * 32);
@@ -629,9 +661,9 @@ class LevelFormatTest {
      */
     @Test
     void vehiclesSteerBothAxesOnAPlane() {
-        Level plan = openLevel(LevelFormat.TOP_DOWN);
+        Level plan = openLevel(LevelFormat.THREE_D);
         World world = new World(plan);
-        GameProfile profile = profileFor(LevelFormat.TOP_DOWN);
+        GameProfile profile = profileFor(LevelFormat.THREE_D);
         com.larsons.engine.entity.Vehicle horse = world.spawnVehicle("horse", 300, 300);
         assertNotNull(horse);
         PlayerState rider = new PlayerState(1, "p", 300, 300);

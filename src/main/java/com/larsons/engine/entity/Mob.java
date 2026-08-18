@@ -654,7 +654,7 @@ public final class Mob {
         // sprite that draws it: left/right on a platform, all eight on a plane
         // (so a slime walking north-east is drawn from behind, like the player).
         facing = Facing.of(dx, planar ? dyPlanar : 0,
-                planar ? Perspective.TOP_DOWN : Perspective.SIDE_SCROLL, facing);
+                planar ? Perspective.THREE_D : Perspective.SIDE_SCROLL, facing);
 
         // --- movement & collision (the same AABB rules as PlayerPhysics) ---
         boolean inLiquid = level.liquidAt((int) Math.floor((x + size / 2) / ts),

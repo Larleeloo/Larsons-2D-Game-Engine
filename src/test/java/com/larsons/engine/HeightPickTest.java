@@ -40,7 +40,7 @@ class HeightPickTest {
      */
     @Test
     void pointingAtATowerHitsTheTowerAndNotTheCellBehindIt() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             for (int eighth = 0; eighth < 8; eighth++) {
                 Level lvl = floored(format);
                 int stone = lvl.blocks.get("stone").id();
@@ -73,7 +73,7 @@ class HeightPickTest {
     /** Floor beside a tower is still floor, and answers layer zero. */
     @Test
     void pointingAtBareFloorHitsTheFloor() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = floored(format);
             int stone = lvl.blocks.get("stone").id();
             for (int layer = 1; layer <= 3; layer++) lvl.setTile(10, 10, layer, stone);
@@ -111,7 +111,7 @@ class HeightPickTest {
     /** Off the level is a miss rather than a cell clamped to the edge. */
     @Test
     void pointingOffTheLevelHitsNothing() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         Camera cam = camera(lvl, 0);
         // Far outside a 20x20 level, in a direction the march cannot recover.
         assertEquals(null, TerrainPainter.pick(cam, lvl, -4000, -4000));

@@ -386,7 +386,7 @@ class SolidViewTest {
     /** A plan-view level with a height axis and nothing in it — not even a floor. */
     private static Level bare(int w, int h) {
         Level lvl = Level.empty("solid-test", w, h, TILE);
-        lvl.setFormat(LevelFormat.TOP_DOWN);
+        lvl.setFormat(LevelFormat.THREE_D);
         GameProfile settings = new GameProfile("solid-test");
         settings.verticality = true;
         lvl.settings = settings;

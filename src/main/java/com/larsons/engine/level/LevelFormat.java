@@ -5,24 +5,34 @@ import com.larsons.engine.world.Block;
 import com.larsons.engine.world.BlockRegistry;
 
 /**
- * The three level formats the engine builds and plays: side-scroller,
- * top-down, and isometric. A format is a level's <em>kind</em> — the camera
- * projection it is drawn through, the movement model it simulates, and the
- * palette its creative mode offers — so each one is authored in its own
- * creative mode while every format loads and plays through the same code.
+ * The two level formats the engine builds and plays: side-scroller and 3D. A
+ * format is a level's <em>kind</em> — the camera projection it is drawn
+ * through, the movement model it simulates, and the palette its creative mode
+ * offers — so each one is authored in its own creative mode while both formats
+ * load and play through the same code.
+ *
+ * <p><b>There were three of these, and two of them were the same world.</b>
+ * "Top-down" and "isometric" differed in exactly one thing: where the camera
+ * stood over the floor. They shared their gravity axis, their two-layer
+ * geometry, their movement model, their palette and their file format, and a
+ * creator picking between them at the moment of creating a level was being
+ * asked to commit, permanently and before building anything, to a camera angle.
+ * Now they are one format whose camera the player moves while playing
+ * ({@link com.larsons.engine.graphics.Camera#tilt}), and levels saved under
+ * either old name load as {@link #THREE_D}.
  *
  * <p>The format is the level's own property (saved as {@code "format"} in the
  * level JSON, see {@link Level#toMap()}), not the game type's: one game type
- * can hold a side-scrolling dungeon, a top-down overworld, and an isometric
- * town, and walking through a door from one into another switches formats
- * mid-play without a reload.
+ * can hold a side-scrolling dungeon and a 3D overworld, and walking through a
+ * door from one into the other switches formats mid-play without a reload.
  *
  * <p>What actually differs between the formats:
  * <ul>
  *   <li><b>Projection</b> — {@link #perspective()} drives {@code Camera}:
- *       orthographic for side-scroll/top-down, a diamond for isometric.</li>
+ *       the screen plane itself for a side-scroller, a turnable and tiltable
+ *       ground plane for 3D.</li>
  *   <li><b>Gravity</b> — {@link #gravity()} is true only for the
- *       side-scroller. The {@link #planar()} formats move on a plane, so
+ *       side-scroller. The {@link #planar()} format moves on a plane, so
  *       players/mobs/vehicles steer both axes, drops scatter instead of
  *       falling, liquids pool outward instead of pouring down, and
  *       sand/gravel stay put.</li>
@@ -39,20 +49,28 @@ import com.larsons.engine.world.BlockRegistry;
  *       cross. A side-scroller has one layer and reads solidity off the block
  *       itself, exactly as it always did.</li>
  *   <li><b>Starter canvas</b> — {@link #starterLevel} floors a side-scroller
- *       and gives a plan-view map a walkable floor inside a stacked wall
- *       border. Which <em>generator</em> a format's Generate window opens on is
- *       the editor's decision rather than the format's, since the list of modes
- *       differs by format: only a layered one has relief to build.</li>
+ *       and gives a 3D map a walkable floor inside a stacked wall border. Which
+ *       <em>generator</em> a format's Generate window opens on is the editor's
+ *       decision rather than the format's, since the list of modes differs by
+ *       format: only a layered one has relief to build.</li>
  * </ul>
  */
 public enum LevelFormat {
 
     SIDE_SCROLLER(Perspective.SIDE_SCROLL, "side_scroller", "Side-Scroller",
             "Gravity world seen from the side — run, jump and climb platforms."),
-    TOP_DOWN(Perspective.TOP_DOWN, "top_down", "Top-Down",
-            "Plan view with no gravity — one layer of blocks is floor, two is a wall."),
-    ISOMETRIC(Perspective.ISOMETRIC, "isometric", "Isometric",
-            "The plan-view world projected into a diamond grid, stacked two deep.");
+    THREE_D(Perspective.THREE_D, "3d", "3D",
+            "The floor seen from a camera you turn and tilt — one layer of blocks "
+                    + "is floor, two is a wall.");
+
+    /**
+     * Ids and names older level files were written under, and the format each
+     * one means now. The two plan views became one; a level that named either
+     * is a 3D level, and always was.
+     */
+    private static final String[] LEGACY_THREE_D = {
+            "TOP_DOWN", "TOPDOWN", "TOP-DOWN", "ISOMETRIC", "ISO"
+    };
 
     /**
      * The floor a fresh plan-view canvas is laid with, and what legacy plan-view
@@ -81,7 +99,7 @@ public enum LevelFormat {
     /** Stable id written to level files ({@code "format"}). */
     public String id() { return id; }
 
-    /** Human-readable name for menus ("Top-Down"). */
+    /** Human-readable name for menus ("3D"). */
     public String displayName() { return displayName; }
 
     /** One-line explanation for menus and creative-mode headers. */
@@ -97,9 +115,10 @@ public enum LevelFormat {
     }
 
     /**
-     * Parse a saved format, accepting both this enum's ids/names and the
-     * {@link Perspective} names older level files wrote. Unknown text falls
-     * back to {@code def}, so a level from a future version still loads.
+     * Parse a saved format, accepting this enum's ids/names, the
+     * {@link Perspective} names older level files wrote, and the ids of the two
+     * plan-view formats {@link #THREE_D} replaced. Unknown text falls back to
+     * {@code def}, so a level from a future version still loads.
      */
     public static LevelFormat of(String text, LevelFormat def) {
         if (text == null || text.isBlank()) return def;
@@ -110,17 +129,20 @@ public enum LevelFormat {
                 return f;
             }
         }
+        for (String legacy : LEGACY_THREE_D) {
+            if (legacy.equals(s)) return THREE_D;
+        }
         return def;
     }
 
     /** True when the format simulates gravity (the side-scroller only). */
     public boolean gravity() { return this == SIDE_SCROLLER; }
 
-    /** True for the plan-view formats (top-down, isometric): movement on a plane. */
+    /** True for the 3D format: movement on a plane, with height its own axis. */
     public boolean planar() { return !gravity(); }
 
     /**
-     * Whether blocks stack two deep here — true for the plan views, where the
+     * Whether blocks stack two deep here — true in 3D, where the
      * screen is the floor and a block's <em>height</em> is the only thing that
      * can read as a wall. A side view already draws its walls edge-on, so it
      * has one layer and no use for a second.

@@ -25,7 +25,7 @@ import java.util.List;
  * <pre>
  *   player/walk          one sheet for walking, whichever way you face
  *   player/walk/e        walking east (right); mirrored for west
- *   player/walk/ne       walking north-east (isometric / top-down)
+ *   player/walk/ne       walking north-east (a 3D level)
  *   character/rogue/walk the Rogue character profile's walk sheet
  * </pre>
  *
@@ -38,6 +38,35 @@ import java.util.List;
  * pre-generated directional art. So one assigned sheet is enough to reskin the
  * whole character, and a creator can hand-draw all eight directions if they
  * want to.
+ *
+ * <h2>Two pools, and the camera picks between them</h2>
+ *
+ * <p>Everything above draws a person <em>standing in front of you</em>. A 3D
+ * level's camera does not stay in front of them: it tilts freely from nearly
+ * edge-on to straight down, and past {@link Camera#OVERHEAD_PITCH} the picture
+ * is of the tops of things. So there is a second pool of art, under a
+ * {@value #TOP_DOWN_KEY} segment, and {@link #overhead(Camera)} is what chooses
+ * it:
+ *
+ * <pre>
+ *   player/walk/n            walking north, seen from over the shoulder
+ *   player/topdown/walk/n    walking north, seen from overhead
+ *   character/rogue/topdown/idle
+ * </pre>
+ *
+ * <p>Both pools fall back the same way through states and directions, and both
+ * end at generated art rather than at nothing — {@link DirectionalSprites} for
+ * the standing view, {@link TopDownSprites} for the overhead one — so the
+ * overhead pool costs a creator nothing until they want to draw into it.
+ *
+ * <p><b>The overhead pool does not fall back to the standing one</b>, and that
+ * is deliberate rather than an omission. The whole reason it exists is that
+ * standing art is the wrong picture from up there; serving it as a
+ * "reasonable default" would reintroduce exactly the thing the second pool was
+ * added to fix, and do it silently, in the one place a creator is least likely
+ * to be looking. A character with no overhead art of its own is drawn by
+ * {@link TopDownSprites} in its own body colour, which is a plainer picture of
+ * that character but a picture of it from the right place.
  */
 public final class PlayerSprites {
 
@@ -46,6 +75,21 @@ public final class PlayerSprites {
 
     /** Texture-key namespace of a named character profile's sheets. */
     public static final String CHARACTER_KEY = "character";
+
+    /**
+     * The texture-key segment of the overhead pool: {@code player/topdown/walk},
+     * {@code character/rogue/topdown/idle}. See the class note.
+     */
+    public static final String TOP_DOWN_KEY = "topdown";
+
+    /**
+     * The camera tilt at and above which a character is drawn from the overhead
+     * pool, in degrees — 75, and named here because this is the side of the
+     * threshold anyone reading about the sprites will look for it on. The angle
+     * itself belongs to the camera ({@link Camera#OVERHEAD_PITCH}), which is the
+     * thing that moves.
+     */
+    public static final double OVERHEAD_DEGREES = Math.toDegrees(Camera.OVERHEAD_PITCH);
 
     /**
      * The player's skinnable action states, in the order the Player Skin…
@@ -100,15 +144,61 @@ public final class PlayerSprites {
      * player, whose sheets live under {@code player/…}.
      */
     public static String characterStateKey(String characterKey, String state) {
-        return characterKey == null || characterKey.isBlank()
-                ? stateKey(state)
-                : CHARACTER_KEY + "/" + characterKey + "/" + state;
+        return characterStateKey(characterKey, state, false);
+    }
+
+    /**
+     * {@link #characterStateKey(String, String)}, from either pool — the
+     * overhead one inserts {@value #TOP_DOWN_KEY} between the character and the
+     * state, so a profile's two views sit side by side in the texture browser.
+     */
+    public static String characterStateKey(String characterKey, String state,
+                                           boolean overhead) {
+        return stateKeyIn(namespace(characterKey, overhead), state);
     }
 
     /** {@link #characterStateKey} for one direction. */
     public static String characterStateKey(String characterKey, String state, Facing facing) {
-        String base = characterStateKey(characterKey, state);
+        return characterStateKey(characterKey, state, facing, false);
+    }
+
+    /** {@link #characterStateKey(String, String, boolean)} for one direction. */
+    public static String characterStateKey(String characterKey, String state, Facing facing,
+                                           boolean overhead) {
+        String base = characterStateKey(characterKey, state, overhead);
         return facing == null ? base : base + "/" + facing.key();
+    }
+
+    /** The overhead pool's key for the default player's action state. */
+    public static String topDownStateKey(String state) {
+        return characterStateKey("", state, true);
+    }
+
+    /** {@link #topDownStateKey(String)} for one direction. */
+    public static String topDownStateKey(String state, Facing facing) {
+        return characterStateKey("", state, facing, true);
+    }
+
+    /**
+     * Whether {@code camera} has been raised far enough that a character should
+     * be drawn from the overhead pool. Null-tolerant, because plenty of callers
+     * draw a character with no camera at all (palette icons, previews) and the
+     * answer for those is the standing view.
+     */
+    public static boolean overhead(Camera camera) {
+        return camera != null && camera.overhead();
+    }
+
+    /**
+     * The texture namespace a character's sheets live under, in one pool or the
+     * other: {@code player}, {@code player/topdown}, {@code character/rogue},
+     * {@code character/rogue/topdown}.
+     */
+    private static String namespace(String characterKey, boolean overhead) {
+        String base = characterKey == null || characterKey.isBlank()
+                ? SKIN_KEY
+                : CHARACTER_KEY + "/" + characterKey;
+        return overhead ? base + "/" + TOP_DOWN_KEY : base;
     }
 
     /**
@@ -197,12 +287,26 @@ public final class PlayerSprites {
     public static Frame directionalFrame(String characterKey, String state, Facing facing,
                                          double stateSeconds, double progress,
                                          int size, Color body) {
+        return directionalFrame(characterKey, state, facing, stateSeconds, progress,
+                size, body, false);
+    }
+
+    /**
+     * {@link #directionalFrame(String, String, Facing, double, double, int, Color)}
+     * from a chosen pool — the overhead one when the camera has been raised past
+     * {@link Camera#OVERHEAD_PITCH} ({@link #overhead(Camera)}), the standing one
+     * otherwise. See the class note for why the two do not fall back into each
+     * other.
+     */
+    public static Frame directionalFrame(String characterKey, String state, Facing facing,
+                                         double stateSeconds, double progress,
+                                         int size, Color body, boolean overhead) {
         Facing dir = facing == null ? Facing.EAST : facing;
         boolean idle = "idle".equals(state);
         for (String candidate : fallbackChain(state)) {
             boolean once = oneShot(candidate);
             double t = once ? progress : (idle && !"idle".equals(candidate) ? 0 : stateSeconds);
-            for (String base : characterChain(characterKey)) {
+            for (String base : characterChain(characterKey, overhead)) {
                 // This exact direction, then the direction whose art it
                 // mirrors, then the state's one-size-fits-all sheet.
                 BufferedImage exact = read(directionKey(base, candidate, dir), t, once);
@@ -216,13 +320,20 @@ public final class PlayerSprites {
                 if (plain != null) return new Frame(plain, dir.facingLeft());
             }
         }
-        BufferedImage legacy = Skins.frame(SKIN_KEY, idle ? 0 : stateSeconds);
-        if (legacy != null) return new Frame(legacy, dir.facingLeft());
+        // The legacy single sheet is a standing one — it predates directions,
+        // let alone a camera that can be raised over the world — so it answers
+        // for the standing pool only.
+        if (!overhead) {
+            BufferedImage legacy = Skins.frame(SKIN_KEY, idle ? 0 : stateSeconds);
+            if (legacy != null) return new Frame(legacy, dir.facingLeft());
+        }
         // Nothing assigned: the pre-generated per-direction walk cycle, frozen
         // on its first frame while idle. It is already drawn for this
         // direction, so the caller must not flip it.
         int frame = idle ? 0 : (int) Math.floor(stateSeconds * WALK_FPS);
-        return new Frame(DirectionalSprites.frame(size, body, dir, frame), false);
+        return new Frame(overhead
+                ? TopDownSprites.frame(size, body, dir, frame)
+                : DirectionalSprites.frame(size, body, dir, frame), false);
     }
 
     /**
@@ -240,14 +351,16 @@ public final class PlayerSprites {
     /**
      * The texture namespaces tried for a character, most specific first: its
      * own sheets, then the shared player ones — so a profile with no art of
-     * its own still wears whatever the Player Skin… tool assigned.
+     * its own still wears whatever the Player Skin… tool assigned. Within one
+     * pool: an overhead lookup never reaches the standing sheets, and vice
+     * versa (see the class note).
      */
-    private static List<String> characterChain(String characterKey) {
+    private static List<String> characterChain(String characterKey, boolean overhead) {
         List<String> chain = new ArrayList<>(2);
         if (characterKey != null && !characterKey.isBlank()) {
-            chain.add(CHARACTER_KEY + "/" + characterKey);
+            chain.add(namespace(characterKey, overhead));
         }
-        chain.add(SKIN_KEY);
+        chain.add(namespace("", overhead));
         return chain;
     }
 

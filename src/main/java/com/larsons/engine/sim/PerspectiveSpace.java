@@ -7,7 +7,7 @@ import com.larsons.engine.level.LevelFormat;
  * Which way is <em>up</em> in a level — the physical space each
  * {@link LevelFormat} simulates in, loaded alongside the level's tiles.
  *
- * <p>The three formats deliberately do not share one side-scrolling space with
+ * <p>The two formats deliberately do not share one side-scrolling space with
  * the camera bent around it. Each one has its own axes:
  *
  * <ul>
@@ -15,41 +15,42 @@ import com.larsons.engine.level.LevelFormat;
  *       up the screen, gravity pulls along world +y, and there is no third
  *       axis ({@link #hasElevation()} is false). This is the classic
  *       platformer space and nothing about it changes.</li>
- *   <li>{@link #TOP_DOWN} — the screen is the <em>floor</em>, seen from
- *       straight above. Up has left the world plane entirely: it points out of
- *       the screen at the viewer. Gravity pulls along an elevation axis
+ *   <li>{@link #THREE_D} — the screen is the <em>floor</em>, seen from a camera
+ *       standing over it. Up has left the world plane entirely: it points out
+ *       of the screen toward the viewer. Gravity pulls along an elevation axis
  *       ({@code z}), and because rising means coming <em>closer to the
  *       camera</em>, height is drawn as a lift and a growth
  *       ({@link #heightGrowth()}).</li>
- *   <li>{@link #ISOMETRIC} — the floor again, tilted into a diamond. Up is
- *       oblique to the view: neither the screen's vertical nor a line straight
- *       at the camera, but the axis a parallel projection draws as a pure
- *       vertical lift with no change in size.</li>
  * </ul>
+ *
+ * <p><b>How far the lift goes is the camera's business, not this enum's.</b>
+ * A 3D camera tilts freely between nearly edge-on and straight down
+ * ({@link com.larsons.engine.graphics.Camera#pitch()}), and the screen distance
+ * a unit of height covers moves with it — so painters ask
+ * {@code Camera.liftScale()} for the number and this enum for the <em>axis</em>.
+ * That split is what let the two plan-view formats this once listed separately
+ * become one: they differed in where the camera stood, which is not a property
+ * of the world.
  *
  * <p><b>Why this exists.</b> Anything with a direction — a jump, a meteor
  * called down from the sky, an ember drifting upward, a shard raining down —
  * used to be authored in screen terms and simply replayed in every format. On
- * a plane that is wrong twice over: in top-down "up the screen" is
- * <em>north</em>, not up, and in isometric it is north-west. Effects ask this
- * enum which axis carries their vertical component instead, so an ember rises
- * off the floor toward the viewer in a top-down level and a meteor falls onto
- * the tile it was aimed at rather than flying in from the north.
+ * a plane that is wrong: "up the screen" is <em>north</em> there, not up.
+ * Effects ask this enum which axis carries their vertical component instead, so
+ * an ember rises off the floor toward the viewer in a 3D level and a meteor
+ * falls onto the tile it was aimed at rather than flying in from the north.
  *
  * <p><b>Gravity does not switch off on a plane</b> — it turns. The pull is the
- * same {@link #gravity()} in all three formats; only the axis it acts on
- * changes, which is what {@link #hasElevation()} answers.
+ * same {@link #gravity()} in both formats; only the axis it acts on changes,
+ * which is what {@link #hasElevation()} answers.
  */
 public enum PerspectiveSpace {
 
     /** Side-scroller: gravity along world +y, no elevation axis. */
     SIDE_VIEW(Perspective.SIDE_SCROLL, false, 0, 0, "up the screen"),
 
-    /** Top-down: the floor seen from above; up comes out of the screen. */
-    TOP_DOWN(Perspective.TOP_DOWN, true, 1.0, 0.55, "out of the screen"),
-
-    /** Isometric: the floor in a diamond; up runs along the screen's vertical. */
-    ISOMETRIC(Perspective.ISOMETRIC, true, 1.0, 0, "along the screen's vertical");
+    /** 3D: the floor seen from above; up comes out of the screen. */
+    THREE_D(Perspective.THREE_D, true, 1.0, 0.55, "out of the screen");
 
     /**
      * The one gravity the engine has, px/sec². Which axis it pulls along is
@@ -122,17 +123,21 @@ public enum PerspectiveSpace {
     public double gravity() { return GRAVITY; }
 
     /**
-     * Screen pixels of lift per world unit of elevation (before zoom). Zero in
-     * the side view, which has no elevation to draw; one on the planes, where
-     * a raised body is drawn above its own shadow.
+     * Whether elevation is drawn as a lift up the screen at all: zero in the
+     * side view, which has no elevation axis, and one in 3D, where a raised
+     * body is drawn above its own shadow.
+     *
+     * <p>Deliberately a flag rather than a distance. <em>How far</em> that lift
+     * carries is the camera's tilt, which moves while the game is running —
+     * ask {@link com.larsons.engine.graphics.Camera#liftScale()} for it.
      */
     public double screenLift() { return screenLift; }
 
     /**
-     * How much bigger a body looks per {@code unit} of elevation. Only
-     * top-down grows things: its up axis points at the camera, so a rising
-     * meteor really is getting nearer. Isometric's up axis is oblique and
-     * parallel-projected, so height moves a sprite without resizing it.
+     * How much bigger a body looks per {@code unit} of elevation. Only 3D grows
+     * things: its up axis points out of the screen toward the viewer, so a
+     * rising meteor really is getting nearer. The side view has no elevation to
+     * come nearer along.
      */
     public double heightGrowth() { return heightGrowth; }
 

@@ -138,7 +138,7 @@ class DirectionalAnimationTest {
                 "jumping straight up keeps the last heading");
         // A plan view uses the whole compass.
         assertEquals(Facing.NORTH,
-                Facing.of(0, -1, Perspective.TOP_DOWN, Facing.EAST));
+                Facing.of(0, -1, Perspective.THREE_D, Facing.EAST));
     }
 
     // --- the simulation records it ----------------------------------------------
@@ -160,23 +160,23 @@ class DirectionalAnimationTest {
         assertTrue(s.facingLeft);
 
         // Top-down: eight directions, and facingLeft stays consistent with them.
-        Level plan = flatLevel(LevelFormat.TOP_DOWN);
-        GameProfile planProfile = profileFor(Perspective.TOP_DOWN);
+        Level plan = flatLevel(LevelFormat.THREE_D);
+        GameProfile planProfile = profileFor(Perspective.THREE_D);
         PlayerState t = new PlayerState(0, "", plan.spawnX, plan.spawnY);
         PlayerInput upRight = new PlayerInput(false, true, true, false, 1);
-        PlayerPhysics.step(t, upRight, plan, planProfile, Perspective.TOP_DOWN, 1 / 60.0);
+        PlayerPhysics.step(t, upRight, plan, planProfile, Perspective.THREE_D, 1 / 60.0);
         assertEquals(Facing.NORTH_EAST, t.facing);
         assertFalse(t.facingLeft);
 
         PlayerInput upLeft = new PlayerInput(true, false, true, false, 2);
-        PlayerPhysics.step(t, upLeft, plan, planProfile, Perspective.TOP_DOWN, 1 / 60.0);
+        PlayerPhysics.step(t, upLeft, plan, planProfile, Perspective.THREE_D, 1 / 60.0);
         assertEquals(Facing.NORTH_WEST, t.facing);
         assertTrue(t.facingLeft, "a north-west facing reads as facing left");
     }
 
     @Test
     void mobsFaceTheWayTheyWalkAndReplicateIt() {
-        Level plan = flatLevel(LevelFormat.TOP_DOWN);
+        Level plan = flatLevel(LevelFormat.THREE_D);
         Mob m = new Mob(1, MobRegistry.standard().get("slime"), 200, 200);
         m.facing = Facing.NORTH_WEST;
         // The wire form carries the compass point alongside the left/right flag.

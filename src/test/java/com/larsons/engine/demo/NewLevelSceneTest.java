@@ -117,7 +117,7 @@ class NewLevelSceneTest {
     @Test
     void theSettingsScreenRendersForTheChosenFormat(@TempDir Path dir) {
         GameContext ctx = context(dir, "Settings Test");
-        ctx.setCreativeFormat(LevelFormat.ISOMETRIC);
+        ctx.setCreativeFormat(LevelFormat.THREE_D);
 
         SceneManager scenes = new SceneManager();
         scenes.setViewport(W, H);
@@ -146,24 +146,24 @@ class NewLevelSceneTest {
         settings.mobsEnabled = false;                   // a choice made on the screen
         settings.tileSize = 48;
 
-        Level level = NewLevelScene.create(store, "Market Square", LevelFormat.ISOMETRIC,
+        Level level = NewLevelScene.create(store, "Market Square", LevelFormat.THREE_D,
                 40, 30, settings, List.of("knight"));
 
         assertEquals("Market Square", level.name);
-        assertEquals(LevelFormat.ISOMETRIC, level.format());
+        assertEquals(LevelFormat.THREE_D, level.format());
         assertEquals(40, level.width);
         assertEquals(30, level.height);
         assertEquals(48, level.tileSize);
         assertEquals(List.of("knight"), level.characters, "the roster it was given");
         assertFalse(level.settings.mobsEnabled, "the level carries the toggles it was created with");
-        assertEquals(Perspective.ISOMETRIC, level.settings.perspective,
+        assertEquals(Perspective.THREE_D, level.settings.perspective,
                 "the saved settings can never contradict the level's own format");
 
         // Created means created: the level is on disk, listed, and reloads.
         assertTrue(Files.exists(store.fileFor("Market Square")));
         assertEquals(List.of("market_square"), store.list(),
                 "listed under the file name the store gave it");
-        assertEquals(LevelFormat.ISOMETRIC, store.formatOf("Market Square"));
+        assertEquals(LevelFormat.THREE_D, store.formatOf("Market Square"));
         Level reloaded = LevelLoader.load(store.fileFor("Market Square").toString());
         assertEquals("Market Square", reloaded.name);
         assertFalse(reloaded.settings.mobsEnabled);
@@ -178,15 +178,15 @@ class NewLevelSceneTest {
         LevelStore store = new LevelStore(dir.toString(), "Busy Game");
         GameProfile settings = new GameProfile("Busy Game");
 
-        String first = NewLevelScene.suggestedName(store, LevelFormat.TOP_DOWN);
-        assertEquals("New Top-Down Level", first);
+        String first = NewLevelScene.suggestedName(store, LevelFormat.THREE_D);
+        assertEquals("New 3D Level", first);
 
-        NewLevelScene.create(store, first, LevelFormat.TOP_DOWN, 20, 20, settings, List.of());
-        String second = NewLevelScene.suggestedName(store, LevelFormat.TOP_DOWN);
+        NewLevelScene.create(store, first, LevelFormat.THREE_D, 20, 20, settings, List.of());
+        String second = NewLevelScene.suggestedName(store, LevelFormat.THREE_D);
         assertNotEquals(first, second, "the taken name is not offered again");
-        assertEquals("New Top-Down Level 2", second);
+        assertEquals("New 3D Level 2", second);
 
-        NewLevelScene.create(store, second, LevelFormat.TOP_DOWN, 20, 20, settings, List.of());
+        NewLevelScene.create(store, second, LevelFormat.THREE_D, 20, 20, settings, List.of());
         assertEquals(2, store.list().size(), "neither level overwrote the other");
     }
 
@@ -200,7 +200,7 @@ class NewLevelSceneTest {
     void theEditorOpensTheLevelTheScreenCreated(@TempDir Path dir) {
         GameContext ctx = context(dir, "Handover Test");
         LevelStore store = new LevelStore(dir.toString(), "Handover Test");
-        Level created = NewLevelScene.create(store, "Sky Bridge", LevelFormat.TOP_DOWN,
+        Level created = NewLevelScene.create(store, "Sky Bridge", LevelFormat.THREE_D,
                 32, 24, ctx.profile().copy(), List.of());
         ctx.setPendingCreativeLevel(created);
 
@@ -212,8 +212,8 @@ class NewLevelSceneTest {
         run(scenes, new InputManager(), 5);
 
         assertSame(created, creative.editing(), "the editor edits the level that was created");
-        assertEquals(LevelFormat.TOP_DOWN, creative.editing().format());
-        assertEquals(Perspective.TOP_DOWN, ctx.profile().perspective,
+        assertEquals(LevelFormat.THREE_D, creative.editing().format());
+        assertEquals(Perspective.THREE_D, ctx.profile().perspective,
                 "the new level's settings are the ones in force");
         assertNull(ctx.takePendingCreativeLevel(), "the handover is spent");
     }

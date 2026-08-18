@@ -72,7 +72,7 @@ public class NewLevelScene extends AbstractScene {
 
     /**
      * Whether {@link #levelName} is still the name this screen suggested. A
-     * suggested name follows the format row ("New Top-Down Level"); a name the
+     * suggested name follows the format row ("New 3D Level"); a name the
      * creator typed is theirs and is left alone.
      */
     private boolean nameIsSuggested = true;
@@ -114,7 +114,7 @@ public class NewLevelScene extends AbstractScene {
     }
 
     /**
-     * A name that is free in {@code store}: "New Top-Down Level", then "New
+     * A name that is free in {@code store}: "New 3D Level", then "New
      * Top-Down Level 2", and so on. Creating a level must never quietly land on
      * top of one that is already there, and the first thing this screen shows
      * is the name it would use.

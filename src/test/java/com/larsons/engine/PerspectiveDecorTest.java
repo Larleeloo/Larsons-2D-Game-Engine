@@ -79,7 +79,7 @@ class PerspectiveDecorTest {
 
     @Test
     void aTreePlantedOnAPlanViewFloorIsNotBuriedByIt() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = floored(format);
             plant(lvl, "decor_bg", "oak_tree", 15, 15);
 
@@ -123,8 +123,7 @@ class PerspectiveDecorTest {
     void whichSideOfTheTerrainSceneryLandsOnIsTheSpacesAnswer() {
         assertTrue(PerspectiveSpace.SIDE_VIEW.scenerySitsBehindTerrain(),
                 "only the side view has a behind to hide in");
-        for (PerspectiveSpace plane : List.of(PerspectiveSpace.TOP_DOWN,
-                PerspectiveSpace.ISOMETRIC)) {
+        for (PerspectiveSpace plane : List.of(PerspectiveSpace.THREE_D)) {
             assertFalse(plane.scenerySitsBehindTerrain(),
                     plane + " plants scenery on the floor, not under it");
         }
@@ -195,7 +194,7 @@ class PerspectiveDecorTest {
         // Seen from above there is no edge to cling to: the block's visible
         // surface is its top, so every style on every face it allows has to
         // land on the tile rather than out in the neighbouring cell.
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             for (SurfaceDecor def : SurfaceDecorRegistry.standard().all()) {
                 for (SurfaceDecor.Face face : SurfaceDecor.Face.values()) {
                     if (!def.allows(face)) continue;
@@ -248,7 +247,7 @@ class PerspectiveDecorTest {
         // floor rather than the face. A detail lying on the surface has no
         // such freedom — it runs across the block, so it reverses with the
         // face it started from.
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Ink leftUp = liftOff(format, "crystal_growth", SurfaceDecor.Face.LEFT);
             Ink rightUp = liftOff(format, "crystal_growth", SurfaceDecor.Face.RIGHT);
             assertTrue(leftUp.y() < 0 && rightUp.y() < 0, format
@@ -297,7 +296,7 @@ class PerspectiveDecorTest {
 
     @Test
     void aPlayerPassesBehindTheSceneryTheyWalkBehind() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = Level.empty("walk", 30, 30, TILE);
             lvl.setFormat(format);
             plant(lvl, "decor_bg", "boulder", 15, 15);
@@ -373,23 +372,23 @@ class PerspectiveDecorTest {
 
     @Test
     void blockDecorScalesWithTheProjectedTileNotTheRawTileSize() {
-        // An isometric tile is wider on screen than its world size, so a
-        // detail measured in raw world pixels came out undersized against the
-        // diamond it decorates.
-        Level flat = Level.empty("tuft", 30, 30, TILE);
-        flat.setFormat(LevelFormat.TOP_DOWN);
-        flat.setTile(15, 15, flat.blocks.get("stone").id());
-        flat.surfaceDecor.add(new SurfaceDecor.Placement(15, 15, SurfaceDecor.Face.UP,
+        // A tile is not its world size on screen: the camera's tilt
+        // foreshortens the floor, so a detail measured in raw world pixels
+        // comes out the wrong size against the block it decorates — and wrong
+        // by a different amount at every angle, which is why it has to be
+        // measured against the projection rather than corrected per format.
+        Level lvl = Level.empty("tuft", 30, 30, TILE);
+        lvl.setFormat(LevelFormat.THREE_D);
+        lvl.setTile(15, 15, lvl.blocks.get("stone").id());
+        lvl.surfaceDecor.add(new SurfaceDecor.Placement(15, 15, SurfaceDecor.Face.UP,
                 "grass_tuft", false, SurfaceDecor.Visibility.ALWAYS));
 
-        Level iso = Level.empty("tuft", 30, 30, TILE);
-        iso.setFormat(LevelFormat.ISOMETRIC);
-        iso.setTile(15, 15, iso.blocks.get("stone").id());
-        iso.surfaceDecor.add(new SurfaceDecor.Placement(15, 15, SurfaceDecor.Face.UP,
-                "grass_tuft", false, SurfaceDecor.Visibility.ALWAYS));
+        int overhead = ink(lvl, 90).count();
+        int lowered = ink(lvl, 30).count();
 
-        assertTrue(ink(iso).count() > ink(flat).count(),
-                "isometric grass is drawn to the diamond's scale, not the world's");
+        assertTrue(overhead > lowered,
+                "grass is drawn to the tile the camera projects, not the world's: "
+                        + "overhead=" + overhead + " lowered=" + lowered);
     }
 
     // --- culling -------------------------------------------------------------------------
@@ -532,9 +531,17 @@ class PerspectiveDecorTest {
     }
 
     /** A camera on the middle of the test levels, at the levels' own format. */
+    /** The camera tilt these tests use unless one of them is about the tilt. */
+    private static final double DEFAULT_PITCH_DEGREES = 90;
+
     private static Camera camera(Level lvl) {
+        return camera(lvl, DEFAULT_PITCH_DEGREES);
+    }
+
+    private static Camera camera(Level lvl, double pitchDegrees) {
         Camera cam = new Camera(lvl.perspective, CANVAS, CANVAS);
         cam.tileSize = lvl.tileSize;
+        cam.setPitch(Math.toRadians(pitchDegrees));
         cam.centerOn(15.5 * TILE, 15.5 * TILE);
         return cam;
     }
@@ -552,13 +559,23 @@ class PerspectiveDecorTest {
      * terrain underneath never counts toward the answer.
      */
     private static Ink ink(Level lvl) {
-        return inkWith(lvl, PerspectiveSpace.of(lvl.perspective).scenerySitsBehindTerrain());
+        return ink(lvl, DEFAULT_PITCH_DEGREES);
+    }
+
+    /** {@link #ink} from a camera raised {@code pitchDegrees} over the floor. */
+    private static Ink ink(Level lvl, double pitchDegrees) {
+        return inkWith(lvl, PerspectiveSpace.of(lvl.perspective).scenerySitsBehindTerrain(),
+                pitchDegrees);
     }
 
     /** {@link #ink} with the layer order forced, to show what the other one does. */
     private static Ink inkWith(Level lvl, boolean sceneryBehind) {
-        BufferedImage dressed = paint(lvl, sceneryBehind);
-        BufferedImage plain = paint(bare(lvl), sceneryBehind);
+        return inkWith(lvl, sceneryBehind, DEFAULT_PITCH_DEGREES);
+    }
+
+    private static Ink inkWith(Level lvl, boolean sceneryBehind, double pitchDegrees) {
+        BufferedImage dressed = paint(lvl, sceneryBehind, pitchDegrees);
+        BufferedImage plain = paint(bare(lvl), sceneryBehind, pitchDegrees);
         long n = 0, sx = 0, sy = 0;
         for (int y = 0; y < CANVAS; y++) {
             for (int x = 0; x < CANVAS; x++) {
@@ -576,7 +593,12 @@ class PerspectiveDecorTest {
 
     /** The scenes' render order: background scenery, terrain, foreground scenery. */
     private static BufferedImage paint(Level lvl, boolean sceneryBehind) {
-        Camera cam = camera(lvl);
+        return paint(lvl, sceneryBehind, DEFAULT_PITCH_DEGREES);
+    }
+
+    private static BufferedImage paint(Level lvl, boolean sceneryBehind,
+                                       double pitchDegrees) {
+        Camera cam = camera(lvl, pitchDegrees);
         BufferedImage canvas = new BufferedImage(CANVAS, CANVAS, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = canvas.createGraphics();
         if (sceneryBehind) scenery(g, lvl, cam, false);

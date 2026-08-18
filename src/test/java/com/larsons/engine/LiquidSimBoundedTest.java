@@ -160,7 +160,7 @@ class LiquidSimBoundedTest {
     @Test
     @Timeout(60)
     void aPlanViewSourcePoolsOutward() {
-        Level lvl = level(LevelFormat.TOP_DOWN, 60, 60);
+        Level lvl = level(LevelFormat.THREE_D, 60, 60);
         int water = id(lvl, "water");
         // A plan-view level is layered: liquids live on the surface layer,
         // because the ground layer there is the floor itself.

@@ -219,7 +219,7 @@ public final class SceneFrames {
         if (!Files.exists(dir.resolve(store.fileFor("Frostmarch").getFileName()))) {
             store.save(new GameProfile("Frostmarch"));
             GameProfile second = new GameProfile("Sunken Halls");
-            second.perspective = com.larsons.engine.graphics.Perspective.TOP_DOWN;
+            second.perspective = com.larsons.engine.graphics.Perspective.THREE_D;
             store.save(second);
         }
         return store;

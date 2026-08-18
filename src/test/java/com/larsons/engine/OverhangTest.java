@@ -116,7 +116,7 @@ class OverhangTest {
      */
     @Test
     void aRoofBetweenTheCameraAndThePlayerIsCutAway() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = roofed(format);
             Camera cam = camera(lvl);
             Set<Long> hidden = TerrainPainter.cutaway(cam, lvl,
@@ -157,7 +157,7 @@ class OverhangTest {
      */
     @Test
     void anActorUnderABridgeIsBehindTheDeckAndInFrontOfTheGround() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = bridged(format);
             Camera cam = camera(lvl);
             // Standing on the ground under the deck, the deck covers them.
@@ -174,7 +174,7 @@ class OverhangTest {
     // --- helpers -----------------------------------------------------------------
 
     private static Level floored() {
-        return floored(LevelFormat.TOP_DOWN);
+        return floored(LevelFormat.THREE_D);
     }
 
     private static Level floored(LevelFormat format) {
@@ -189,7 +189,7 @@ class OverhangTest {
 
     /** A deck at layer 4, with clear air between it and the floor. */
     private static Level bridged() {
-        return bridged(LevelFormat.TOP_DOWN);
+        return bridged(LevelFormat.THREE_D);
     }
 
     private static Level bridged(LevelFormat format) {

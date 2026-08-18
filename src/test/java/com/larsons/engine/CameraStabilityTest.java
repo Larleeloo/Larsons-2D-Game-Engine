@@ -172,7 +172,7 @@ class CameraStabilityTest {
                     // One screen pixel is 1/zoom world units, and the forward
                     // direction rounds twice, so two pixels' worth is the honest
                     // bound. Isometric spends its rounding on both axes at once.
-                    double tolerance = 2.5 / cam.zoom * (perspective == Perspective.ISOMETRIC ? 2 : 1);
+                    double tolerance = 2.5 / cam.zoom * (perspective == Perspective.THREE_D ? 2 : 1);
                     assertTrue(Math.abs(back[0] - wx) <= tolerance
                                     && Math.abs(back[1] - wy) <= tolerance,
                             perspective + ": (" + wx + "," + wy + ") projected to ("

@@ -40,7 +40,7 @@ class CameraFollowTest {
     /** Following a body takes its height with it; framing a mark does not. */
     @Test
     void followTakesTheHeightAndFrameOnLeavesItBehind() {
-        for (Perspective p : List.of(Perspective.TOP_DOWN, Perspective.ISOMETRIC)) {
+        for (Perspective p : List.of(Perspective.THREE_D)) {
             Camera cam = camera(p);
 
             cam.follow(100, 200, 0);
@@ -77,7 +77,7 @@ class CameraFollowTest {
      */
     @Test
     void aPlayerOnATowerIsFramedExactlyWhereAPlayerOnTheFloorIs() {
-        for (Perspective p : List.of(Perspective.TOP_DOWN, Perspective.ISOMETRIC)) {
+        for (Perspective p : List.of(Perspective.THREE_D)) {
             Camera cam = camera(p);
             int[] onFloor = new int[2], onTower = new int[2];
 
@@ -110,7 +110,7 @@ class CameraFollowTest {
      */
     @Test
     void theLiftIsInterpolatedWithThePlaneAndNotLeftOnTheLastStep() {
-        Camera cam = camera(Perspective.TOP_DOWN);
+        Camera cam = camera(Perspective.THREE_D);
         PlayerState body = new PlayerState(0, "climber", 10 * TILE, 10 * TILE);
 
         // One simulation step of a body climbing: it moves on the plane and up.
@@ -148,7 +148,7 @@ class CameraFollowTest {
      */
     @Test
     void followingIsRigidSoTheWorldStillMovesAsOneSheet() {
-        Camera cam = camera(Perspective.TOP_DOWN);
+        Camera cam = camera(Perspective.THREE_D);
         int[] near = new int[2], far = new int[2];
 
         // Two fixed points in the world, measured against each other as the

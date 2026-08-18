@@ -468,7 +468,7 @@ class MeleeCombatTest {
         double startX = me.x;
         for (int i = 0; i < 60; i++) {
             Melee.step(me, melee, sword, "iron_sword", false, true, DT);
-            PlayerPhysics.step(me, still, lvl, p, Perspective.TOP_DOWN, DT);
+            PlayerPhysics.step(me, still, lvl, p, Perspective.THREE_D, DT);
         }
         assertTrue(me.x > startX + 40,
                 "the dash carried us east without a movement key held");
@@ -476,7 +476,7 @@ class MeleeCombatTest {
 
         double parked = me.x;
         for (int i = 0; i < 60; i++) {
-            PlayerPhysics.step(me, still, lvl, p, Perspective.TOP_DOWN, DT);
+            PlayerPhysics.step(me, still, lvl, p, Perspective.THREE_D, DT);
         }
         assertEquals(parked, me.x, 0.001, "no lingering momentum");
     }

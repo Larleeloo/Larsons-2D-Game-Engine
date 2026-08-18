@@ -92,7 +92,7 @@ class LevelSelectSceneTest {
      */
     @Test
     void aSavedLevelCanBeOpenedInTheEditorFromTheList(@TempDir Path dir) {
-        Fixture f = fixture(dir, "Load Test", LevelFormat.TOP_DOWN, true);
+        Fixture f = fixture(dir, "Load Test", LevelFormat.THREE_D, true);
         CreativeScene creative = new CreativeScene(f.ctx());
         SceneManager scenes = scenes(f, dir, creative);
 
@@ -110,7 +110,7 @@ class LevelSelectSceneTest {
         assertEquals("CreativeScene", scenes.current().name(),
                 "Edit in Creative opens the editor");
         assertEquals("Old Town", creative.editing().name, "on the level that was picked");
-        assertEquals(LevelFormat.TOP_DOWN, creative.editing().format(),
+        assertEquals(LevelFormat.THREE_D, creative.editing().format(),
                 "in the format the level was built in");
         assertEquals(f.store().fileFor("Old Town").toString(), f.ctx().profile().lastLevelPath,
                 "and the editor now returns to it");
@@ -148,14 +148,14 @@ class LevelSelectSceneTest {
     /** What the hand-over does, on its own: current level, settings, object. */
     @Test
     void handingALevelToTheEditorPointsTheGameTypeAtIt(@TempDir Path dir) {
-        Fixture f = fixture(dir, "Handover", LevelFormat.ISOMETRIC, true);
+        Fixture f = fixture(dir, "Handover", LevelFormat.THREE_D, true);
         Level loaded = f.store().load("Old Town");
         Path file = f.store().fileFor("Old Town");
 
         LevelSelectScene.handToCreative(f.ctx(), file, loaded);
 
         assertEquals(file.toString(), f.ctx().profile().lastLevelPath);
-        assertEquals(Perspective.ISOMETRIC, f.ctx().profile().perspective,
+        assertEquals(Perspective.THREE_D, f.ctx().profile().perspective,
                 "the level's own format is what is in force");
         assertFalse(f.ctx().profile().mobsEnabled, "and its own toggles with it");
         assertSame(loaded, f.ctx().takePendingCreativeLevel(),

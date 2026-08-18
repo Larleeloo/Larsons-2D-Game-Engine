@@ -96,13 +96,28 @@ public enum GameAction {
     TOGGLE_VIEW("toggle_view", "First / Third Person View", Category.CAMERA,
             InputBinding.key(KeyEvent.VK_F5)),
     /*
-     * Look up and down in the solid views, for anyone who would rather not
-     * steer with the mouse — and the only way to pitch the eye at all on a
-     * setup with no mouse. Page Up/Down are the editor's build-height keys,
-     * which is a different category and so not a conflict.
+     * The camera's vertical axis, in both views it has one.
+     *
+     * In the solid views these pitch the eye, for anyone who would rather not
+     * steer with the mouse — and they are the only way to pitch it at all on a
+     * setup with no mouse. In a 3D level's plan view they raise and lower the
+     * camera over the floor (Camera.tilt), which is the companion to the
+     * rotate keys above: those two turn the camera around the player, these
+     * two carry it up and over them. Both are held rather than pressed, because
+     * the tilt is free rather than snapped and a player stops it where they
+     * want it.
+     *
+     * A side-scroller tilts nothing: its screen *is* the vertical plane, so
+     * there is no floor to stand over. The keys are harmless there rather than
+     * hidden, on the same grounds the rotate keys are.
+     *
+     * Page Up/Down are the editor's build-height keys, which is a different
+     * category and so not a conflict.
      */
-    LOOK_UP("look_up", "Look Up", Category.CAMERA, InputBinding.key(KeyEvent.VK_HOME)),
-    LOOK_DOWN("look_down", "Look Down", Category.CAMERA, InputBinding.key(KeyEvent.VK_END)),
+    LOOK_UP("look_up", "Look Up / Raise Camera", Category.CAMERA,
+            InputBinding.key(KeyEvent.VK_HOME)),
+    LOOK_DOWN("look_down", "Look Down / Lower Camera", Category.CAMERA,
+            InputBinding.key(KeyEvent.VK_END)),
 
     // --- menus & interface ----------------------------------------------------------
     MENU_UP("menu_up", "Menu: Previous Item", Category.INTERFACE,
