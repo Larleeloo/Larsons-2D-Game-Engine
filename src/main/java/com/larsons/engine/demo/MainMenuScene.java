@@ -9,6 +9,8 @@ import com.larsons.engine.input.InputManager;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelStore;
+import com.larsons.engine.save.RunRecord;
+import com.larsons.engine.save.SaveStore;
 import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
@@ -71,9 +73,22 @@ public class MainMenuScene extends AbstractScene {
         menu = new Menu(p.name)
                 .subtitle("game type · levels in any format"
                         + (p.finalized ? " · finalized (play-only)" : ""))
-                .theme(MenuTheme.dark())
-                .add("Play Level", () -> scenes.transitionTo("play"))
-                .add("Load Level", () -> scenes.transitionTo("levelselect"));
+                .theme(MenuTheme.dark());
+        // Continue comes first when there is something to continue, because it
+        // is what somebody returning to the game came here to press. A game
+        // type with no saved run does not show it at all rather than showing it
+        // greyed out — an entry that has never once worked is just clutter.
+        String recent = SaveSelectScene.mostRecentSlot(p.name);
+        if (recent != null) {
+            RunRecord run = SaveSelectScene.runIn(p.name, recent);
+            menu.add("Continue — " + run.describe(), () -> {
+                ctx.continueRun(recent);
+                scenes.transitionTo("play");
+            });
+        }
+        menu.add("Play Level", () -> scenes.transitionTo("play"))
+                .add("Load Level", () -> scenes.transitionTo("levelselect"))
+                .add("Saved Runs", () -> scenes.transitionTo(SaveSelectScene.NAME));
         // A finalized (published) game type is play-only: no creative editing,
         // feature edits, renames, or re-exports — just play its levels.
         if (p.creativeEnabled && !p.finalized) {
@@ -163,6 +178,9 @@ public class MainMenuScene extends AbstractScene {
 
         try {
             oldLevels.moveGameTypeFolderTo(newName); // levels + doors + custom content
+            // …and the runs through them, which belong to the game type just as
+            // much as its levels do and would otherwise be orphaned by a rename.
+            SaveStore.moveGameTypeSaves(oldName, newName);
         } catch (RuntimeException e) {
             status = "Could not move levels: " + e.getMessage();
             buildMenu();
@@ -247,6 +265,7 @@ public class MainMenuScene extends AbstractScene {
         deleting = false;
         try {
             new LevelStore(p.name).deleteGameTypeFolder(); // levels + doors + custom content
+            SaveStore.deleteGameTypeSaves(p.name);         // every run through them
             ctx.store().delete(p.name);                    // the gametypes/<name>.json profile
         } catch (RuntimeException e) {
             status = "Delete failed: " + e.getMessage();

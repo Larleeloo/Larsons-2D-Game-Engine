@@ -1,8 +1,11 @@
 # Save Plan — the run that survives the session
 
 **Status:** Written 2026-08-17 as an analysis of what the engine is missing
-that is *essential to playing it*, rather than to building it. Nothing here has
-landed. The finding is one sentence long:
+that is *essential to playing it*, rather than to building it. **All six jobs
+have landed** — O, P, C, D, U and A — with the tests each one names. §12 at the
+end records what the build taught that the plan did not know, including two
+concurrency bugs the tests found and one measurement that changed a design.
+The finding is one sentence long:
 
 > **The engine persists the world and never persists the run.**
 
@@ -472,3 +475,102 @@ works until a door round-trips through them. U before A is a choice — a manual
 save that a player can see and trust is worth more than an automatic one they
 cannot, and A's background-write measurement is easier to attribute once the
 save path is otherwise settled.
+
+---
+
+## 12. What building it taught
+
+Written after the fact. The plan above is left as it was so the two can be
+compared; this section is what the code knows that the plan did not.
+
+### 12.1 The measurement that changed a design
+
+Job A was planned as "save on a background thread from an immutable snapshot"
+without knowing what a save costs. Measured, on a dense level:
+
+| level | `toMap()` | `stringify` | total | file |
+|---|---:|---:|---:|---:|
+| 256×256 | 1.67 ms | 6.08 ms | 7.7 ms | 576 KB |
+| 512×512 | 5.20 ms | 6.68 ms | 11.9 ms | 2.3 MB |
+| 1024×1024 | 33.74 ms | 125.56 ms | 159.3 ms | 9.2 MB |
+
+A 60 Hz frame is 16.67 ms, so a save on the game thread is a dropped frame from
+512×512 up. Two things came out of that:
+
+- **The split is not where the plan assumed.** `toMap()` reads live game state
+  and so *has* to happen on the game thread — but it produces a tree of plain
+  maps and boxed numbers that shares nothing with the `Level`, so it **is** the
+  immutable snapshot the plan asked for, and `stringify` — the larger half every
+  time — moves off the thread for free. No deep copy of `Level` was needed.
+- **The cheapest save is the one that does not happen.** `Level` already counts
+  its own edits (`terrainRevision()`), so `RunSession` skips a level nobody has
+  touched. A periodic autosave for a player who is walking around rather than
+  building writes only `run.json` — a few hundred bytes — and pays the level
+  cost only when there are changes to lose.
+
+### 12.2 Two concurrency bugs, both found by the tests
+
+Neither was in the plan, and both were intermittent, which is the worst way for
+a save system to be wrong.
+
+- **A queued save could be overtaken.** The first `RunSession` kept one pending
+  job and let a newer save replace it — sensible-looking coalescing that loses
+  the departing level on door travel, because a door saves the level it is
+  leaving and then, lines later, the one it is arriving at. Saves are queued in
+  order now, not collapsed.
+- **A synchronous save could be overwritten by an older asynchronous one.**
+  `saveNow` wrote inline while an autosave queued moments earlier was still in
+  flight; the autosave landed second and put the older snapshot on disk. A quit
+  would then save the game as it had been half a minute before — sometimes.
+  `saveNow` goes through the same single writer thread and waits its turn.
+
+`DoorContinuityTest` caught the first and `AutosaveTest.aLaterSaveIsNeverOvertakenByAnEarlierOne`
+pins the second.
+
+### 12.3 The run holds the levels it has been in
+
+Not in the plan, and forced by the first bug above: with saves queued rather
+than instant, walking back through a door could read a file the writer had not
+finished. `RunSession` keeps the last `VISITED_LEVELS` (4) levels in memory, so
+a return through a door does not touch the disk at all and the file is left to
+do the job it is for — surviving a quit. Reading a level that has fallen out of
+that window waits for the writer first.
+
+### 12.4 Where the plan was too clever
+
+- **`dirty` is not a save trigger.** It was going to decide whether leaving
+  writes anything. It is assembled from whichever events the scene happens to
+  notice, and being wrong about it at the moment of quitting costs the player
+  something they cannot get back — so `onExit` writes unconditionally, and
+  `dirty` is left to drive the periodic autosave and the quit prompt, where
+  being slightly over-eager is free.
+- **Writes are atomic.** Not in the plan. A save writes to a temporary file and
+  moves it into place, because a truncated `run.json` reads as "no save" — a
+  mild-sounding way to describe losing a run that was fine a second ago.
+
+### 12.5 What did not change
+
+The three load-bearing predictions held. `Level` ↔ JSON needed no changes at
+all; `LevelStore`'s re-rootable constructor made a save slot a second levels
+root exactly as claimed; and door travel already carried the player, so Job D
+really was an ordering fix plus the fire counts. Invariant I1 — an authored
+level is a template — is asserted by two tests that fingerprint the whole
+authored folder before and after a run.
+
+### 12.6 Still open
+
+- **Online runs** remain out of scope (§10). `PlayScene` holds no `RunSession`
+  in a session and every save path is a no-op there.
+- **HUD scale** applies to the play HUD (top bar, health, hotbar, item name).
+  The inventory grid, crafting and container panels still draw at fixed sizes.
+- **§9's other items** — the death screen, fullscreen, the minimap — were not
+  part of the save system and were not built. §9.1 and §9.2 were: the
+  stat-rule re-fire is fixed by Job D, and `saveLevel` no longer overwrites an
+  authored level because it no longer exists.
+- **Editing a level you have a run in.** *Edit in Creative* writes the
+  **authored** level, and the run keeps its own copy — so returning to play
+  shows the run's world rather than the edit. That is the right way round (the
+  alternative silently discards whatever the player had built), but it is
+  surprising the first time, and a run has no way to say "adopt the new
+  authored version of this level". A *Reload this level from the authored copy*
+  action in the pause menu is the obvious answer; it is not built.

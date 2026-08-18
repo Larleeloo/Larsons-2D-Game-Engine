@@ -4,6 +4,8 @@ import com.larsons.engine.audio.Sounds;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GamePackage;
 import com.larsons.engine.config.GameTypeStore;
+import com.larsons.engine.config.PlayerSettings;
+import com.larsons.engine.config.PlayerSettingsStore;
 import com.larsons.engine.demo.AutoBattlerGuideScene;
 import com.larsons.engine.demo.AutoBattlerLobbyScene;
 import com.larsons.engine.demo.AutoBattlerScene;
@@ -21,6 +23,7 @@ import com.larsons.engine.demo.MainMenuScene;
 import com.larsons.engine.demo.MultiplayerScene;
 import com.larsons.engine.demo.NewLevelScene;
 import com.larsons.engine.demo.PlayScene;
+import com.larsons.engine.demo.SaveSelectScene;
 import com.larsons.engine.demo.SkinEditorScene;
 import com.larsons.engine.demo.StartupScene;
 import com.larsons.engine.graphics.SkinStore;
@@ -109,6 +112,12 @@ public class Main {
         // in force from the launch menu on, before any scene reads a key.
         KeyBinds.install(new KeyBindStore().load());
 
+        // …and the rest of what belongs to the player rather than to a game
+        // type: volume, look sensitivity, HUD scale. Installed beside the binds
+        // because it is the same kind of file and has the same rule — nothing a
+        // level or a server loads afterwards is allowed to overwrite it.
+        PlayerSettings.install(new PlayerSettingsStore().load());
+
         EngineConfig config = new EngineConfig()
                 .title("Larson's Game Engine")
                 .size(1280, 720)
@@ -122,6 +131,7 @@ public class Main {
         engine.scenes().register("editor", new GameTypeEditorScene(context));
         engine.scenes().register("menu", new MainMenuScene(context));
         engine.scenes().register("levelselect", new LevelSelectScene(context));
+        engine.scenes().register(SaveSelectScene.NAME, new SaveSelectScene(context));
         engine.scenes().register("play", new PlayScene(context, LEVEL));
         engine.scenes().register(NewLevelScene.NAME, new NewLevelScene(context));
         engine.scenes().register("creative", new CreativeScene(context));

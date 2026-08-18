@@ -18,6 +18,7 @@ import com.larsons.engine.demo.LevelSelectScene;
 import com.larsons.engine.demo.MainMenuScene;
 import com.larsons.engine.demo.MultiplayerScene;
 import com.larsons.engine.demo.NewLevelScene;
+import com.larsons.engine.demo.SaveSelectScene;
 import com.larsons.engine.demo.SkinEditorScene;
 import com.larsons.engine.demo.StartupScene;
 import com.larsons.engine.evolution.EvolutionGame;
@@ -124,6 +125,7 @@ public final class SceneFrames {
         frames.add(scene("scene-game-type-editor", ctx -> new GameTypeEditorScene(ctx)));
         frames.add(scene("scene-new-level", ctx -> new NewLevelScene(ctx)));
         frames.add(scene("scene-main-menu", ctx -> new MainMenuScene(ctx)));
+        frames.add(scene("scene-save-select", ctx -> new SaveSelectScene(ctx)));
         frames.add(scene("scene-evolution-lobby",
                 ctx -> new EvolutionLobbyScene(ctx, evolutionStore())));
         frames.add(scene("scene-board-customize", ctx -> new BoardCustomizeScene(ctx)));

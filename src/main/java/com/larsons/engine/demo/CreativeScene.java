@@ -24,6 +24,8 @@ import com.larsons.engine.combat.MeleeState;
 import com.larsons.engine.config.CustomContentStore;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
+import com.larsons.engine.config.PlayerSettings;
+import com.larsons.engine.config.PlayerSettingsStore;
 import com.larsons.engine.crafting.Recipe;
 import com.larsons.engine.crafting.RecipeRegistry;
 import com.larsons.engine.entity.DroppedItem;
@@ -4731,20 +4733,28 @@ public class CreativeScene extends AbstractScene {
             ctx.applyLiveSettings();
             ctx.save();
         });
-        dialogForm.addSlider("Master volume %", () -> percent(profile().masterVolume),
+        // These three move the *player's* mix (config/player.json), not the
+        // game type's — an author monitoring at 30% must not ship 30% to
+        // everyone who opens the level. See PlayerSettings.
+        PlayerSettings sound = PlayerSettings.active();
+        PlayerSettingsStore soundStore = new PlayerSettingsStore();
+        dialogForm.addSlider("Master volume % (yours)", () -> percent(sound.masterVolume),
                 v -> {
-                    profile().masterVolume = v / 100.0;
-                    Sounds.setMasterVolume(profile().masterVolume);
+                    sound.masterVolume = v / 100.0;
+                    Sounds.setMasterVolume(sound.masterVolume);
+                    soundStore.trySave(sound);
                 }, 0, 100);
-        dialogForm.addSlider("Effects volume %", () -> percent(profile().sfxVolume),
+        dialogForm.addSlider("Effects volume % (yours)", () -> percent(sound.sfxVolume),
                 v -> {
-                    profile().sfxVolume = v / 100.0;
-                    Sounds.setSfxVolume(profile().sfxVolume);
+                    sound.sfxVolume = v / 100.0;
+                    Sounds.setSfxVolume(sound.sfxVolume);
+                    soundStore.trySave(sound);
                 }, 0, 100);
-        dialogForm.addSlider("Music volume %", () -> percent(profile().musicVolume),
+        dialogForm.addSlider("Music volume % (yours)", () -> percent(sound.musicVolume),
                 v -> {
-                    profile().musicVolume = v / 100.0;
-                    Sounds.setMusicVolume(profile().musicVolume);
+                    sound.musicVolume = v / 100.0;
+                    Sounds.setMusicVolume(sound.musicVolume);
+                    soundStore.trySave(sound);
                 }, 0, 100);
         // The pitch toggle the whole system hangs off: on, every sound plays
         // a touch higher or lower each time, so repeated sounds stay fresh

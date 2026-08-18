@@ -2711,6 +2711,123 @@ genetics, **Esc** pauses (and offers the full game reset).
 
 ---
 
+## Saving (runs, slots, and what a save actually is)
+
+A **run** is a play-through of a game type: where you are, what you are
+carrying, how you are doing, and **every level you have changed along the way**.
+It is a different noun from a *level*, and the distinction is the whole of this
+system — the engine could always write a level to disk and read it back, and had
+nothing at all that described the person playing it.
+
+### An authored level is a template; a run is a copy
+
+Nothing on the play path writes to `resources/levels/` any more. Play reads the
+authored level once, when a run first enters it, and from then on writes only
+into the run's own folder:
+
+```
+src/main/resources/saves/<game-type>/<slot>/
+    run.json              you: character, health/mana/stamina, position,
+                          inventory + hotbar, every tracked stat, the stat-rule
+                          fire counts per level, the world clock, play time
+    levels/<name>.json    the run's own copy of each level it has changed
+```
+
+`levels/` is a second **levels root** —
+[`LevelStore`](src/main/java/com/larsons/engine/level/LevelStore.java) already
+took its root as a constructor argument, so a run's copy of a level is written
+and read by exactly the code that writes and reads an authored one. No new file
+format was needed for the world half of a save; what was missing was somewhere
+to put it, and something to mean "this run"
+([`RunRecord`](src/main/java/com/larsons/engine/save/RunRecord.java)).
+
+Because the authored copy stays pristine, **New Run** is a meaningful thing to
+offer: it starts from the levels as their author built them. Before this, playing
+a level and pressing *Save Level* wrote back over that author's file.
+
+### When it saves
+
+- **Every door.** The level being left is written *before* the destination is
+  read. That ordering is the difference between a game type of linked levels
+  being one continuous world and being a set of rooms that reset.
+- **Every death.** So "I died" never also means "and lost the hour before it".
+- **Every couple of minutes**, and only when something has actually happened.
+- **Whenever you leave** — *Save and Quit*, *Quit to Menu*, or any other way out
+  of the play scene. Quitting with unsaved progress asks first.
+- **On demand**, from the pause menu's *Save Run*.
+
+### Why it does not cost a frame
+
+Serializing a level is not free. Measured on a dense level, `toMap()` then
+`stringify`:
+
+| level | `toMap()` | `stringify` | total |
+|---|---:|---:|---:|
+| 256×256 | 1.67 ms | 6.08 ms | 7.7 ms |
+| 512×512 | 5.20 ms | 6.68 ms | 11.9 ms |
+| 1024×1024 | 33.74 ms | 125.56 ms | 159.3 ms |
+
+A 60 Hz frame is 16.67 ms.
+[`RunSession`](src/main/java/com/larsons/engine/save/RunSession.java) therefore
+takes the **snapshot** on the game thread — `toMap()` has to read live state, and
+produces a tree of plain maps that shares nothing with the `Level` — and does the
+string building and the file write on a single background writer. It also
+**skips levels nobody has touched**, using the revision counter `Level` already
+keeps, so a periodic autosave for a player who is walking around rather than
+building writes only `run.json`. Saves are queued in order rather than
+collapsed, and a synchronous save waits its turn rather than being overtaken by
+an autosave taken earlier. Writes go through a temporary file and a move, so an
+interrupted save leaves either the old run or the new one and never half of
+either. The snapshot appears as its own `autosave` stage in the
+[frame profiler](#frame-profiler-where-the-time-actually-goes).
+
+### The run owns the stat-rule fire counts
+
+A level's [`StatRule`](src/main/java/com/larsons/engine/level/StatRule.java)s are
+the level's; how many times each has *fired* is the run's, keyed by level. They
+used to belong to the per-level rule engine, which was rebuilt on every entry
+while the counters it was measured against carried on across doors — so a
+one-shot "mine 50 blocks → take a diamond" paid out again every time the player
+walked out of the level and back. Every authored reward in the engine was
+farmable. The counts live in `run.json` now and are restored whenever a level is
+entered again.
+
+### Online
+
+Runs are offline. In a multiplayer session the server owns the world, and who
+owns a save — and what happens to a player's things when they disconnect — is a
+genuinely different design that needs the offline run model to exist first. The
+play scene holds no run in a session, and every save path there is a no-op.
+
+## Your own settings (volume, sensitivity, HUD size)
+
+Some settings belong to the **person playing** rather than to the game type they
+are playing.
+[`KeyBinds`](src/main/java/com/larsons/engine/input/KeyBindStore.java) always
+drew that line correctly; audio did not. Volume lived on `GameProfile`, was
+captured into every level file, and was copied back out on load — so opening a
+level somebody else authored replaced your mix with theirs, and walking through
+a door between two levels saved at different volumes changed it mid-run.
+
+[`PlayerSettings`](src/main/java/com/larsons/engine/config/PlayerSettings.java)
+now holds them in `config/player.json`, beside `keybinds.json` and under the same
+rules (a missing or unreadable file is the defaults, never an error; it is plain
+text you can copy between machines):
+
+| setting | what it does |
+|---|---|
+| master / effects / music volume | the mix, on *your* machine |
+| mouse sensitivity | `[F5]` first- and third-person look speed, 10–500% |
+| invert look (Y axis) | for whom an uninvertible Y axis means those views may as well not exist |
+| HUD size | 75–300%, for a HUD sized in pixels on a 4K display |
+
+They are edited from **Options** in the pause menu — the first place in the
+engine a player rather than an author can change how the game feels — and from
+the creative editor's sound dialog, which now moves *your* volume rather than
+the game type's. Whether a level *has* music is still the creator's call, as is
+whether sounds drift in pitch; only how loud it all is moved out.
+
+
 ## Custom key binds (rebind anything)
 
 Nothing in the engine names a key any more. Gameplay asks whether an **action**
@@ -3289,8 +3406,13 @@ default.
    *Edit Settings* shows. **Create Level** builds the starter canvas, saves it
    into the game type, and opens the editor on it.
 6. **Play** — the level loads with only its own enabled features active. Press
-   **Esc** for a deliberately simple **pause menu**: *Resume*, *Save Level*
-   (persist this world + its settings), *Edit in Creative*, and *Quit to Menu*.
+   **Esc** for the **pause menu**: *Resume*, *Controls (Key Binds)*, *Options*
+   (volume, mouse sensitivity, invert-Y, HUD size — yours, not the level's),
+   *Save Run* (the player and every level this run has changed, into its own
+   slot), *Save and Quit*, *Edit in Creative*, and *Quit to Menu*, which asks
+   first when there is unsaved progress. A run also saves itself at every door,
+   at every death, and every couple of minutes. Runs are picked from
+   **Saved Runs** on the main menu, or resumed with **Continue**.
 
 Levels are authored and saved in **Creative Mode**, which snapshots the active
 toggles into the level on every save, and are stored under
@@ -3617,24 +3739,35 @@ true before it starts and the instrument that proves it worked.
   and the terrain painter already derives visible faces from the projection
   rather than from the heading — and that the one genuinely missing thing is
   that a body's floor is the literal number zero, everywhere.
-- **The run that survives the session — a saved game.** The engine persists the
-  *world* and never persists the *run*. `PlayScene.onEnter` builds a fresh
-  `PlayerStats`, a fresh `Inventory` and a `PlayerState` at the level's spawn
-  every single time, the character profile restores full health, and the world
-  clock starts at the same morning — so inventory, health, position, the
-  character you chose and every stat-rule counter are discarded on exit, with no
-  prompt and no slot to put them in. The pause menu's *Save Level* saves the
-  mountain you dug and loses the diamonds you dug out of it, and it writes back
-  over the level's *authored* copy while doing it. Doors compound it: a level
-  you walk out of is re-read from disk when you walk back in, so a game type of
-  linked levels — sold here as "one continuous world" — is a set of rooms that
-  reset, and one-shot stat rules can be re-fired by walking through a door and
-  back. It has its own plan of record, **[`SAVE_PLAN.md`](SAVE_PLAN.md)**,
-  written the same way `RENDER_PLAN.md` and `HEIGHT_PLAN.md` are. The
-  measurement that opens it is that the hard part is already built: `Level` ↔
-  JSON already round-trips everything a world is, and `LevelStore` already takes
-  its root as an argument — so **a save slot is just a second levels root**, and
-  what is genuinely missing is an object that means "this run".
+- **The run that survives the session — done.** The engine used to persist the
+  *world* and never the *run*: `PlayScene.onEnter` built a fresh `PlayerStats`,
+  a fresh `Inventory` and a `PlayerState` at the level's spawn every single
+  time, so inventory, health, position, the character you chose and every
+  stat-rule counter went on exit, with no prompt and no slot to put them in. The
+  pause menu's *Save Level* saved the mountain you dug and lost the diamonds you
+  dug out of it — and wrote back over the level's *authored* copy while doing
+  it. There is a **save file** now: `Continue` on the main menu, three run slots
+  per game type, *Save Run* / *Save and Quit* in the pause menu, a quit that
+  asks before throwing an hour away, and an autosave at every door, every death
+  and every couple of minutes. A run is `saves/<game-type>/<slot>/`, holding a
+  `run.json` and the run's own copies of every level it has changed — **a save
+  slot is a second levels root**, so authored levels became read-only on the
+  play path and a new run really does start from the level as its author built
+  it. Doors write before they read, so a game type of linked levels is the one
+  continuous world it was always described as, and one-shot stat rules stay
+  one-shot — walking out and back used to re-arm every reward in the level.
+  Saving is off the game thread: the snapshot is taken where the game runs and
+  the 6–125 ms of string building is not, and an untouched level is not written
+  at all. See **[`SAVE_PLAN.md`](SAVE_PLAN.md)** for the evidence, the six jobs,
+  and §12 on what the build taught that the plan did not know.
+- **Player settings are the player's — done.** Volume used to live on
+  `GameProfile`, be captured into every level file, and be copied back out on
+  load, so opening someone else's level replaced your mix with theirs and a door
+  between two levels could change it mid-run. It lives in `config/player.json`
+  now, beside the key binds and under the same rule, along with mouse-look
+  sensitivity, an invert-Y toggle and a HUD scale — reachable from a new
+  **Options** entry in the pause menu, which is the first place in the engine a
+  *player* rather than an *author* can change how the game feels.
 - **Netcode next steps:** interest management for large worlds, lag
   compensation for hit detection.
 - **Deeper ports from the Side-Scroller engine:** alchemy/crafting recipes,
@@ -3647,6 +3780,11 @@ true before it starts and the instrument that proves it worked.
 
 `./gradlew test` runs headless tests
 ([`EngineSmokeTest`](src/test/java/com/larsons/engine/EngineSmokeTest.java),
+[`RunRecordTest`](src/test/java/com/larsons/engine/save/RunRecordTest.java),
+[`SaveStoreTest`](src/test/java/com/larsons/engine/save/SaveStoreTest.java),
+[`AutosaveTest`](src/test/java/com/larsons/engine/save/AutosaveTest.java),
+[`DoorContinuityTest`](src/test/java/com/larsons/engine/demo/DoorContinuityTest.java),
+[`PlayerSettingsTest`](src/test/java/com/larsons/engine/PlayerSettingsTest.java),
 [`ConfigFeatureTest`](src/test/java/com/larsons/engine/ConfigFeatureTest.java),
 [`ShaderTest`](src/test/java/com/larsons/engine/ShaderTest.java),
 [`PlayerPhysicsTest`](src/test/java/com/larsons/engine/PlayerPhysicsTest.java),
