@@ -198,7 +198,7 @@ public final class ActorPreview {
                                   double hit, double draw) {
         int[] corner = new int[2];
         int depth = TerrainPainter.standingDepth(cam, (int) cam.tileSize, footX, footY);
-        int within = cam.worldToScreenY(footX, footY);
+        int within = TerrainPainter.pointDepth(cam, footX, footY);
         into.at(depth, within, () -> {
             // The ground they cover, drawn as the quad it is in this
             // projection: a square in top-down, a diamond in isometric.

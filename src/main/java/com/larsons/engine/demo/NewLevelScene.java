@@ -205,6 +205,7 @@ public class NewLevelScene extends AbstractScene {
                 + "when it is created.");
         ProfileForms.addRosterOptions(form, ctx.profile().name, roster);
         ProfileForms.addFeatureOptions(form, settings);
+        ProfileForms.addCameraOptions(form, settings);
         form.addAction("Back", () -> scenes.transitionTo("menu"));
     }
 

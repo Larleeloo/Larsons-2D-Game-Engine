@@ -253,7 +253,7 @@ This engine was built against six explicit requirements:
 | # | Requirement | How it's addressed |
 |---|-------------|--------------------|
 | 1 | **120 FPS** | A fixed-timestep [`GameLoop`](src/main/java/com/larsons/engine/core/GameLoop.java) renders with a configurable cap (default **120**). The limiter schedules frames on an absolute timeline and uses a hybrid coarse-sleep / fine-park wait, so the cap is hit precisely without pegging a CPU. |
-| 2 | **Multiple 2D perspectives** | Two **distinct level formats** ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)) — side-scroller and 3D — each with its own creative mode, movement model and **number of block layers**, both loading and playing through the same code. [`Camera`](src/main/java/com/larsons/engine/graphics/Camera.java) + [`Perspective`](src/main/java/com/larsons/engine/graphics/Perspective.java) supply the projections (`SIDE_SCROLL`, `THREE_D`). The 3D camera turns around the player in **eight compass points** and **tilts freely** from 20° to 90° over the floor, which is what folded the old separate "top-down" and "isometric" formats into one: they were the same world seen from two places to stand. A level's format is fixed for its lifetime — the two are different worlds, not two views of one — and a door into a level of the other format is how a game changes perspective. What the player *can* switch mid-play is where they stand to look: `[F5]` cycles plan view / first person / third person, drawn from inside the level by [`EyeCamera`](src/main/java/com/larsons/engine/graphics/EyeCamera.java) + [`SolidPainter`](src/main/java/com/larsons/engine/graphics/SolidPainter.java) wherever there is a height axis to stand an eye in. See [First and third person](#first-and-third-person-the-f5-view). |
+| 2 | **Multiple 2D perspectives** | Two **distinct level formats** ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)) — side-scroller and 3D — each with its own creative mode, movement model and **number of block layers**, both loading and playing through the same code. [`Camera`](src/main/java/com/larsons/engine/graphics/Camera.java) + [`Perspective`](src/main/java/com/larsons/engine/graphics/Perspective.java) supply the projections (`SIDE_SCROLL`, `THREE_D`). The 3D camera turns around the player in **eight compass points** and **tilts freely** from 0° to 90° over the floor, which is what folded the old separate "top-down" and "isometric" formats into one: they were the same world seen from two places to stand — and 0°, flat on the floor, is a third: the level cut open along the line you are looking down, which reads as a side-scroller made out of a 3D level. A level can restrict all of it ([`CameraLock`](src/main/java/com/larsons/engine/graphics/CameraLock.java)): exact headings, a tilt range or a single angle, and which stops of the F5 cycle are reachable. A level's format is fixed for its lifetime — the two are different worlds, not two views of one — and a door into a level of the other format is how a game changes perspective. What the player *can* switch mid-play is where they stand to look: `[F5]` cycles plan view / first person / third person, drawn from inside the level by [`EyeCamera`](src/main/java/com/larsons/engine/graphics/EyeCamera.java) + [`SolidPainter`](src/main/java/com/larsons/engine/graphics/SolidPainter.java) wherever there is a height axis to stand an eye in. See [First and third person](#first-and-third-person-the-f5-view). |
 | 3 | **Online play** | ✅ Implemented — see [Online play](#online-play). An authoritative [`GameServer`](src/main/java/com/larsons/engine/net/GameServer.java) ticks the same deterministic [`PlayerPhysics`](src/main/java/com/larsons/engine/sim/PlayerPhysics.java) clients predict with; host in-game or run a headless dedicated server; friends join by IP + port like Minecraft Java edition. |
 | 4 | **Out of the box on any Java machine** | The engine uses **only the JDK** (Java2D / AWT / Swing / sockets). No third-party runtime dependencies — JSON parsing, networking, and shader execution are all in-engine. The optional GL backend lives in a separate Gradle project and a separate jar, so this stays true of the one a player double-clicks — checked on every build by `:verifyNoRuntimeDependencies`, which fails the `jar` task if anything external reaches the runtime classpath. |
 | 5 | **Shader support** | ✅ Implemented — see [Shaders](#shaders). Every [`ShaderPass`](src/main/java/com/larsons/engine/graphics/shader/ShaderPass.java) is defined **GLSL-first** (real GPU fragment-shader source, exportable as `.frag` files) beside a multithreaded CPU implementation, and every pass is compiled on a real driver and diffed against its CPU twin (`ShaderCompileTest`, `ShaderParityTest`: five passes at 0.00 mean channel error out of 255, worst 3.58). **Both sides now execute**: the GL backend compiles each pass's `glsl()` once and runs the chain as a framebuffer ping-pong over the scene texture, and the Java2D backend runs the CPU implementation in parallel row stripes. `GlShaderChainTest` renders every pass both ways through the shipping chain and reproduces those same per-pass errors — which is what says the backend is right, since the shaders were measured before it existed. |
@@ -712,11 +712,72 @@ model, their palette and their file format, and picking between them at the
 moment of *creating* a level asked a creator to commit — permanently, before
 building anything — to a camera angle. They are now one format whose camera the
 player moves while playing: **`,` / `.` turn it around the eight compass points
-and `Home` / `End` raise and lower it freely** between 20° and 90° over the
+and `Home` / `End` raise and lower it freely** between 0° and 90° over the
 floor. Both are remembered per level: a level opens at the heading *and* the
 tilt it was saved from, so a maze laid out to be read from directly above opens
 from directly above. Neither is a constraint on the player, and neither goes
-over the wire. A camera brought most of the way down is the oblique three-quarter view
+over the wire.
+
+**0° is a view of its own: the level cut open.** Bring the camera all the way
+down and the floor's depth axis multiplies by zero — the whole plane collapses
+onto one screen row, height is drawn at full length, and what is left is a
+**side elevation of the slice the player is standing in**. Everything in front
+of them is cut away (it would otherwise be drawn over them, because at that
+angle every depth lands in the same band of screen), and the cut shows its own
+cross-section: the interior faces a slice exposes are drawn rather than
+suppressed as hidden. What you see is the line you are looking down and
+everything behind it, which reads as a side-scroller made out of a 3D level.
+Turn the camera to check another axis, or press `[F5]` to walk it in first or
+third person.
+
+The band just above the floor has nothing to recommend it — too foreshortened
+to read, not yet cut — so the tilt keys **drop through it** (`Camera.SLICE_DETENT`)
+and one press off the floor comes back out the other side. `Camera.setPitch`
+has no detent, because a level's own camera rules and a test are not a held key.
+
+Three things stop working at 0° if nothing is done about them, and the engine
+does something about each:
+
+| What breaks | Why | What the engine does |
+|---|---|---|
+| Depth sorting | every cell shares one screen row, so a painter sorting on rows has nothing to sort by | sorts on `Camera.depthOf` — distance along the view axis, which the screen row was only ever a foreshortened copy of |
+| The inverse projection | a screen point is a whole line of world | `inversePlanar` drops the depth it cannot recover; `screenToWorld` puts it back at the focus's own depth, so a click lands on the slice you are looking at |
+| The near half drawing over the far half | nothing is behind anything on screen any more | `TerrainPainter.sliceCut` cuts the world at the focus, for terrain and actors alike, and `TerrainCache` stands aside because there is no floor left to bake |
+
+### Camera locks: where a level may be looked at from
+
+The freedom above is right for a sandbox and wrong for a great many levels
+somebody has actually composed. A side-on puzzle laid out to be read as a cut
+through the world is nonsense from overhead; a room built to be entered from
+the south shows a player the back of every wall if they turn round; a jump
+measured by eye at one tilt is a different jump at another.
+
+So a level can say where its camera may stand
+([`CameraLock`](src/main/java/com/larsons/engine/graphics/CameraLock.java)),
+in *Load Level → Edit Settings* (and on the *New Level* screen). Each axis is
+restricted on its own and each defaults to unrestricted, so a level that never
+opens the section behaves exactly as it did before locks existed:
+
+| Setting | What it does |
+|---|---|
+| **Facing North … North-West** | Any subset of the eight compass points. The rotate keys step *over* what is not allowed; one heading left is a fixed camera. The last one cannot be unticked — a camera has to point somewhere. |
+| **Lowest / highest camera tilt** | The tilt's range in degrees. Equal ends pin it to one angle: `0/0` is a level that is always the cut view, `90/90` one that is always overhead. |
+| **Tilt snaps to steps of** | Turns the range into a list of *exact* angles — `0–90` by `15` is seven angles and nothing between them. The grid starts at the low end, so the lowest angle you allowed is one a player can actually rest at. |
+| **View: First person / Third person / Third person, front** | Which stops the `[F5]` cycle may reach. The plan view is always available — it is what every level is authored through and what the others fall back to — so switching all three off simply means `[F5]` stays put. |
+| *Unlock the camera* | Puts every axis back to unrestricted. |
+
+A lock is obeyed by **every** way of placing the camera, not only by the keys a
+player presses: `turn` and `tilt` for the player, and `setYaw`/`setPitch` for a
+level opening at its authored angle — which is snapped to the nearest allowed
+heading and clamped into the allowed tilt rather than contradicting the lock.
+It is written into the level file as names rather than bitmasks
+(`"camera": {"headings": ["n","s"], "maxPitch": 0}`) and omitted entirely when
+it restricts nothing.
+
+**The creative editor is not under the lock**, deliberately: a lock says where
+a level is meant to be *played* from, and building it needs to see the far side
+of every wall. Tilt and turn to the locked angle yourself when you want to
+check it. A camera brought most of the way down is the oblique three-quarter view
 that used to be called isometric; a camera at the top of its travel is the
 straight-down view that used to be called top-down. Levels saved under either
 old name load as 3D.
@@ -1270,9 +1331,11 @@ grid, the block faces, the shadows and the characters' sprites all turn with it;
 the movement keys mean what they look like they mean, at every heading and on
 both sides of a network connection; a level remembers the heading it was built
 from and opens there; the camera's *other* axis moves too — `Home` and `End`
-raise and lower it freely between 20° and 90° over the floor, which is what let
+raise and lower it freely between 0° and 90° over the floor, which is what let
 the old separate top-down and isometric formats collapse into one 3D format,
-and a level remembers that angle as well; and the floor cache knows which
+and at the bottom of that travel the level is cut open into a side elevation of
+the slice you are standing in. A level remembers that angle as well, and can
+lock the camera to the angles it was composed for; and the floor cache knows which
 headings it can still bake
 — four of the eight headings, including four at diagonal projections it could
 never bake before. Two players may look at one world from different directions,
@@ -1594,7 +1657,11 @@ format's creative mode: its camera projection, its starter canvas (a ground
 floor to land on, or a walled 3D arena), its palette, its generator default,
 and a play-test that moves under that format's rules. In 3D the editor's
 camera turns (`,` / `.`) and tilts (`Home` / `End`) while you build, which is
-usually easier than building a wall from straight above it.
+usually easier than building a wall from straight above it — all the way to
+flat on the floor, where the level is cut open along the line you are looking
+down. The editor is **not** under the level's camera lock: a lock says where a
+level is meant to be played from, and building it needs to see the far side of
+every wall.
 
 **Picking a format does not create the level.** It opens the **New Level**
 screen ([`NewLevelScene`](src/main/java/com/larsons/engine/demo/NewLevelScene.java)):

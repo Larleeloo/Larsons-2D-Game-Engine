@@ -416,6 +416,12 @@ public final class TerrainCache {
      * now worth less than it was, because half the headings do not need it.
      */
     public static boolean faithfulIn(Camera camera) {
+        // A floor with no area on screen has nothing worth baking: a camera
+        // flat on the floor draws every tile as a zero-height line, so each
+        // chunk would bake a transparent sliver and the blits would land on
+        // top of one another in sweep order rather than in depth order. The
+        // live sweep draws exactly the same nothing, for free.
+        if (camera.sliced()) return false;
         return onAScreenAxis(camera.planarDelta(camera.tileSize, 0))
                 && onAScreenAxis(camera.planarDelta(0, camera.tileSize));
     }

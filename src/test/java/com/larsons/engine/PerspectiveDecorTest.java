@@ -496,8 +496,12 @@ class PerspectiveDecorTest {
         Graphics2D g = canvas.createGraphics();
         DepthPass standing = DepthPass.of(lvl.perspective);
         scenery(g, lvl, cam, false, standing);
+        // Both keys on the painters' own measure: a tie-break taken as a screen
+        // row while the scenery beside it uses view depth is two scales in one
+        // comparison, and the two agree only while the camera is square to the
+        // world (TerrainPainter.pointDepth).
         standing.at(TerrainPainter.standingDepth(cam, TILE, footX, footY),
-                cam.worldToScreenY(footX, footY), () -> {
+                TerrainPainter.pointDepth(cam, footX, footY), () -> {
                     g.setColor(PLAYER);
                     g.fillRect(feet[0] - 14, feet[1] - 28, 28, 28);
                 });

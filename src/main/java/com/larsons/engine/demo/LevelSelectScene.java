@@ -211,6 +211,7 @@ public class LevelSelectScene extends AbstractScene {
         // screen.
         ProfileForms.addRosterOptions(form, ctx.profile().name, editLevel.characters);
         ProfileForms.addFeatureOptions(form, editLevel.settings);
+        ProfileForms.addCameraOptions(form, editLevel.settings);
         form.addAction("Save", this::saveEdited);
         form.addAction("Back", () -> openActions(selectedLevel));
     }

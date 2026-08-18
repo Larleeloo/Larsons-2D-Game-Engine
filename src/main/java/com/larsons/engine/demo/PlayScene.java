@@ -3336,12 +3336,16 @@ public class PlayScene extends AbstractScene {
      * of something that never moved.
      */
     private void cycleViewpoint() {
-        Viewpoint next = viewpoint.next(hasElevation());
+        Viewpoint next = viewpoint.next(hasElevation(), camera.lock());
         if (next == viewpoint) {
-            // A side-scroller has one view and this is it. Say so rather than
-            // swallowing the press: a key that does nothing and does not
-            // explain itself reads as a broken key.
-            ruleStatus = "This level is a side-scroller — no first-person view here";
+            // One view and this is it. Say which of the two reasons it is
+            // rather than swallowing the press: a key that does nothing and
+            // does not explain itself reads as a broken key, and "this level
+            // does not allow it" and "this kind of level cannot have it" are
+            // different things to be told.
+            ruleStatus = hasElevation()
+                    ? "This level keeps its camera in the plan view"
+                    : "This level is a side-scroller — no first-person view here";
             ruleStatusTime = 2.5;
             return;
         }
@@ -3576,16 +3580,20 @@ public class PlayScene extends AbstractScene {
         // off the wire, so two players may face different ways in one world.
         // Walking through a door into a level authored from another heading
         // lands settled on that one rather than sliding into it. C9.
+        // The level's camera rules first, so the heading and tilt below are
+        // placed inside them rather than corrected a frame later.
+        camera.setLock(p.cameraLock);
         camera.setYaw(level.authoredHeading * Camera.EIGHTH_TURN);
         // …and at the tilt it was built from, which is the other half of the
         // same sentence now that the camera has two axes a creator can move.
         camera.setPitch(Camera.pitchFor(level.authoredPitchDegrees));
         // A door can lead from a plan-view level into a side-scroller, which
-        // has no height axis and so no solid view to be in. The choice goes
-        // back to the level's own view rather than being held in reserve: a
-        // player who walks back out should be told what they are looking
-        // through, and the HUD reads this field.
-        if (!hasElevation()) viewpoint = Viewpoint.PLAN;
+        // has no height axis and so no solid view to be in — or into a level
+        // that allows only the plan view. The choice goes back to the level's
+        // own view rather than being held in reserve: a player who walks back
+        // out should be told what they are looking through, and the HUD reads
+        // this field.
+        if (!hasElevation() || !camera.lock().allows(viewpoint)) viewpoint = Viewpoint.PLAN;
         lookYaw = camera.viewYaw();
         lookPitch = 0;
         lookFromX = -1;
@@ -3745,7 +3753,7 @@ public class PlayScene extends AbstractScene {
      * way the level stores entities.
      */
     private int footDepth(double x, double y, double size) {
-        return camera.worldToScreenY(x + size / 2, y + size);
+        return TerrainPainter.pointDepth(camera, x + size / 2, y + size);
     }
 
     /**
@@ -3804,6 +3812,11 @@ public class PlayScene extends AbstractScene {
                     camera.worldToScreenY(ax, ay) - lift, camera.zoom, sprite);
             return;
         }
+        // Cut by the same plane the terrain is when the camera lies flat on
+        // the floor: a slice that removed the wall in front of you but kept the
+        // mob behind it would be showing a creature through a wall the picture
+        // no longer has (TerrainPainter.cutOff).
+        if (TerrainPainter.cutOff(camera, level.tileSize, x + size / 2, y + size)) return;
         into.at(standDepth(x, y, size), TerrainPainter.standingLayer(level, z),
                 footDepth(x, y, size), sprite);
     }
@@ -4505,10 +4518,20 @@ public class PlayScene extends AbstractScene {
         if (!solidView() && camera.tilts()) {
             hud.append("    |    camera ")
                     .append((int) Math.round(camera.pitchDegrees())).append((char) 0x00B0);
-            if (camera.overhead()) hud.append(" overhead");
-            hud.append("  [").append(KeyBinds.label(GameAction.LOOK_UP))
-                    .append("/").append(KeyBinds.label(GameAction.LOOK_DOWN))
-                    .append("] tilt");
+            // The two angles that change what you are looking at rather than
+            // only how far you are tilted, named where a player can see them.
+            if (camera.sliced()) hud.append(" sliced");
+            else if (camera.overhead()) hud.append(" overhead");
+            if (camera.lock().isFree()) {
+                hud.append("  [").append(KeyBinds.label(GameAction.LOOK_UP))
+                        .append("/").append(KeyBinds.label(GameAction.LOOK_DOWN))
+                        .append("] tilt");
+            } else {
+                // A locked camera's keys do less than they say, so the HUD says
+                // what the level allows instead of naming keys that will not
+                // move it.
+                hud.append("  locked: ").append(camera.lock().describe());
+            }
         }
         if (net != null) {
             Snapshot snap = net.client().latest();

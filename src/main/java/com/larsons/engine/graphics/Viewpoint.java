@@ -116,10 +116,24 @@ public enum Viewpoint {
      * cycle silently jumps over.
      */
     public Viewpoint next(boolean hasElevation) {
+        return next(hasElevation, null);
+    }
+
+    /**
+     * {@link #next(boolean)}, skipping anything {@code lock} rules out as well
+     * — a level may switch the solid views off entirely, and then this cycle
+     * collapses to {@link #PLAN} exactly as a side-scroller's does.
+     *
+     * <p>A {@code null} lock allows everything, which is what a scene with no
+     * level loaded and every test that predates locking passes.
+     */
+    public Viewpoint next(boolean hasElevation, CameraLock lock) {
         Viewpoint[] all = values();
         for (int i = 1; i <= all.length; i++) {
             Viewpoint candidate = all[(ordinal() + i) % all.length];
-            if (candidate.availableIn(hasElevation)) return candidate;
+            if (!candidate.availableIn(hasElevation)) continue;
+            if (lock != null && !lock.allows(candidate)) continue;
+            return candidate;
         }
         return this;
     }
