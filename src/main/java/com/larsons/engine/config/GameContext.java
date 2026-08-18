@@ -137,6 +137,47 @@ public class GameContext {
         applyLiveSettings();
     }
 
+    // --- which run the next play session opens ----------------------------------
+
+    /**
+     * The save slot the next play session uses, and whether it starts that slot
+     * over instead of continuing it.
+     *
+     * <p>Two fields rather than one because they answer different questions and
+     * the menus set them from different places: <em>Continue</em> names a slot
+     * and continues it, <em>New Run</em> names a slot and wipes it, and
+     * <em>Play Level</em> continues whichever slot is current but overrides the
+     * level to start in. Read once by the play scene as it enters and then left
+     * alone — a run that is under way owns its own slot.
+     */
+    private String runSlot = com.larsons.engine.save.SaveStore.DEFAULT_SLOT;
+    private boolean startFreshRun;
+
+    /** The save slot the next play session opens. */
+    public String runSlot() { return runSlot; }
+
+    /** Continue {@code slot} on the next play session. */
+    public void continueRun(String slot) {
+        if (slot != null && !slot.isBlank()) runSlot = slot;
+        startFreshRun = false;
+    }
+
+    /**
+     * Start {@code slot} over on the next play session: the play scene wipes
+     * the slot and begins from the authored levels.
+     */
+    public void startNewRun(String slot) {
+        if (slot != null && !slot.isBlank()) runSlot = slot;
+        startFreshRun = true;
+    }
+
+    /** Whether the next play session should start its slot over; clears itself. */
+    public boolean takeStartFreshRun() {
+        boolean fresh = startFreshRun;
+        startFreshRun = false;
+        return fresh;
+    }
+
     // --- creative mode selection ------------------------------------------------
 
     /**
@@ -227,11 +268,14 @@ public class GameContext {
             TexturePack.useDir(profile.texturePackDir);
             SoundPack.useDir(profile.soundPackDir);
             Sounds.setMusicEnabled(profile.musicEnabled);
-            Sounds.setMasterVolume(profile.masterVolume);
-            Sounds.setSfxVolume(profile.sfxVolume);
-            Sounds.setMusicVolume(profile.musicVolume);
             Sounds.setPitchVariation(profile.soundPitchVariation);
         }
+        // Volume comes from the player, not the profile, and so is pushed
+        // whether or not a game type is selected — the launch menu has sound
+        // too. Kept in the same method because the mix must be re-asserted
+        // after anything that could have changed it; see PlayerSettings for
+        // why a level is not allowed to be one of those things.
+        applyPlayerSettings();
         if (engine != null && profile != null) {
             // The level says what is allowed; the machine in front of the
             // player picks inside it. See DisplayCap for why those are two
@@ -240,6 +284,18 @@ public class GameContext {
                     engine.device(), profile.minFps, profile.maxFps));
             syncShaders(engine.shaders(), profile);
         }
+    }
+
+    /**
+     * Push the player's own settings into the sound system. Separate from the
+     * profile sync above so the options menu can call it after a slider moves
+     * without re-deriving the whole shader chain.
+     */
+    public void applyPlayerSettings() {
+        PlayerSettings s = PlayerSettings.active();
+        Sounds.setMasterVolume(s.masterVolume);
+        Sounds.setSfxVolume(s.sfxVolume);
+        Sounds.setMusicVolume(s.musicVolume);
     }
 
     /** Save the active profile to the store. */

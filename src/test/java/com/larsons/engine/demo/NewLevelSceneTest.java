@@ -90,7 +90,11 @@ class NewLevelSceneTest {
         Component src = new Canvas();
         run(scenes, input, 2);
 
-        // Main menu: Play Level, Load Level, Creative Mode … — down twice, select.
+        // Main menu: Play Level, Load Level, Saved Runs, Creative Mode … — down
+        // three times, select. (There is no Continue entry above them: this
+        // game type is brand new and has no saved run to continue.)
+        press(input, src, KeyEvent.VK_DOWN);
+        run(scenes, input, 1);
         press(input, src, KeyEvent.VK_DOWN);
         run(scenes, input, 1);
         press(input, src, KeyEvent.VK_DOWN);

@@ -9,6 +9,7 @@ import com.larsons.engine.character.Ultimates;
 import com.larsons.engine.config.CustomContentStore;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
+import com.larsons.engine.config.PlayerSettings;
 import com.larsons.engine.audio.AudioManager.Sfx;
 import com.larsons.engine.audio.SceneSounds;
 import com.larsons.engine.audio.SoundKeys;
@@ -66,6 +67,9 @@ import com.larsons.engine.level.DoorLink;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
 import com.larsons.engine.level.LevelStore;
+import com.larsons.engine.save.RunRecord;
+import com.larsons.engine.save.RunSession;
+import com.larsons.engine.save.SaveStore;
 import com.larsons.engine.level.StatRule;
 import com.larsons.engine.minigame.MiniGame;
 import com.larsons.engine.minigame.MiniGameView;
@@ -86,6 +90,7 @@ import com.larsons.engine.ui.ContainerPanel;
 import com.larsons.engine.ui.CraftingPanel;
 import com.larsons.engine.ui.KeyBindForm;
 import com.larsons.engine.ui.MenuTheme;
+import com.larsons.engine.ui.PlayerOptionsForm;
 import com.larsons.engine.world.Block;
 import com.larsons.engine.world.World;
 
@@ -98,6 +103,7 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Gameplay scene that honours the active {@link GameProfile}: it only enables
@@ -336,10 +342,25 @@ public class PlayScene extends AbstractScene {
     private double animClock;      // drives skinned (sprite-sheet) textures
     private DoorDirectory doors;   // this game type's external door list
 
+    /**
+     * The saved run this session belongs to: the player's record plus the run's
+     * own copies of every level it has changed. Offline only — online the
+     * server owns the world and nobody has decided yet whose save that is (see
+     * {@code SAVE_PLAN.md} §10), so this stays {@code null} in a session and
+     * every save path below is a no-op.
+     */
+    private RunSession run;
+
     private boolean paused;
     private ConfigForm pauseForm;
     /** The controls sheet, shown over the pause menu while it is open. */
     private ConfigForm bindsForm;
+    /** The options sheet (volume, look, HUD size), shown the same way. */
+    private ConfigForm optionsForm;
+    /** The "you have unsaved progress" sheet, over the pause menu. */
+    private ConfigForm confirmQuitForm;
+    /** Set by the pause menu when quitting would throw a run away. */
+    private boolean confirmQuit;
 
     // Scratch buffer for zero-allocation world-to-screen projection.
     private final int[] corner = new int[2];
@@ -351,9 +372,49 @@ public class PlayScene extends AbstractScene {
     private static final Font SANS_PLAIN_14 = new Font("SansSerif", Font.PLAIN, 14);
 
     public PlayScene(GameContext ctx, String levelPath) {
+        this(ctx, levelPath, LevelStore.DEFAULT_DIR, SaveStore.DEFAULT_DIR);
+    }
+
+    /**
+     * A play scene reading levels and writing runs somewhere other than the
+     * default folders — which is what lets a test drive a whole run through a
+     * door and back inside a temporary directory, the same way
+     * {@link LevelSelectScene} takes its levels root.
+     *
+     * @param levelsDir where levels are <em>authored</em>: read from, and after
+     *                  the save system never written to (see {@link SaveStore})
+     * @param savesDir  where runs are written
+     */
+    public PlayScene(GameContext ctx, String levelPath, String levelsDir, String savesDir) {
         this.ctx = ctx;
         this.levelPath = levelPath;
+        this.levelsDir = levelsDir;
+        this.savesDir = savesDir;
     }
+
+    private final String levelsDir;
+    private final String savesDir;
+
+    /** This game type's authored levels. Read-only on the play path (I1). */
+    private LevelStore authoredLevels() {
+        return new LevelStore(levelsDir, profile().name);
+    }
+
+    // --- test access ------------------------------------------------------------
+    // Package-private, for the tests in this package that drive a whole run
+    // through doors and out again. Deliberately read-only views of what the
+    // scene already owns rather than setters: a test that can only observe
+    // cannot put the scene into a state the game never would.
+
+    Level currentLevel() { return level; }
+
+    PlayerState player() { return me; }
+
+    Inventory carried() { return inventory; }
+
+    PlayerStats runStats() { return stats; }
+
+    RunSession runSession() { return run; }
 
     private GameProfile profile() { return ctx.profile(); }
 
@@ -371,7 +432,7 @@ public class PlayScene extends AbstractScene {
         Melee.clear(me, melee);
         meleeItem = "";
         prevGuardHits = 0;
-        doors = new DoorDirectory(profile().name);
+        doors = new DoorDirectory(authoredLevels());
         // Objects created with the creative editor's "+" entries must be
         // registered before a level referencing them loads.
         new CustomContentStore(profile().name).loadAndRegister();
@@ -385,15 +446,24 @@ public class PlayScene extends AbstractScene {
         ruleStatus = "";
         ruleStatusTime = 0;
 
+        // Offline, this session is a run: which slot it is comes from whatever
+        // menu got here (Continue names one, New Run wipes one), and the run
+        // decides which copy of a level is played — its own, or the authored
+        // one. Opened before the level loads because it is what answers that.
+        run = openRun();
+
         // Online, the world is whatever the server runs (one shared Level
-        // instance that block broadcasts keep current); offline, prefer the
-        // game type's last saved creative level, falling back to the bundled
+        // instance that block broadcasts keep current); offline, the level the
+        // run stopped in, else the game type's last level, else the bundled
         // sample.
         if (net != null && net.client().level() != null) {
             level = net.client().level();
             world = null;
         } else {
             level = loadOfflineLevel();
+            // Whatever copy that turned out to be, it is what is on disk right
+            // now — so the run only writes it once the player changes it.
+            if (run != null) run.adopt(level);
             // Each level carries its own feature toggles: apply them so the
             // game type acts as a folder of diverse levels, not one fixed
             // feature set. Legacy levels (settings == null) keep the game
@@ -406,9 +476,13 @@ public class PlayScene extends AbstractScene {
                 inventory.add(key, count);
                 stats.add("items_picked_up", count);
                 itemSound(key, "pickup", "pickup");
+                if (run != null) run.markDirty();
             });
         }
         ruleEngine = new StatRuleEngine(List.copyOf(level.statRules));
+        // The run, not the level, owns how many times each rule has fired —
+        // see StatRuleEngine for the exploit that came of them disagreeing.
+        if (run != null) run.restoreFired(level.name, ruleEngine);
         // Cutscenes are an offline feature, like stat-rule bars and doors.
         cutscenes = net == null ? new CutsceneDirector(level.cutscenes) : null;
         inventory = new Inventory(world != null ? world.itemTypes : ItemRegistry.standard());
@@ -424,7 +498,9 @@ public class PlayScene extends AbstractScene {
 
         me = new PlayerState(net != null ? net.client().localId() : 0, "",
                 level.spawnX, level.spawnY);
-        openCharacterChoice();
+        // A run being continued already answered the character question and
+        // already has a body to put back; a new one asks and starts at spawn.
+        if (!restoreRun()) openCharacterChoice();
         prevHealth = me.health;
         setupLocalMinigame();
 
@@ -439,10 +515,34 @@ public class PlayScene extends AbstractScene {
         ctx.sound(SoundKeys.world("level_load"));
     }
 
-    /** Leaving the scene stops the music and every loop it started. */
+    /**
+     * Leaving the scene stops the music and every loop it started — and flushes
+     * the run.
+     *
+     * <p>Every deliberate way out of play (Save and Quit, Quit to Menu, the
+     * confirmation sheet) has already decided what to do about the save by the
+     * time it gets here. This covers the ways that did not ask: <em>Edit in
+     * Creative</em>, a disconnect, a scene change the engine made on its own.
+     * Writing rather than asking is the right default for those, because the
+     * alternative is a player who edited their own level losing the run they
+     * were in the middle of, having never been given the chance to say no.
+     */
     @Override
     public void onExit() {
         sounds.reset();
+        if (run != null) {
+            // Unconditionally, not only when the run looks dirty. The dirty
+            // flag is an optimisation for the periodic autosave and an input to
+            // the quit prompt; it is assembled from the events the scene
+            // happens to notice, and leaving is the one moment where being
+            // wrong about it costs the player something they cannot get back.
+            // Writing anyway is cheap — an unchanged level is skipped, and what
+            // is left is a few hundred bytes of run record.
+            run.capture(profile().name, level, me, inventory, stats, timeOfDay());
+            run.rememberFired(level.name, ruleEngine);
+            run.saveNow(level);
+            closeRun();
+        }
     }
 
     /**
@@ -517,10 +617,27 @@ public class PlayScene extends AbstractScene {
      * seen once.
      */
     private Level loadOfflineLevel() {
+        // A run being continued goes back to the level it stopped in, and to
+        // *its* copy of that level — the hole it dug is in the slot, not in the
+        // level as its author built it.
+        if (run != null && run.resumed()) {
+            Level saved = run.level(run.record().levelName);
+            if (saved != null) return saved;
+            System.err.println("PlayScene: the run's level \"" + run.record().levelName
+                    + "\" is gone — starting from the game type's last level instead");
+        }
         String last = profile().lastLevelPath;
         if (last != null && !last.isEmpty() && Files.exists(Path.of(last))) {
             try {
-                return LevelLoader.load(last);
+                Level authored = LevelLoader.load(last);
+                // Even a level reached by "Load Level" is played through the
+                // run: if this slot has already been in it, that copy is the
+                // one with the player's changes in it.
+                if (run != null && run.store().hasLevel(authored.name)) {
+                    Level mine = run.level(authored.name);
+                    if (mine != null) return mine;
+                }
+                return authored;
             } catch (RuntimeException e) {
                 System.err.println("PlayScene: failed to load " + last + ": " + e.getMessage()
                         + " — forgetting it and loading " + levelPath);
@@ -529,6 +646,72 @@ public class PlayScene extends AbstractScene {
             }
         }
         return LevelLoader.load(levelPath);
+    }
+
+    /**
+     * Open the run this session plays: the slot the menus selected, continued
+     * or started over.
+     *
+     * <p>{@code null} online, where the server owns the world.
+     */
+    private RunSession openRun() {
+        closeRun();
+        if (net != null) {
+            ctx.takeStartFreshRun(); // consumed either way, so it cannot leak into the next run
+            return null;
+        }
+        SaveStore store = new SaveStore(savesDir, levelsDir, profile().name, ctx.runSlot());
+        if (ctx.takeStartFreshRun()) {
+            // "New Run" means this slot starts from the authored levels again.
+            // Deleting is the only way to say that, because a slot's levels are
+            // its memory of every level it has been in.
+            store.delete();
+            return RunSession.fresh(store);
+        }
+        return RunSession.open(store);
+    }
+
+    /** Flush and release the run, if there is one. */
+    private void closeRun() {
+        if (run == null) return;
+        run.close();
+        run = null;
+    }
+
+    /**
+     * Put a continued run back onto the body: character, pools, position,
+     * carried items, counters and the hour of the day.
+     *
+     * <p><b>The character is applied first and the pools second</b>, because
+     * {@code CharacterProfile.applyTo} fills health, mana and stamina to their
+     * maxima — restoring before it would hand the player a full bar on every
+     * load, which is the bug this ordering exists to avoid.
+     *
+     * @return whether a run was restored (so the caller knows not to ask the
+     *         character question again)
+     */
+    private boolean restoreRun() {
+        if (run == null || !run.resumed()) return false;
+        RunRecord saved = run.record();
+
+        List<CharacterProfile> roster = Characters.rosterFor(level.characters);
+        CharacterProfile chosen = roster.stream()
+                .filter(c -> c.key.equals(saved.characterKey))
+                .findFirst()
+                .or(() -> Optional.ofNullable(Characters.get(saved.characterKey)))
+                .orElseGet(() -> roster.isEmpty()
+                        ? CharacterProfile.defaultProfile() : roster.get(0));
+        picker = null;
+        applyCharacter(chosen);
+
+        saved.applyTo(me);          // …and now the pools that applyCharacter filled
+        saved.applyTo(inventory);
+        saved.applyTo(stats);
+        if (world != null && saved.timeOfDay >= 0) world.setTimeOfDay(saved.timeOfDay);
+
+        ruleStatus = "Continued — " + level.name;
+        ruleStatusTime = 3.0;
+        return true;
     }
 
     @Override
@@ -857,7 +1040,11 @@ public class PlayScene extends AbstractScene {
                 mgView = MiniGameView.fromMap(localMinigame.toWireMap());
             }
             stats.add("mobs_killed", world.pollKills());
-            stats.add("deaths", world.pollDeaths());
+            int died = world.pollDeaths();
+            stats.add("deaths", died);
+            // A death is a chapter break, like a door: the run is written so
+            // that "I died" never also means "and lost the hour before it".
+            if (died > 0) autosave();
             for (World.Impact im : world.pollImpacts()) impactFeedback(im, p);
             // Tiles the simulation broke on its own (bomb craters, the drill,
             // the Tremor Totem) shower shards like hand-mined blocks do.
@@ -888,11 +1075,18 @@ public class PlayScene extends AbstractScene {
                 ctx.sound(SoundKeys.world("stat_rule"));
                 ruleStatus = ruleFiredMessage(fired.rule());
                 ruleStatusTime = 3.5;
+                if (run != null) run.markDirty(); // a reward collected is progress
             }
+            tickRun(dt);
         }
 
         if (me.health < prevHealth - 0.01) {
             stats.add("damage_taken", prevHealth - me.health);
+            // Being hurt is progress in the only sense that matters here: it is
+            // a change to the run that the player would notice not having been
+            // saved. Position and terrain have their own detectors; this is the
+            // one that would otherwise be missed while standing still.
+            if (run != null) run.markDirty();
             // The hurt/death cry itself comes from the tracker below, which
             // is watching the same health bar and knows the character.
         }
@@ -982,10 +1176,29 @@ public class PlayScene extends AbstractScene {
         if (door == null) return false;
         DoorLink link = doors.get(door.type);
         if (link == null || link.targetLevel().isEmpty()) return true;
-        LevelStore store = new LevelStore(p.name);
-        if (!store.exists(link.targetLevel())) return true;
+
+        // Read the destination through the run, so a level this run has already
+        // been in comes back as it was left rather than as it was authored.
+        // Falls back to a plain store when there is no run (there always is
+        // one offline, and door travel is offline-only, but the null check is
+        // what stops this from being the one path that assumes otherwise).
+        Level destination = run != null ? run.level(link.targetLevel()) : null;
+        if (destination == null) {
+            LevelStore store = authoredLevels();
+            if (!store.exists(link.targetLevel())) return true;
+            destination = store.load(link.targetLevel());
+        }
+
+        // …and write the level being left *before* reading the next one. This
+        // one ordering is the difference between a game type of linked levels
+        // being one continuous world and being a set of rooms that reset: the
+        // departing level's only copy is the one in memory, and the line below
+        // used to overwrite it.
+        saveDepartingLevel();
+
         ctx.sound(SoundKeys.door("open"));
-        level = store.load(link.targetLevel());
+        level = destination;
+        if (run != null) run.adopt(level);
         // The destination's own toggles (and so its tile/player sizes) apply
         // before anything is built against them.
         ctx.applyLevelSettings(level.settings);
@@ -996,8 +1209,12 @@ public class PlayScene extends AbstractScene {
             inventory.add(key, count);
             stats.add("items_picked_up", count);
             itemSound(key, "pickup", "pickup");
+            if (run != null) run.markDirty();
         });
         ruleEngine = new StatRuleEngine(List.copyOf(level.statRules));
+        // The counters carried across; the fire counts have to as well, or every
+        // one-shot reward in this level is armed again by the walk back into it.
+        if (run != null) run.restoreFired(level.name, ruleEngine);
         cutscenes = new CutsceneDirector(level.cutscenes);
         me.x = level.spawnX;
         me.y = level.spawnY;
@@ -1018,7 +1235,28 @@ public class PlayScene extends AbstractScene {
         ctx.sound(SoundKeys.door("travel"));
         ctx.sound(SoundKeys.player("door_enter"));
         ctx.sound(SoundKeys.world("level_load"));
+        // A door is a chapter break, and a good moment to have written: the
+        // screen is changing level anyway, so the cost hides where a hitch
+        // mid-fight would not.
+        autosave();
         return true;
+    }
+
+    /**
+     * Write the level being left into the run, together with the fire counts
+     * that belong to it, so both are still true when the player comes back.
+     *
+     * <p>Only the record is touched here — the bytes go out with the next save,
+     * which for door travel is the {@link #autosave()} a few lines later.
+     */
+    private void saveDepartingLevel() {
+        if (run == null || level == null) return;
+        run.rememberFired(level.name, ruleEngine);
+        run.capture(profile().name, level, me, inventory, stats, timeOfDay());
+        // The level's own copy has to go out now rather than at the next
+        // autosave: in a moment `level` will be a different object and this
+        // one's changes will have nowhere left to be read from.
+        run.saveAsync(level);
     }
 
     /**
@@ -1053,6 +1291,12 @@ public class PlayScene extends AbstractScene {
                     containerPanel = new ContainerPanel(level, pc + dc, pr + dr,
                             b.displayName(),
                             world != null ? world.itemTypes : ItemRegistry.standard());
+                    // A chest's contents live in level.containers, which is not
+                    // terrain and so does not move the level's revision counter.
+                    // Opening one is the moment to say so: the panel edits the
+                    // level directly, and by the time it closes there is no
+                    // record of whether anything moved.
+                    if (run != null) run.markLevelDirty(level.name);
                     showInventory = true;
                     cursorSlot = -1;
                     ctx.sfx(Sfx.CLICK);
@@ -2062,6 +2306,14 @@ public class PlayScene extends AbstractScene {
     }
 
     private void updatePaused(double dt, InputManager input) {
+        // The quit confirmation goes first: while it is up it is the only thing
+        // that can be answered, because everything it is asking about is
+        // waiting on the answer.
+        if (confirmQuit) {
+            if (KeyBinds.pressed(input, GameAction.MENU_BACK)) confirmQuit = false;
+            else confirmQuitForm().update(dt, input);
+            return;
+        }
         // The controls sheet sits over the pause menu rather than replacing the
         // scene, so rebinding mid-level costs neither the level nor the session.
         if (bindsForm != null) {
@@ -2069,6 +2321,16 @@ public class PlayScene extends AbstractScene {
                 bindsForm = null;
             } else {
                 bindsForm.update(dt, input);
+            }
+            return;
+        }
+        // The options sheet, over the pause menu for the same reason: turning
+        // the music down should not cost you the level you are standing in.
+        if (optionsForm != null) {
+            if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
+                optionsForm = null;
+            } else {
+                optionsForm.update(dt, input);
             }
             return;
         }
@@ -2594,6 +2856,12 @@ public class PlayScene extends AbstractScene {
 
     private void openPause() {
         paused = true;
+        // Any sheet from the last time this menu was open starts closed: a
+        // pause that opens straight into "you have unsaved progress" is asking
+        // a question nobody just asked for.
+        confirmQuit = false;
+        bindsForm = null;
+        optionsForm = null;
         if (pauseForm == null) buildPauseForm();
         // Online, the server keeps applying the held input command — send an
         // idle one so the player doesn't keep walking (or mining) while the
@@ -2607,6 +2875,8 @@ public class PlayScene extends AbstractScene {
     private void resume() {
         paused = false;
         bindsForm = null;
+        optionsForm = null;
+        confirmQuit = false;
         syncCameraFromProfile();
     }
 
@@ -2632,15 +2902,28 @@ public class PlayScene extends AbstractScene {
             // Settings, not here — the pause menu stays simple.
             pauseForm.addAction("Resume", this::resume);
             pauseForm.addAction("Controls (Key Binds)", this::openKeyBinds);
-            pauseForm.addAction("Save Level", this::saveLevel);
+            pauseForm.addAction("Options", this::openOptions);
+            pauseForm.addAction("Save Run", this::saveRun);
+            pauseForm.addAction("Save and Quit", () -> {
+                saveRun();
+                quitToMenu();
+            });
             pauseForm.addAction("Edit in Creative",
                             () -> scenes.transitionTo("creative"))
                     .enabledWhen(() -> p.creativeEnabled);
-            pauseForm.addAction("Quit to Menu", () -> scenes.transitionTo("menu"));
+            // Quitting without saving is still allowed — it is just no longer
+            // silent. A menu click that throws away an hour with no word about
+            // it is the one thing this menu could do that a player could not
+            // undo or even notice until it was too late.
+            pauseForm.addAction("Quit to Menu", () -> {
+                if (run != null && run.dirty()) confirmQuit = true;
+                else quitToMenu();
+            });
         } else {
             // Online the server owns the world.
             pauseForm.addAction("Resume", this::resume);
             pauseForm.addAction("Controls (Key Binds)", this::openKeyBinds);
+            pauseForm.addAction("Options", this::openOptions);
             pauseForm.addAction("Edit in Creative",
                             () -> scenes.transitionTo("creative"))
                     .enabledWhen(() -> p.creativeEnabled);
@@ -2655,21 +2938,125 @@ public class PlayScene extends AbstractScene {
     }
 
     /**
-     * Save the current level — its terrain, entities, and the settings it's
-     * playing with — into the game type's folder, so this play state reloads
-     * next time. Its feature toggles are edited elsewhere (Load Level → Edit
-     * Settings); here we just persist them alongside the world as-is.
+     * Open the options sheet over the pause menu: volume, look sensitivity,
+     * invert-Y and HUD size. Applied live and saved to the player's own file as
+     * each row changes, so a level never carries the result — see
+     * {@link PlayerSettings}.
      */
-    private void saveLevel() {
+    private void openOptions() {
+        optionsForm = PlayerOptionsForm.forActiveSettings(
+                ctx::applyPlayerSettings, () -> optionsForm = null);
+    }
+
+    /**
+     * The sheet a dirty quit puts up: save and go, go anyway, or think better
+     * of it. Built lazily like the others, and named after the thing at stake
+     * rather than after the button that was pressed.
+     */
+    private ConfigForm confirmQuitForm() {
+        if (confirmQuitForm == null) {
+            confirmQuitForm = new ConfigForm("Unsaved progress").theme(MenuTheme.dark());
+            confirmQuitForm.addNote("This run has changes that are not on disk yet.");
+            confirmQuitForm.addAction("Save and Quit", () -> {
+                saveRun();
+                confirmQuit = false;
+                quitToMenu();
+            });
+            confirmQuitForm.addAction("Quit without Saving", () -> {
+                confirmQuit = false;
+                quitToMenu();
+            });
+            confirmQuitForm.addAction("Back", () -> confirmQuit = false);
+        }
+        return confirmQuitForm;
+    }
+
+    /** Leave for the launch menu, releasing the run's writer thread. */
+    private void quitToMenu() {
+        closeRun();
+        scenes.transitionTo("menu");
+    }
+
+    /**
+     * Save the run: the player — health, position, what they are carrying, what
+     * they have done — and every level this run has changed, into its own slot.
+     *
+     * <p><b>This used to be <em>Save Level</em>, and it saved the wrong noun.</b>
+     * It wrote the level, which is a complete and correct save of everything
+     * except the person playing, and it wrote it back over the level's
+     * <em>authored</em> file — so pressing it preserved the mountain you dug
+     * and lost the diamonds you dug out of it, while quietly editing the level
+     * for every future run. Both halves of that are fixed by writing a
+     * {@link RunSession} instead: the player is in the record, and the world
+     * goes in the slot, next to it.
+     */
+    private void saveRun() {
+        if (run == null) {
+            ruleStatus = "Nothing to save — the server owns this world";
+            ruleStatusTime = 3.0;
+            return;
+        }
         GameProfile p = profile();
         p.normalize();
+        // The level still carries the toggles it is being played with, as it
+        // always did; what changed is which file that copy of the level is.
         level.captureSettings(p);
-        LevelStore store = new LevelStore(p.name);
-        Path file = store.save(level);
-        p.lastLevelPath = file.toString();
+        run.capture(p.name, level, me, inventory, stats, timeOfDay());
+        run.rememberFired(level.name, ruleEngine);
+        run.markLevelDirty(level.name); // an explicit save writes, revision or not
+        run.saveNow(level);             // synchronous: the player asked, and is watching
         ctx.save();
-        ruleStatus = "Saved level \"" + level.name + "\"";
+        ruleStatus = "Saved — " + level.name + " · "
+                + RunRecord.formatPlayTime(run.record().playSeconds);
         ruleStatusTime = 3.0;
+    }
+
+    /**
+     * Write the run in the background, if anything has happened. The quiet
+     * counterpart of {@link #saveRun()}: no message, no waiting, and nothing at
+     * all when the run is clean.
+     */
+    private void autosave() {
+        if (run == null || level == null) return;
+        // Profiled like every other stage, because the part of a save that
+        // happens on this thread — the snapshot — is the part that can cost a
+        // frame, and a cost that does not appear in the report is a cost
+        // nobody can attribute. It shows up beside `update` and `scene` in the
+        // same `[F3]` breakdown. The stringify and the file write are on the
+        // writer thread and are deliberately *not* in this measurement, which
+        // is the point of them being there.
+        phase("autosave", () -> {
+            run.capture(profile().name, level, me, inventory, stats, timeOfDay());
+            run.rememberFired(level.name, ruleEngine);
+            run.saveAsync(level);
+        });
+    }
+
+    /**
+     * Advance the run's clock and let the periodic autosave fire.
+     *
+     * <p><b>What counts as "something has happened".</b> The obvious answer —
+     * mark the run dirty on every frame it is being played — makes the quit
+     * prompt appear one frame after a save, which teaches a player to ignore
+     * it. The events that already exist mark themselves (a block changed, a
+     * reward fired, a chest was opened, a death); movement is the one that has
+     * no event, so it is measured instead, against the position the last save
+     * actually wrote. A tile of travel is the threshold because it is the
+     * smallest move worth reloading into.
+     */
+    private void tickRun(double dt) {
+        if (run == null) return;
+        run.tick(dt);
+        RunRecord saved = run.record();
+        if (Math.abs(me.x - saved.x) > ts() || Math.abs(me.y - saved.y) > ts()) {
+            run.markDirty();
+        }
+        // Every terrain edit — mined, placed, or made by the simulation itself
+        // (a bomb crater, water finding a new cell) — is already counted by the
+        // level, so asking it is cheaper and more complete than instrumenting
+        // each of the places one can happen.
+        if (run.levelNeedsWrite(level)) run.markDirty();
+        if (run.autosaveDue()) autosave();
     }
 
     private void drawPauseOverlay(DrawTarget target) {
@@ -2677,6 +3064,16 @@ public class PlayScene extends AbstractScene {
         target.fillRect(0, 0, viewportWidth, viewportHeight, PAUSE_SCRIM);
         target.popAlpha();
 
+        if (confirmQuit) {
+            confirmQuitForm().render(target, viewportWidth, viewportHeight);
+            return;
+        }
+        if (optionsForm != null) {
+            optionsForm.render(target, viewportWidth, viewportHeight);
+            target.drawText(PlayerOptionsForm.HINT, 24, viewportHeight - 24, HUD_FONT,
+                    SceneChrome.HINT);
+            return;
+        }
         if (bindsForm != null) {
             bindsForm.render(target, viewportWidth, viewportHeight);
             if (bindsForm.isCapturing()) {
@@ -2820,8 +3217,36 @@ public class PlayScene extends AbstractScene {
     /** How fast the look keys turn the eye, radians per second. */
     private static final double LOOK_KEY_SPEED = Math.toRadians(120);
 
-    /** Radians of turn per pixel of pointer movement. */
+    /**
+     * Radians of turn per pixel of pointer movement, at 100% sensitivity. The
+     * player's own multiplier rides on top of it — see {@link #lookStep()}.
+     */
     private static final double LOOK_SENSITIVITY = Math.toRadians(0.22);
+
+    /**
+     * Turn per pixel for this player: the engine's base rate scaled by their
+     * saved sensitivity.
+     *
+     * <p>Read every frame rather than cached, because the options form edits
+     * {@link PlayerSettings#active()} in place and a sensitivity slider that
+     * only takes effect after a level reload is a slider nobody can tune.
+     */
+    private static double lookStep() {
+        return LOOK_SENSITIVITY * PlayerSettings.active().lookSensitivity;
+    }
+
+    /**
+     * Which way a downward pointer movement takes the eye: {@code -1} looks up
+     * (the flight-stick convention), {@code +1} looks down.
+     *
+     * <p>Worth a setting rather than a constant because for a substantial
+     * number of people an uninvertible Y axis does not mean the mouse feels
+     * wrong — it means the {@code [F5]} views are unusable, and a whole third
+     * of the engine's cameras may as well not exist.
+     */
+    private static double lookPitchSign() {
+        return PlayerSettings.active().invertLook ? 1 : -1;
+    }
 
     /**
      * The fraction of the window at each edge that keeps turning the view while
@@ -2850,10 +3275,11 @@ public class PlayScene extends AbstractScene {
      */
     private void steerLook(InputManager input, double dt) {
         int mx = input.getMouseX(), my = input.getMouseY();
+        double step = lookStep(), pitchSign = lookPitchSign();
         if (lookFromX >= 0) {
             if (mx != lookFromX || my != lookFromY) pointerMoved = true;
-            lookYaw += (mx - lookFromX) * LOOK_SENSITIVITY;
-            lookPitch -= (my - lookFromY) * LOOK_SENSITIVITY;
+            lookYaw += (mx - lookFromX) * step;
+            lookPitch += (my - lookFromY) * step * pitchSign;
         }
         lookFromX = mx;
         lookFromY = my;
@@ -2868,11 +3294,19 @@ public class PlayScene extends AbstractScene {
         if (pointerMoved) {
             if (mx < marginX) lookYaw -= edgePush(marginX - mx, marginX) * dt;
             else if (mx > w - marginX) lookYaw += edgePush(mx - (w - marginX), marginX) * dt;
-            if (my < marginY) lookPitch += edgePush(marginY - my, marginY) * dt;
-            else if (my > h - marginY) lookPitch -= edgePush(my - (h - marginY), marginY) * dt;
+            // Inverted the same way the drag is: resting against an edge is the
+            // same gesture as moving toward it, so the two must agree or the
+            // view reverses direction as the pointer crosses the margin.
+            double edgeSign = -pitchSign;
+            if (my < marginY) lookPitch += edgeSign * edgePush(marginY - my, marginY) * dt;
+            else if (my > h - marginY) {
+                lookPitch -= edgeSign * edgePush(my - (h - marginY), marginY) * dt;
+            }
         }
 
-        // The keys, for anyone who would rather not steer with the mouse.
+        // The keys, for anyone who would rather not steer with the mouse. Not
+        // inverted with the mouse: "Look Up" is a named action, and a key that
+        // says up and goes down is a bug in any convention.
         if (KeyBinds.down(input, GameAction.ROTATE_LEFT)) lookYaw -= LOOK_KEY_SPEED * dt;
         if (KeyBinds.down(input, GameAction.ROTATE_RIGHT)) lookYaw += LOOK_KEY_SPEED * dt;
         if (KeyBinds.down(input, GameAction.LOOK_UP)) lookPitch += LOOK_KEY_SPEED * dt;
@@ -3846,8 +4280,44 @@ public class PlayScene extends AbstractScene {
         }
     }
 
+    // --- HUD scale ---------------------------------------------------------
+    // Every HUD dimension below used to be a literal against a pixel viewport,
+    // which is legible at 720p and unreadable at 4K. These two helpers put the
+    // player's hudScale in front of the literals rather than re-deriving each
+    // one, so the numbers still read as the sizes they are.
+    //
+    // At the default scale of 1.0 both are the identity — Math.round(n * 1.0)
+    // is n — which is what lets the golden frames keep asserting the exact
+    // pixels they always did.
+
+    /** A HUD dimension in pixels, scaled by the player's HUD size setting. */
+    private int hud(int px) {
+        double scale = PlayerSettings.active().hudScale;
+        return scale == 1.0 ? px : (int) Math.round(px * scale);
+    }
+
+    /**
+     * {@code base} at the player's HUD size. Cached per (font, scale) rather
+     * than derived per call: the glyph atlas keys on the font instance, so
+     * handing the renderer a freshly-built-but-equal font every frame would
+     * turn every string in the HUD into an atlas miss.
+     */
+    private Font hudFont(Font base) {
+        double scale = PlayerSettings.active().hudScale;
+        if (scale == 1.0) return base;
+        if (scale != scaledFontScale) {
+            scaledFonts.clear();
+            scaledFontScale = scale;
+        }
+        return scaledFonts.computeIfAbsent(base, f ->
+                f.deriveFont((float) Math.max(1, Math.round(f.getSize() * scale))));
+    }
+
+    private final Map<Font, Font> scaledFonts = new HashMap<>();
+    private double scaledFontScale = 1.0;
+
     private void drawHud(DrawTarget target) {
-        target.fillRect(0, 0, viewportWidth, 38, new Color(0, 0, 0, 150));
+        target.fillRect(0, 0, viewportWidth, hud(38), new Color(0, 0, 0, 150));
         StringBuilder hud = new StringBuilder();
         // Naming where up points says which physics this level is running —
         // the formats differ in more than how they are drawn.
@@ -3880,25 +4350,25 @@ public class PlayScene extends AbstractScene {
         if (Ultimates.of(me) != null) {
             hud.append("  [").append(KeyBinds.label(GameAction.ULTIMATE)).append("] ultimate");
         }
-        target.drawText(hud.toString(), 12, 24, HUD_FONT, Color.WHITE);
+        target.drawText(hud.toString(), hud(12), hud(24), hudFont(HUD_FONT), Color.WHITE);
     }
 
     private void drawHealthBar(DrawTarget target) {
-        int w = 180, h = 14;
-        int x = 12, y = viewportHeight - 28;
+        int w = hud(180), h = hud(14);
+        int x = hud(12), y = viewportHeight - hud(28);
         target.fillRoundRect(x - 2, y - 2, w + 4, h + 4, 6, 6, new Color(0, 0, 0, 160));
         target.fillRect(x, y, w, h, new Color(120, 30, 30));
         target.fillRect(x, y, (int) (w * Math.max(0, me.health / me.maxHealth)), h,
                 new Color(220, 60, 60));
-        target.drawText((int) Math.ceil(me.health) + " / " + (int) me.maxHealth, x + w / 2 - 20,
-                y + 11, SMALL_FONT, Color.WHITE);
+        target.drawText((int) Math.ceil(me.health) + " / " + (int) me.maxHealth,
+                x + w / 2 - hud(20), y + hud(11), hudFont(SMALL_FONT), Color.WHITE);
     }
 
     private void drawHotbar(DrawTarget target) {
-        int slot = 44, pad = 5;
+        int slot = hud(44), pad = hud(5);
         int total = Inventory.HOTBAR * (slot + pad) - pad;
         int x0 = (viewportWidth - total) / 2;
-        int y0 = viewportHeight - slot - 10;
+        int y0 = viewportHeight - slot - hud(10);
         for (int i = 0; i < Inventory.HOTBAR; i++) {
             int x = x0 + i * (slot + pad);
             boolean sel = inventory.selectedIndex() == i;
@@ -3906,8 +4376,8 @@ public class PlayScene extends AbstractScene {
             target.drawRoundRect(x, y0, slot, slot, 8, 8,
                     sel ? new Color(255, 220, 120) : new Color(255, 255, 255, 70), sel ? 2.5f : 1f);
             drawStack(target, inventory.slot(i), x, y0, slot);
-            target.drawText(String.valueOf(i + 1), x + 4, y0 + 12, SMALL_FONT,
-                    new Color(255, 255, 255, 130));
+            target.drawText(String.valueOf(i + 1), x + hud(4), y0 + hud(12),
+                    hudFont(SMALL_FONT), new Color(255, 255, 255, 130));
         }
         drawSelectedItemName(target, inventory.selectedDef(), y0);
     }
@@ -3915,10 +4385,11 @@ public class PlayScene extends AbstractScene {
     /** The selected hotbar item's name, floated above the bar in its rarity colour. */
     private void drawSelectedItemName(DrawTarget target, ItemDef def, int hotbarTop) {
         if (def == null) return;
-        int tw = target.textWidth(def.name(), HUD_FONT);
-        int x = (viewportWidth - tw) / 2, y = hotbarTop - 10;
-        target.fillRoundRect(x - 8, y - 14, tw + 16, 20, 8, 8, new Color(0, 0, 0, 160));
-        target.drawText(def.name(), x, y, HUD_FONT, def.rarity().color);
+        Font font = hudFont(HUD_FONT);
+        int tw = target.textWidth(def.name(), font);
+        int x = (viewportWidth - tw) / 2, y = hotbarTop - hud(10);
+        target.fillRoundRect(x - 8, y - hud(14), tw + 16, hud(20), 8, 8, new Color(0, 0, 0, 160));
+        target.drawText(def.name(), x, y, font, def.rarity().color);
     }
 
     // Inventory panel geometry, shared by rendering and mouse hit-testing.

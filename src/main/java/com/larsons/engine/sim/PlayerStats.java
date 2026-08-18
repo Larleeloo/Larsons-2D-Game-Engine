@@ -64,4 +64,22 @@ public final class PlayerStats {
     public void reset() {
         counters.clear();
     }
+
+    /**
+     * Replace every counter from saved data (see
+     * {@link com.larsons.engine.save.RunRecord}). Counters are open-ended by
+     * design, so a save written by a build that tracked something this one does
+     * not is carried through untouched rather than dropped — the rule that
+     * lets custom content invent a stat without touching this class applies
+     * just as much to reading one back.
+     */
+    public void restore(Map<String, ?> saved) {
+        counters.clear();
+        if (saved == null) return;
+        for (Map.Entry<String, ?> e : saved.entrySet()) {
+            if (e.getKey() != null && e.getValue() instanceof Number n) {
+                counters.put(e.getKey(), n.doubleValue());
+            }
+        }
+    }
 }

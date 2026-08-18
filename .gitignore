@@ -54,3 +54,7 @@ bin/
 # not part of the source tree.
 /src/main/resources/config/render.json
 /src/main/resources/config/keybinds.json
+# The player's own settings and their save files: like the key binds above,
+# these belong to whoever is running this copy of the game, not to the repo.
+/src/main/resources/config/player.json
+/src/main/resources/saves/

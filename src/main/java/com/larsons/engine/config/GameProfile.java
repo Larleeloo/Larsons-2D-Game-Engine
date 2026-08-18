@@ -110,9 +110,10 @@ public class GameProfile {
     // drop-in sound pack; these are the settings that apply to all of them at
     // once (see com.larsons.engine.audio.Sounds).
     public boolean musicEnabled = true;       // level music, separate from effects
-    public double masterVolume = 1.0;         // everything, 0..1
-    public double sfxVolume = 1.0;            // sound effects, 0..1
-    public double musicVolume = 0.6;          // music, 0..1
+    // Volume is NOT here. It is a property of the person playing, so it lives
+    // in PlayerSettings (config/player.json) beside the key binds, and no level
+    // file carries it. Whether a level has music at all is the creator's call
+    // (musicEnabled, above); how loud it is on your machine is yours.
     /**
      * Whether every sound plays at a slightly different pitch each time — the
      * trick that keeps a run of footsteps or block breaks from sounding like a
@@ -211,9 +212,6 @@ public class GameProfile {
         m.put("particlesEnabled", particlesEnabled);
         m.put("audioEnabled", audioEnabled);
         m.put("musicEnabled", musicEnabled);
-        m.put("masterVolume", masterVolume);
-        m.put("sfxVolume", sfxVolume);
-        m.put("musicVolume", musicVolume);
         m.put("soundPitchVariation", soundPitchVariation);
         m.put("lastLevelPath", lastLevelPath);
         m.put("finalized", finalized);
@@ -312,9 +310,6 @@ public class GameProfile {
         particlesEnabled = s.particlesEnabled;
         audioEnabled = s.audioEnabled;
         musicEnabled = s.musicEnabled;
-        masterVolume = s.masterVolume;
-        sfxVolume = s.sfxVolume;
-        musicVolume = s.musicVolume;
         soundPitchVariation = s.soundPitchVariation;
         tileSize = s.tileSize;
         playerSize = s.playerSize;
@@ -370,9 +365,11 @@ public class GameProfile {
         p.particlesEnabled = bool(m, "particlesEnabled", p.particlesEnabled);
         p.audioEnabled = bool(m, "audioEnabled", p.audioEnabled);
         p.musicEnabled = bool(m, "musicEnabled", p.musicEnabled);
-        p.masterVolume = dbl(m, "masterVolume", p.masterVolume);
-        p.sfxVolume = dbl(m, "sfxVolume", p.sfxVolume);
-        p.musicVolume = dbl(m, "musicVolume", p.musicVolume);
+        // "masterVolume"/"sfxVolume"/"musicVolume" are deliberately not read.
+        // Level and game-type files written before volume moved to
+        // PlayerSettings still carry those keys; ignoring them is what stops an
+        // old file from reaching into a player's mix. Unknown keys have always
+        // been skipped here, so no migration is needed and no file breaks.
         p.soundPitchVariation = bool(m, "soundPitchVariation", p.soundPitchVariation);
         p.lastLevelPath = str(m, "lastLevelPath", p.lastLevelPath);
         p.finalized = bool(m, "finalized", p.finalized);
@@ -408,9 +405,6 @@ public class GameProfile {
         shaderPixelSize = Math.max(1, Math.min(64, shaderPixelSize));
         nightDarkness = Math.max(0.0, Math.min(1.0, nightDarkness));
         ambientLight = Math.max(0.0, Math.min(1.0, ambientLight));
-        masterVolume = Math.max(0.0, Math.min(1.0, masterVolume));
-        sfxVolume = Math.max(0.0, Math.min(1.0, sfxVolume));
-        musicVolume = Math.max(0.0, Math.min(1.0, musicVolume));
         if (lastLevelPath == null) lastLevelPath = "";
         if (texturePackDir == null) texturePackDir = "";
         if (soundPackDir == null) soundPackDir = "";

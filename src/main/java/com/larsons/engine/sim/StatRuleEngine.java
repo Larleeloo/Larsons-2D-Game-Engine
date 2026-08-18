@@ -9,8 +9,21 @@ import java.util.List;
 /**
  * Evaluates a level's {@link StatRule}s against the run's
  * {@link PlayerStats} each tick, firing rewards/consumptions as thresholds
- * are crossed. One engine instance per run — it owns the per-rule "how many
- * times has this fired" state, so re-entering a level starts fresh.
+ * are crossed.
+ *
+ * <p><b>The fire counts belong to the run, not to this object.</b> One engine
+ * exists per level being played, and a level is entered and left many times in
+ * one run — every door transition builds a new one. The counts therefore have
+ * to outlive it, and {@link com.larsons.engine.save.RunRecord} is what holds
+ * them, keyed by level, restored through {@link #restore(int[])} whenever a
+ * level is entered again.
+ *
+ * <p>That indirection is not decoration. When these counts started at zero on
+ * every entry while {@link PlayerStats} carried on accumulating, a one-shot
+ * rule fired again on every return: "mine 50 blocks → take a diamond" paid out
+ * once, and then once more each time the player stepped through a door and
+ * back, forever. Two halves of one mechanism with two different lifetimes is
+ * the whole of that bug.
  *
  * <p>Firing semantics:
  * <ul>
@@ -76,5 +89,31 @@ public final class StatRuleEngine {
     public int firedCount(StatRule rule) {
         int idx = rules.indexOf(rule);
         return idx < 0 ? 0 : fired[idx];
+    }
+
+    /**
+     * The fire counts, in rule order, for the run to keep while this level is
+     * not the one being played.
+     */
+    public int[] firedCounts() {
+        return fired.clone();
+    }
+
+    /**
+     * Put saved counts back, as far as they line up with the rules this level
+     * actually has.
+     *
+     * <p>Deliberately tolerant of a length mismatch rather than strict about
+     * it: a level whose author added or removed a rule since the save was
+     * written is an ordinary thing to open, and the honest answer for the rules
+     * that still line up is their saved count. The alternative — refusing the
+     * whole array — would silently re-arm every one-shot reward in the level,
+     * which is precisely the failure this method exists to prevent.
+     */
+    public void restore(int[] counts) {
+        if (counts == null) return;
+        for (int i = 0; i < fired.length && i < counts.length; i++) {
+            fired[i] = Math.max(0, counts[i]);
+        }
     }
 }

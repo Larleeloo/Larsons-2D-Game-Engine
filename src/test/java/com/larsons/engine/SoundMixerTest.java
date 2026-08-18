@@ -181,6 +181,12 @@ class SoundMixerTest {
     /**
      * The game type's audio settings really reach the sound system, so a
      * creator's choices apply to their game rather than sitting in a file.
+     *
+     * <p>Volume is <em>not</em> among those choices any more — it belongs to
+     * the person playing and lives in {@link com.larsons.engine.config.PlayerSettings}
+     * (see {@code PlayerSettingsTest}). What a game type still decides is which
+     * pack the sounds come from, whether there is music at all, and whether
+     * every play drifts in pitch.
      */
     @Test
     void theProfilePushesItsSettingsIntoTheSoundSystem(@TempDir Path dir) throws IOException {
@@ -189,9 +195,6 @@ class SoundMixerTest {
         p.soundPackDir = dir.toString();
         p.audioEnabled = true;
         p.musicEnabled = false;
-        p.masterVolume = 0.5;
-        p.sfxVolume = 0.25;
-        p.musicVolume = 0.75;
         p.soundPitchVariation = false;
 
         GameContext ctx = new GameContext(null, new GameTypeStore(dir.toString()));
@@ -199,9 +202,6 @@ class SoundMixerTest {
 
         assertEquals(dir.toAbsolutePath(), SoundPack.root().toAbsolutePath(),
                 "the profile's pack folder should be the one in use");
-        assertEquals(0.5, Sounds.masterVolume(), 1e-9);
-        assertEquals(0.25, Sounds.sfxVolume(), 1e-9);
-        assertEquals(0.75, Sounds.musicVolume(), 1e-9);
         assertFalse(Sounds.isMusicEnabled());
         assertFalse(Sounds.pitchVariation());
 
@@ -210,22 +210,6 @@ class SoundMixerTest {
         assertEquals(dir.toString(), copy.soundPackDir);
         assertFalse(copy.musicEnabled);
         assertFalse(copy.soundPitchVariation);
-        assertEquals(0.5, copy.masterVolume, 1e-9);
-        assertEquals(0.25, copy.sfxVolume, 1e-9);
-        assertEquals(0.75, copy.musicVolume, 1e-9);
-    }
-
-    /** Volumes are clamped to 0..1 whatever a hand-edited file says. */
-    @Test
-    void volumesAreClamped() {
-        GameProfile p = new GameProfile();
-        p.masterVolume = 4;
-        p.sfxVolume = -2;
-        p.musicVolume = 1.5;
-        p.normalize();
-        assertEquals(1.0, p.masterVolume, 1e-9);
-        assertEquals(0.0, p.sfxVolume, 1e-9);
-        assertEquals(1.0, p.musicVolume, 1e-9);
     }
 
     /** Turning sound off silences everything without any call site changing. */
