@@ -66,6 +66,7 @@ import com.larsons.engine.level.DoorDirectory;
 import com.larsons.engine.level.DoorLink;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelLoader;
+import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelStore;
 import com.larsons.engine.save.RunRecord;
 import com.larsons.engine.save.RunSession;
@@ -100,6 +101,7 @@ import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -415,6 +417,11 @@ public class PlayScene extends AbstractScene {
     PlayerStats runStats() { return stats; }
 
     RunSession runSession() { return run; }
+
+    ConfigForm pauseFormForTest() {
+        if (pauseForm == null) buildPauseForm();
+        return pauseForm;
+    }
 
     private GameProfile profile() { return ctx.profile(); }
 
@@ -2894,23 +2901,43 @@ public class PlayScene extends AbstractScene {
         scenes.transitionTo("menu");
     }
 
+    /**
+     * The pause menu's actions.
+     *
+     * <p>Grouped rather than listed: what you came here to do (resume, save),
+     * then what you came here to change (options, controls), then how you
+     * leave. The title is left off because {@link PauseScreen} draws a header
+     * with the level and the save state in it, and two titles is one too many.
+     *
+     * <p>A level's feature toggles are still edited in <em>Load Level → Edit
+     * Settings</em> rather than here: those belong to the level and outlive the
+     * session, and a pause menu that quietly rewrites the level being played is
+     * how this engine used to lose people's work.
+     */
     private void buildPauseForm() {
         GameProfile p = profile();
-        pauseForm = new ConfigForm("Paused — " + p.name).theme(MenuTheme.dark());
+        pauseForm = new ConfigForm("Paused").theme(MenuTheme.dark()).rowHeight(40);
+        pauseForm.addAction("Resume", this::resume);
+
         if (net == null) {
-            // A level's feature toggles are edited in Load Level → Edit
-            // Settings, not here — the pause menu stays simple.
-            pauseForm.addAction("Resume", this::resume);
-            pauseForm.addAction("Controls (Key Binds)", this::openKeyBinds);
-            pauseForm.addAction("Options", this::openOptions);
-            pauseForm.addAction("Save Run", this::saveRun);
+            // Greyed out rather than hidden when there is nothing to save: an
+            // entry that appears and disappears teaches nobody where it lives.
+            pauseForm.addAction("Save Run", this::saveRun)
+                    .enabledWhen(() -> run != null);
             pauseForm.addAction("Save and Quit", () -> {
                 saveRun();
                 quitToMenu();
-            });
-            pauseForm.addAction("Edit in Creative",
-                            () -> scenes.transitionTo("creative"))
-                    .enabledWhen(() -> p.creativeEnabled);
+            }).enabledWhen(() -> run != null);
+        }
+
+        pauseForm.addNote("");
+        pauseForm.addAction("Options", this::openOptions);
+        pauseForm.addAction("Controls", this::openKeyBinds);
+        pauseForm.addAction("Edit in Creative", () -> scenes.transitionTo("creative"))
+                .enabledWhen(() -> p.creativeEnabled);
+
+        pauseForm.addNote("");
+        if (net == null) {
             // Quitting without saving is still allowed — it is just no longer
             // silent. A menu click that throws away an hour with no word about
             // it is the one thing this menu could do that a player could not
@@ -2920,13 +2947,8 @@ public class PlayScene extends AbstractScene {
                 else quitToMenu();
             });
         } else {
-            // Online the server owns the world.
-            pauseForm.addAction("Resume", this::resume);
-            pauseForm.addAction("Controls (Key Binds)", this::openKeyBinds);
-            pauseForm.addAction("Options", this::openOptions);
-            pauseForm.addAction("Edit in Creative",
-                            () -> scenes.transitionTo("creative"))
-                    .enabledWhen(() -> p.creativeEnabled);
+            // Online the server owns the world, so there is nothing here to
+            // save and no version of leaving that keeps it.
             pauseForm.addAction(net.isHost() ? "Stop Server & Quit" : "Disconnect & Quit",
                     this::leaveSession);
         }
@@ -3059,10 +3081,122 @@ public class PlayScene extends AbstractScene {
         if (run.autosaveDue()) autosave();
     }
 
+    /**
+     * Read this frame's run into the shape the pause screen draws.
+     *
+     * <p>Taken fresh every frame rather than once when the menu opens: online
+     * the world keeps running while a player is paused, so ping, player count
+     * and health are live numbers, and offline an autosave can land while the
+     * menu is up — a save chip that still says "unsaved changes" a minute after
+     * it saved is worse than no chip at all.
+     */
+    PauseScreen.Status pauseStatus() {
+        GameProfile p = profile();
+        PauseScreen.Status s = new PauseScreen.Status();
+        s.gameType = p.name;
+        s.levelName = level == null ? "" : level.name;
+        s.characterName = character == null ? "" : character.name;
+        Ultimate ult = Ultimates.of(me);
+        s.ultimateName = ult == null ? "" : ult.name();
+        // The format's display name rather than the enum constant: "Top-Down",
+        // not "TOP_DOWN". A pause screen is player-facing.
+        s.world = camera == null ? ""
+                : LevelFormat.of(camera.getPerspective()).displayName() + " · up is "
+                        + PerspectiveSpace.of(camera.getPerspective()).upLabel();
+        s.viewpoint = hasElevation() ? viewpoint.label() : "";
+
+        s.health = me.health;
+        s.maxHealth = me.maxHealth;
+        s.mana = me.mana;
+        s.maxMana = me.maxMana;
+        s.stamina = me.stamina;
+        s.maxStamina = me.maxStamina;
+        s.ultCharge = me.ultCharge;
+
+        // The clock is only worth naming when the level actually runs one;
+        // otherwise "Dawn" is a reading of a number nothing moves.
+        s.timeOfDay = p.dayNightCycle ? timeOfDay() : -1;
+
+        if (stats != null) s.stats = stats.all();
+        s.objectives = objectives();
+        s.keyHints = pauseKeyHints();
+
+        if (net != null) {
+            s.online = true;
+            Snapshot snap = net.client().latest();
+            s.players = snap != null ? snap.players().size() : 1;
+            s.ping = net.client().pingMillis();
+            s.host = net.isHost();
+            if (s.host && net.hostedServer() != null) s.port = net.hostedServer().getPort();
+        } else if (run != null) {
+            s.slot = run.store().slot();
+            s.playSeconds = run.record().playSeconds;
+            s.savedAt = run.record().savedAt;
+            s.unsaved = run.dirty();
+            s.writing = run.writing();
+        }
+        return s;
+    }
+
+    /**
+     * The level's stat rules as goals: where the player stands against each,
+     * and whether a one-shot has already paid out.
+     *
+     * <p>Every rule, not only the ones whose author ticked "show bar" — that
+     * flag decides what crowds the HUD during play, which is a different
+     * question from what a paused player is allowed to know.
+     */
+    private List<PauseScreen.Objective> objectives() {
+        List<PauseScreen.Objective> out = new ArrayList<>();
+        if (ruleEngine == null || stats == null || level == null) return out;
+        for (StatRule rule : level.statRules) {
+            int fired = ruleEngine.firedCount(rule);
+            boolean done = !rule.repeat() && fired > 0;
+            double target = rule.threshold() * (rule.repeat() ? fired + 1 : 1);
+            String detail = done ? "done"
+                    : (long) stats.get(rule.stat()) + " / " + (long) target
+                            + (fired > 0 ? "  ×" + fired : "");
+            out.add(new PauseScreen.Objective(goalLabel(rule),
+                    detail, ruleEngine.progress(rule, stats), done));
+        }
+        return out;
+    }
+
+    /** "Blocks Mined → 1× diamond", the rule as a sentence about its reward. */
+    private static String goalLabel(StatRule rule) {
+        String label = PlayerStats.label(rule.stat());
+        if (rule.rewardItem() == null) return label;
+        return label + " → " + rule.rewardCount() + "× " + rule.rewardItem();
+    }
+
+    /** The binds worth restating on a screen somebody opened because they were stuck. */
+    private List<String[]> pauseKeyHints() {
+        List<String[]> hints = new ArrayList<>();
+        GameProfile p = profile();
+        hints.add(new String[] {KeyBinds.label(GameAction.JUMP), "Jump"});
+        hints.add(new String[] {KeyBinds.label(GameAction.INTERACT), "Doors, chests, mounts"});
+        if (p.itemsEnabled) {
+            hints.add(new String[] {KeyBinds.label(GameAction.INVENTORY), "Inventory"});
+        }
+        if (Ultimates.of(me) != null) {
+            hints.add(new String[] {KeyBinds.label(GameAction.ULTIMATE), "Ultimate"});
+        }
+        if (hasElevation()) {
+            hints.add(new String[] {KeyBinds.label(GameAction.TOGGLE_VIEW), "First/third person"});
+        }
+        if (p.zoomEnabled) {
+            hints.add(new String[] {KeyBinds.label(GameAction.ZOOM_IN) + "/"
+                    + KeyBinds.label(GameAction.ZOOM_OUT), "Zoom"});
+        }
+        return hints;
+    }
+
     private void drawPauseOverlay(DrawTarget target) {
-        target.pushAlpha(0.82f);
-        target.fillRect(0, 0, viewportWidth, viewportHeight, PAUSE_SCRIM);
-        target.popAlpha();
+        if (confirmQuit || optionsForm != null || bindsForm != null) {
+            target.pushAlpha(0.82f);
+            target.fillRect(0, 0, viewportWidth, viewportHeight, PAUSE_SCRIM);
+            target.popAlpha();
+        }
 
         if (confirmQuit) {
             confirmQuitForm().render(target, viewportWidth, viewportHeight);
@@ -3084,12 +3218,13 @@ public class PlayScene extends AbstractScene {
                     new Color(120, 120, 140));
             return;
         }
-        pauseForm.render(target, viewportWidth, viewportHeight);
+        PauseScreen.render(target, viewportWidth, viewportHeight, pauseForm, pauseStatus());
         target.drawText(net == null
-                        ? "Back to resume · Save Level keeps this world; edit toggles in "
-                                + "Load Level → Edit Settings"
-                        : "Back to resume · game keeps running on the server while paused",
-                24, viewportHeight - 24, HUD_FONT, SceneChrome.HINT);
+                        ? "Esc to resume · the run saves itself at every door, every death, "
+                                + "and every couple of minutes"
+                        : "Esc to resume · the game keeps running on the server while you are "
+                                + "paused",
+                24, viewportHeight - 20, HUD_FONT, SceneChrome.HINT);
     }
 
     private void drawDisconnectOverlay(DrawTarget target) {
