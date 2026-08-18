@@ -88,9 +88,9 @@ package com.larsons.engine.graphics;
  *
  * <p>{@link #pitch()} is how high the camera stands over the floor it is looking
  * at, in radians: {@link #MAX_PITCH} is straight down and {@link #MIN_PITCH} is
- * nearly edge-on. Unlike the yaw, which rests only on the eight compass points,
- * it moves <em>freely</em> — a player holding the look keys sweeps the camera up
- * and over the world and stops wherever they like.
+ * flat on the floor. Unlike the yaw, which rests only on the eight compass
+ * points, it moves <em>freely</em> — a player holding the look keys sweeps the
+ * camera up and over the world and stops wherever they like.
  *
  * <p>Two numbers carry it into the picture, and they are the whole of the tilt:
  *
@@ -116,6 +116,36 @@ package com.larsons.engine.graphics;
  * strictly orthographic in the last fifteen degrees of travel, which is the
  * trade every game with a straight-down view makes.
  *
+ * <h2>The other end: a camera flat on the floor</h2>
+ *
+ * <p>At {@link #MIN_PITCH} the ground's depth axis multiplies by zero and the
+ * whole floor collapses onto one screen row. {@link #sliced()} says so, and it
+ * changes three things rather than being a curiosity at the end of a range:
+ *
+ * <ul>
+ *   <li><b>The picture becomes a side elevation.</b> Screen x is the distance
+ *       across the view and screen y is height alone, at full length — so what
+ *       is drawn is the world cut open along the line the camera looks down,
+ *       and the level reads as a platformer of whatever slice the focus is
+ *       standing in. A floor tile has no area at all there, which is why the
+ *       ground stops being drawn and the standing geometry is all that is
+ *       left.</li>
+ *   <li><b>Depth stops being a screen row.</b> Everything projects to the same
+ *       one, so a painter that sorts on screen rows has nothing to sort by.
+ *       {@link #depthOf} is the key it sorts on instead: the distance along the
+ *       view axis, which is what "nearer" meant all along and which the screen
+ *       row was only ever a foreshortened copy of.</li>
+ *   <li><b>The projection stops being invertible</b>, because a screen point is
+ *       now a whole line of the world. {@link #inversePlanar} answers with the
+ *       depth component dropped and {@link #screenToWorld} puts it back at the
+ *       focus's own depth — the slice you are looking at, which is the one
+ *       answer a click could sensibly mean.</li>
+ * </ul>
+ *
+ * <p>What is <em>in front</em> of the focus would otherwise be drawn over it,
+ * which at this angle is half the level; culling it is the painter's job (see
+ * {@code TerrainPainter}), and it is what makes the cut a cut.
+ *
  * <h2>The board diamond</h2>
  *
  * <p>{@link #useBoardDiamond} replaces the tilt with a fixed diamond: one world
@@ -132,12 +162,31 @@ public class Camera {
     public static final double EIGHTH_TURN = Math.PI / 4;
 
     /**
-     * The lowest the camera may be brought over the floor — 20°, a strongly
-     * raking view where the ground has squashed to about a third of its depth.
-     * Lower than this the floor is nearly edge-on, tiles collapse into stripes,
-     * and picking a cell under the cursor stops being a thing a player can do.
+     * The lowest the camera may be brought over the floor: flat on it, looking
+     * straight along the ground. See {@link #sliced()} — this is a view of its
+     * own rather than the end of a range nobody visits.
      */
-    public static final double MIN_PITCH = Math.toRadians(20);
+    public static final double MIN_PITCH = 0;
+
+    /**
+     * How far above the floor {@link #tilt} refuses to rest — the band between
+     * a fully edge-on camera and a usable raking one, which a held key crosses
+     * in a single step in either direction.
+     *
+     * <p><b>Why the tilt has a detent at the bottom and the yaw does not.</b>
+     * Between 0° and this angle the floor is foreshortened past reading — a
+     * tile is a couple of pixels deep — while the world in front of you is
+     * still drawn over you, because it is only at 0° that "in front" becomes a
+     * clean cut ({@link #sliced()}). It is the one part of the camera's travel
+     * with nothing to recommend it, so a player sweeping the key drops through
+     * it rather than stopping in it, and one press off the floor comes back out
+     * the other side.
+     *
+     * <p>{@link #setPitch} has no detent: a level may lock its camera anywhere
+     * it likes, and a test may place it anywhere. This is about what a held key
+     * does, in the same way {@link #turn} is and {@link #setYaw} is not.
+     */
+    public static final double SLICE_DETENT = Math.toRadians(8);
 
     /** Straight down: the camera directly over the floor it is looking at. */
     public static final double MAX_PITCH = Math.toRadians(90);
@@ -209,6 +258,15 @@ public class Camera {
      * class note and {@link #useBoardDiamond}.
      */
     private boolean boardDiamond;
+
+    /**
+     * Where the level lets this camera stand. Free until a level says
+     * otherwise, and consulted by the two verbs a player drives ({@link #turn},
+     * {@link #tilt}) and the two a level does ({@link #setYaw},
+     * {@link #setPitch}) — so there is no way to place the camera somewhere the
+     * level forbids, whichever of the four does the placing.
+     */
+    private CameraLock lock = CameraLock.free();
 
     /**
      * The compass point the camera is settled on or turning to, 0–7.
@@ -399,7 +457,8 @@ public class Camera {
      * disappearing, and the projection simply ignores it where it means nothing.
      */
     public void setPitch(double radians) {
-        this.pitch = Math.max(MIN_PITCH, Math.min(MAX_PITCH, radians));
+        double want = Math.max(MIN_PITCH, Math.min(MAX_PITCH, radians));
+        this.pitch = lock.clampPitch(want);
         this.sinPitch = snap(Math.sin(this.pitch));
         this.cosPitch = snap(Math.cos(this.pitch));
     }
@@ -427,7 +486,84 @@ public class Camera {
      */
     public void tilt(double radians) {
         if (!tilts() || radians == 0) return;
-        setPitch(pitch + radians);
+        setPitch(detent(pitch + radians, radians > 0));
+    }
+
+    /**
+     * {@link #SLICE_DETENT} applied to a tilt a key is on its way to: anything
+     * under it drops to the floor, and leaving the floor upward clears it in
+     * one step. Only the key goes through this; see the constant.
+     */
+    private static double detent(double want, boolean rising) {
+        if (want <= MIN_PITCH) return MIN_PITCH;
+        if (want >= SLICE_DETENT) return want;
+        return rising ? SLICE_DETENT : MIN_PITCH;
+    }
+
+    /**
+     * Whether the camera is flat on the floor, so the ground's depth axis has
+     * collapsed onto a single screen row. See the class note — this is a view
+     * of its own, and the three things it changes are listed there.
+     *
+     * <p>Exact rather than "nearly flat": {@link #MIN_PITCH} is where a held
+     * key comes to rest and {@link #SLICE_DETENT} is what keeps a player from
+     * stopping just above it, so the condition is reached by doing the obvious
+     * thing rather than by landing on a tolerance.
+     */
+    public boolean sliced() {
+        return tilts() && sinPitch == 0;
+    }
+
+    /**
+     * How far along the view axis a ground point lies, in world units —
+     * <em>positive toward the camera</em>, so a larger number is nearer.
+     *
+     * <p>This is what "nearer" has always meant on a plane. The painters used
+     * to ask for the projected screen row instead, which is this multiplied by
+     * {@code sin(pitch)} and shifted: the same ordering at every tilt the
+     * camera used to have, and no ordering at all at the one it has now. The
+     * screen row was a copy of this number, not the thing itself.
+     */
+    public double viewDepth(double wx, double wy) {
+        if (perspective == Perspective.SIDE_SCROLL) return wy;
+        if (boardDiamond) {
+            // The diamond folds both world axes into its screen row, and that
+            // fold *is* its depth — the board is drawn from a fixed angle and
+            // has no separate view axis to measure along.
+            return planar(wx, wy)[1];
+        }
+        return -wx * sinYaw + wy * cosYaw;
+    }
+
+    /**
+     * A displacement of {@code depth} world units along the view axis, in world
+     * coordinates — the inverse of {@link #viewDepth} applied to a distance
+     * rather than a point.
+     *
+     * <p>Positive is toward the camera, matching {@link #viewDepth}, so a
+     * negative distance is the direction "further away" points in the world.
+     * What a caller reaching behind the focus needs, and the one place the view
+     * axis is written out as a world vector.
+     */
+    public double[] inverseViewAxis(double depth) {
+        if (perspective == Perspective.SIDE_SCROLL) return new double[]{0, depth};
+        return new double[]{depth * -sinYaw, depth * cosYaw};
+    }
+
+    /**
+     * {@link #viewDepth} as the whole-number key a {@link DepthPass} sorts on,
+     * at this camera's zoom.
+     *
+     * <p>Quantised for the same reason the projection is: two things a hair
+     * apart in depth should tie rather than flicker between orders as the
+     * camera moves. At the zoom it is taken at, one unit is one screen pixel of
+     * the unforeshortened plane.
+     */
+    public int depthOf(double wx, double wy) {
+        double d = viewDepth(wx, wy) * zoom;
+        if (d > Integer.MAX_VALUE) return Integer.MAX_VALUE;
+        if (d < Integer.MIN_VALUE) return Integer.MIN_VALUE;
+        return (int) Math.round(d);
     }
 
     /**
@@ -460,11 +596,32 @@ public class Camera {
      * running would be overwritten by it a frame later.
      */
     public void setYaw(double radians) {
-        placeYaw(radians);
-        this.targetYaw = radians;
-        this.heading = Math.floorMod((int) Math.round(radians / EIGHTH_TURN), 8);
+        int want = Math.floorMod((int) Math.round(radians / EIGHTH_TURN), 8);
+        int allowed = lock.nearestHeading(want);
+        // Placed at the compass point rather than at the angle asked for when
+        // the level has ruled that heading out — the nearest one it does allow,
+        // exactly, so the camera still rests square to the world.
+        double at = allowed == want ? radians : allowed * EIGHTH_TURN;
+        placeYaw(at);
+        this.targetYaw = at;
+        this.heading = allowed;
         this.turning = false;
         this.queued = 0;
+    }
+
+    /** Where the level lets this camera stand; never {@code null}. */
+    public CameraLock lock() { return lock; }
+
+    /**
+     * Put this camera under a level's rules, and bring it inside them now
+     * rather than at the next press: a camera left at a heading or tilt the new
+     * level forbids is a camera showing a picture that level says it does not
+     * have.
+     */
+    public void setLock(CameraLock lock) {
+        this.lock = lock == null ? CameraLock.free() : lock;
+        setYaw(heading * EIGHTH_TURN);
+        setPitch(pitch);
     }
 
     /** The heading itself, with none of the bookkeeping {@link #setYaw} does. */
@@ -504,6 +661,10 @@ public class Camera {
      */
     public void turn(int eighths) {
         if (!rotates() || eighths == 0) return;
+        // A level that allows one heading has no turn to make; one that allows
+        // some of the eight turns between those, which is why this asks the
+        // lock for the next heading rather than testing the one it wanted.
+        if (lock.headingLocked()) return;
         int step = eighths > 0 ? 1 : -1;
         if (turning) {
             if (queued == 0) queued = step;
@@ -512,8 +673,16 @@ public class Camera {
         beginTurn(step);
     }
 
+    /** How many compass points a {@code step}-wards turn from {@code from} covers. */
+    private static int eighthsBetween(int from, int to, int step) {
+        int n = Math.floorMod((to - from) * (step >= 0 ? 1 : -1), 8);
+        return n == 0 ? 8 : n;
+    }
+
     private void beginTurn(int step) {
-        heading = Math.floorMod(heading + step, 8);
+        int from = heading;
+        heading = lock.nextHeading(heading, step);
+        if (heading == from) return;
         targetYaw = heading * EIGHTH_TURN;
         turnFrom = yaw;
         // The angle actually eased to, which is not targetYaw when the turn
@@ -521,7 +690,11 @@ public class Camera {
         // forward to 360° and not backwards through seven eighths of a circle
         // to 0°. They are the same heading and only one of them is the way
         // round the player pressed for.
-        turnTo = yaw + step * EIGHTH_TURN;
+        //
+        // How far, rather than one eighth: a level that forbids a heading makes
+        // the camera step over it, and an animation that travelled one eighth
+        // regardless would end up somewhere neither heading is.
+        turnTo = yaw + step * EIGHTH_TURN * eighthsBetween(from, heading, step);
         turnElapsed = 0;
         turning = true;
     }
@@ -661,8 +834,16 @@ public class Camera {
             ry = (b - a) / 2.0 * tileSize;
         } else {
             rx = px;
-            // Never a divide by zero: MIN_PITCH keeps the sine above a third.
-            ry = py / sinPitch;
+            // A collapsed floor carries no depth: every depth projects to the
+            // same row, so the row says nothing about it and the honest answer
+            // is none of it. That makes this the projection's pseudo-inverse
+            // rather than its inverse — still exact on the component that
+            // survived, and still linear, which is what the callers that use it
+            // on a *direction* rather than a point depend on (a step of zero is
+            // the right step: at this tilt a raised block draws over its own
+            // cell and no other). {@link #screenToWorld} is where a point gets
+            // its depth back.
+            ry = sinPitch == 0 ? 0 : py / sinPitch;
         }
         return new double[]{
                 rx * cosYaw - ry * sinYaw,
@@ -811,6 +992,17 @@ public class Camera {
         double[] c = planar(x, y);
         double px = (sx - offsetFor(c[0], viewportWidth, false)) / zoom;
         double py = (sy - offsetFor(c[1], viewportHeight, true)) / zoom;
-        return inversePlanar(px, py);
+        double[] w = inversePlanar(px, py);
+        if (sliced()) {
+            // The screen point is a whole line of the world here, so this is a
+            // choice rather than an inverse — and the choice is the slice the
+            // camera is looking at, which is the only one a click can mean. The
+            // pseudo-inverse left the point at depth zero; carrying it along the
+            // view axis to the focus's depth is what puts it on that slice.
+            double depth = viewDepth(x, y);
+            w[0] += depth * -sinYaw;
+            w[1] += depth * cosYaw;
+        }
+        return w;
     }
 }

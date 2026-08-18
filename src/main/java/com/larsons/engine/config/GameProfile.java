@@ -1,5 +1,6 @@
 package com.larsons.engine.config;
 
+import com.larsons.engine.graphics.CameraLock;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.util.Json;
 
@@ -46,6 +47,17 @@ public class GameProfile {
      * {@link com.larsons.engine.graphics.Camera#tilt}.)
      */
     public Perspective perspective = Perspective.SIDE_SCROLL;
+
+    /**
+     * Where this level lets its camera stand — headings, tilt range, and which
+     * stops of the first/third-person cycle are reachable. Free by default and
+     * in every level saved before it existed.
+     *
+     * <p>Beside the zoom bounds because it is the same kind of setting: the
+     * creator saying what the player may do with the view, per level, on the
+     * level it applies to. See {@link CameraLock}.
+     */
+    public CameraLock cameraLock = CameraLock.free();
 
     // Zoom feature + bounds.
     public boolean zoomEnabled = true;
@@ -188,6 +200,10 @@ public class GameProfile {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("name", name);
         m.put("perspective", perspective.name());
+        // Written only when it restricts something, so a level that lets the
+        // camera go anywhere carries no camera block at all.
+        Map<String, Object> camera = cameraLock.toMap();
+        if (!camera.isEmpty()) m.put("camera", camera);
         m.put("zoomEnabled", zoomEnabled);
         m.put("minZoom", minZoom);
         m.put("maxZoom", maxZoom);
@@ -286,6 +302,7 @@ public class GameProfile {
         String keepLast = lastLevelPath;
         GameProfile s = src.copy();
         perspective = s.perspective;
+        cameraLock = s.cameraLock;
         zoomEnabled = s.zoomEnabled;
         minZoom = s.minZoom;
         maxZoom = s.maxZoom;
@@ -341,6 +358,9 @@ public class GameProfile {
         GameProfile p = new GameProfile();
         p.name = str(m, "name", p.name);
         p.perspective = perspectiveOf(str(m, "perspective", p.perspective.name()), p.perspective);
+        p.cameraLock = m.get("camera") instanceof Map<?, ?> camera
+                ? CameraLock.fromMap(Json.asObject(camera))
+                : CameraLock.free();
         p.zoomEnabled = bool(m, "zoomEnabled", p.zoomEnabled);
         p.minZoom = dbl(m, "minZoom", p.minZoom);
         p.maxZoom = dbl(m, "maxZoom", p.maxZoom);
@@ -407,6 +427,8 @@ public class GameProfile {
         shaderPixelSize = Math.max(1, Math.min(64, shaderPixelSize));
         nightDarkness = Math.max(0.0, Math.min(1.0, nightDarkness));
         ambientLight = Math.max(0.0, Math.min(1.0, ambientLight));
+        if (cameraLock == null) cameraLock = CameraLock.free();
+        cameraLock.normalize();
         if (lastLevelPath == null) lastLevelPath = "";
         if (texturePackDir == null) texturePackDir = "";
         if (soundPackDir == null) soundPackDir = "";

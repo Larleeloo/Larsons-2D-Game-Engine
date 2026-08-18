@@ -99,7 +99,7 @@ public final class DecorPainter {
             if (sprite == null) sprite = EntitySprites.decor(def, SPRITE_PX);
             batch.add(new Placed(sprite, x, y, size,
                     TerrainPainter.standingDepth(camera, level.tileSize, e.x, e.y),
-                    anchor[1]));
+                    TerrainPainter.pointDepth(camera, e.x, e.y)));
         }
         return batch;
     }

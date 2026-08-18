@@ -5,6 +5,8 @@ import com.larsons.engine.character.CharacterStore;
 import com.larsons.engine.character.Characters;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
+import com.larsons.engine.graphics.CameraLock;
+import com.larsons.engine.graphics.Viewpoint;
 import com.larsons.engine.graphics.shader.Shaders;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.profile.DeviceProfile;
@@ -58,6 +60,67 @@ final class ProfileForms {
                     });
         }
         form.addAction("Offer every character (clear the roster)", roster::clear);
+    }
+
+    /**
+     * Where this level lets its camera stand — the {@link CameraLock} rows.
+     *
+     * <p>Its own method rather than more lines in the feature list because it
+     * is its own question: everything in {@code addFeatureOptions} is "does
+     * this level have X", and this is "how is this level meant to be looked
+     * at". A creator composing a side-on puzzle or a fixed-angle room comes
+     * here once and does not touch it again.
+     *
+     * <p>Every row is a permission and every default is "allowed", so a level
+     * that never opens this section behaves exactly as it did before locks
+     * existed.
+     */
+    static void addCameraOptions(ConfigForm form, GameProfile p) {
+        CameraLock lock = p.cameraLock;
+        form.addNote("Camera lock — where this level may be looked at from. "
+                + "Everything is allowed until you say otherwise.");
+
+        // The eight compass points, one row each. A list rather than a range
+        // because the useful locks are not intervals: "north and south only"
+        // is a corridor seen from either end, and no min/max can say it.
+        for (int h = 0; h < CameraLock.HEADINGS; h++) {
+            int heading = h;
+            form.addToggle("Facing " + CameraLock.HEADING_LABELS[h],
+                    () -> lock.allowsHeading(heading),
+                    v -> lock.setHeadingAllowed(heading, v));
+        }
+        form.addNote("Untick a heading and the rotate keys step over it. "
+                + "One heading left is a fixed camera; the last one cannot be "
+                + "unticked, because a camera has to point somewhere.");
+
+        // The tilt: a range, plus a step that turns the range into a list of
+        // exact angles.
+        form.addDouble("Lowest camera tilt (°)", lock::minPitchDegrees,
+                lock::setMinPitchDegrees, 0, 90, 5);
+        form.addDouble("Highest camera tilt (°)", lock::maxPitchDegrees,
+                lock::setMaxPitchDegrees, 0, 90, 5);
+        form.addDouble("Tilt snaps to steps of (°)", lock::pitchStepDegrees,
+                lock::setPitchStepDegrees, 0, 45, 5);
+        form.addNote("0° is flat on the floor — the level cut open along the "
+                + "line you are looking down. 90° is straight overhead. Equal "
+                + "low and high values pin the camera to one angle; a step of 0 "
+                + "leaves the tilt free between them.");
+
+        // The F5 cycle. The plan view is not on the list because it cannot be
+        // turned off — it is the view every level is authored through and the
+        // one the others fall back to.
+        for (Viewpoint v : Viewpoint.values()) {
+            if (v == Viewpoint.PLAN) continue;
+            form.addToggle("View: " + v.label(), () -> lock.allows(v),
+                    v2 -> lock.setAllowed(v, v2));
+        }
+        form.addNote("The plan view is always available. Turn the others off "
+                + "and [F5] stays where it is.");
+
+        // Reset rather than replace: the rows above hold a reference to this
+        // lock, and handing the profile a different object would leave every
+        // one of them editing a lock nothing reads.
+        form.addAction("Unlock the camera (allow everything)", lock::reset);
     }
 
     static void addFeatureOptions(ConfigForm form, GameProfile p) {

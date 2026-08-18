@@ -179,9 +179,15 @@ public final class GoldenFrames {
         // formats here; it is one format at two tilts, which is what the two
         // formats always were — and keeping both frames is worth more now than
         // it was, because the tilt is something a player moves rather than
-        // something a level was born with.
-        frames.add(new Frame("world-3d-lowered", 480, 320,
-                t -> paintWorld(t, LevelFormat.THREE_D, Camera.MIN_PITCH)));
+        // something a level was born with. The lower of the two is the camera
+        // flat on the floor, where the floor stops being drawn at all and the
+        // standing geometry is cut open along the line the camera looks down.
+        frames.add(new Frame("world-3d-sliced", 480, 320,
+                // Focused south of the stacked wall rather than on the level's
+                // middle, so the wall is *behind* the cut and the frame shows
+                // the slice doing its job. Focused on the middle it would show
+                // a bare ground line and prove only that the cull runs.
+                t -> paintWorld(t, LevelFormat.THREE_D, Camera.MIN_PITCH, 8.5)));
         frames.add(new Frame("world-3d-overhead", 480, 320,
                 t -> paintWorld(t, LevelFormat.THREE_D, Camera.MAX_PITCH)));
         frames.add(new Frame("world-crowd", 480, 320, GoldenFrames::paintCrowd));
@@ -262,11 +268,23 @@ public final class GoldenFrames {
 
     /** {@link #paintWorld(DrawTarget, LevelFormat)} from a camera at {@code pitch}. */
     private static void paintWorld(DrawTarget target, LevelFormat format, double pitch) {
+        paintWorld(target, format, pitch, -1);
+    }
+
+    /**
+     * {@link #paintWorld(DrawTarget, LevelFormat, double)} focused on a given
+     * row rather than on the level's middle; {@code focusRow < 0} keeps the
+     * middle. Only the sliced frame needs it — where the camera stands decides
+     * what a cut view contains.
+     */
+    private static void paintWorld(DrawTarget target, LevelFormat format, double pitch,
+                                   double focusRow) {
         Level level = worldLevel(format);
         Camera camera = new Camera(level.perspective, target.width(), target.height());
         camera.tileSize = level.tileSize;
         camera.setPitch(pitch);
-        camera.centerOn(level.width * 32 / 2.0, level.height * 32 / 2.0);
+        camera.centerOn(level.width * 32 / 2.0,
+                focusRow < 0 ? level.height * 32 / 2.0 : focusRow * 32);
 
         target.clear(level.background.getRGB());
 

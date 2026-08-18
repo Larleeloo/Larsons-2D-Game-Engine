@@ -78,7 +78,8 @@ public final class SurfaceDecorPainter {
             // Surface decor belongs to the block it is stuck to, so it sorts on
             // that cell and settles ties on the face's own row.
             into.at(TerrainPainter.tileDepth(camera, level.tileSize, p.col(), p.row()),
-                    frame.py, () -> drawOne(target, frame, p, def, animClock));
+                    TerrainPainter.pointDepth(camera, frame.anchorX, frame.anchorY),
+                    () -> drawOne(target, frame, p, def, animClock));
         }
     }
 
@@ -346,6 +347,13 @@ public final class SurfaceDecorPainter {
         private static final double PLAN_VIEW_RISE = 0.5;
 
         final int px, py;
+        /**
+         * Where this face is rooted in the <em>world</em>, for the depth it
+         * sorts at. Kept alongside the screen point rather than derived from
+         * it, because a screen point stops being invertible once the camera
+         * lies flat on the floor and the depth is exactly what it loses.
+         */
+        final double anchorX, anchorY;
         /** One world tile, in screen pixels, at this face. */
         final double tile;
         final double tanX, tanY;
@@ -363,8 +371,11 @@ public final class SurfaceDecorPainter {
          *               side view, and the one thing every axis but
          *               {@code out} turns on
          */
-        private FaceFrame(int px, int py, double tile, double tanX, double tanY,
+        private FaceFrame(int px, int py, double anchorX, double anchorY,
+                          double tile, double tanX, double tanY,
                           double outX, double outY, boolean sideOn) {
+            this.anchorX = anchorX;
+            this.anchorY = anchorY;
             this.px = px;
             this.py = py;
             this.tile = tile;
@@ -440,7 +451,7 @@ public final class SurfaceDecorPainter {
             tanX /= tanLen;
             tanY /= tanLen;
 
-            return new FaceFrame(px, py, tile, tanX, tanY, outX, outY, sideOn);
+            return new FaceFrame(px, py, ax, ay, tile, tanX, tanY, outX, outY, sideOn);
         }
 
         /**

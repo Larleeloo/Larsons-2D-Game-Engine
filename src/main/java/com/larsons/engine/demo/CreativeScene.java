@@ -3816,6 +3816,15 @@ public class CreativeScene extends AbstractScene {
         // Open the level looking the way it was built, and settled there
         // rather than sliding into it — setYaw is the teleport, turn() is what
         // a player does. C9.
+        // <b>The editor is not under the level's camera lock, deliberately.</b>
+        // A lock says where a level is meant to be *played* from; building it
+        // is a different job, and one that needs to see the far side of every
+        // wall. An editor that could only look from the one angle the finished
+        // level allows would make a fixed-camera level nearly impossible to
+        // build — and the creator can tilt and turn to that angle themselves
+        // whenever they want to check it, which is the whole of what obeying
+        // the lock here would have bought.
+        camera.setLock(com.larsons.engine.graphics.CameraLock.free());
         camera.setYaw(level.authoredHeading * Camera.EIGHTH_TURN);
         camera.setPitch(Camera.pitchFor(level.authoredPitchDegrees));
         camera.frameOn(level.spawnX, level.spawnY);
@@ -6438,7 +6447,7 @@ public class CreativeScene extends AbstractScene {
      * way the level stores entities.
      */
     private int footDepth(double x, double y, double size) {
-        return camera.worldToScreenY(x + size / 2, y + size);
+        return TerrainPainter.pointDepth(camera, x + size / 2, y + size);
     }
 
     /**
@@ -6448,6 +6457,9 @@ public class CreativeScene extends AbstractScene {
      * that tile it stands.
      */
     private void standingAt(DepthPass into, double x, double y, double size, Runnable sprite) {
+        // Cut with the terrain when the camera lies flat on the floor; see
+        // TerrainPainter.cutOff.
+        if (TerrainPainter.cutOff(camera, level.tileSize, x + size / 2, y + size)) return;
         into.at(TerrainPainter.standingDepth(camera, level.tileSize, x + size / 2, y + size),
                 footDepth(x, y, size), sprite);
     }

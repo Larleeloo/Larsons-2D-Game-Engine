@@ -68,9 +68,44 @@ class CameraTiltTest {
         Camera down = camera();
         for (int i = 0; i < 600; i++) down.tilt(-Camera.TILT_SPEED / 60.0);
         assertEquals(Camera.MIN_PITCH, down.pitch(), 1e-12,
-                "and a floor seen edge-on is as low as it goes");
-        assertTrue(Math.sin(down.pitch()) > 0.2,
-                "the lowest tilt must still leave a ground plane to invert");
+                "and flat on the floor is as low as it goes");
+        assertTrue(down.sliced(), "the bottom of the travel is the sliced view");
+    }
+
+    /**
+     * The detent: a held key drops through the band above the floor rather than
+     * stopping in it, and one press off the floor clears it.
+     *
+     * <p>That band is the one part of the camera's travel with nothing to
+     * recommend it — the floor is foreshortened past reading and the world in
+     * front of you is still drawn over you, because only a fully flat camera
+     * turns "in front" into a clean cut. Resting there is not a view anyone
+     * would choose, so the key does not offer it.
+     */
+    @Test
+    void theTiltDropsThroughTheBandAboveTheFloor() {
+        Camera cam = camera();
+        cam.setPitch(Camera.SLICE_DETENT + Math.toRadians(1));
+        cam.tilt(-Math.toRadians(2));
+        assertEquals(Camera.MIN_PITCH, cam.pitch(), 1e-12,
+                "a step into the band goes on through to the floor");
+        assertTrue(cam.sliced());
+
+        cam.tilt(Math.toRadians(1));
+        assertEquals(Camera.SLICE_DETENT, cam.pitch(), 1e-12,
+                "and one step up clears the band in the other direction");
+        assertFalse(cam.sliced());
+    }
+
+    /**
+     * {@link Camera#setPitch} has no detent, because a level's own camera rules
+     * and a test are not a held key. A lock that pins the camera to 3° gets 3°.
+     */
+    @Test
+    void placingTheCameraIgnoresTheDetent() {
+        Camera cam = camera();
+        cam.setPitch(Math.toRadians(3));
+        assertEquals(Math.toRadians(3), cam.pitch(), 1e-12);
     }
 
     @Test

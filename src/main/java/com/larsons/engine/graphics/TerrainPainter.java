@@ -55,6 +55,19 @@ public final class TerrainPainter {
      */
     public static final double BLOCK_HEIGHT = Level.BLOCK_HEIGHT;
 
+    /**
+     * How deep the cut is when the camera lies flat on the floor, in tiles —
+     * how much of the world behind the focus is drawn.
+     *
+     * <p>Generous rather than exact, because at that tilt there is no depth cue
+     * to spend it on: a block sixty tiles back draws in the same place as one
+     * six tiles back and is covered by it, so the number only has to be past
+     * the point where anything new can appear. Bounded because the alternative
+     * is sweeping a 65536-deep map end to end for a picture that stopped
+     * changing at the far wall of the room.
+     */
+    public static final int SLICE_TILES = 64;
+
     /** How far a shadow reaches from its caster, as a fraction of a tile. */
     private static final double SHADOW_REACH = 0.34;
 
@@ -88,7 +101,8 @@ public final class TerrainPainter {
     }
 
     /**
-     * The depth a cell is sorted at: the screen row of its centre.
+     * The depth a cell is sorted at: how far along the view axis its centre
+     * lies ({@link Camera#depthOf}).
      *
      * <p>The primary key of everything sharing a plan view's {@link DepthPass}
      * — a raised block's own, and the cell an actor is standing on. It is
@@ -98,24 +112,34 @@ public final class TerrainPainter {
      * under it. {@link DepthPass} carries the argument for comparing cells at
      * all.
      *
+     * <p><b>This used to be the projected screen row, and the two are the same
+     * ordering at every tilt but one.</b> A screen row is the view depth
+     * multiplied by {@code sin(pitch)} and shifted by the camera's offset — a
+     * positive scale and a constant, so it sorts identically — right up until
+     * the camera lies flat on the floor and the scale is zero. There the whole
+     * level shares one screen row and a painter sorting on it has nothing to
+     * sort by: the block behind you and the block in front of you tie, and
+     * which covers which falls to the order the sweep happened to visit them
+     * in. Asking the camera how far away a cell is instead costs nothing and
+     * holds at every tilt, including the one where the picture is entirely made
+     * of the answer.
+     *
      * <p><b>Why the centre.</b> Between one cell and another the offset inside
      * the cell cancels — any point taken the same way for every cell puts them
      * in the same order — so this is not what fixes the ordering. What it fixes
      * is the comparison against a caller that hands {@link DepthPass#at(int,
-     * Runnable)} a plain screen row, knowing nothing about cells: that number
-     * lands somewhere inside a cell, and the stand-in wants to be as far from
-     * both edges as it can. Write {@code f} for the screen row of a floor point
-     * — linear, whatever the projection or heading. A cell's key has to sit
-     * above {@code f} of every point on the cells behind it and below {@code f}
-     * of every point on the cells in front, and those two bounds are symmetric
-     * about {@code f} of the cell's centre. In top-down the window between them
-     * is a whole tile deep, so the middle of the cell's southern edge — what
-     * this used to be — sat exactly on its rim and survived anyway. In
-     * isometric, which folds both world axes into the screen row, the window
-     * closes to a single value, and the centre is it.
+     * Runnable)} a point rather than a cell: that number lands somewhere inside
+     * a cell, and the stand-in wants to be as far from both edges as it can. A
+     * cell's key has to sit above the depth of every point on the cells behind
+     * it and below the depth of every point on the cells in front, and those two
+     * bounds are symmetric about the depth of the cell's centre. Square to the
+     * world the window between them is a whole tile deep, so the middle of the
+     * cell's southern edge — what this used to be — sat exactly on its rim and
+     * survived anyway. Turned an eighth, which folds both world axes into the
+     * one number, the window closes to a single value, and the centre is it.
      */
     public static int tileDepth(Camera camera, int tileSize, int col, int row) {
-        return camera.worldToScreenY((col + 0.5) * tileSize, (row + 0.5) * tileSize);
+        return camera.depthOf((col + 0.5) * tileSize, (row + 0.5) * tileSize);
     }
 
     /**
@@ -125,6 +149,52 @@ public final class TerrainPainter {
     public static int standingDepth(Camera camera, int tileSize, double footX, double footY) {
         return tileDepth(camera, tileSize,
                 (int) Math.floor(footX / tileSize), (int) Math.floor(footY / tileSize));
+    }
+
+    /**
+     * The tie-break depth of a point that is not a cell — where on its tile a
+     * body actually stands, which orders it against everything else on that
+     * tile.
+     *
+     * <p>On the same measure as {@link #tileDepth} rather than on a screen row,
+     * for the same reason and with the same consequence at a flat camera: two
+     * bodies on one tile are ordered by which is nearer, and "nearer" has to go
+     * on meaning something after the screen has stopped showing it.
+     */
+    public static int pointDepth(Camera camera, double wx, double wy) {
+        return camera.depthOf(wx, wy);
+    }
+
+    /**
+     * The depth beyond which nothing is drawn — where the world is cut open
+     * when the camera lies flat on the floor ({@link Camera#sliced()}), and
+     * {@link Integer#MAX_VALUE} at every other tilt, where nothing is cut.
+     *
+     * <p>The cut is at the camera's own focus, plus half a tile so the cell the
+     * focus stands in falls on the near side of it rather than on it. In a
+     * played level the focus is the player, so what survives is the slice they
+     * are walking down and everything behind it — which is what the view looks
+     * like it is showing, and what makes it a view rather than a wall of
+     * whatever happens to be nearest the camera.
+     */
+    public static int sliceCut(Camera camera, int tileSize) {
+        if (!camera.sliced()) return Integer.MAX_VALUE;
+        return camera.depthOf(camera.x, camera.y)
+                + (int) Math.round(tileSize * 0.5 * camera.zoom);
+    }
+
+    /**
+     * Whether a body standing at ({@code wx}, {@code wy}) is in front of
+     * {@link #sliceCut} and so is not drawn this frame. Always {@code false}
+     * unless the camera is flat on the floor.
+     *
+     * <p>Actors are cut by the same plane the terrain is, and have to be: a cut
+     * that removed the wall in front of you but left the mob standing on the
+     * other side of it would be showing a creature through a wall the picture
+     * no longer contains.
+     */
+    public static boolean cutOff(Camera camera, int tileSize, double wx, double wy) {
+        return camera.sliced() && camera.depthOf(wx, wy) > sliceCut(camera, tileSize);
     }
 
     /**
@@ -164,6 +234,12 @@ public final class TerrainPainter {
     public static java.util.Set<Long> cutaway(Camera camera, Level level,
                                               double footX, double footY, double z) {
         if (!level.layered() || !level.verticality()) return java.util.Set.of();
+        // A flat camera draws a raised block over its own cell and no other, so
+        // there is no ray between the camera and the body to march along and
+        // nothing for a cutaway to find. What would have covered the body there
+        // is the whole half of the level in front of it, which is the slice
+        // cull's job (see queueRaised) rather than a see-through hole's.
+        if (camera.sliced()) return java.util.Set.of();
         int ts = level.tileSize;
         double[] step = camera.inversePlanar(0,
                 BLOCK_HEIGHT * ts * camera.liftScale());
@@ -305,7 +381,26 @@ public final class TerrainPainter {
             minY = Math.min(minY, wp[1]);
             maxY = Math.max(maxY, wp[1]);
         }
-        if (level.layered()) {
+        if (camera.sliced()) {
+            // The corners all came back on one line — a flat camera's screen
+            // point is a whole line of world and screenToWorld picked the
+            // focus's slice off it — so the sweep has to be widened by hand to
+            // the slab this view actually shows: the focus's own slice and
+            // SLICE_TILES of world behind it.
+            //
+            // Behind, and bounded. Nothing in front is drawn at all (see
+            // queueRaised), and depth stops being visible at this tilt, so a
+            // block a hundred tiles back draws exactly where one ten tiles back
+            // does and is covered by it. Sweeping the whole level along the
+            // view axis would cost a 65536-deep map's worth of cells to change
+            // nothing on screen.
+            double reach = SLICE_TILES * ts;
+            double[] back = camera.inverseViewAxis(-reach);
+            minX = Math.min(minX, minX + back[0]);
+            maxX = Math.max(maxX, maxX + back[0]);
+            minY = Math.min(minY, minY + back[1]);
+            maxY = Math.max(maxY, maxY + back[1]);
+        } else if (level.layered()) {
             // A block at cell T drawn n layers up lands on the floor point
             // T − n·step, so the cells that can paint over this viewport run
             // out to its corners + n·step. Along the step and not against it:
@@ -608,6 +703,12 @@ public final class TerrainPainter {
         private final double animClock;
         private final CellDecorator decor;
         /**
+         * The depth this frame cuts the world open at — {@link Integer#MAX_VALUE}
+         * unless the camera lies flat on the floor. See
+         * {@link TerrainPainter#sliceCut}.
+         */
+        private final int cut;
+        /**
          * Whether a tile's texture can be blitted as an upright rectangle
          * instead of warped through its own edge vectors.
          *
@@ -687,6 +788,7 @@ public final class TerrainPainter {
                     && alongX[0] > 0 && alongY[1] > 0;
             this.layered = level.layered();
             this.tileSize = level.tileSize;
+            this.cut = sliceCut(camera, level.tileSize);
             // Height is drawn along whichever axis this space lifts things
             // along, so a raised block rises the same way a jumping player does.
             this.lift = liftPixels(camera, tileSize);
@@ -850,6 +952,11 @@ public final class TerrainPainter {
             }
         }
 
+        /** Whether a cell is past this frame's cut and so is not drawn at all. */
+        private boolean beyondCut(int col, int row) {
+            return cut != Integer.MAX_VALUE && baseDepth(col, row) > cut;
+        }
+
         /** {@link TerrainPainter#tileDepth} against this pass's camera. */
         private int baseDepth(int col, int row) {
             return tileDepth(camera, tileSize, col, row);
@@ -902,14 +1009,25 @@ public final class TerrainPainter {
 
         /**
          * Queue every stacked block in view into the pass it shares with the
-         * actors, at the screen row of its base — the same measure a sprite's
-         * feet are sorted by, so a wall and a player standing beside it agree
-         * on which is nearer.
+         * actors, at the depth of its base — the same measure a sprite's feet
+         * are sorted by, so a wall and a player standing beside it agree on
+         * which is nearer.
+         *
+         * <p><b>Except what stands in front of the camera's focus when the
+         * camera is flat on the floor</b> ({@link Camera#sliced()}). At that
+         * tilt the picture is a side elevation of the world, and everything at
+         * every depth lands in the same band of screen: the near half of the
+         * level would be drawn over the far half, so the thing a player is
+         * looking at — themselves, in the slice they are walking down — would
+         * be behind every wall between them and the edge of the map. Cutting
+         * the world open at the focus is what makes the view a view, and it is
+         * exactly the cut the picture already looks like it is showing.
          */
         private void queueRaised(int[] bounds, DepthPass raisedPass) {
             if (level.layerCount() <= 1) return;
             for (int r = bounds[1]; r <= bounds[3]; r++) {
                 for (int c = bounds[0]; c <= bounds[2]; c++) {
+                    if (beyondCut(c, r)) continue;
                     // How far up *this* column, not how far up the level. They
                     // are the same number only while every column is as tall as
                     // the tallest one; one 512-block tower in a level of
@@ -1084,7 +1202,16 @@ public final class TerrainPainter {
                 // columns therefore draws its tops and the side faces of its
                 // rim, and nothing in between — which is the difference between
                 // a landscape costing its silhouette and costing its area.
-                int neighbour = level.stackHeight(col + EDGE_DC[i], row + EDGE_DR[i]);
+                //
+                // …unless the neighbour is on the far side of a cut, in which
+                // case it is not there to hide anything. Without this the cut
+                // would show no cross-section at all: the face a slice exposes
+                // is by definition the one whose neighbour was in front of it,
+                // and that is exactly the face this rule normally suppresses.
+                // A cut world with its interior faces missing is a world with
+                // holes in it where the interesting part should be.
+                int nc = col + EDGE_DC[i], nr = row + EDGE_DR[i];
+                int neighbour = beyondCut(nc, nr) ? 0 : level.stackHeight(nc, nr);
                 int from = Math.max(base, neighbour);
                 if (from >= top) continue;
                 int lower = (int) Math.round(lift * (from - 1));
