@@ -2711,6 +2711,74 @@ genetics, **Esc** pauses (and offers the full game reset).
 
 ---
 
+## The pause screen
+
+**Esc** during play opens a screen, not a list of buttons. Pausing is the one
+moment a player is deliberately *not* playing, and it is when the questions they
+cannot ask mid-fight arrive — so the pause screen answers them.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ Paused                                          [ Unsaved changes ] │
+│ Frostmarch · Hollow Deep                                            │
+│                                    ┌──────────────────────────────┐ │
+│        [ Resume ]                  │ THE RUN                      │ │
+│        [ Save Run ]                │ Character            Scout   │ │
+│        [ Save and Quit ]           │ Ultimate         Overdrive   │ │
+│                                    │ World   Top-Down · up north  │ │
+│        [ Options ]                 │ Played             3h 47m    │ │
+│        [ Controls ]                ├──────────────────────────────┤ │
+│        [ Edit in Creative ]        │ VITALS · GOALS · THIS RUN    │ │
+│                                    │ KEYS                         │ │
+│        [ Quit to Menu ]            └──────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+The **actions** are grouped by what you came here to do: get back in, save,
+change how it feels, leave. *Save and Quit* is one press, and *Quit to Menu*
+asks first when there is unsaved progress. Online, the two save entries are
+absent rather than disabled — the server owns that world and there is nothing
+here to write.
+
+The **panels** are live, re-read every frame, so an autosave landing while the
+menu is open updates the chip and a multiplayer session's ping keeps moving:
+
+- **Save state**, top right — *Saved 2m ago* / *Unsaved changes* / *Saving…*,
+  the single most useful thing to know before walking away from the keyboard.
+- **The run** — character, ultimate, which physics the level runs and which way
+  is up, the hour of the day, how long this run has been played, which slot it
+  is in.
+- **Vitals** — health, mana, stamina and the ultimate meter as bars with their
+  numbers. Pools a character does not have are not drawn.
+- **Goals** — the level's [stat rules](#game-types-levels--feature-toggles) with
+  live progress: *every* rule, not just the ones whose author ticked "show bar",
+  because what crowds the HUD during play is a different question from what a
+  paused player is allowed to know. A one-shot that has paid out reads *done*; a
+  repeating one counts toward its next step and says how many times it has
+  fired.
+- **This run** — every non-zero counter, abbreviated (`1.8k`, `96.5k`).
+- **Session** (online only) — players, ping, and whether you are hosting.
+- **Keys** — the handful of binds people forget, read live from your own
+  [key binds](#custom-key-binds-rebind-anything) rather than from a hardcoded
+  list, so a rebound key is right here too.
+
+Sub-sheets open **over** the screen rather than replacing it, so changing the
+volume or rebinding a key costs neither the level nor the session:
+[*Options*](#your-own-settings-volume-sensitivity-hud-size) and *Controls* both
+open in place, and **Esc** backs out one layer at a time.
+
+It **degrades rather than breaking**. Below 780px wide the panels are dropped
+and the actions take the full width; the right column stops drawing panels when
+it runs out of vertical room, so the panel order is also a priority order. Three
+golden frames pin the three layouts: `pause-screen` (1280×720, everything),
+`pause-screen-narrow` (640×420, one column) and `pause-screen-online`.
+
+Its feature toggles are still edited in *Load Level → Edit Settings* rather than
+here. Those belong to the level and outlive the session, and a pause menu that
+quietly rewrites the level being played is how this engine used to lose people's
+work.
+
+
 ## Saving (runs, slots, and what a save actually is)
 
 A **run** is a play-through of a game type: where you are, what you are
@@ -3406,13 +3474,10 @@ default.
    *Edit Settings* shows. **Create Level** builds the starter canvas, saves it
    into the game type, and opens the editor on it.
 6. **Play** — the level loads with only its own enabled features active. Press
-   **Esc** for the **pause menu**: *Resume*, *Controls (Key Binds)*, *Options*
-   (volume, mouse sensitivity, invert-Y, HUD size — yours, not the level's),
-   *Save Run* (the player and every level this run has changed, into its own
-   slot), *Save and Quit*, *Edit in Creative*, and *Quit to Menu*, which asks
-   first when there is unsaved progress. A run also saves itself at every door,
-   at every death, and every couple of minutes. Runs are picked from
-   **Saved Runs** on the main menu, or resumed with **Continue**.
+   **Esc** for the **[pause screen](#the-pause-screen)**: the actions on the
+   left — *Resume*, *Save Run*, *Save and Quit*, *Options*, *Controls*, *Edit in
+   Creative*, *Quit to Menu* — and on the right a live read-out of the run
+   (vitals, the level's goals, your counters, the save state, the binds).
 
 Levels are authored and saved in **Creative Mode**, which snapshots the active
 toggles into the level on every save, and are stored under
@@ -3785,6 +3850,7 @@ true before it starts and the instrument that proves it worked.
 [`AutosaveTest`](src/test/java/com/larsons/engine/save/AutosaveTest.java),
 [`DoorContinuityTest`](src/test/java/com/larsons/engine/demo/DoorContinuityTest.java),
 [`PlayerSettingsTest`](src/test/java/com/larsons/engine/PlayerSettingsTest.java),
+[`PauseMenuTest`](src/test/java/com/larsons/engine/demo/PauseMenuTest.java),
 [`ConfigFeatureTest`](src/test/java/com/larsons/engine/ConfigFeatureTest.java),
 [`ShaderTest`](src/test/java/com/larsons/engine/ShaderTest.java),
 [`PlayerPhysicsTest`](src/test/java/com/larsons/engine/PlayerPhysicsTest.java),

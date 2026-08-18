@@ -6,6 +6,7 @@ import com.larsons.engine.autobattler.Element;
 import com.larsons.engine.character.CharacterPicker;
 import com.larsons.engine.character.CharacterProfile;
 import com.larsons.engine.crafting.RecipeRegistry;
+import com.larsons.engine.demo.PauseScreenAccess;
 import com.larsons.engine.demo.MiniGameHudAccess;
 import com.larsons.engine.entity.Inventory;
 import com.larsons.engine.entity.ItemDef;
@@ -193,6 +194,14 @@ public final class GoldenFrames {
         frames.add(new Frame("config-form", 640, 400, GoldenFrames::paintConfigForm));
         frames.add(new Frame("profile-overlay", 400, 400, GoldenFrames::paintProfileOverlay));
         frames.add(new Frame("minigame-hud", 480, 320, GoldenFrames::paintMiniGameHud));
+        // The pause screen, at the two sizes it has two layouts for: wide
+        // enough for the panels, and narrow enough that it drops them.
+        frames.add(new Frame("pause-screen", 1280, 720,
+                t -> PauseScreenAccess.paintSample(t, 1280, 720)));
+        frames.add(new Frame("pause-screen-narrow", 640, 420,
+                t -> PauseScreenAccess.paintSample(t, 640, 420)));
+        frames.add(new Frame("pause-screen-online", 1000, 700,
+                t -> PauseScreenAccess.paintSample(t, 1000, 700, true)));
 
         return frames;
     }

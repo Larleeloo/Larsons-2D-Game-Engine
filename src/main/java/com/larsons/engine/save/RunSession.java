@@ -371,6 +371,11 @@ public final class RunSession implements AutoCloseable {
         String levelName = level == null ? null : level.name;
         long revision = level == null ? 0 : level.terrainRevision();
         Map<String, Object> levelData = writeLevel ? level.toMap() : null;
+        // Stamped here rather than in capture(): a save can be taken without a
+        // capture in front of it, and "when this was saved" that only moves
+        // when something else happens to call capture is a lie the pause
+        // screen's save chip would repeat. This is the moment the save exists.
+        record.savedAt = System.currentTimeMillis();
         Map<String, Object> runData = new LinkedHashMap<>(record.toMap());
 
         dirty = false;

@@ -310,10 +310,38 @@ public class ConfigForm {
     private int captureSlot;
     private Runnable bindListener;
 
+    /**
+     * The box this form lays itself out inside, or {@code null} for "the whole
+     * viewport, centred" — which is what every caller wanted until a screen
+     * needed a form beside something else rather than in the middle of
+     * everything.
+     *
+     * <p>Only the layout changes. Row boxes, the scroll bar and the hit-testing
+     * in {@link #update} all derive from the same numbers either way, so a form
+     * in a region stays fully navigable by keyboard, wheel and mouse.
+     */
+    private Rectangle region;
+
+    /** Whether the form draws its own title (a host may draw a nicer one). */
+    private boolean showTitle = true;
+
     public ConfigForm(String title) { this.title = title; }
 
     public ConfigForm theme(MenuTheme t) { this.theme = t; return this; }
     public ConfigForm rowHeight(int h) { this.rowHeight = h; return this; }
+
+    /**
+     * Lay this form out inside {@code (x, y, w, h)} instead of centring it on
+     * the viewport. Pass a {@code null}-ish (zero-width) box to go back to
+     * centring.
+     */
+    public ConfigForm region(int x, int y, int w, int h) {
+        region = w <= 0 || h <= 0 ? null : new Rectangle(x, y, w, h);
+        return this;
+    }
+
+    /** Suppress the form's own title — for hosts that draw their own header. */
+    public ConfigForm showTitle(boolean show) { this.showTitle = show; return this; }
     public MenuTheme theme() { return theme; }
     public List<Option> options() { return options; }
 
@@ -560,26 +588,39 @@ public class ConfigForm {
     }
 
     public void render(DrawTarget target, int viewportW, int viewportH) {
-        int contentW = Math.min(640, viewportW - 80);
-        int contentX = (viewportW - contentW) / 2;
+        // The box to lay out in: an explicit region, or the whole viewport.
+        int areaX = region != null ? region.x : 0;
+        int areaY = region != null ? region.y : 0;
+        int areaW = region != null ? region.width : viewportW;
+        int areaH = region != null ? region.height : viewportH;
+        int areaBottom = areaY + areaH;
 
-        Font titleFont = theme.titleFont;
-        int titleY = Math.max(target.textAscent(titleFont) + 24, viewportH / 8);
-        // Titles carry names the creator chose ("Settings — <level>"), so they
-        // are shortened to the room right of the column rather than run off it.
-        if (title != null) {
-            target.drawText(UiText.fit(target, titleFont, title, viewportW - contentX - 24),
-                    contentX, titleY, titleFont, theme.title);
-        }
+        int contentW = Math.min(640, areaW - (region != null ? 0 : 80));
+        int contentX = areaX + (areaW - contentW) / 2;
 
         Font itemFont = theme.itemFont;
         int ascent = target.textAscent(itemFont);
         int lineHeight = target.textHeight(itemFont);
-        int startY = titleY + 50 + ascent;
+
+        int startY;
+        if (showTitle && title != null) {
+            Font titleFont = theme.titleFont;
+            int titleY = region != null
+                    ? areaY + target.textAscent(titleFont)
+                    : Math.max(target.textAscent(titleFont) + 24, areaH / 8);
+            // Titles carry names the creator chose ("Settings — <level>"), so
+            // they are shortened to the room right of the column rather than
+            // run off it.
+            target.drawText(UiText.fit(target, titleFont, title, areaX + areaW - contentX - 24),
+                    contentX, titleY, titleFont, theme.title);
+            startY = titleY + 50 + ascent;
+        } else {
+            startY = areaY + ascent;
+        }
 
         // Long forms scroll. Capture the layout as fields so update() can drive
         // the scroll bar and wheel on the next frame.
-        visibleCount = Math.max(1, (viewportH - 48 - startY) / rowHeight + 1);
+        visibleCount = Math.max(1, (areaBottom - 48 - startY) / rowHeight + 1);
         maxScroll = Math.max(0, options.size() - visibleCount);
         // Keyboard navigation pulls the selected row into view; free scrolling
         // (wheel / scroll-bar drag) leaves the view where the user put it.
@@ -638,7 +679,7 @@ public class ConfigForm {
             target.drawText(label, contentX, baseY, itemFont, labelColor);
         }
 
-        drawScrollBar(target, ascent, contentX, contentW, startY, viewportH);
+        drawScrollBar(target, ascent, contentX, contentW, startY, areaBottom);
     }
 
     /**
@@ -647,7 +688,7 @@ public class ConfigForm {
      * the track/thumb boxes for {@link #handleScrollBar} to hit-test next frame.
      */
     private void drawScrollBar(DrawTarget target, int ascent,
-                               int contentX, int contentW, int startY, int viewportH) {
+                               int contentX, int contentW, int startY, int boxBottom) {
         scrollTrack.setBounds(0, 0, 0, 0);
         scrollThumb.setBounds(0, 0, 0, 0);
         if (maxScroll <= 0) return; // everything fits; no bar needed
@@ -655,7 +696,7 @@ public class ConfigForm {
         int barW = 10;
         int barX = contentX + contentW + 14;
         int barTop = startY - ascent - 2;
-        int barBottom = Math.min(viewportH - 24, barTop + visibleCount * rowHeight);
+        int barBottom = Math.min(boxBottom - 24, barTop + visibleCount * rowHeight);
         int barH = Math.max(rowHeight, barBottom - barTop);
         scrollTrack.setBounds(barX, barTop, barW, barH);
 
