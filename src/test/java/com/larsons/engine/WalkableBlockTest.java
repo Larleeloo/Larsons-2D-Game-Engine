@@ -80,7 +80,7 @@ class WalkableBlockTest {
     /** A body settles onto the column under its feet, however deep that is. */
     @Test
     void aBodySettlesOntoTheColumnUnderIt() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = floored(format, true);
             int stone = lvl.blocks.get("stone").id();
             for (int layer = 1; layer < 4; layer++) lvl.setTile(5, 5, layer, stone);
@@ -101,7 +101,7 @@ class WalkableBlockTest {
      */
     @Test
     void aTorchIsGeometryAndNotAFloor() {
-        Level lvl = floored(LevelFormat.TOP_DOWN, true);
+        Level lvl = floored(LevelFormat.THREE_D, true);
         lvl.setTile(5, 5, Level.LAYER_UPPER, lvl.blocks.get("torch").id());
         assertEquals(2, lvl.stackHeight(5, 5), "two blocks of geometry");
 
@@ -126,7 +126,7 @@ class WalkableBlockTest {
     /** A stair is walked up, which is what a stair is for. */
     @Test
     void aStairIsWalkedUpWithoutJumping() {
-        Level lvl = floored(LevelFormat.TOP_DOWN, true);
+        Level lvl = floored(LevelFormat.THREE_D, true);
         int stairs = lvl.blocks.get("stone_stairs").id();
         int stone = lvl.blocks.get("stone").id();
         // A staircase east of the spawn, rising a block per column, opening
@@ -155,7 +155,7 @@ class WalkableBlockTest {
                 "walked all the way up the staircase, ending on the top step");
 
         // The same staircase built out of plain blocks stops them at the first.
-        Level walls = floored(LevelFormat.TOP_DOWN, true);
+        Level walls = floored(LevelFormat.THREE_D, true);
         for (int r = 0; r < walls.height; r++) walls.setTile(6, r, 1, stone);
         PlayerState blocked = onCell(walls, 4, 5);
         for (int i = 0; i < 240; i++) step(walls, blocked, input(true, false, false));
@@ -166,7 +166,7 @@ class WalkableBlockTest {
     /** Walking off a ledge falls, and does not hand out a free jump on the way. */
     @Test
     void walkingOffALedgeFallsAndSpendsNoJump() {
-        Level lvl = floored(LevelFormat.TOP_DOWN, true);
+        Level lvl = floored(LevelFormat.THREE_D, true);
         int stone = lvl.blocks.get("stone").id();
         // A plateau three deep, from the west edge out to column 6.
         for (int c = 0; c <= 6; c++) {
@@ -193,7 +193,7 @@ class WalkableBlockTest {
     @Test
     void fallDamageIsOffUntilALevelAsksForIt() {
         for (boolean hurts : List.of(false, true)) {
-            Level lvl = floored(LevelFormat.TOP_DOWN, true);
+            Level lvl = floored(LevelFormat.THREE_D, true);
             lvl.settings.fallDamageEnabled = hurts;
             PlayerState s = onCell(lvl, 4, 5);
             double full = s.health;
@@ -212,7 +212,7 @@ class WalkableBlockTest {
     /** A hop never hurts, whatever the level says about falling. */
     @Test
     void aHopIsNeverFarEnoughToHurt() {
-        Level lvl = floored(LevelFormat.TOP_DOWN, true);
+        Level lvl = floored(LevelFormat.THREE_D, true);
         lvl.settings.fallDamageEnabled = true;
         PlayerState s = onCell(lvl, 4, 5);
         double full = s.health;
@@ -225,7 +225,7 @@ class WalkableBlockTest {
     /** A player is in the way of a block at their own height, and not of one above. */
     @Test
     void aBlockMayBeLaidOverAPlayersHeadButNotThroughThem() {
-        Level lvl = floored(LevelFormat.TOP_DOWN, true);
+        Level lvl = floored(LevelFormat.THREE_D, true);
         PlayerState s = onCell(lvl, 5, 5);
         var space = com.larsons.engine.sim.PerspectiveSpace.of(lvl.perspective);
 
@@ -261,7 +261,7 @@ class WalkableBlockTest {
      * read.
      */
     private static Level walled(boolean vertical) {
-        Level lvl = floored(LevelFormat.TOP_DOWN, vertical);
+        Level lvl = floored(LevelFormat.THREE_D, vertical);
         int stone = lvl.blocks.get("stone").id();
         for (int c = 6; c < lvl.width; c++) {
             for (int r = 0; r < lvl.height; r++) lvl.setTile(c, r, 1, stone);

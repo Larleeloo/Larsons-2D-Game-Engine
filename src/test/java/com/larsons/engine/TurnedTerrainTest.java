@@ -69,7 +69,7 @@ class TurnedTerrainTest {
      */
     @Test
     void aTurnedViewDoesNotSweepTheBoxAroundItself() {
-        Level lvl = floor(LevelFormat.TOP_DOWN, 60, 60);
+        Level lvl = floor(LevelFormat.THREE_D, 60, 60);
 
         int square = fills(lvl, 0);
         int turned = fills(lvl, Camera.EIGHTH_TURN);
@@ -99,7 +99,7 @@ class TurnedTerrainTest {
      */
     @Test
     void aBlockBelowTheScreenStillDrawsWhatReachesBackIntoIt() {
-        Level bare = floor(LevelFormat.TOP_DOWN, 60, 60);
+        Level bare = floor(LevelFormat.THREE_D, 60, 60);
         int lift = TerrainPainter.liftPixels(camera(bare, 0), TILE);
         assertTrue(lift > 0, "a plan view lifts stacked blocks, or there is nothing to test");
 
@@ -110,14 +110,22 @@ class TurnedTerrainTest {
         // and the lift is a third of that, so most camera positions have no
         // row in this band at all.
         int row = 30;
-        double centreY = row * (double) TILE - H / 2.0 - lift / 2.0;
 
-        Level stacked = floor(LevelFormat.TOP_DOWN, 60, 60);
+        Level stacked = floor(LevelFormat.THREE_D, 60, 60);
         int stone = stacked.blocks.get("stone").id();
         for (int c = 0; c < stacked.width; c++) stacked.setTile(c, row, Level.LAYER_UPPER, stone);
 
+        // Placed through the projection rather than in world units: the
+        // camera's tilt foreshortens the depth axis, so "half a lift below the
+        // bottom edge" is a screen distance and the world distance that
+        // produces it depends on how high the camera is standing.
         Camera cam = camera(bare, 0);
-        cam.centerOn(10.5 * TILE, centreY);
+        cam.centerOn(10.5 * TILE, row * (double) TILE);
+        double screenPerWorld = (cam.worldToScreenY(0, (row + 1) * (double) TILE)
+                - cam.worldToScreenY(0, row * (double) TILE)) / (double) TILE;
+        double push = (H + lift / 2.0 - cam.worldToScreenY(0, row * (double) TILE))
+                / screenPerWorld;
+        cam.centerOn(10.5 * TILE, row * (double) TILE - push);
         assertTrue(cam.worldToScreenY(0, row * (double) TILE) > H,
                 "the row was meant to be below the bottom edge");
 
@@ -136,14 +144,13 @@ class TurnedTerrainTest {
      *
      * <p>One face when the tile projects to an upright square — only its near
      * edge is turned toward the viewer — and two when it projects to a diamond,
-     * which a square tile does at every heading halfway between the cardinals,
-     * and which an isometric tile does at the cardinals. Never three: a convex
-     * quad extruded along a screen axis can never turn three of its edges
-     * toward the same side.
+     * which a square tile does at every heading halfway between the cardinals.
+     * Never three: a convex quad extruded along a screen axis can never turn
+     * three of its edges toward the same side.
      */
     @Test
     void aBlockShowsTheFacesTurnedTowardTheCamera() {
-        for (LevelFormat format : new LevelFormat[]{LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
+        for (LevelFormat format : new LevelFormat[]{LevelFormat.THREE_D}) {
             Level lvl = floor(format, 20, 20);
             int stone = lvl.blocks.get("stone").id();
             lvl.setTile(10, 10, Level.LAYER_UPPER, stone);
@@ -160,7 +167,9 @@ class TurnedTerrainTest {
                         - record(bare, eighth * Camera.EIGHTH_TURN).count("fillPolygon")
                         - 1;   // the block's top face
 
-                boolean diamond = (format == LevelFormat.ISOMETRIC) == (eighth % 2 == 0);
+                // A square tile projects to a square at the cardinals and to a
+                // diamond at the four headings halfway between them.
+                boolean diamond = eighth % 2 == 1;
                 assertEquals(diamond ? 2 : 1, faces, format + " at " + eighth
                         + "/8 of a turn: a tile projecting to a "
                         + (diamond ? "diamond shows two side faces" : "square shows one")
@@ -191,7 +200,7 @@ class TurnedTerrainTest {
      */
     @Test
     void aTileReadsTheSameWayRoundAtEveryHeading() {
-        for (LevelFormat format : new LevelFormat[]{LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
+        for (LevelFormat format : new LevelFormat[]{LevelFormat.THREE_D}) {
             Level lvl = floor(format, 20, 20);
             for (int eighth = 0; eighth < 8; eighth++) {
                 Camera cam = camera(lvl, eighth * Camera.EIGHTH_TURN);
@@ -234,7 +243,7 @@ class TurnedTerrainTest {
      */
     @Test
     void theNearerOfTwoBlocksIsDrawnOnTopAtEveryHeading() {
-        for (LevelFormat format : new LevelFormat[]{LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
+        for (LevelFormat format : new LevelFormat[]{LevelFormat.THREE_D}) {
             for (int eighth = 0; eighth < 8; eighth++) {
                 double yaw = eighth * Camera.EIGHTH_TURN;
                 // Toward the viewer on the world plane: the opposite of the way
@@ -287,7 +296,7 @@ class TurnedTerrainTest {
      */
     @Test
     void aBlocksShadowSwingsWithTheWorldAtEveryHeading() {
-        for (LevelFormat format : new LevelFormat[]{LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
+        for (LevelFormat format : new LevelFormat[]{LevelFormat.THREE_D}) {
             Level lvl = floor(format, 20, 20);
             lvl.setTile(10, 10, Level.LAYER_UPPER, lvl.blocks.get("stone").id());
 
@@ -331,7 +340,7 @@ class TurnedTerrainTest {
      */
     @Test
     void surfaceDecorStaysOnTheSideOfItsBlockItBelongsTo() {
-        for (LevelFormat format : new LevelFormat[]{LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
+        for (LevelFormat format : new LevelFormat[]{LevelFormat.THREE_D}) {
             Level bare = floor(format, 20, 20);
 
             for (int eighth = 0; eighth < 8; eighth++) {
@@ -396,7 +405,7 @@ class TurnedTerrainTest {
      */
     @Test
     void aPoolsSurfaceLineStaysOnTheSameRimWhenTheViewTurns() {
-        for (LevelFormat format : new LevelFormat[]{LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
+        for (LevelFormat format : new LevelFormat[]{LevelFormat.THREE_D}) {
             Level lvl = floor(format, 20, 20);
             lvl.setTile(10, 10, lvl.blocks.get("water").id());
 

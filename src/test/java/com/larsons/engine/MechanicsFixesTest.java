@@ -301,8 +301,8 @@ class MechanicsFixesTest {
     @Test
     void generatedMazeIsFullyConnected() {
         Level maze = LevelGenerator.generateMaze("maze", 41, 41, 32, 77L,
-                Perspective.TOP_DOWN);
-        assertEquals(Perspective.TOP_DOWN, maze.perspective);
+                Perspective.THREE_D);
+        assertEquals(Perspective.THREE_D, maze.perspective);
         // Flood-fill from the spawn: every carved room cell (odd, odd) must be
         // reachable, or the maze has sealed-off sections.
         boolean[][] seen = new boolean[maze.width][maze.height];

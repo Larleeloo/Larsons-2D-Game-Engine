@@ -65,7 +65,7 @@ class NetCameraIndependenceTest {
     private static final String LEVEL_JSON = turnableLevel();
 
     private static String turnableLevel() {
-        Level level = LevelFormat.TOP_DOWN.starterLevel("Turned Test Level", 24, 24, 32);
+        Level level = LevelFormat.THREE_D.starterLevel("Turned Test Level", 24, 24, 32);
         level.spawnX = 12 * 32;
         level.spawnY = 12 * 32;
         return level.toJson();

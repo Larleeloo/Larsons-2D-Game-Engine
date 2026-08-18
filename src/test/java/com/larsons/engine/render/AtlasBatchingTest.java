@@ -76,7 +76,8 @@ class AtlasBatchingTest {
     /** The generated-art frames the world draws, which have sprites in them too. */
     @Test
     void theWorldFramesBatchTheirSpritesToo() {
-        for (String name : List.of("world-side-scroll", "world-top-down", "world-isometric")) {
+        for (String name : List.of("world-side-scroll", "world-3d-lowered",
+                "world-3d-overhead")) {
             Row row = one(name);
             assertTrue(row.after().batches() <= row.before().batches(),
                     name + " got worse: " + row);

@@ -276,12 +276,12 @@ public final class TextureKeys {
             // an absent face falls back to the sheet above — so only the ones
             // a creator asked for are listed as files to draw.
             if (b.topTexture()) {
-                out.add(new Entry("Block tops (top-down / isometric)", BLOCKS_TOP,
+                out.add(new Entry("Block tops (3D)", BLOCKS_TOP,
                         b.topTextureKey(), b.key(), b.displayName() + " — top face",
                         List.of()));
             }
             if (b.sideTexture()) {
-                out.add(new Entry("Block sides (top-down / isometric)", BLOCKS_SIDE,
+                out.add(new Entry("Block sides (3D)", BLOCKS_SIDE,
                         b.sideTextureKey(), b.key(), b.displayName() + " — side face",
                         List.of()));
             }
@@ -319,13 +319,30 @@ public final class TextureKeys {
             out.add(new Entry("Player", PLAYER, PlayerSprites.stateKey(state), state,
                     "Player — " + state, List.of(), directions()));
         }
+        // The overhead pool, listed in full beside the standing one: a 3D
+        // level's camera tilts past PlayerSprites.OVERHEAD_DEGREES and draws
+        // from these instead, so a creator who never sees them listed is a
+        // creator who cannot draw them.
+        for (String state : PlayerSprites.ACTION_STATES) {
+            out.add(new Entry("Player (overhead)", PLAYER,
+                    PlayerSprites.topDownStateKey(state), "topdown_" + state,
+                    "Player from above — " + state, List.of(), directions()));
+        }
         // Character profiles: each one's sheets sit beside the player's,
-        // prefixed with the profile key, and split by state and facing too.
+        // prefixed with the profile key, and split by state and facing too —
+        // in both pools, for the same reason.
         for (CharacterProfile c : Characters.all()) {
             for (String state : PlayerSprites.ACTION_STATES) {
                 out.add(new Entry("Characters", PLAYER,
                         PlayerSprites.characterStateKey(c.key, state),
                         c.key + "_" + state, c.name + " — " + state,
+                        List.of(), directions()));
+            }
+            for (String state : PlayerSprites.ACTION_STATES) {
+                out.add(new Entry("Characters (overhead)", PLAYER,
+                        PlayerSprites.characterStateKey(c.key, state, true),
+                        c.key + "_topdown_" + state,
+                        c.name + " from above — " + state,
                         List.of(), directions()));
             }
         }

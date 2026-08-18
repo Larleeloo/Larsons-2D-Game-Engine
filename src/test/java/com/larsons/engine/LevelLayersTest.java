@@ -98,7 +98,7 @@ class LevelLayersTest {
     @Test
     void clearingALayerThatWasNeverBuiltInAllocatesNothing() {
         Level lvl = Level.empty("erase", 8, 8, 32);
-        lvl.setFormat(LevelFormat.TOP_DOWN);
+        lvl.setFormat(LevelFormat.THREE_D);
         lvl.fillFloor(lvl.blocks.get("stone_path").id());
 
         assertFalse(lvl.setTile(4, 4, Level.LAYER_UPPER, 0),
@@ -141,7 +141,7 @@ class LevelLayersTest {
     @Test
     void aColumnStacksUpToTheCeiling() {
         Level lvl = Level.empty("tower", 8, 8, 32);
-        lvl.setFormat(LevelFormat.ISOMETRIC);
+        lvl.setFormat(LevelFormat.THREE_D);
         lvl.fillFloor(lvl.blocks.get("stone_path").id());
         int stone = lvl.blocks.get("stone").id();
 
@@ -163,7 +163,7 @@ class LevelLayersTest {
     @Test
     void aLevelMaySetItsOwnCeilingAndItIsClamped() {
         Level flat = Level.empty("flat", 8, 8, 32);
-        flat.setFormat(LevelFormat.TOP_DOWN);
+        flat.setFormat(LevelFormat.THREE_D);
         flat.fillFloor(flat.blocks.get("stone_path").id());
         int stone = flat.blocks.get("stone").id();
 
@@ -190,7 +190,7 @@ class LevelLayersTest {
     @Test
     void clearingTheFloorClearsTheWholeColumn() {
         Level lvl = Level.empty("column", 8, 8, 32);
-        lvl.setFormat(LevelFormat.TOP_DOWN);
+        lvl.setFormat(LevelFormat.THREE_D);
         lvl.fillFloor(lvl.blocks.get("stone_path").id());
         lvl.setTile(4, 4, Level.LAYER_UPPER, lvl.blocks.get("stone").id());
         assertEquals(2, lvl.stackHeight(4, 4));
@@ -207,7 +207,7 @@ class LevelLayersTest {
     @Test
     void resizingKeepsEveryLayer() {
         Level lvl = Level.empty("resize", 16, 16, 32);
-        lvl.setFormat(LevelFormat.TOP_DOWN);
+        lvl.setFormat(LevelFormat.THREE_D);
         lvl.fillFloor(lvl.blocks.get("stone_path").id());
         int stone = lvl.blocks.get("stone").id();
         lvl.setTile(2, 2, Level.LAYER_UPPER, stone);
@@ -230,7 +230,7 @@ class LevelLayersTest {
     @Test
     void growingPastTheDenseLimitConvertsEveryLayerToChunks() {
         Level lvl = Level.empty("grow", 16, 16, 32);
-        lvl.setFormat(LevelFormat.TOP_DOWN);
+        lvl.setFormat(LevelFormat.THREE_D);
         lvl.fillFloor(lvl.blocks.get("stone_path").id());
         int stone = lvl.blocks.get("stone").id();
         lvl.setTile(2, 2, Level.LAYER_UPPER, stone);
@@ -248,7 +248,7 @@ class LevelLayersTest {
     @Test
     void aTerrainSnapshotRestoresEveryLayer() {
         Level lvl = Level.empty("snapshot", 8, 8, 32);
-        lvl.setFormat(LevelFormat.TOP_DOWN);
+        lvl.setFormat(LevelFormat.THREE_D);
         lvl.fillFloor(lvl.blocks.get("stone_path").id());
         int stone = lvl.blocks.get("stone").id();
         lvl.setTile(4, 4, Level.LAYER_UPPER, stone);
@@ -267,7 +267,7 @@ class LevelLayersTest {
     @Test
     void aBoundsSnapshotRestoresEveryLayer() {
         Level lvl = Level.empty("bounds", 16, 16, 32);
-        lvl.setFormat(LevelFormat.TOP_DOWN);
+        lvl.setFormat(LevelFormat.THREE_D);
         lvl.fillFloor(lvl.blocks.get("stone_path").id());
         int stone = lvl.blocks.get("stone").id();
         lvl.setTile(2, 2, Level.LAYER_UPPER, stone);

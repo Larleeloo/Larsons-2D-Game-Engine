@@ -86,30 +86,28 @@ class PerspectiveSpaceTest {
     void eachFormatKnowsWhichAxisIsUp() {
         assertEquals(PerspectiveSpace.SIDE_VIEW,
                 PerspectiveSpace.of(LevelFormat.SIDE_SCROLLER));
-        assertEquals(PerspectiveSpace.TOP_DOWN, PerspectiveSpace.of(LevelFormat.TOP_DOWN));
-        assertEquals(PerspectiveSpace.ISOMETRIC, PerspectiveSpace.of(LevelFormat.ISOMETRIC));
+        assertEquals(PerspectiveSpace.THREE_D, PerspectiveSpace.of(LevelFormat.THREE_D));
         assertEquals(PerspectiveSpace.SIDE_VIEW, PerspectiveSpace.of((LevelFormat) null));
 
         // Only the side-scroller carries "down" on its world plane.
         assertTrue(PerspectiveSpace.SIDE_VIEW.gravityOnPlane());
         assertFalse(PerspectiveSpace.SIDE_VIEW.hasElevation());
-        for (PerspectiveSpace plane : List.of(PerspectiveSpace.TOP_DOWN,
-                PerspectiveSpace.ISOMETRIC)) {
+        for (PerspectiveSpace plane : List.of(PerspectiveSpace.THREE_D)) {
             assertTrue(plane.hasElevation(), plane + " has a height axis");
             assertFalse(plane.gravityOnPlane(), plane + " does not fall along +y");
             assertEquals(PerspectiveSpace.GRAVITY, plane.gravity(), 0.0001,
                     "gravity does not switch off on a plane, it turns");
         }
 
-        // Height reads differently in the two plan views: top-down's up axis
-        // points at the viewer, so a raised body also grows; isometric's is
-        // oblique and parallel-projected, so it only moves.
-        assertTrue(PerspectiveSpace.TOP_DOWN.heightScale(32, 32) > 1.2,
-                "rising in top-down means coming closer to the camera");
-        assertEquals(1, PerspectiveSpace.ISOMETRIC.heightScale(32, 32), 0.0001,
-                "isometric height lifts a sprite without resizing it");
-        assertEquals(1, PerspectiveSpace.TOP_DOWN.heightScale(0, 32), 0.0001,
+        // 3D's up axis points out of the screen at the viewer, so a raised
+        // body also grows. (How far it is *lifted* is the camera's tilt, which
+        // moves; the growth is the space's, which does not.)
+        assertTrue(PerspectiveSpace.THREE_D.heightScale(32, 32) > 1.2,
+                "rising in 3D means coming closer to the camera");
+        assertEquals(1, PerspectiveSpace.THREE_D.heightScale(0, 32), 0.0001,
                 "…and something on the floor is drawn at its own size");
+        assertEquals(1, PerspectiveSpace.SIDE_VIEW.heightScale(32, 32), 0.0001,
+                "a side view has no elevation to come nearer along");
     }
 
     // --- jump is Space --------------------------------------------------------------
@@ -140,7 +138,7 @@ class PerspectiveSpaceTest {
 
     @Test
     void upWalksNorthOnAPlaneInsteadOfHopping() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = format.starterLevel("Walk", 40, 30, 32);
             GameProfile profile = profileFor(lvl.perspective);
             PlayerState s = new PlayerState(0, "", 300, 300);
@@ -181,14 +179,18 @@ class PerspectiveSpaceTest {
     // --- particle trajectories ------------------------------------------------------
 
     @Test
-    void aFountainRisesUpTheScreenIsometricallyInsteadOfSprayingNorthEast() {
-        // The bug in one picture: the isometric camera turns world "north"
-        // (-y, which is what a side-scrolling burst calls up) into up-and-to-
-        // the-right. A geyser has to go *up*.
-        double[] warped = burstCentroid(Perspective.ISOMETRIC, PerspectiveSpace.SIDE_VIEW,
-                Particles.Style.FOUNTAIN);
-        double[] fixed = burstCentroid(Perspective.ISOMETRIC, PerspectiveSpace.ISOMETRIC,
-                Particles.Style.FOUNTAIN);
+    void aFountainRisesUpTheScreenInsteadOfSprayingNorthEast() {
+        // The bug in one picture: a turned camera sends world "north" (-y,
+        // which is what a side-scrolling burst calls up) up-and-to-the-right.
+        // A geyser has to go *up* the screen whichever way the camera looks,
+        // which it only does if it rises along the elevation axis instead.
+        // Anticlockwise an eighth, which is the heading that sends world north
+        // up and to the right — the drift this is about.
+        double turned = -Camera.EIGHTH_TURN;
+        double[] warped = burstCentroid(Perspective.THREE_D, PerspectiveSpace.SIDE_VIEW,
+                Particles.Style.FOUNTAIN, turned);
+        double[] fixed = burstCentroid(Perspective.THREE_D, PerspectiveSpace.THREE_D,
+                Particles.Style.FOUNTAIN, turned);
 
         assertTrue(warped[0] > CENTRE + 6,
                 "the old screen-space 'up' drifts north-east, x=" + warped[0]);
@@ -201,9 +203,9 @@ class PerspectiveSpaceTest {
     void dripsSplashOverTheirImpactInsteadOfRunningSouth() {
         // "Down the screen" in a top-down level is south along the floor, so a
         // drip used to crawl away from whatever it dripped off.
-        int warpedTop = burstTopEdge(Perspective.TOP_DOWN, PerspectiveSpace.SIDE_VIEW,
+        int warpedTop = burstTopEdge(Perspective.THREE_D, PerspectiveSpace.SIDE_VIEW,
                 Particles.Style.DRIP);
-        int fixedTop = burstTopEdge(Perspective.TOP_DOWN, PerspectiveSpace.TOP_DOWN,
+        int fixedTop = burstTopEdge(Perspective.THREE_D, PerspectiveSpace.THREE_D,
                 Particles.Style.DRIP);
 
         assertTrue(warpedTop > CENTRE + 4,
@@ -229,7 +231,7 @@ class PerspectiveSpaceTest {
 
     @Test
     void aMeteorSalvoFallsOutOfTheSkyOntoTheAimPointOnAPlane() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = format.starterLevel("Strike", 60, 60, 32);
             World world = new World(lvl);
             GameProfile p = profileFor(lvl.perspective);
@@ -282,7 +284,7 @@ class PerspectiveSpaceTest {
 
     @Test
     void aFallingShotClearsWallsAndStrikesWhenItTouchesDown() {
-        Level lvl = LevelFormat.TOP_DOWN.starterLevel("Wall", 40, 40, 32);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Wall", 40, 40, 32);
         // A wall right where it will come down: on the way it is *above* the
         // level, so it must not clip into the wall mid-fall.
         lvl.setTile(20, 20, lvl.blocks.get("stone_wall").id());
@@ -291,7 +293,7 @@ class PerspectiveSpaceTest {
         Projectile m = Projectile.fromSky(1, def, 0, target, target, target, target, 280);
 
         int ticks = 0;
-        while (!m.step(lvl, PerspectiveSpace.TOP_DOWN, false, DT) && ticks < 600) {
+        while (!m.step(lvl, PerspectiveSpace.THREE_D, false, DT) && ticks < 600) {
             assertTrue(m.airborne(), "still in the air on tick " + ticks);
             ticks++;
         }
@@ -307,7 +309,7 @@ class PerspectiveSpaceTest {
     void knockbackFollowsTheHitVectorOnAPlane() {
         Mob north = new Mob(1, MobRegistry.standard().get("slime"), 300, 300);
         // Struck from due north: on a floor, that shoves the mob south.
-        north.damage(1, north.x + north.def.size() / 2, 200, PerspectiveSpace.TOP_DOWN);
+        north.damage(1, north.x + north.def.size() / 2, 200, PerspectiveSpace.THREE_D);
         assertTrue(north.y > 300, "knocked south, y=" + north.y);
         assertEquals(300, north.x, 0.001, "and not sideways for no reason");
 
@@ -351,7 +353,12 @@ class PerspectiveSpaceTest {
      */
     private static double[] burstCentroid(Perspective perspective, PerspectiveSpace space,
                                           Particles.Style style) {
-        BufferedImage canvas = paintBurst(perspective, space, style);
+        return burstCentroid(perspective, space, style, 0);
+    }
+
+    private static double[] burstCentroid(Perspective perspective, PerspectiveSpace space,
+                                          Particles.Style style, double yaw) {
+        BufferedImage canvas = paintBurst(perspective, space, style, yaw);
         long n = 0, sx = 0, sy = 0;
         for (int y = 0; y < CANVAS; y++) {
             for (int x = 0; x < CANVAS; x++) {
@@ -368,7 +375,7 @@ class PerspectiveSpaceTest {
     /** The topmost screen row a burst painted (smaller = higher up the screen). */
     private static int burstTopEdge(Perspective perspective, PerspectiveSpace space,
                                     Particles.Style style) {
-        BufferedImage canvas = paintBurst(perspective, space, style);
+        BufferedImage canvas = paintBurst(perspective, space, style, 0);
         for (int y = 0; y < CANVAS; y++) {
             for (int x = 0; x < CANVAS; x++) {
                 if ((canvas.getRGB(x, y) >>> 24) != 0) return y;
@@ -378,7 +385,7 @@ class PerspectiveSpaceTest {
     }
 
     private static BufferedImage paintBurst(Perspective perspective, PerspectiveSpace space,
-                                            Particles.Style style) {
+                                            Particles.Style style, double yaw) {
         Particles particles = new Particles();
         particles.setSpace(space);
         particles.burst(ORIGIN, ORIGIN, Color.GREEN, 200, style);
@@ -386,6 +393,7 @@ class PerspectiveSpaceTest {
 
         Camera camera = new Camera(perspective, CANVAS, CANVAS);
         camera.tileSize = 32;
+        camera.setYaw(yaw);
         camera.centerOn(ORIGIN, ORIGIN);
         BufferedImage canvas = new BufferedImage(CANVAS, CANVAS, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = canvas.createGraphics();

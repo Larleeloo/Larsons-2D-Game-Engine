@@ -24,8 +24,9 @@ import java.util.Map;
  * <pre>
  * {
  *   "name": "Sample",
- *   "format": "side_scroller" | "top_down" | "isometric",
- *   "perspective": "SIDE_SCROLL" | "TOP_DOWN" | "ISOMETRIC",
+ *   "format": "side_scroller" | "3d"   (older files may say "top_down" or
+ *                                       "isometric"; both load as 3D),
+ *   "perspective": "SIDE_SCROLL" | "THREE_D"   (the legacy key; same story),
  *   "tileSize": 32,
  *   "width": 24, "height": 14,
  *   "maxLayers": 8,                     // only when not the default
@@ -92,6 +93,12 @@ public final class LevelLoader {
         // before this field existed meant and still means.
         if (root.get("heading") instanceof Number h) {
             lvl.authoredHeading = Math.floorMod(h.intValue(), 8);
+        }
+        // The tilt the same way: absent means "before this existed", which
+        // opens at the engine's default rather than at zero — see
+        // Level.authoredPitchDegrees.
+        if (root.get("pitch") instanceof Number pitch) {
+            lvl.authoredPitchDegrees = pitch.doubleValue();
         }
         if (root.containsKey("tileSize")) lvl.tileSize = intOf(root.get("tileSize"), 32);
         // Read before any geometry: installing a layer consults the ceiling,

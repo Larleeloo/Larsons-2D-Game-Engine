@@ -159,7 +159,7 @@ class HeightSimTest {
 
     private static Level floored(boolean vertical) {
         Level lvl = Level.empty("sim", 16, 12, TILE);
-        lvl.setFormat(LevelFormat.TOP_DOWN);
+        lvl.setFormat(LevelFormat.THREE_D);
         lvl.fillFloor(lvl.blocks.get("stone_path").id());
         GameProfile settings = new GameProfile("sim-test");
         settings.verticality = vertical;

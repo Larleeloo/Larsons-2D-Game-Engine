@@ -203,7 +203,11 @@ public class EvolutionScene extends AbstractScene {
         particles.clear();
         if (game == null) game = EvolutionGame.newGame(com.larsons.engine.evolution.Nucleotide.G);
 
-        camera = new Camera(Perspective.TOP_DOWN, viewportWidth, viewportHeight);
+        camera = new Camera(Perspective.THREE_D, viewportWidth, viewportHeight);
+        // A dish is flat and seen from straight above: the camera sits at the top
+        // of its travel and never moves, so the projection is the plain
+        // orthographic one this scene was written against.
+        camera.setPitch(Camera.MAX_PITCH);
         camera.zoom = Math.max(fitZoom(), 1.15);
         camera.centerOn(0, 0);
 

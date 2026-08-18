@@ -14,11 +14,11 @@ a real fallback) — without committing to a single genre.
 
 The engine is built to be **a giant custom level loader**: you group levels
 under a **game type** (a folder), and each **level** carries its own **format**
-— side-scroller, top-down or isometric, each built in its own creative mode —
-plus only the features it needs (zoom, framerate bounds, entity sizes, gravity,
-HUD, …). The format and the toggles live on the level, so one game type can
-hold a diverse mix of levels of all three kinds and they all play as one game;
-the game type just supplies the default template new levels start from.
+— side-scroller or 3D, each built in its own creative mode — plus only the
+features it needs (zoom, framerate bounds, entity sizes, gravity, HUD, …). The
+format and the toggles live on the level, so one game type can hold a mix of
+levels of both kinds and they all play as one game; the game type just supplies
+the default template new levels start from.
 One engine drives many different games.
 
 This engine is a **merge**: the minimal outline above, plus the feature
@@ -28,15 +28,16 @@ over in a generic, data-driven form and wired to the same toggles:
 - **Creative Mode** — a level editor for *painting objects into the world*
   (blocks, lights, mobs, items) with palette categories, drag-painting,
   erasing, pick-block, pan/zoom, play-testing, `Ctrl+Z` undo over **every**
-  action it can take, and per-game-type level saving — in **three modes, one
-  per level format** (side-scroller, top-down, isometric), each with its own
-  palette, starter canvas and movement model. The two plan views build in
-  **three dimensions**: stack columns against the face you point at, sculpt
-  the ground with raise / lower / flatten / smooth brushes, lock a build
-  height to cut a terrace, and roll a whole landscape from noise.
+  action it can take, and per-game-type level saving — in **two modes, one
+  per level format** (side-scroller, 3D), each with its own palette, starter
+  canvas and movement model. The 3D mode builds in **three dimensions**: stack
+  columns against the face you point at, sculpt the ground with raise / lower /
+  flatten / smooth brushes, lock a build height to cut a terrace, and roll a
+  whole landscape from noise — all from a camera you turn around the world and
+  tilt over it while you work.
   Works offline **and inside a multiplayer session**, where strokes replicate
   to every player. See [Creative mode](#creative-mode-paint-objects) and
-  [The three level formats](#the-three-level-formats).
+  [The two level formats](#the-two-level-formats).
 - **Blocks** — a data-driven [`BlockRegistry`](src/main/java/com/larsons/engine/world/BlockRegistry.java)
   (terrain, ores, decorations, light sources) with solidity, drops, and light
   emission; mining/placing in play mode with drops and particles.
@@ -66,7 +67,7 @@ over in a generic, data-driven form and wired to the same toggles:
   online (server-side ammo, snapshot replication, impact FX broadcasts).
 - **First and third person** — `[F5]` cycles the viewpoint the way every 3D
   game does: plan view, first person, third person behind, third person in
-  front. The blocks a top-down or isometric level is already built out of are
+  front. The blocks a 3D level is already built out of are
   drawn as solid cubes seen from *inside* the world through a real perspective
   camera ([`EyeCamera`](src/main/java/com/larsons/engine/graphics/EyeCamera.java)
   + [`SolidPainter`](src/main/java/com/larsons/engine/graphics/SolidPainter.java))
@@ -145,10 +146,10 @@ over in a generic, data-driven form and wired to the same toggles:
   size/count/fps covers the whole pack, and anything you don't supply keeps
   its built-in icon. Blocks get a **second pool for the plan-view
   perspectives** — `blocks_top/` and `blocks_side/` — because a side-scroller
-  and a top-down level look at different faces of the same block. See
+  and a 3D level look at different faces of the same block. See
   [Texture packs](#texture-packs-drop-in-art).
-- **Stacked blocks (top-down & isometric)** — the plan views build in **two
-  layers**, and the stack is their geometry: bare ground is a hole, one layer
+- **Stacked blocks (3D)** — a 3D level builds in **two
+  layers**, and the stack is its geometry: bare ground is a hole, one layer
   is a pathway, two is a barrier. Blocks stack by themselves — place one on a
   cell that already has a block and it goes on top — and a stacked block is
   drawn standing off its own floor tile, **casting a shadow** in the direction
@@ -252,7 +253,7 @@ This engine was built against six explicit requirements:
 | # | Requirement | How it's addressed |
 |---|-------------|--------------------|
 | 1 | **120 FPS** | A fixed-timestep [`GameLoop`](src/main/java/com/larsons/engine/core/GameLoop.java) renders with a configurable cap (default **120**). The limiter schedules frames on an absolute timeline and uses a hybrid coarse-sleep / fine-park wait, so the cap is hit precisely without pegging a CPU. |
-| 2 | **Multiple 2D perspectives** | Three **distinct level formats** ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)) — side-scroller, top-down, isometric — each with its own creative mode, movement model and **number of block layers**, all loading and playing through the same code. [`Camera`](src/main/java/com/larsons/engine/graphics/Camera.java) + [`Perspective`](src/main/java/com/larsons/engine/graphics/Perspective.java) supply the projections (`SIDE_SCROLL`, `TOP_DOWN`, `ISOMETRIC`). A level's format is fixed for its lifetime — the three are different worlds, not three views of one — and a door into a level of another format is how a game changes perspective. What the player *can* switch mid-play is where they stand to look: `[F5]` cycles plan view / first person / third person, drawn from inside the level by [`EyeCamera`](src/main/java/com/larsons/engine/graphics/EyeCamera.java) + [`SolidPainter`](src/main/java/com/larsons/engine/graphics/SolidPainter.java) wherever there is a height axis to stand an eye in. See [First and third person](#first-and-third-person-the-f5-view). |
+| 2 | **Multiple 2D perspectives** | Two **distinct level formats** ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)) — side-scroller and 3D — each with its own creative mode, movement model and **number of block layers**, both loading and playing through the same code. [`Camera`](src/main/java/com/larsons/engine/graphics/Camera.java) + [`Perspective`](src/main/java/com/larsons/engine/graphics/Perspective.java) supply the projections (`SIDE_SCROLL`, `THREE_D`). The 3D camera turns around the player in **eight compass points** and **tilts freely** from 20° to 90° over the floor, which is what folded the old separate "top-down" and "isometric" formats into one: they were the same world seen from two places to stand. A level's format is fixed for its lifetime — the two are different worlds, not two views of one — and a door into a level of the other format is how a game changes perspective. What the player *can* switch mid-play is where they stand to look: `[F5]` cycles plan view / first person / third person, drawn from inside the level by [`EyeCamera`](src/main/java/com/larsons/engine/graphics/EyeCamera.java) + [`SolidPainter`](src/main/java/com/larsons/engine/graphics/SolidPainter.java) wherever there is a height axis to stand an eye in. See [First and third person](#first-and-third-person-the-f5-view). |
 | 3 | **Online play** | ✅ Implemented — see [Online play](#online-play). An authoritative [`GameServer`](src/main/java/com/larsons/engine/net/GameServer.java) ticks the same deterministic [`PlayerPhysics`](src/main/java/com/larsons/engine/sim/PlayerPhysics.java) clients predict with; host in-game or run a headless dedicated server; friends join by IP + port like Minecraft Java edition. |
 | 4 | **Out of the box on any Java machine** | The engine uses **only the JDK** (Java2D / AWT / Swing / sockets). No third-party runtime dependencies — JSON parsing, networking, and shader execution are all in-engine. The optional GL backend lives in a separate Gradle project and a separate jar, so this stays true of the one a player double-clicks — checked on every build by `:verifyNoRuntimeDependencies`, which fails the `jar` task if anything external reaches the runtime classpath. |
 | 5 | **Shader support** | ✅ Implemented — see [Shaders](#shaders). Every [`ShaderPass`](src/main/java/com/larsons/engine/graphics/shader/ShaderPass.java) is defined **GLSL-first** (real GPU fragment-shader source, exportable as `.frag` files) beside a multithreaded CPU implementation, and every pass is compiled on a real driver and diffed against its CPU twin (`ShaderCompileTest`, `ShaderParityTest`: five passes at 0.00 mean channel error out of 255, worst 3.58). **Both sides now execute**: the GL backend compiles each pass's `glsl()` once and runs the chain as a framebuffer ping-pong over the scene texture, and the Java2D backend runs the CPU implementation in parallel row stripes. `GlShaderChainTest` renders every pass both ways through the shipping chain and reproduces those same per-pass errors — which is what says the backend is right, since the shaders were measured before it existed. |
@@ -445,9 +446,9 @@ launch menu, every game's main menu, and the in-game pause menu — see
 - **Level:** `WASD` / arrows to move, **Space** to jump, **+ / -** to zoom
   (if enabled), **Esc** to open the pause menu. **Space is the only jump key** — `W`/`Up` are *directions*:
   they stroke upward while swimming, climb while flying, and walk north in a
-  top-down or isometric level, so holding one no longer bounces you off the
-  ground. Jumping itself works in **all three formats**: gravity in
-  side-scroll, and a **hop along the elevation axis** in top-down and isometric
+  3D level, so holding one no longer bounces you off the
+  ground. Jumping itself works in **both formats**: gravity in
+  side-scroll, and a **hop along the elevation axis** in 3D
   (you rise over your own shadow and land back down) — same key, same double
   jump, same stamina cost. Which of these are available depends on the active
   game type and the character you picked.
@@ -583,7 +584,7 @@ com.larsons.engine
 ├── level
 │   ├── Level.java         Tile grid (palette or block-registry mode) + spawns;
 │   │                      two layers in the plan views — the stack is the geometry
-│   ├── LevelFormat.java   The 3 level formats: side-scroller | top-down | isometric
+│   ├── LevelFormat.java   The 2 level formats: side-scroller | 3D
 │   ├── LevelLoader.java   Load a Level from JSON (or raw text, for the server)
 │   ├── LevelStore.java    Per-game-type level saving + listing levels by format
 │   ├── Cutscene.java      Cutscene data: trigger + actors (animation states) + steps
@@ -692,58 +693,74 @@ before the deadline, then short `parkNanos` slices — because a bare
 `Thread.sleep` oversleeps by a scheduler quantum, which at 120 FPS (8.3 ms
 frames) costs real frames.
 
-### The three level formats
+### The two level formats
 
-A level belongs to one of three **formats**
+A level belongs to one of two **formats**
 ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)) — and
 the format, not the game type, is what decides how it is built and how it
 plays:
 
 | Format | Projection | Up is | Movement | Palette |
 |--------|-----------|-------|----------|---------|
-| **Side-Scroller** | orthographic | up the screen | gravity: run, jump, swim, fall | everything except paths/walls |
-| **Top-Down** | orthographic | out of the screen | walks the plane on both axes | everything, **plus paths & walls** |
-| **Isometric** | diamond | along the screen's vertical | walks the plane on both axes | everything, **plus paths & walls** |
+| **Side-Scroller** | the vertical plane | up the screen | gravity: run, jump, swim, fall | everything except paths/walls |
+| **3D** | the floor, turned and tilted | out of the screen | walks the plane on both axes | everything, **plus paths & walls** |
+
+**There were three of these, and two of them were the same world.** "Top-down"
+and "isometric" differed in exactly one thing: where the camera stood over the
+floor. They shared their gravity axis, their two-layer geometry, their movement
+model, their palette and their file format, and picking between them at the
+moment of *creating* a level asked a creator to commit — permanently, before
+building anything — to a camera angle. They are now one format whose camera the
+player moves while playing: **`,` / `.` turn it around the eight compass points
+and `Home` / `End` raise and lower it freely** between 20° and 90° over the
+floor. Both are remembered per level: a level opens at the heading *and* the
+tilt it was saved from, so a maze laid out to be read from directly above opens
+from directly above. Neither is a constraint on the player, and neither goes
+over the wire. A camera brought most of the way down is the oblique three-quarter view
+that used to be called isometric; a camera at the top of its travel is the
+straight-down view that used to be called top-down. Levels saved under either
+old name load as 3D.
 
 Each format has its **own creative mode** — the main menu's *Creative Mode*
 entry picks which one to open, the *New Level* screen then names and sizes the
 level being built, and the editor paints, play-tests and
 generates for that format. Playing is the opposite: a level simply loads in the
-format it was built in, so a game type can hold side-scrolling caves, a
-top-down overworld and an isometric town at once, and a **door between two
-formats swaps the camera and the movement model mid-play** with no reload.
+format it was built in, so a game type can hold side-scrolling caves and a 3D
+overworld at once, and a **door between the two formats swaps the camera and
+the movement model mid-play** with no reload.
 
-The format is saved in the level file (`"format": "isometric"`), so
+The format is saved in the level file (`"format": "3d"`), so
 [`LevelStore`](src/main/java/com/larsons/engine/level/LevelStore.java) can list
-a game type's levels by format without loading them, and levels written before
-formats existed load as side-scrollers.
+a game type's levels by format without loading them; levels written before
+formats existed load as side-scrollers, and ones written as `top_down` or
+`isometric` load as 3D.
 
 **What actually differs.** Only the *path* and *wall* block families are
-format-specific — they read as plan-view geometry, so they appear in the
-top-down and isometric palettes only (a side-scrolling level that already
-contains them still renders and collides with them). Everything else — blocks,
-liquids, lights, mobs, items, decorations, block details, doors, cutscenes,
-vehicles, mini games — is offered in all three and behaves in all three:
+format-specific — they read as plan-view geometry, so they appear in the 3D
+palette only (a side-scrolling level that already contains them still renders
+and collides with them). Everything else — blocks, liquids, lights, mobs,
+items, decorations, block details, doors, cutscenes, vehicles, mini games — is
+offered in both and behaves in both:
 
-- **Gravity** is a side-scroller property. In the plan-view formats sand and
-  gravel stay where they are placed, liquids pool outward in all four
-  directions instead of pouring down, dropped items skid across the floor and
-  settle (with a hover + shadow) instead of arcing, and vehicles steer both
-  axes.
+- **Gravity** is a side-scroller property. In 3D sand and gravel stay where
+  they are placed, liquids pool outward in all four directions instead of
+  pouring down, dropped items skid across the floor and settle (with a hover +
+  shadow) instead of arcing, and vehicles steer both axes.
 - **Mobs** run a platform-walker AI in side-scroll (jump smarts, swimming,
-  fliers holding altitude) and a plan-view AI in top-down/isometric — every
-  species, fliers included, wanders to 2D destinations and chases, flees and
-  bursts along both axes, refusing to walk into hazards on *either* axis.
-- **The player** walks the whole plane in top-down/isometric, with diagonals
-  normalized (a diagonal isn't √2 faster than an axis) and sprint applying in
-  every direction.
+  fliers holding altitude) and a plan-view AI in 3D — every species, fliers
+  included, wanders to 2D destinations and chases, flees and bursts along both
+  axes, refusing to walk into hazards on *either* axis.
+- **The player** walks the whole plane in 3D, with diagonals normalized (a
+  diagonal isn't √2 faster than an axis) and sprint applying in every
+  direction.
 - **Which way is up** — every directional effect resolves against the format's
   own axes, not a side-scroller's screen. See
-  [the three physical spaces](#the-three-physical-spaces-which-way-is-up).
-- **Online**, the server simulates the *served level's* format, so hosting an
-  isometric level moves everyone isometrically and client prediction agrees.
+  [the two physical spaces](#the-two-physical-spaces-which-way-is-up).
+- **Online**, the server simulates the *served level's* format, so hosting a 3D
+  level moves everyone on the plane and client prediction agrees. The camera's
+  heading and tilt are per-client view state and are never sent.
 
-### The three physical spaces (which way is up)
+### The two physical spaces (which way is up)
 
 A format is not a camera angle with the same physics behind it. Each one loads
 a **space** of its own
@@ -751,21 +768,27 @@ a **space** of its own
 and that is the axis every directional thing in the engine asks before it
 moves:
 
-| | Side-Scroller | Top-Down | Isometric |
-|---|---|---|---|
-| The screen shows | the vertical plane | the floor, from above | the floor, in a diamond |
-| Up points | up the screen | out of the screen, at you | oblique to the view |
-| Gravity pulls along | world **+y** | the **elevation** axis | the **elevation** axis |
-| Height is drawn as | *(no height axis)* | a lift **and a growth** — rising means coming nearer | a pure vertical lift, same size |
+| | Side-Scroller | 3D |
+|---|---|---|
+| The screen shows | the vertical plane | the floor, from a camera standing over it |
+| Up points | up the screen | out of the screen, at you |
+| Gravity pulls along | world **+y** | the **elevation** axis |
+| Height is drawn as | *(no height axis)* | a lift **and a growth** — rising means coming nearer |
+
+How *far* that lift carries is the camera's tilt rather than the space's:
+`Camera.liftScale()` is `cos(pitch)`, so blocks stand up as the camera comes
+down and flatten into their own top faces as it is raised. It never reaches
+zero (`Camera.MIN_LIFT`) — a wall drawn zero pixels tall is a wall that has
+left the level, at exactly the angle a creator is most likely to build from.
 
 **Gravity does not switch off on a plane — it turns.** The pull is the same
-strength in all three formats; only the axis changes. That is what makes a
-top-down level feel like a floor you are standing on rather than a wall you
-are pinned to.
+strength in both formats; only the axis changes. That is what makes a 3D level
+feel like a floor you are standing on rather than a wall you are pinned to.
 
 What used to go wrong without this: anything with a direction was authored in
 screen terms and replayed unchanged in every format, so "up" quietly meant
-**north** in a top-down level and **north-west** in an isometric one. Meteors
+**north** in a 3D level, and swung round to somewhere else again the moment
+the camera turned. Meteors
 called down from the sky spawned a screen's worth of pixels north of their
 target and flew in sideways along the ground; embers drifted north instead of
 rising; drips crawled south away from whatever they dripped off; a blast ring
@@ -776,8 +799,8 @@ tilted out of the floor it had just blasted. Now:
   picked. While falling they are **over** the level — they clear walls and pass
   over heads — and they strike the instant they touch down. In a side-scroller
   they still arrive from up the screen, exactly as before.
-- **Particles** spread across the *floor* (which the isometric camera projects
-  into a diamond for free) and put their upward component on the elevation
+- **Particles** spread across the *floor* (which a turned or tilted camera
+  foreshortens for free) and put their upward component on the elevation
   axis, so embers rise off the ground toward you, fountains go straight up,
   shards rain back down onto the floor, and a blast ring stays flat on it.
 - **Knockback** follows the whole hit vector on a plane: a mob struck from the
@@ -796,8 +819,8 @@ then applies zoom and centering. Orthographic perspectives (`SIDE_SCROLL`,
 diamond. Because the projection is the only thing that changes, the *same*
 tile/sprite drawing code renders correctly in every perspective — see
 `PlayScene`, which simply projects each tile's four world corners. The editor
-grid goes through the same projection, so isometric levels get a diamond
-lattice to line blocks up against.
+grid goes through the same projection, so a turned camera gets a diamond
+lattice to line blocks up against and a tilted one gets a foreshortened grid.
 
 Rendering cost scales with the screen, not the level: `PlayScene` computes the
 visible tile range by inverse-projecting the viewport corners
@@ -836,10 +859,11 @@ GL disturbed up to 169 pixels a step beyond the camera's own shift and now
 disturbs none — the same as Java2D.
 
 A level's perspective is **fixed for its lifetime**. There is no in-game
-switch, because the three formats are not three views of one world: they differ
+switch, because the two formats are not two views of one world: they differ
 in which axis is up, in what a block *means*, and in how many layers of them a
 level is written in, so there is nothing coherent for a mid-level switch to
-show. Walking through a door into a level of another format is how a game
+show. (Moving the *camera* within a 3D level is a different question entirely,
+and free — turn it and tilt it as much as you like.) Walking through a door into a level of another format is how a game
 changes perspective, and that works mid-play with no reload. What *can* be
 switched mid-play is where you stand to look at that world — see below, and
 note that the two are different questions: a level's format is what the world
@@ -849,7 +873,7 @@ note that the two are different questions: a level's format is what the world
 
 **`[F5]` cycles the camera the way every 3D game does** — plan view, first
 person, third person behind, third person in front — in any level with a height
-axis (top-down and isometric). It is the same world, the same blocks and the
+axis (3D). It is the same world, the same blocks and the
 same simulation; what changes is that the second, third and fourth stops are
 drawn from *inside* the level through
 [`EyeCamera`](src/main/java/com/larsons/engine/graphics/EyeCamera.java) and
@@ -940,7 +964,7 @@ the plan view; the toggle is a play-mode one.
 
 ### Stacked blocks (the plan views' geometry)
 
-Top-down and isometric levels build in **two layers of blocks**, and the stack
+3D levels build in **two layers of blocks**, and the stack
 is what their geometry means — see
 [`TerrainPainter`](src/main/java/com/larsons/engine/graphics/TerrainPainter.java)
 and [`Level.walkable`](src/main/java/com/larsons/engine/level/Level.java):
@@ -969,10 +993,11 @@ it puts you in front of the wall — the same rule that already decided whether
 you pass in front of a tree.
 
 **Depth is which cell you are on, not where on it you are standing.** That
-distinction is the whole of it in isometric, where the screen row folds in both
-world axes: a cell and its *diagonal* neighbour sit at the same depth, side by
-side on screen, and an actor standing on one could score a pixel less than the
-block standing on the other. Sprites are billboards wider than the diamond of
+distinction is the whole of it at a diagonal heading, where the screen row folds
+in both world axes: a cell and its *diagonal* neighbour sit at the same depth,
+side by side on screen, and an actor standing on one could score a pixel less
+than the block standing on the other. Sprites are billboards wider than the
+diamond of
 floor they stand on, so that one pixel was the difference between a player
 pressed against a wall and a player with a fifth of themselves — and whatever
 they were holding — eaten by the block beside them, appearing and vanishing as
@@ -1244,8 +1269,12 @@ points on `,` and `.`, easing between them and never resting anywhere else; the
 grid, the block faces, the shadows and the characters' sprites all turn with it;
 the movement keys mean what they look like they mean, at every heading and on
 both sides of a network connection; a level remembers the heading it was built
-from and opens there; and the floor cache knows which headings it can still bake
-— four of the eight in either plan view, including four in isometric it could
+from and opens there; the camera's *other* axis moves too — `Home` and `End`
+raise and lower it freely between 20° and 90° over the floor, which is what let
+the old separate top-down and isometric formats collapse into one 3D format,
+and a level remembers that angle as well; and the floor cache knows which
+headings it can still bake
+— four of the eight headings, including four at diagonal projections it could
 never bake before. Two players may look at one world from different directions,
 which is the point rather than a bug. [`RENDER_PLAN.md`](RENDER_PLAN.md) is the
 plan of record, and all four of its jobs are closed.
@@ -1491,7 +1520,7 @@ its texture…**, which makes the object and opens the
 so a new object can be given its own art on the spot.
 
 A new **block** is always asked one extra question: whether it comes with a
-**top texture, a side texture, or both** — the faces a top-down or isometric
+**top texture, a side texture, or both** — the faces a 3D
 level sees that a side-scroller never does (see
 [texture packs](#texture-packs-drop-in-art)). Whatever you answer, the form
 names the exact files to draw, and a face you leave off falls back to the
@@ -1559,12 +1588,13 @@ the server's to answer for, so undo is offline only; online it says so instead
 of pretending.
 
 **One creative mode per level format.** The main menu's *Creative Mode*
-entry asks which format you are building — Side-Scroller, Top-Down or
-Isometric (with how many levels of each the game type already holds) — and
-the editor opens as that format's creative mode: its camera projection, its
-starter canvas (a ground floor to land on, or a walled plan-view arena), its
-palette, its generator default, and a play-test that moves under that
-format's rules.
+entry asks which format you are building — Side-Scroller or 3D (with how many
+levels of each the game type already holds) — and the editor opens as that
+format's creative mode: its camera projection, its starter canvas (a ground
+floor to land on, or a walled 3D arena), its palette, its generator default,
+and a play-test that moves under that format's rules. In 3D the editor's
+camera turns (`,` / `.`) and tilts (`Home` / `End`) while you build, which is
+usually easier than building a wall from straight above it.
 
 **Picking a format does not create the level.** It opens the **New Level**
 screen ([`NewLevelScene`](src/main/java/com/larsons/engine/demo/NewLevelScene.java)):
@@ -1583,15 +1613,15 @@ The editor's own *New Level* and *Generate* dialogs still carry a **Format**
 row, so you can switch modes in place without leaving it.
 
 Painting itself works in **every format** — the palette paints through the
-same `Camera` projection the game renders with, so building in isometric is
-the same act as building flat, and the grid becomes a diamond lattice to line
-blocks up against.
+same `Camera` projection the game renders with, so building from a turned or
+tilted camera is the same act as building square-on, and the grid follows the
+projection to give you a lattice to line blocks up against.
 
 The **path** and **wall** block families are the one part of the palette that
 is format-specific: they are plan-view geometry, so they appear while building
-top-down and isometric levels and not while building side-scrollers. (A level
+3D levels and not while building side-scrollers. (A level
 that already contains them keeps them — hiding a family from a palette never
-changes a tile.) Everything else in the palette is shared by all three modes.
+changes a tile.) Everything else in the palette is shared by both modes.
 
 **Level size sliders.** The sidebar's bottom panel has live width/height
 sliders: drag to resize the level in place — existing tiles are preserved,
@@ -1612,7 +1642,7 @@ mix** — name up to three extra block keys and every stroke scatters them
 stably alongside the selected block, so one drag lays down varied terrain
 (stone + granite + gravel, say) instead of a flat fill.
 
-**Building 3D landscapes (top-down & isometric).** In the plan views a
+**Building 3D landscapes.** In a 3D level a
 column of blocks is real height — you climb it, stand on it, and fall off
 it — so the editor builds along that axis rather than along a floor.
 
@@ -1771,7 +1801,7 @@ dripstone) generate with the terrain automatically.
 
 The Generate dialog also has a **Mode** switch: *Perlin terrain*, or
 **Maze** — the automatic generator for the plan-view formats (it defaults to
-Maze while building a top-down or isometric level, and to terrain for a
+Maze while building a 3D level, and to terrain for a
 side-scroller). A seeded recursive-backtracker
 maze is built from solid walls and walkable path floors, dressed with
 torches at junctions, loot chests and mobs in the dead ends, multiplayer
@@ -1909,19 +1939,19 @@ A batch of gameplay and editor refinements layered onto the systems above:
 - **The player is exactly 1×1 blocks** — `playerSize` locks to `tileSize`,
   so the player fits perfectly through one-tile gaps in every game type.
 - **Three level formats, one game** — every level *is* a side-scroller, a
-  top-down map, or an isometric one ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)),
+  or a 3D one ([`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)),
   each with its own creative mode, and every level plays in the format it was
   built in — including through a door from one format straight into another,
   which swaps the camera and the movement model mid-play. The **path** and
-  **wall** families paint only in the plan-view modes; everything else — mobs,
+  **wall** families paint only in the 3D mode; everything else — mobs,
   items, blocks, decorations, lights, liquids, vehicles, cutscenes, mini games
-  — is offered in all three and behaves in all three: mobs run format-specific
+  — is offered in both and behaves in both: mobs run format-specific
   AI (platform walkers with jump smarts in side-scroll, full-plane
-  wander/chase/flee in top-down/iso), liquids pour down or pool outward,
+  wander/chase/flee in 3D), liquids pour down or pool outward,
   sand/gravel fall only under gravity, dropped items arc-and-bounce or
   scatter-and-hover with a shadow, the player's diagonals are normalized on the
-  plane, and sprite-sheet block textures warp correctly into the isometric
-  diamond instead of falling back to flat colours.
+  plane, and sprite-sheet block textures warp correctly into a turned or tilted
+  floor instead of falling back to flat colours.
 - **Chests & barrels are real storage** — stand next to one and press `E`:
   its second inventory opens ([`ContainerPanel`](src/main/java/com/larsons/engine/ui/ContainerPanel.java)),
   and the contents **save inside the level data** (`containers` in the level
@@ -2089,8 +2119,9 @@ The direction a character faces picks the sprite that draws them
 - **Side-scroll** — two directions. Facing right, the **right arm swings in
   front of the torso and the left behind it**; facing left, the reverse. It
   is one drawing and its mirror, which is exactly what makes the near arm
-  stay near through a turn.
-- **Top-down / isometric** — **all eight** compass points (E, NE, N, NW, W,
+  stay near through a turn. Nothing about the side-scroller changed when the
+  overhead pool below arrived: it has no camera tilt to cross a threshold with.
+- **3D** — **all eight** compass points (E, NE, N, NW, W,
   SW, S, SE). Walk north and you are drawn from behind; walk south and you
   are looking at the camera; the diagonals are three-quarter views.
 
@@ -2117,6 +2148,36 @@ The same nesting works for mobs (`mobs/slime_walk_e.png` → `mobs/slime_walk`
 (`player/rogue_walk_ne.png`). In creative mode, right-click any of these and
 the texture dialog grows a **Facing** row: leave it on *(every direction)* —
 the normal case — or assign one compass point at a time.
+
+**Two pools, and the camera picks between them.** Everything above draws a
+person *standing in front of you*, and a 3D level's camera does not stay in
+front of them: raise it past **75°** and you are looking at the tops of the
+walls, the tops of the blocks, and — until now — at one full-length standing
+figure pasted flat on the floor. So there is a second pool of art under a
+`topdown` segment, and the camera's tilt chooses it
+([`PlayerSprites.overhead`](src/main/java/com/larsons/engine/graphics/PlayerSprites.java)):
+
+```
+player/walk/n            ->  player/walk_n.png            over the shoulder
+player/topdown/walk/n    ->  player/topdown_walk_n.png    from overhead
+character/rogue/topdown/idle                              a profile's own
+```
+
+Both pools fall back through states and directions the same way, and both end
+at generated art rather than at nothing —
+[`DirectionalSprites`](src/main/java/com/larsons/engine/graphics/DirectionalSprites.java)
+for the standing view and
+[`TopDownSprites`](src/main/java/com/larsons/engine/graphics/TopDownSprites.java)
+for the overhead one, which draws head, shoulders and the arms and feet
+swinging out from under them, as one east-facing figure turned to each of the
+eight headings. Drawing overhead art is therefore optional, and a game that
+never draws any still reads correctly from above.
+
+The overhead pool does **not** fall back to the standing one, deliberately:
+serving standing art from up there is precisely the picture the second pool
+exists to stop, and it would do it silently. A character with no overhead art
+of its own is drawn by `TopDownSprites` in its own body colour — a plainer
+picture of that character, but a picture of it from the right place.
 
 ### Character profiles
 
@@ -2195,7 +2256,7 @@ faster gain **per point of damage dealt**, so a player who fights earns theirs
 long before a player who hides. A full meter fires once on **R**, spends
 itself entirely, and — because every one of them is radial, aimed, or
 self-targeted, with no assumption of a "down" — **plays the same in
-side-scroll, top-down and isometric**.
+side-scroll and 3D**.
 
 | Ability | What it does |
 |---------|--------------|
@@ -2217,7 +2278,7 @@ switched off simply keeps the charge instead of burning it on nothing.
 
 ### Jumping in every perspective
 
-In top-down and isometric levels the tile grid is the **floor**, so gravity has
+In 3D levels the tile grid is the **floor**, so gravity has
 moved off it onto the elevation axis and **Space** lifts you along that instead
 ([`PlayerState.z`](src/main/java/com/larsons/engine/sim/PlayerState.java)):
 you rise, hang, and settle back down over your own **shadow**, which shrinks
@@ -2227,7 +2288,7 @@ the `jumps` stat rule, and while airborne you clear contact-damage tiles
 (lava, spikes) exactly as a side-scroll jump does. The jump/fall animation
 states play off it too, so a per-state sprite sheet animates a hop.
 
-**Space is the jump key, and the only one, in all three formats.** `W`/`Up`
+**Space is the jump key, and the only one, in both formats.** `W`/`Up`
 used to jump as well, which made them unusable as what they actually are — a
 direction. They now only ever mean *up*: stroking toward the surface while
 swimming, climbing while flying, walking north on a plane. Mounts follow the
@@ -2261,7 +2322,8 @@ A complete standalone game inside the engine, launched straight from the
 launch menu as its own option:
 **Auto Battler (2-10 Online)** — no need to pick or create a game type first.
 It plays like Dota Auto Chess / Teamfight
-Tactics on the engine's **isometric** camera, and it is online-first: one
+Tactics on the engine's fixed **board diamond** projection, and it is
+online-first: one
 player hosts (from the lobby screen, exactly like hosting a world server),
 everyone else joins by `ip:port` (default port **7788**). The host can add
 **bots** to fill seats — so it's playable solo against bots, with 2 friends,
@@ -2725,7 +2787,7 @@ cannot ask mid-fight arrive — so the pause screen answers them.
 │        [ Resume ]                  │ THE RUN                      │ │
 │        [ Save Run ]                │ Character            Scout   │ │
 │        [ Save and Quit ]           │ Ultimate         Overdrive   │ │
-│                                    │ World   Top-Down · up north  │ │
+│                                    │ World   3D · up out of screen│ │
 │        [ Options ]                 │ Played             3h 47m    │ │
 │        [ Controls ]                ├──────────────────────────────┤ │
 │        [ Edit in Creative ]        │ VITALS · GOALS · THIS RUN    │ │
@@ -3049,7 +3111,7 @@ yourself — so nobody has to guess or memorize a key. PNG is preferred; GIF
 and JPG load too.
 
 **Blocks have a second pool, for the plan-view perspectives.** A side-scroller
-and a top-down or isometric level look at *different faces* of the same block,
+and a 3D level look at *different faces* of the same block,
 and one sheet cannot be both a wall seen edge-on and a floor seen from above.
 So `blocks_top/` supplies the face a plan view looks down at (floors, and the
 lid of a [stacked block](#stacked-blocks-the-plan-views-geometry)) and
@@ -3430,13 +3492,13 @@ the menu is open, again like Minecraft.
 A **game type** is a named **folder of levels**, stored as a JSON
 [`GameProfile`](src/main/java/com/larsons/engine/config/GameProfile.java). The
 idea: the engine is one big level loader, and a level's toggles tell it which
-features to turn on so the *same* engine can drive a platformer, a top-down
-adventure, an isometric builder, etc.
+features to turn on so the *same* engine can drive a platformer, an overworld
+adventure, a block builder, etc.
 
 **Feature settings belong to a level, and only to a level.** Every level
 carries its own copy ([`Level.settings`](src/main/java/com/larsons/engine/level/Level.java)),
 so a single game type can group wildly different levels — a lit, gravity-on
-boss arena next to an unlit, top-down puzzle room. Loading a level loads its
+boss arena next to an unlit, 3D puzzle room. Loading a level loads its
 settings.
 
 **The game type has no feature settings to edit.** Its own copy is pinned to
@@ -3452,8 +3514,10 @@ default.
 
 **Flow on launch:**
 
-1. **Startup** — pick an existing game type (to keep creating levels within it)
-   or *Create New Game Type*.
+1. **Startup** — pick an existing game (to keep creating levels within it)
+   or *+ Create New Game*. The list shows game names and nothing else: a game
+   type is a folder that can hold levels of both formats, so a level type on
+   that row could only ever be right about some of them.
 2. **Editor** — name it. That is the whole screen.
 3. **Save** — written to `resources/gametypes/<name>.json`.
 4. **Main menu** — **Play Level** opens the last level you played; **Load Level**
@@ -3467,7 +3531,7 @@ default.
    level). The main menu also has **Rename Game Type**, which renames the
    folder — its levels, doors, and custom content move with it.
 5. **New level** — **Creative Mode** asks two questions before it builds
-   anything: which **format** (side-scroller, top-down, isometric), then the
+   anything: which **format** (side-scroller, 3D), then the
    **New Level** screen
    ([`NewLevelScene`](src/main/java/com/larsons/engine/demo/NewLevelScene.java))
    — the level's name, its canvas size, and the same per-level settings form
@@ -3492,7 +3556,7 @@ neither can drift from the other:
 | Feature | Type | Notes |
 |---------|------|-------|
 | Level name | text | renames this level |
-| Level format | cycler | Side-Scroller / Top-Down / Isometric — this level's own format, which it keeps for life |
+| Level format | cycler | Side-Scroller / 3D — this level's own format, which it keeps for life |
 | Zoom enabled | toggle | gates the zoom controls + range |
 | Min / Max / Default zoom | steppers | enabled only when zoom is on |
 | Min / Max framerate | steppers | **Max** is applied live as the render cap |
@@ -3696,7 +3760,7 @@ Level level = LevelLoader.load("levels/sample_level.json");
 ```
 
 `"format"` names the level's [`LevelFormat`](src/main/java/com/larsons/engine/level/LevelFormat.java)
-(`side_scroller` / `top_down` / `isometric`) — which creative mode builds it
+(`side_scroller` / `3d`) — which creative mode builds it
 and how it plays. `"perspective"` is the same choice in the older spelling;
 either key alone is enough, and a level with neither loads as a side-scroller.
 A level keeps the format it was saved with for its whole life.
@@ -3704,7 +3768,7 @@ A level keeps the format it was saved with for its whole life.
 `"upperRle"` (or `"upperChunks"` on a giant level) carries the **second layer
 of blocks** the plan-view formats stack — see
 [Stacked blocks](#stacked-blocks-the-plan-views-geometry). A side-scroller has
-no such key, and neither does a top-down or isometric level written before
+no such key, and neither does a 3D level written before
 blocks stacked: a plan-view level with no upper layer in the file is converted
 on load so it still plays as drawn.
 
@@ -3976,10 +4040,10 @@ character-profile persistence and re-registration per game type, trait
 clamping, level rosters saving and degrading gracefully when a profile is
 deleted, traits actually reaching the physics — speed, sprint permission, air
 jumps, jump height, resized pools — ultimate charging from time and damage,
-one-cast spending, every ability's effect in all three perspectives, sustained
+one-cast spending, every ability's effect in both perspectives, sustained
 buffs lapsing on their own and on death, particle and projectile texture keys
 with their built-in fallbacks, a skinned particle sheet actually rendering,
-and jumping in all three formats: Space off the ground in side-scroll, the
+and jumping in both formats: Space off the ground in side-scroll, the
 plan-view hop's launch/peak/landing, its mid-air steering and double jump, the
 jump/fall animation states it drives, and the Z axis parking when a door leads
 into a side-scrolling level),
@@ -3989,7 +4053,7 @@ jump nothing — on foot or on a mount — while Space still does; meteor salvos
 spawning above the aim point on a plane and landing on the tile they were
 aimed at, still arriving from up the screen in a side-scroller, and a falling
 shot clearing walls until it touches down; particle trajectories rising up the
-screen isometrically instead of spraying north-east and splashing across the
+screen instead of spraying north-east and splashing across the
 floor instead of running south, with the side-scroller's own motion unchanged;
 knockback following the hit vector on a plane; thrown stacks leaving along all
 eight facings),

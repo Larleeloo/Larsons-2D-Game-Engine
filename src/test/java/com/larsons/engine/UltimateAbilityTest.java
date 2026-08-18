@@ -167,9 +167,9 @@ class UltimateAbilityTest {
 
     @Test
     void overdriveIsSustainedAndBuffsSpeedDamageAndStamina() {
-        Level lvl = arena(LevelFormat.TOP_DOWN);
+        Level lvl = arena(LevelFormat.THREE_D);
         World world = new World(lvl);
-        GameProfile profile = profileFor(Perspective.TOP_DOWN);
+        GameProfile profile = profileFor(Perspective.THREE_D);
         PlayerState s = caster("overdrive", lvl);
 
         assertTrue(world.useUltimate(s, s.x, s.y, profile));
@@ -214,9 +214,9 @@ class UltimateAbilityTest {
 
     @Test
     void blinkStrikeMovesTheCasterTowardTheAimAndHurtsWhatItPassesThrough() {
-        Level lvl = arena(LevelFormat.ISOMETRIC);
+        Level lvl = arena(LevelFormat.THREE_D);
         World world = new World(lvl);
-        GameProfile profile = profileFor(Perspective.ISOMETRIC);
+        GameProfile profile = profileFor(Perspective.THREE_D);
         PlayerState s = caster("blink_strike", lvl);
         double startX = s.x;
 
@@ -232,9 +232,9 @@ class UltimateAbilityTest {
 
     @Test
     void timeDilationSlowsEverythingNearbyAndLifeSiphonHealsTheCaster() {
-        Level lvl = arena(LevelFormat.TOP_DOWN);
+        Level lvl = arena(LevelFormat.THREE_D);
         World world = new World(lvl);
-        GameProfile profile = profileFor(Perspective.TOP_DOWN);
+        GameProfile profile = profileFor(Perspective.THREE_D);
 
         PlayerState slower = caster("time_dilation", lvl);
         Mob victim = world.spawnMob("slime", slower.x + 60, slower.y);

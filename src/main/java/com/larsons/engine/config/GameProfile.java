@@ -37,11 +37,13 @@ public class GameProfile {
 
     /**
      * The format new levels start in (requirement #2). A level owns its
-     * perspective from the moment it is created and keeps it — the three
-     * formats differ in which axis is up, in what a block means, and in how
-     * many layers of them a level is written in, so there is no coherent
-     * "switch view" for one to offer. Changing perspective is what walking
-     * through a door into a level of another format does.
+     * perspective from the moment it is created and keeps it — the two formats
+     * differ in which axis is up, in what a block means, and in how many layers
+     * of them a level is written in, so there is no coherent "switch view" for
+     * one to offer. Changing perspective is what walking through a door into a
+     * level of the other format does. (Moving the <em>camera</em> within a 3D
+     * level is a different thing entirely, and free: see
+     * {@link com.larsons.engine.graphics.Camera#tilt}.)
      */
     public Perspective perspective = Perspective.SIDE_SCROLL;
 
@@ -436,10 +438,9 @@ public class GameProfile {
     }
 
     private static Perspective perspectiveOf(String s, Perspective def) {
-        try {
-            return Perspective.valueOf(s.trim().toUpperCase());
-        } catch (RuntimeException e) {
-            return def;
-        }
+        // Through Perspective's own parser rather than valueOf, so a game type
+        // saved when the plan views were two formats still names a world this
+        // engine has.
+        return Perspective.of(s, def);
     }
 }

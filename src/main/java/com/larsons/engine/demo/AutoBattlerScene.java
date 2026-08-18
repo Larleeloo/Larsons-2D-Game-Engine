@@ -281,10 +281,13 @@ public class AutoBattlerScene extends AbstractScene {
 
     @Override
     public void onEnter() {
-        camera = new Camera(Perspective.ISOMETRIC, viewportWidth, viewportHeight);
+        camera = new Camera(Perspective.THREE_D, viewportWidth, viewportHeight);
         camera.tileSize = TILE;
-        camera.isoTileWidth = 64;
-        camera.isoTileHeight = 32;
+        // A fixed diamond rather than a camera anyone can move: an arena is a
+        // board, and a board is drawn from one angle for ever. The levels'
+        // camera turns and tilts (see Camera); this one does neither, so the
+        // squares stay where the layout below measured them.
+        camera.useBoardDiamond(64, 32);
         layoutCamera();
         selectedUnitId = -1;
         selectedItemIndex = -1;

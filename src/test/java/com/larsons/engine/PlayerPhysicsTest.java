@@ -115,12 +115,12 @@ class PlayerPhysicsTest {
         PlayerState s = new PlayerState(1, "t", 64, 64);
 
         PlayerInput right = new PlayerInput(false, true, false, false, 1);
-        PlayerPhysics.step(s, right, level, p, Perspective.TOP_DOWN, DT);
+        PlayerPhysics.step(s, right, level, p, Perspective.THREE_D, DT);
         assertEquals(64 + PlayerPhysics.SPEED * DT, s.x, 1e-9);
         assertEquals(64, s.y, 1e-9);
 
         PlayerInput up = new PlayerInput(false, false, true, false, 2);
-        PlayerPhysics.step(s, up, level, p, Perspective.TOP_DOWN, DT);
+        PlayerPhysics.step(s, up, level, p, Perspective.THREE_D, DT);
         assertEquals(64 - PlayerPhysics.SPEED * DT, s.y, 1e-9, "up walks on the plane");
         assertEquals(0, s.vy, 1e-9, "no gravity in top-down");
     }
@@ -137,7 +137,7 @@ class PlayerPhysicsTest {
         PlayerState s = new PlayerState(1, "t", 64, 64);
 
         PlayerInput upRight = new PlayerInput(false, true, true, false, 1);
-        PlayerPhysics.step(s, upRight, level, p, Perspective.TOP_DOWN, DT);
+        PlayerPhysics.step(s, upRight, level, p, Perspective.THREE_D, DT);
 
         double dx = s.x - 64, dy = s.y - 64;
         assertEquals(PlayerPhysics.SPEED * DT, Math.hypot(dx, dy), 1e-9,
@@ -159,7 +159,7 @@ class PlayerPhysicsTest {
 
         PlayerInput sprintUp = new PlayerInput(false, false, true, false, 1);
         sprintUp.sprint = true;
-        PlayerPhysics.step(s, sprintUp, level, p, Perspective.TOP_DOWN, DT);
+        PlayerPhysics.step(s, sprintUp, level, p, Perspective.THREE_D, DT);
 
         assertEquals(64 - PlayerPhysics.SPEED * PlayerPhysics.SPRINT_FACTOR * DT, s.y, 1e-9);
         assertTrue(s.stamina < stamina, "sprinting north spends stamina");
@@ -173,13 +173,13 @@ class PlayerPhysicsTest {
 
         PlayerInput left = new PlayerInput(true, false, false, false, 1);
         for (int i = 0; i < 60; i++) {
-            PlayerPhysics.step(s, left, level, p, Perspective.TOP_DOWN, DT);
+            PlayerPhysics.step(s, left, level, p, Perspective.THREE_D, DT);
         }
         assertEquals(0, s.x, 1e-9, "left edge clamps");
 
         PlayerInput right = new PlayerInput(false, true, false, false, 2);
         for (int i = 0; i < 600; i++) {
-            PlayerPhysics.step(s, right, level, p, Perspective.TOP_DOWN, DT);
+            PlayerPhysics.step(s, right, level, p, Perspective.THREE_D, DT);
         }
         assertEquals(10 * 32 - 32, s.x, 1e-9, "right edge clamps to width - playerSize");
     }
@@ -207,7 +207,7 @@ class PlayerPhysicsTest {
             PlayerState s = new PlayerState(1, "t", 64, 64);
             PlayerInput up = new PlayerInput(false, false, true, false, 1);
             up.yaw = yaw;
-            PlayerPhysics.step(s, up, level, p, Perspective.TOP_DOWN, DT);
+            PlayerPhysics.step(s, up, level, p, Perspective.THREE_D, DT);
 
             // The compass direction the camera faces, which C1 defines as the
             // one pointing away from the viewer.
@@ -245,7 +245,7 @@ class PlayerPhysicsTest {
                 PlayerState s = new PlayerState(1, "t", 96, 96);
                 PlayerInput in = new PlayerInput(key == 0, key == 1, key == 2, key == 3, 1);
                 in.yaw = eighth * Camera.EIGHTH_TURN;
-                PlayerPhysics.step(s, in, level, p, Perspective.TOP_DOWN, DT);
+                PlayerPhysics.step(s, in, level, p, Perspective.THREE_D, DT);
 
                 double moved = Math.hypot(s.x - 96, s.y - 96);
                 assertEquals(step, moved, 1e-9, "at heading " + (eighth * 45)
@@ -269,7 +269,7 @@ class PlayerPhysicsTest {
             PlayerState s = new PlayerState(1, "t", 96, 96);
             PlayerInput upRight = new PlayerInput(false, true, true, false, 1);
             upRight.yaw = eighth * Camera.EIGHTH_TURN;
-            PlayerPhysics.step(s, upRight, level, p, Perspective.TOP_DOWN, DT);
+            PlayerPhysics.step(s, upRight, level, p, Perspective.THREE_D, DT);
 
             assertEquals(PlayerPhysics.SPEED * DT, Math.hypot(s.x - 96, s.y - 96), 1e-9,
                     "at heading " + (eighth * 45) + "° a diagonal is not one step");
@@ -332,8 +332,8 @@ class PlayerPhysicsTest {
             assertEquals(local.yaw, overTheWire.yaw, 0.0,
                     "the heading did not survive the wire at tick " + i);
 
-            PlayerPhysics.step(predicted, local, level, p, Perspective.TOP_DOWN, DT);
-            PlayerPhysics.step(authoritative, overTheWire, level, p, Perspective.TOP_DOWN, DT);
+            PlayerPhysics.step(predicted, local, level, p, Perspective.THREE_D, DT);
+            PlayerPhysics.step(authoritative, overTheWire, level, p, Perspective.THREE_D, DT);
             assertEquals(predicted.x, authoritative.x, 0.0,
                     "prediction and authority disagree on x at tick " + i);
             assertEquals(predicted.y, authoritative.y, 0.0,
@@ -465,7 +465,7 @@ class PlayerPhysicsTest {
      */
     @Test
     void feetWalkUpToARaisedBlockFromEverySide() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = walledPlane(format);
             GameProfile p = profile();
             Perspective view = format.perspective();
@@ -525,11 +525,11 @@ class PlayerPhysicsTest {
      */
     @Test
     void standingInAsksTheCollisionShapeAndNotTheBodyBox() {
-        Level lvl = walledPlane(LevelFormat.TOP_DOWN);
+        Level lvl = walledPlane(LevelFormat.THREE_D);
         GameProfile p = profile();
         double size = p.playerSize;
-        PlayerState s = walkInto(lvl, p, Perspective.TOP_DOWN, 5 * 32, 8 * 32, 0, -1);
-        PerspectiveSpace plane = PerspectiveSpace.of(Perspective.TOP_DOWN);
+        PlayerState s = walkInto(lvl, p, Perspective.THREE_D, 5 * 32, 8 * 32, 0, -1);
+        PerspectiveSpace plane = PerspectiveSpace.of(Perspective.THREE_D);
 
         assertTrue(s.y + size > 5 * 32 && s.y < 6 * 32,
                 "the sprite's head does reach into the wall's cell");

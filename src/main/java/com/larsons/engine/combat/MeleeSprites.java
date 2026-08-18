@@ -96,10 +96,30 @@ public final class MeleeSprites {
                                                   String state, Facing facing,
                                                   double seconds, double progress,
                                                   int size, Color body) {
+        return playerFrame(characterKey, itemKey, state, facing, seconds, progress,
+                size, body, false);
+    }
+
+    /**
+     * {@link #playerFrame(String, String, String, Facing, double, double, int, Color)}
+     * with the pool the camera's tilt has chosen — see {@code PlayerSprites}.
+     *
+     * <p><b>A wield sheet still wins, in either view.</b> It is art somebody
+     * drew for this object in this hand, and the alternative — dropping it the
+     * moment the camera passes 75° — would take a creator's own work away from
+     * them at an angle they may not have thought to check. The fighter's own
+     * pool is what changes underneath it, which is the case that matters:
+     * nothing ships with wield art, so the overhead view a player actually meets
+     * is the overhead one.
+     */
+    public static PlayerSprites.Frame playerFrame(String characterKey, String itemKey,
+                                                  String state, Facing facing,
+                                                  double seconds, double progress,
+                                                  int size, Color body, boolean overhead) {
         PlayerSprites.Frame wielded = wieldFrame(itemKey, state, facing, seconds, progress);
         if (wielded != null) return wielded;
         return PlayerSprites.directionalFrame(characterKey, state, facing,
-                seconds, progress, size, body);
+                seconds, progress, size, body, overhead);
     }
 
     /**

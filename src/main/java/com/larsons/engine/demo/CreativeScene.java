@@ -1121,6 +1121,12 @@ public class CreativeScene extends AbstractScene {
         if (KeyBinds.pressed(input, GameAction.ROTATE_LEFT)) camera.turn(-1);
         if (KeyBinds.pressed(input, GameAction.ROTATE_RIGHT)) camera.turn(1);
         camera.stepYaw(dt);
+        // The camera's other axis, held rather than pressed and free rather than
+        // snapped: the editor gets it for the same reason the player does, and
+        // needs it more — building a wall is much easier from a camera brought
+        // down over the floor than from one straight above it.
+        if (KeyBinds.down(input, GameAction.LOOK_UP)) camera.tilt(Camera.TILT_SPEED * dt);
+        if (KeyBinds.down(input, GameAction.LOOK_DOWN)) camera.tilt(-Camera.TILT_SPEED * dt);
 
         boolean overSidebar = input.getMouseX() < SIDEBAR_W;
         int wheel = input.getWheelRotation();
@@ -2511,14 +2517,14 @@ public class CreativeScene extends AbstractScene {
 
     /** What the face/state cycler is called for the object being reskinned. */
     private String texStateLabel() {
-        return "block".equals(texEntry.kind) ? "Face (top-down / isometric)"
+        return "block".equals(texEntry.kind) ? "Face (3D)"
                 : "Action state";
     }
 
     /** What the face being edited is used for, so the cycler isn't three words. */
     private String blockFaceNote() {
         return switch (texStates.get(Math.min(texStateIndex, texStates.size() - 1))) {
-            case "top" -> "The face a top-down or isometric level looks down at: "
+            case "top" -> "The face a 3D level's camera looks down at: "
                     + "floors, and the lid of a stacked block.";
             case "side" -> "The face a stacked block turns toward the camera — "
                     + "what gives a wall its height.";
@@ -3793,6 +3799,10 @@ public class CreativeScene extends AbstractScene {
         // rotate key: turning to look at what you are building is not an edit,
         // and making it one would fill the undo history with camera moves. C9.
         level.authoredHeading = camera.heading();
+        // And how high the camera was standing, for the same reason and taken
+        // at the same moment: a level laid out to be read from overhead should
+        // open from overhead.
+        level.authoredPitchDegrees = camera.pitchDegrees();
     }
 
     /** Camera/slider bookkeeping after replacing the edited level. */
@@ -3807,6 +3817,7 @@ public class CreativeScene extends AbstractScene {
         // rather than sliding into it — setYaw is the teleport, turn() is what
         // a player does. C9.
         camera.setYaw(level.authoredHeading * Camera.EIGHTH_TURN);
+        camera.setPitch(Camera.pitchFor(level.authoredPitchDegrees));
         camera.frameOn(level.spawnX, level.spawnY);
         pendingLevelW = level.width;
         pendingLevelH = level.height;
@@ -5197,7 +5208,7 @@ public class CreativeScene extends AbstractScene {
      * "neither" is a real answer rather than a broken block.
      */
     private void addFaceTextureFields() {
-        dialogForm.addToggle("Has a TOP texture (top-down / isometric)",
+        dialogForm.addToggle("Has a TOP texture (3D)",
                 () -> cTopTexture, v -> cTopTexture = v);
         dialogForm.addToggle("Has a SIDE texture (stacked into a wall)",
                 () -> cSideTexture, v -> cSideTexture = v);
@@ -6888,7 +6899,10 @@ public class CreativeScene extends AbstractScene {
         // doing this — the same resolution the play scene uses.
         PlayerSprites.Frame sprite = MeleeSprites.playerFrame(
                 testMe.characterKey, testMeleeItem, testAnimState, seen(testMe.facing),
-                testAnimClock, testMelee.progress(), (int) size, testCharacter.body);
+                testAnimClock, testMelee.progress(), (int) size, testCharacter.body,
+                // The play-test draws what the play scene would draw, and that
+                // now includes which pool the camera's tilt has chosen.
+                PlayerSprites.overhead(camera));
         double px = testDrawX(), py = testDrawY(), pz = testDrawZ();
         camera.worldToScreen(px + hit / 2.0, py + hit, pcorner);
         int w = (int) Math.round(size * camera.zoom);
@@ -7462,7 +7476,7 @@ public class CreativeScene extends AbstractScene {
             }
             case "generate" -> {
                 return "Opens the level generator: rolling landscape, Perlin terrain"
-                        + " with caves and ores, or a top-down maze.";
+                        + " with caves and ores, or a maze on a 3D floor.";
             }
             case "rules" -> {
                 return "Opens Stat Rules: programmable triggers over tracked stats"

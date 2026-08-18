@@ -167,7 +167,7 @@ class CharacterProfileTest {
     @Test
     void theRosterSavesAndLoadsWithTheLevel(@TempDir Path tmp) throws Exception {
         Characters.register(sprinter());
-        Level lvl = LevelFormat.TOP_DOWN.starterLevel("Arena", 24, 24, 32);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Arena", 24, 24, 32);
         lvl.characters.add("sprinter");
         lvl.characters.add(CharacterProfile.DEFAULT_KEY);
 
@@ -198,16 +198,16 @@ class CharacterProfileTest {
         assertEquals("overdrive", s.ultimateKey);
 
         // Speed: the same input carries a faster character further.
-        Level lvl = LevelFormat.TOP_DOWN.starterLevel("Speed", 60, 30, 32);
-        GameProfile profile = profileFor(Perspective.TOP_DOWN);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Speed", 60, 30, 32);
+        GameProfile profile = profileFor(Perspective.THREE_D);
         PlayerState fast = new PlayerState(0, "", 300, 300);
         sprinter().applyTo(fast);
         PlayerState normal = new PlayerState(1, "", 300, 300);
         CharacterProfile.defaultProfile().applyTo(normal);
         for (int i = 0; i < 30; i++) {
             PlayerInput in = new PlayerInput(false, true, false, false, i);
-            PlayerPhysics.step(fast, in, lvl, profile, Perspective.TOP_DOWN, 1 / 60.0);
-            PlayerPhysics.step(normal, in, lvl, profile, Perspective.TOP_DOWN, 1 / 60.0);
+            PlayerPhysics.step(fast, in, lvl, profile, Perspective.THREE_D, 1 / 60.0);
+            PlayerPhysics.step(normal, in, lvl, profile, Perspective.THREE_D, 1 / 60.0);
         }
         assertTrue(fast.x > normal.x + 20,
                 "the 1.8x character should be well ahead, was " + fast.x + " vs " + normal.x);
@@ -215,8 +215,8 @@ class CharacterProfileTest {
 
     @Test
     void aCharacterWithoutSprintNeverSprints() {
-        Level lvl = LevelFormat.TOP_DOWN.starterLevel("Sprint", 60, 30, 32);
-        GameProfile profile = profileFor(Perspective.TOP_DOWN);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Sprint", 60, 30, 32);
+        GameProfile profile = profileFor(Perspective.THREE_D);
 
         CharacterProfile plodder = new CharacterProfile("plodder", "Plodder");
         plodder.sprintEnabled = false;
@@ -228,8 +228,8 @@ class CharacterProfileTest {
         for (int i = 0; i < 30; i++) {
             PlayerInput in = new PlayerInput(false, true, false, false, i);
             in.sprint = true;
-            PlayerPhysics.step(no, in, lvl, profile, Perspective.TOP_DOWN, 1 / 60.0);
-            PlayerPhysics.step(yes, in, lvl, profile, Perspective.TOP_DOWN, 1 / 60.0);
+            PlayerPhysics.step(no, in, lvl, profile, Perspective.THREE_D, 1 / 60.0);
+            PlayerPhysics.step(yes, in, lvl, profile, Perspective.THREE_D, 1 / 60.0);
         }
         assertTrue(yes.x > no.x + 10, "only the sprint-capable character speeds up");
         assertEquals(no.maxStamina, no.stamina, 0.001,

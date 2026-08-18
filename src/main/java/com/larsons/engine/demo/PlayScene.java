@@ -923,6 +923,19 @@ public class PlayScene extends AbstractScene {
             if (KeyBinds.pressed(input, GameAction.ROTATE_LEFT)) camera.turn(-1);
             if (KeyBinds.pressed(input, GameAction.ROTATE_RIGHT)) camera.turn(1);
             camera.stepYaw(dt);
+            // And the other axis of the same camera: held rather than pressed,
+            // and free rather than snapped. Turning around the player is a
+            // choice between eight things and wants to land on one of them;
+            // raising the camera over them is a continuum, and stopping it
+            // halfway is the whole point — a player picks the angle they want to
+            // look at their world from. No-op in a side view, which has no floor
+            // to stand over (Camera.tilt).
+            if (KeyBinds.down(input, GameAction.LOOK_UP)) {
+                camera.tilt(Camera.TILT_SPEED * dt);
+            }
+            if (KeyBinds.down(input, GameAction.LOOK_DOWN)) {
+                camera.tilt(-Camera.TILT_SPEED * dt);
+            }
         }
 
         if (craftingPanel != null) {
@@ -2487,7 +2500,7 @@ public class PlayScene extends AbstractScene {
         standingAt(standing, meX, meY, hitSize(), meZ, () -> {
             drawPlayer(target, meX, meY, meZ, hitSize(), drawSize(), MeleeSprites.playerFrame(
                     me.characterKey, meleeItem, animState, seen(me.facing), animStateClock,
-                    melee.progress(), (int) drawSize(), character.body), null);
+                    melee.progress(), (int) drawSize(), character.body, overheadView()), null);
             drawHeldObject(target, meX, meY, meZ, hitSize(), drawSize(), seen(me.facing),
                     meleeItem, melee.action(), melee.progress(), meleeProfile(p));
         });
@@ -2536,7 +2549,7 @@ public class PlayScene extends AbstractScene {
                 drawPlayer(target, meX, meY, meZ, hitSize(), drawSize(),
                         MeleeSprites.playerFrame(me.characterKey, meleeItem, animState,
                                 seen(me.facing), animStateClock, melee.progress(),
-                                (int) drawSize(), character.body), null);
+                                (int) drawSize(), character.body, overheadView()), null);
                 drawHeldObject(target, meX, meY, meZ, hitSize(), drawSize(), seen(me.facing),
                         meleeItem, melee.action(), melee.progress(), meleeProfile(p));
             });
@@ -3098,8 +3111,8 @@ public class PlayScene extends AbstractScene {
         s.characterName = character == null ? "" : character.name;
         Ultimate ult = Ultimates.of(me);
         s.ultimateName = ult == null ? "" : ult.name();
-        // The format's display name rather than the enum constant: "Top-Down",
-        // not "TOP_DOWN". A pause screen is player-facing.
+        // The format's display name rather than the enum constant: "3D", not
+        // "THREE_D". A pause screen is player-facing.
         s.world = camera == null ? ""
                 : LevelFormat.of(camera.getPerspective()).displayName() + " · up is "
                         + PerspectiveSpace.of(camera.getPerspective()).upLabel();
@@ -3564,6 +3577,9 @@ public class PlayScene extends AbstractScene {
         // Walking through a door into a level authored from another heading
         // lands settled on that one rather than sliding into it. C9.
         camera.setYaw(level.authoredHeading * Camera.EIGHTH_TURN);
+        // …and at the tilt it was built from, which is the other half of the
+        // same sentence now that the camera has two axes a creator can move.
+        camera.setPitch(Camera.pitchFor(level.authoredPitchDegrees));
         // A door can lead from a plan-view level into a side-scroller, which
         // has no height axis and so no solid view to be in. The choice goes
         // back to the level's own view rather than being held in reserve: a
@@ -4207,6 +4223,21 @@ public class PlayScene extends AbstractScene {
         return facing == null ? null : facing.asSeenFrom(viewYaw());
     }
 
+    /**
+     * Whether characters are drawn from the overhead sprite pool this frame —
+     * the flat camera raised past {@link Camera#OVERHEAD_PITCH}.
+     *
+     * <p>The solid views are excluded, and not for want of a pitch: theirs is
+     * the player's own look, which sweeps the whole way up and down several
+     * times in a minute of ordinary play. Swapping every character's art each
+     * time somebody glanced at the floor would be a flicker rather than a view.
+     * The flat camera's tilt is a setting a player chooses and leaves, which is
+     * what makes it a thing art can be chosen by.
+     */
+    private boolean overheadView() {
+        return !solidView() && PlayerSprites.overhead(camera);
+    }
+
     private void drawMeleeArc(DrawTarget target, MeleeProfile profile) {
         camera.worldToScreen(drawX() + hitSize() / 2, drawY() + hitSize() / 2, corner);
         int r = (int) Math.round(profile.reach() * camera.zoom);
@@ -4328,7 +4359,7 @@ public class PlayScene extends AbstractScene {
                     ? (ps.moving ? "walk" : "idle") : ps.meleeAction;
             PlayerSprites.Frame sprite = MeleeSprites.playerFrame(
                     ps.characterKey, ps.heldKey, state, seen(ps.facing),
-                    animClock, ps.meleeProgress, (int) draw, body);
+                    animClock, ps.meleeProgress, (int) draw, body, overheadView());
             MeleeAction move = MeleeAction.byKey(ps.meleeAction);
             standingAt(into, x, y, hit, ps.z, () -> {
                 drawPlayer(target, x, y, ps.z, hit, draw, sprite, ps.name);
@@ -4464,6 +4495,20 @@ public class PlayScene extends AbstractScene {
             hud.append("    |    ").append(viewpoint.label())
                     .append("  [").append(KeyBinds.label(GameAction.TOGGLE_VIEW))
                     .append("] view");
+        }
+        // Where the camera is standing, in the units a player thinks in. It is
+        // on the HUD rather than left to be felt because the tilt is the one
+        // camera control with a threshold in it: at OVERHEAD_DEGREES the
+        // characters change to their overhead art, and a number that says how
+        // close you are to that is the difference between a feature and a
+        // surprise.
+        if (!solidView() && camera.tilts()) {
+            hud.append("    |    camera ")
+                    .append((int) Math.round(camera.pitchDegrees())).append((char) 0x00B0);
+            if (camera.overhead()) hud.append(" overhead");
+            hud.append("  [").append(KeyBinds.label(GameAction.LOOK_UP))
+                    .append("/").append(KeyBinds.label(GameAction.LOOK_DOWN))
+                    .append("] tilt");
         }
         if (net != null) {
             Snapshot snap = net.client().latest();

@@ -56,7 +56,7 @@ class FacingUnderYawTest {
     void everyDirectionAtEveryHeadingIsDrawnAsTheWayItVisiblyMoves() {
         for (int eighth = 0; eighth < 8; eighth++) {
             double yaw = eighth * Camera.EIGHTH_TURN;
-            Camera ground = new Camera(Perspective.TOP_DOWN, 480, 360);
+            Camera ground = new Camera(Perspective.THREE_D, 480, 360);
             ground.tileSize = 32;
             ground.setYaw(yaw);
 

@@ -75,7 +75,7 @@ class StackedBlockTest {
      */
     @Test
     void aStackedBlockStandsAboveItsOwnFloorTile() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level flat = floored(format);
             Level wall = floored(format);
             wall.setTile(15, 15, Level.LAYER_UPPER, wall.blocks.get("stone").id());
@@ -92,7 +92,7 @@ class StackedBlockTest {
     /** The shadow is what makes that height legible from straight above. */
     @Test
     void aStackedBlockCastsAShadowAndAFloorTileDoesNot() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level flat = floored(format);
             Level wall = floored(format);
             wall.setTile(15, 15, Level.LAYER_UPPER, wall.blocks.get("stone").id());
@@ -124,7 +124,7 @@ class StackedBlockTest {
      */
     @Test
     void aPlayerPassesBehindAWallAndInFrontOfTheNextOne() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = floored(format);
             lvl.setTile(15, 15, Level.LAYER_UPPER, lvl.blocks.get("stone").id());
             Camera cam = camera(lvl);
@@ -160,7 +160,7 @@ class StackedBlockTest {
      */
     @Test
     void nothingCoversAnActorStandingAgainstAWallsSouthFace() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = floored(format);
             int stone = lvl.blocks.get("stone").id();
             for (int c = 13; c <= 17; c++) lvl.setTile(c, 15, Level.LAYER_UPPER, stone);
@@ -190,7 +190,7 @@ class StackedBlockTest {
      */
     @Test
     void withinOneTileTheExactPositionStillDecides() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = floored(format);
             Camera cam = camera(lvl);
             // Two markers on the same tile, a few pixels apart along it.
@@ -242,7 +242,7 @@ class StackedBlockTest {
     /** Mining takes a stack apart from the top: wall, then path, then hole. */
     @Test
     void miningTakesAWallDownToAPathAndThenToAHole() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         lvl.stackTile(15, 15, stone);
         World world = new World(lvl);
@@ -262,7 +262,7 @@ class StackedBlockTest {
     /** Placing builds the stack back up in the same order. */
     @Test
     void placingFloorsAHoleBeforeStandingAnythingOnIt() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         lvl.setTile(15, 15, 0);
         World world = new World(lvl);
@@ -298,32 +298,45 @@ class StackedBlockTest {
     // --- blocks are cubes -------------------------------------------------------
 
     /**
-     * A block is as tall as it is wide: one layer of height draws exactly one
-     * tile's worth of screen edge along the axis that carries height.
+     * How tall one layer of height draws: the camera's tilt, applied to a
+     * block that is one tile on every axis.
      *
-     * <p><b>Asserted per projection, because the two arrive at the same number
-     * by different routes.</b> Top-down draws the ground at world scale, so a
-     * unit of height is a unit of screen. Isometric's ground is a diamond
-     * {@code isoTileWidth} across, and a cube's vertical edge there is
-     * <em>half the diamond's width</em> — the classic 64&times;64 block sprite
-     * on a 64&times;32 top face. They agree at 32 px today only because the
-     * diamond happens to be twice the tile; asserting the number alone would
-     * pass just as happily on a formula that draws rhomboids the moment
-     * somebody widens it.
+     * <p><b>A block is no longer "as tall as it is wide", and that is the
+     * tilt arriving rather than a rule being broken.</b> A cube seen from a
+     * camera raised {@code pitch} over the floor shows {@code cos(pitch)} of
+     * its vertical edge, which is the whole of what makes a low camera show
+     * walls and a high one show their tops. Asserted against the camera's own
+     * {@code liftScale} rather than against a number, because the number is
+     * different at every angle and the relationship is not.
+     *
+     * <p>The two ends of the travel are asserted separately, since they are
+     * where the picture is most easily wrong: brought right down the block
+     * stands nearly its full height, and taken straight overhead it keeps
+     * {@link Camera#MIN_LIFT} rather than vanishing — a wall drawn zero pixels
+     * tall would take a plan-view level's geometry off the screen at exactly
+     * the angle a creator is most likely to build from.
      */
     @Test
-    void oneLayerOfHeightIsOneTileOfScreenEdge() {
-        Level topDown = floored(LevelFormat.TOP_DOWN);
-        Camera flat = camera(topDown);
-        assertEquals((int) Math.round(TILE * flat.zoom),
-                TerrainPainter.liftPixels(flat, TILE),
-                "top-down: the ground is drawn at world scale, so a block is a tile tall");
+    void oneLayerOfHeightIsTheTiltAppliedToATile() {
+        Level plan = floored(LevelFormat.THREE_D);
+        for (double deg : new double[]{20, 45, 60, 75, 90}) {
+            Camera cam = camera(plan);
+            cam.setPitch(Math.toRadians(deg));
+            assertEquals((int) Math.round(TILE * cam.zoom * cam.liftScale()),
+                    TerrainPainter.liftPixels(cam, TILE),
+                    "a block at " + deg + "° over the floor");
+        }
 
-        Level iso = floored(LevelFormat.ISOMETRIC);
-        Camera diamond = camera(iso);
-        assertEquals((int) Math.round(diamond.isoTileWidth / 2 * diamond.zoom),
-                TerrainPainter.liftPixels(diamond, TILE),
-                "isometric: a cube's vertical edge is half the diamond's width");
+        Camera low = camera(plan);
+        low.setPitch(Camera.MIN_PITCH);
+        assertTrue(TerrainPainter.liftPixels(low, TILE) > TILE * 0.9,
+                "brought down over the floor, a block stands nearly a tile tall");
+
+        Camera overhead = camera(plan);
+        overhead.setPitch(Camera.MAX_PITCH);
+        assertEquals((int) Math.round(TILE * Camera.MIN_LIFT * overhead.zoom),
+                TerrainPainter.liftPixels(overhead, TILE),
+                "straight down, a block keeps the floor of its height rather than none");
 
         // And a side view has no height axis to lift along at all.
         assertEquals(0, TerrainPainter.liftPixels(
@@ -333,7 +346,7 @@ class StackedBlockTest {
     /** A column of N blocks stands N times as tall, with no seams down it. */
     @Test
     void aColumnStandsAsManyBlocksTallAsItIsDeep() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = floored(format);
             int stone = lvl.blocks.get("stone").id();
             for (int layer = 1; layer <= 4; layer++) lvl.setTile(15, 15, layer, stone);
@@ -434,7 +447,7 @@ class StackedBlockTest {
      */
     @Test
     void placementBuildsToTheCeilingOnlyWhereTheHeightAxisIsOn() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level flat = floored(format);
             int stone = flat.blocks.get("stone").id();
             assertFalse(flat.verticality(), format + ": a level that never asked for height");
@@ -484,7 +497,7 @@ class StackedBlockTest {
      */
     @Test
     void heightIsWhatHoldsYouUpAndSolidityIsWhatStopsYou() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
 
         assertEquals(1, lvl.stackHeight(15, 15), "a bare path is one block of floor");
@@ -504,7 +517,7 @@ class StackedBlockTest {
         assertFalse(lvl.walkable(17, 15), "and that is the whole difference");
 
         // A block with nothing under it: no height, and solid where it sits.
-        Level floating = floored(LevelFormat.TOP_DOWN);
+        Level floating = floored(LevelFormat.THREE_D);
         floating.setTile(15, 15, 0);
         floating.setTile(15, 15, 3, stone);
         assertEquals(0, floating.stackHeight(15, 15),
@@ -513,7 +526,7 @@ class StackedBlockTest {
                 "and the block is still a barrier in the layer it is floating in");
 
         // Nothing at all, anywhere in the column.
-        Level empty = floored(LevelFormat.TOP_DOWN);
+        Level empty = floored(LevelFormat.THREE_D);
         empty.setTile(15, 15, 0);
         assertEquals(0, empty.stackHeight(15, 15), "a hole holds nobody up");
         assertEquals(-1, empty.topSolidLayer(15, 15), "and stops nobody either");
@@ -522,7 +535,7 @@ class StackedBlockTest {
     /** A column of any depth reads its height as the depth it was built to. */
     @Test
     void aTallColumnReadsItsOwnHeight() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = floored(format);
             int stone = lvl.blocks.get("stone").id();
             for (int layer = 1; layer < 5; layer++) lvl.setTile(15, 15, layer, stone);
@@ -557,7 +570,7 @@ class StackedBlockTest {
      */
     @Test
     void heightIsGeometryAndWalkabilityIsSolidity() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
 
         lvl.setTile(15, 15, Level.LAYER_UPPER, lvl.blocks.get("stone").id());
         assertEquals(2, lvl.stackHeight(15, 15));
@@ -574,7 +587,7 @@ class StackedBlockTest {
     @Test
     void theMazeGeneratorStandsItsWallsOnAFloor() {
         Level maze = LevelGenerator.generateMaze("maze", 21, 21, TILE, 5L,
-                LevelFormat.TOP_DOWN);
+                LevelFormat.THREE_D);
         int floors = 0, walls = 0;
         for (int r = 0; r < maze.height; r++) {
             for (int c = 0; c < maze.width; c++) {
@@ -633,7 +646,7 @@ class StackedBlockTest {
 
         // On a stack they rise with the block they belong to, rather than
         // staying on the floor beside the wall being mined.
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level flat = floored(format);
             Level wall = floored(format);
             wall.setTile(15, 15, Level.LAYER_UPPER, wall.blocks.get("stone").id());
@@ -679,7 +692,7 @@ class StackedBlockTest {
      */
     @Test
     void turningTheSunTurnsTheShadows() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level northWest = floored(format);
             northWest.setTile(15, 15, Level.LAYER_UPPER, northWest.blocks.get("stone").id());
             assertEquals(Level.DEFAULT_LIGHT_ANGLE, northWest.lightAngle);
@@ -701,11 +714,11 @@ class StackedBlockTest {
     /** The bearing survives a save, because it is a look the level owns. */
     @Test
     void theLightDirectionIsSavedWithTheLevel() {
-        Level lvl = LevelFormat.ISOMETRIC.starterLevel("Sun", 20, 12, 32);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Sun", 20, 12, 32);
         lvl.lightAngle = 120;
         assertEquals(120.0, LevelLoader.parse(lvl.toJson()).lightAngle);
         // A level that never moved its sun says nothing and loads the default.
-        Level plain = LevelFormat.ISOMETRIC.starterLevel("Plain", 20, 12, 32);
+        Level plain = LevelFormat.THREE_D.starterLevel("Plain", 20, 12, 32);
         assertFalse(plain.toJson().contains("lightAngle"));
         assertEquals(Level.DEFAULT_LIGHT_ANGLE, LevelLoader.parse(plain.toJson()).lightAngle);
     }

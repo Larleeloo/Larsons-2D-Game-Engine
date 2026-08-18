@@ -189,7 +189,7 @@ class CreativeUndoTest {
 
     @Test
     void aCellSnapshotBringsBackTheStackItsDetailsAndItsContainer() {
-        Level lvl = LevelFormat.TOP_DOWN.starterLevel("Cells", 16, 16, 32);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Cells", 16, 16, 32);
         int stone = lvl.blocks.get("stone").id();
         int dirt = lvl.blocks.get("dirt").id();
         lvl.setTile(4, 4, Level.LAYER_GROUND, dirt);
@@ -233,7 +233,7 @@ class CreativeUndoTest {
      */
     @Test
     void aCellSnapshotIsTheWholeColumnHoweverDeepItIs() {
-        Level lvl = LevelFormat.ISOMETRIC.starterLevel("Tower", 16, 16, 32);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Tower", 16, 16, 32);
         int stone = lvl.blocks.get("stone").id();
         int dirt = lvl.blocks.get("dirt").id();
         lvl.setTile(4, 4, Level.LAYER_GROUND, dirt);
@@ -262,7 +262,7 @@ class CreativeUndoTest {
      */
     @Test
     void undoingAStrokeThatBuiltUpwardTakesTheNewLayersDown() {
-        Level lvl = LevelFormat.TOP_DOWN.starterLevel("Grow", 16, 16, 32);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Grow", 16, 16, 32);
         int stone = lvl.blocks.get("stone").id();
         lvl.setTile(4, 4, Level.LAYER_GROUND, lvl.blocks.get("dirt").id());
         assertEquals(1, lvl.stackHeight(4, 4));
@@ -288,7 +288,7 @@ class CreativeUndoTest {
      */
     @Test
     void anUnchangedCellSnapshotsEqual() {
-        Level lvl = LevelFormat.ISOMETRIC.starterLevel("Same", 16, 16, 32);
+        Level lvl = LevelFormat.THREE_D.starterLevel("Same", 16, 16, 32);
         int stone = lvl.blocks.get("stone").id();
         for (int layer = 1; layer < 4; layer++) lvl.setTile(4, 4, layer, stone);
 

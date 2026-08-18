@@ -102,15 +102,15 @@ class GameTypeDefaultsTest {
         // Why the settings form needs no format row of its own: whatever the
         // profile carried, saving writes the level's actual format.
         Level level = Level.empty("Iso Town", 16, 16, 32);
-        level.setFormat(LevelFormat.ISOMETRIC);
+        level.setFormat(LevelFormat.THREE_D);
 
         GameProfile playingWith = new GameProfile("Sandbox");
         playingWith.perspective = Perspective.SIDE_SCROLL;   // contradicts the level
         level.captureSettings(playingWith);
 
-        assertEquals(Perspective.ISOMETRIC, level.settings.perspective,
+        assertEquals(Perspective.THREE_D, level.settings.perspective,
                 "the level's own format wins over anything the profile carried");
-        assertEquals(LevelFormat.ISOMETRIC, level.format());
+        assertEquals(LevelFormat.THREE_D, level.format());
     }
 
     @Test

@@ -44,7 +44,7 @@ class HeightEditorTest {
      */
     @Test
     void aTopFaceBuildsUpwardAndASideFaceBuildsOutward() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = floored(format);
             int stone = lvl.blocks.get("stone").id();
             for (int layer = 1; layer <= 2; layer++) lvl.setTile(10, 10, layer, stone);
@@ -74,7 +74,7 @@ class HeightEditorTest {
     /** A column builds up to the level's ceiling, one block per placement. */
     @Test
     void placingRepeatedlyBuildsAColumnToTheCeiling() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         World world = new World(lvl);
         int stone = lvl.blocks.get("stone").id();
 
@@ -94,7 +94,7 @@ class HeightEditorTest {
      */
     @Test
     void miningTakesTheTopOfTheColumnAndNeverItsMiddle() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         World world = new World(lvl);
         int stone = lvl.blocks.get("stone").id();
         for (int layer = 1; layer <= 4; layer++) lvl.setTile(10, 10, layer, stone);
@@ -123,7 +123,7 @@ class HeightEditorTest {
      */
     @Test
     void aPaintedBlockGoesOnTopOfTheColumnAllTheWayToTheCeiling() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         for (int expected = 1; expected < lvl.layerLimit(); expected++) {
             Brush.Placement at = Brush.place(lvl, 10, 10, -1);
             assertFalse(at.refused(), "layer " + expected + " has room");
@@ -146,7 +146,7 @@ class HeightEditorTest {
      */
     @Test
     void aLockedBuildHeightFillsUpToItAndRepaintsWhatIsAlreadyTaller() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
 
         Brush.Placement climb = Brush.place(lvl, 10, 10, 3);
@@ -188,7 +188,7 @@ class HeightEditorTest {
      */
     @Test
     void theTopOfATallColumnIsWhatComesOffFirst() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         for (int layer = 1; layer <= 4; layer++) lvl.setTile(10, 10, layer, stone);
         assertEquals(4, lvl.topFilledLayer(10, 10));
@@ -203,7 +203,7 @@ class HeightEditorTest {
     /** Raise and lower move a whole footprint a layer at a time. */
     @Test
     void raiseAndLowerMoveTheGroundUnderTheBrush() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         List<int[]> stamp = Brush.cells(Brush.Shape.SQUARE, 3, 10, 10);
 
@@ -229,7 +229,7 @@ class HeightEditorTest {
     /** Flatten levels a footprint to the height under the cursor. */
     @Test
     void flattenLevelsTheGroundToTheCellUnderTheCursor() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         for (int layer = 1; layer <= 3; layer++) lvl.setTile(10, 10, layer, stone);
         lvl.setTile(11, 10, 1, stone);
@@ -245,7 +245,7 @@ class HeightEditorTest {
     /** Smooth turns a step into a slope. */
     @Test
     void smoothTurnsAStepIntoASlope() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         // A cliff: everything west of column 10 stands four deep.
         for (int c = 0; c < 10; c++) {
@@ -272,7 +272,7 @@ class HeightEditorTest {
      */
     @Test
     void flattenAimsAtTheLockedBuildHeight() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         List<int[]> stamp = Brush.cells(Brush.Shape.SQUARE, 3, 10, 10);
 
@@ -294,7 +294,7 @@ class HeightEditorTest {
      */
     @Test
     void sculptingWritesEveryLayerThroughTheWriterItIsGiven() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         List<int[]> stamp = Brush.cells(Brush.Shape.SQUARE, 3, 10, 10);
         List<int[]> writes = new java.util.ArrayList<>();
@@ -316,7 +316,7 @@ class HeightEditorTest {
      */
     @Test
     void thePreviewAgreesWithTheStrokeItIsPreviewing() {
-        Level lvl = floored(LevelFormat.TOP_DOWN);
+        Level lvl = floored(LevelFormat.THREE_D);
         int stone = lvl.blocks.get("stone").id();
         for (int c = 0; c < 10; c++) {
             for (int r = 0; r < lvl.height; r++) {
@@ -345,7 +345,7 @@ class HeightEditorTest {
      */
     @Test
     void aGeneratedLandscapeRollsAndIsAllStandable() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Level lvl = LevelGenerator.generateLandscape("hills", 48, 48, TILE,
                     99L, format, 4);
             int min = Integer.MAX_VALUE, max = 0;
@@ -378,7 +378,7 @@ class HeightEditorTest {
      */
     @Test
     void clickingAColumnsTopInTheEditorBuildsItHigher() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             Editor editor = Editor.open(format);
             Level lvl = editor.level();
             editor.selectFirstBlock();
@@ -413,7 +413,7 @@ class HeightEditorTest {
      */
     @Test
     void theRaiseToolLiftsTheGroundUnderTheBrushAndUndoesInOneStep() {
-        Editor editor = Editor.open(LevelFormat.TOP_DOWN);
+        Editor editor = Editor.open(LevelFormat.THREE_D);
         Level lvl = editor.level();
         editor.selectFirstBlock();
         editor.press(KeyEvent.VK_H);        // Stack -> Raise
@@ -437,7 +437,7 @@ class HeightEditorTest {
     /** The build height winds down past the floor and back to following the surface. */
     @Test
     void theBuildHeightWindsUpAndOffTheBottomBackToTheSurface() {
-        Editor editor = Editor.open(LevelFormat.TOP_DOWN);
+        Editor editor = Editor.open(LevelFormat.THREE_D);
         assertEquals(-1, editor.scene.buildLayer(), "unlocked to start with");
         editor.press(KeyEvent.VK_PAGE_UP);
         editor.press(KeyEvent.VK_PAGE_UP);

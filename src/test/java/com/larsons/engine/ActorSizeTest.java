@@ -69,7 +69,7 @@ class ActorSizeTest {
      */
     @Test
     void redrawingACharacterDoesNotMoveTheirBody() {
-        Level lvl = corridor(LevelFormat.TOP_DOWN);
+        Level lvl = corridor(LevelFormat.THREE_D);
         GameProfile p = profile();
 
         double[] rest = new double[2];
@@ -92,7 +92,7 @@ class ActorSizeTest {
     /** Changing the footprint does move the body — the other half of the split. */
     @Test
     void resizingTheFootprintMovesWhereTheyComeToRest() {
-        Level lvl = corridor(LevelFormat.TOP_DOWN);
+        Level lvl = corridor(LevelFormat.THREE_D);
         GameProfile p = profile();
 
         CharacterProfile small = new CharacterProfile("s", "S");
@@ -114,7 +114,7 @@ class ActorSizeTest {
      */
     @Test
     void aGiantWithASmallFootprintFitsAOneBlockGap() {
-        Level lvl = corridor(LevelFormat.TOP_DOWN);
+        Level lvl = corridor(LevelFormat.THREE_D);
         GameProfile p = profile();
         CharacterProfile giant = new CharacterProfile("g", "Giant");
         giant.spriteScale = ActorSize.MAX_TILES;
@@ -124,7 +124,7 @@ class ActorSizeTest {
         giant.applyTo(s, lvl.tileSize);
         PlayerInput down = new PlayerInput(false, false, false, true, 1);
         for (int i = 0; i < 400; i++) {
-            PlayerPhysics.step(s, down, lvl, p, LevelFormat.TOP_DOWN.perspective(), DT);
+            PlayerPhysics.step(s, down, lvl, p, LevelFormat.THREE_D.perspective(), DT);
         }
         assertTrue(s.y > WALL_ROW * 32, "the giant walked through the gap, reaching y=" + s.y);
     }
@@ -213,7 +213,7 @@ class ActorSizeTest {
      */
     @Test
     void noSpriteIsEatenByAWallAtAnySize() {
-        for (LevelFormat format : List.of(LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC)) {
+        for (LevelFormat format : List.of(LevelFormat.THREE_D)) {
             for (int tile : List.of(16, 32, 64)) {
                 Level lvl = wall(format, tile);
                 for (double sprite : List.of(ActorSize.MIN_TILES, 0.9, 3.0, ActorSize.MAX_TILES)) {

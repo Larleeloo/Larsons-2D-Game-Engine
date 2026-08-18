@@ -317,17 +317,29 @@ public final class TerrainCache {
      * {@code generation} is the separate wholesale counter, for a grid replaced
      * rather than edited.
      *
-     * <p>{@code edgeDx/edgeDy} are where the projection sends one world tile
-     * along +x — the camera's heading, in the only form the baked pixels care
+     * <p>{@code edgeDx/edgeDy} and {@code stepDx/stepDy} are where the
+     * projection sends one world tile along +x and one along +y — the camera's
+     * heading <em>and</em> its tilt, in the only form the baked pixels care
      * about. A chunk baked looking north is a different picture from the same
-     * chunk baked looking east, and without this in the key it would be served
-     * for both. It is the projected edge rather than the angle so that a heading
-     * reached by turning right eight times is the heading it started from, and
-     * because it is what actually determines the pixels.
+     * chunk baked looking east, and a chunk baked from overhead is a different
+     * picture from the same chunk baked from a camera brought down over it;
+     * without these in the key one would be served for the other. They are the
+     * projected edges rather than the angles so that a heading reached by
+     * turning right eight times is the heading it started from, and because
+     * between them they <em>are</em> the projection — two edges pin a linear map
+     * of the plane completely, which is what determines the pixels.
+     *
+     * <p><b>Both edges, not just the first.</b> One edge was enough while the
+     * only thing that could change under it was the heading. It is not enough
+     * once the camera can tilt: at heading zero the +x edge is {@code (tile, 0)}
+     * whatever the pitch, so a key holding only that one would have served a
+     * chunk baked from overhead to a camera that had since been brought all the
+     * way down over the floor.
      */
     private record Key(long generation, long revision, double zoom,
                        Perspective perspective, int tileSize,
-                       double edgeDx, double edgeDy) {}
+                       double edgeDx, double edgeDy,
+                       double stepDx, double stepDy) {}
 
     private final Map<Long, Entry> chunks = new HashMap<>();
 
@@ -438,8 +450,10 @@ public final class TerrainCache {
         long generation = level.terrainGeneration();
         double zoom = camera.zoom;
         Perspective perspective = camera.getPerspective();
-        // The heading, as the key needs it: where one tile along +x lands.
+        // The projection, as the key needs it: where one tile along +x lands,
+        // and where one along +y does.
         double[] edge = camera.planarDelta(level.tileSize, 0);
+        double[] step = camera.planarDelta(0, level.tileSize);
         long animFrame = (long) (animClock * ANIM_FPS);
 
         // The camera enters the terrain's position exactly once, here. Every
@@ -481,7 +495,7 @@ public final class TerrainCache {
         int needed = 0;
         for (int cr = r0; cr <= r1; cr++) {
             for (int cc = c0; cc <= c1; cc++) {
-                Key key = keyFor(level, cc, cr, generation, zoom, perspective, edge);
+                Key key = keyFor(level, cc, cr, generation, zoom, perspective, edge, step);
                 if (cached(chunkKey(cc, cr), key, animFrame) == null) needed++;
             }
         }
@@ -507,7 +521,7 @@ public final class TerrainCache {
                 for (int cr = r0; cr <= r1 && left > 0; cr++) {
                     for (int cc = c0; cc <= c1 && left > 0; cc++) {
                         long id = chunkKey(cc, cr);
-                        Key key = keyFor(level, cc, cr, generation, zoom, perspective, edge);
+                        Key key = keyFor(level, cc, cr, generation, zoom, perspective, edge, step);
                         if (cached(id, key, animFrame) != null) continue;
                         Entry built = build(level, camera, cc, cr, key, animFrame,
                                 renderChunk, chunks.get(id));
@@ -526,7 +540,7 @@ public final class TerrainCache {
         for (int cr = r0; cr <= r1; cr++) {
             for (int cc = c0; cc <= c1; cc++) {
                 long id = chunkKey(cc, cr);
-                Key key = keyFor(level, cc, cr, generation, zoom, perspective, edge);
+                Key key = keyFor(level, cc, cr, generation, zoom, perspective, edge, step);
                 Entry entry = cached(id, key, animFrame);
                 if (entry == null) {
                     entry = build(level, camera, cc, cr, key, animFrame, renderChunk,
@@ -547,10 +561,11 @@ public final class TerrainCache {
 
     /** Everything a chunk's validity depends on. */
     private static Key keyFor(Level level, int chunkCol, int chunkRow, long generation,
-                              double zoom, Perspective perspective, double[] edge) {
+                              double zoom, Perspective perspective, double[] edge,
+                              double[] step) {
         return new Key(generation,
                 level.terrainRevisionAt(chunkCol * CHUNK, chunkRow * CHUNK),
-                zoom, perspective, level.tileSize, edge[0], edge[1]);
+                zoom, perspective, level.tileSize, edge[0], edge[1], step[0], step[1]);
     }
 
     /**
@@ -757,7 +772,14 @@ public final class TerrainCache {
         bake.tileSize = camera.tileSize;
         bake.isoTileWidth = camera.isoTileWidth;
         bake.isoTileHeight = camera.isoTileHeight;
+        if (camera.boardDiamond()) {
+            bake.useBoardDiamond(camera.isoTileWidth, camera.isoTileHeight);
+        }
         bake.setYaw(camera.yaw());
+        // The tilt as well as the heading: both are the projection, and a chunk
+        // baked through a camera that only copied one of them is a chunk drawn
+        // for a picture the frame is not showing.
+        bake.setPitch(camera.pitch());
         double[] focus = camera.inversePlanar(
                 (camera.viewportWidth / 2.0 + latticeX) / camera.zoom,
                 (camera.viewportHeight / 2.0 + latticeY) / camera.zoom);

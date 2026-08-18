@@ -316,7 +316,7 @@ class TerrainCacheTest {
 
     @Test
     void theRevisionCounterMovesOnlyOnRealChanges() {
-        Level lvl = level(LevelFormat.TOP_DOWN, 8, 8);
+        Level lvl = level(LevelFormat.THREE_D, 8, 8);
         long start = lvl.terrainRevision();
 
         lvl.setTile(1, 1, lvl.tileAt(1, 1));
@@ -339,8 +339,7 @@ class TerrainCacheTest {
         // sheet moves together, so the test allows a uniform offset and then
         // demands a close match at it — a per-chunk wobble would satisfy no
         // single offset.
-        for (LevelFormat format : new LevelFormat[]{
-                LevelFormat.SIDE_SCROLLER, LevelFormat.TOP_DOWN}) {
+        for (LevelFormat format : new LevelFormat[]{LevelFormat.SIDE_SCROLLER, LevelFormat.THREE_D}) {
             Level lvl = level(format, TerrainCache.CHUNK * 3, TerrainCache.CHUNK * 3);
             Camera cam = camera(lvl);
             TerrainCache cache = new TerrainCache();
@@ -374,15 +373,15 @@ class TerrainCacheTest {
      * looking north to a camera looking east. Neither is visible in a diff and
      * both put the whole floor somewhere the live sweep is not.
      *
-     * <p>Isometric is in the list, at the headings where the diamond is a
-     * square again — the first time this cache has ever baked a diamond
-     * projection, which is why the bake camera's derivation had to stop
-     * assuming it never would.
+     * <p>The bake camera's derivation had to stop assuming the projection was
+     * never a diamond when the auto-battler's board arrived, and it has to copy
+     * the tilt as well as the heading now that a level's camera has one: both
+     * are the projection, and a chunk baked through half of it is a chunk drawn
+     * for a picture the frame is not showing.
      */
     @Test
     void theBakedFloorMatchesTheLiveSweepAtEveryHeadingItClaims() {
-        for (LevelFormat format : new LevelFormat[]{
-                LevelFormat.SIDE_SCROLLER, LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
+        for (LevelFormat format : new LevelFormat[]{LevelFormat.SIDE_SCROLLER, LevelFormat.THREE_D}) {
             for (int eighth = 0; eighth < 8; eighth++) {
                 double yaw = eighth * Camera.EIGHTH_TURN;
                 Level lvl = level(format, TerrainCache.CHUNK * 3, TerrainCache.CHUNK * 3);
@@ -434,7 +433,7 @@ class TerrainCacheTest {
      */
     @Test
     void turningTheCameraRebuildsTheFloorRatherThanServingTheOldHeading() {
-        Level lvl = level(LevelFormat.TOP_DOWN, TerrainCache.CHUNK * 3, TerrainCache.CHUNK * 3);
+        Level lvl = level(LevelFormat.THREE_D, TerrainCache.CHUNK * 3, TerrainCache.CHUNK * 3);
         Camera cam = camera(lvl);
         TerrainCache cache = new TerrainCache();
         warmUp(lvl, cam, cache);
@@ -474,7 +473,7 @@ class TerrainCacheTest {
      */
     @Test
     void aTurnInFlightSweepsLiveAndLeavesTheCacheWarmBehindIt() {
-        Level lvl = level(LevelFormat.TOP_DOWN, TerrainCache.CHUNK * 3, TerrainCache.CHUNK * 3);
+        Level lvl = level(LevelFormat.THREE_D, TerrainCache.CHUNK * 3, TerrainCache.CHUNK * 3);
         Camera cam = camera(lvl);
         TerrainCache cache = new TerrainCache();
         warmUp(lvl, cam, cache);
@@ -510,12 +509,63 @@ class TerrainCacheTest {
     }
 
     @Test
-    void isometricIsNotCachedBecauseItsEdgesAreAntialiased() {
+    void aDiamondIsNotCachedBecauseItsEdgesAreAntialiased() {
         // Diamond tiles share diagonal edges; baked separately they blend
-        // against transparency and every shared edge picks up a seam.
-        assertFalse(TerrainCache.faithfulIn(unturned(Perspective.ISOMETRIC)));
+        // against transparency and every shared edge picks up a seam. No level
+        // is drawn that way any more — the board games are (Camera's board
+        // diamond) — and the rule that excludes it is the same one that lets
+        // the other two in, which is why it is still worth stating.
+        assertFalse(TerrainCache.faithfulIn(board(0)));
         assertTrue(TerrainCache.faithfulIn(unturned(Perspective.SIDE_SCROLL)));
-        assertTrue(TerrainCache.faithfulIn(unturned(Perspective.TOP_DOWN)));
+        assertTrue(TerrainCache.faithfulIn(unturned(Perspective.THREE_D)));
+    }
+
+    /**
+     * Tilting the camera does not cost the floor its cache.
+     *
+     * <p>Worth stating because it is the one thing a free tilt could plausibly
+     * have broken, and it would have broken it invisibly — as a frame time
+     * rather than as a picture. The reason it does not: the tilt scales the
+     * depth axis and leaves the other alone, so at a cardinal heading both tile
+     * edges stay exactly on the screen axes however far the camera is raised.
+     * It <em>is</em> in the cache key, though; the test below has that.
+     */
+    @Test
+    void tiltingTheCameraKeepsTheFloorCacheable() {
+        for (double deg : new double[]{20, 35, 60, 75, 90}) {
+            Camera cam = turned(Perspective.THREE_D, 0);
+            cam.setPitch(Math.toRadians(deg));
+            assertTrue(TerrainCache.faithfulIn(cam),
+                    "a camera at " + deg + "° over the floor");
+        }
+    }
+
+    /**
+     * A chunk baked at one tilt is not served at another.
+     *
+     * <p>The tilt is half the projection, so it belongs in the validity key
+     * beside the heading — and unlike the heading it is invisible to the +x
+     * tile edge at heading zero, which is exactly where the old one-edge key
+     * would have gone on serving a picture drawn from somewhere else.
+     */
+    @Test
+    void aChunkBakedAtOneTiltIsRebuiltAtAnother() {
+        Level lvl = level(LevelFormat.THREE_D, TerrainCache.CHUNK * 2, TerrainCache.CHUNK * 2);
+        Camera cam = camera(lvl);
+        TerrainCache cache = new TerrainCache();
+
+        cam.setPitch(Math.toRadians(60));
+        paint(lvl, cam, cache, bounds(lvl));
+        paint(lvl, cam, cache, bounds(lvl));
+        cache.resetCounters();
+        paint(lvl, cam, cache, bounds(lvl));
+        assertTrue(cache.hits() > 0, "a settled camera is served from cache");
+
+        cam.setPitch(Math.toRadians(85));
+        cache.resetCounters();
+        paint(lvl, cam, cache, bounds(lvl));
+        assertEquals(0, cache.hits(),
+                "a chunk baked from a lower camera must not be served to a raised one");
     }
 
     /**
@@ -526,8 +576,8 @@ class TerrainCacheTest {
      * <p>C3's precondition measurement, as a rule. A tile edge on a screen axis
      * has no partial coverage to blend, so chunk images composite exactly; a
      * diagonal one blends against transparency in its own image and leaves the
-     * background showing through along every shared edge. Top-down loses that
-     * property the moment it turns off a cardinal heading and isometric
+     * background showing through along every shared edge. A 3D level loses that
+     * property the moment it turns off a cardinal heading, and a diamond
      * <em>gains</em> it at 45°, where an eighth of a turn puts the diamond's
      * edges back on the axes. The seam measured 0.5–0.7% of frame pixels at
      * every heading this says no to, and 0.001–0.055% at every heading it says
@@ -542,30 +592,29 @@ class TerrainCacheTest {
             assertTrue(TerrainCache.faithfulIn(turned(Perspective.SIDE_SCROLL, yaw)),
                     "a side-scroller at " + eighth + "/8 of a turn");
 
-            // Top-down keeps its axis-aligned edges only at the cardinals.
+            // A 3D level keeps its axis-aligned edges only at the cardinals.
             assertEquals(eighth % 2 == 0,
-                    TerrainCache.faithfulIn(turned(Perspective.TOP_DOWN, yaw)),
-                    "top-down at " + eighth + "/8 of a turn: cacheable exactly when its "
+                    TerrainCache.faithfulIn(turned(Perspective.THREE_D, yaw)),
+                    "3D at " + eighth + "/8 of a turn: cacheable exactly when its "
                             + "tile edges are still on the screen axes");
 
-            // Isometric is the same rule in the opposite phase: the diamond is
-            // a square again at the diagonal headings.
-            assertEquals(eighth % 2 == 1,
-                    TerrainCache.faithfulIn(turned(Perspective.ISOMETRIC, yaw)),
-                    "isometric at " + eighth + "/8 of a turn: an eighth of a turn puts "
+            // A board diamond is the same rule in the opposite phase: the
+            // diamond is a square again at the diagonal headings.
+            assertEquals(eighth % 2 == 1, TerrainCache.faithfulIn(board(yaw)),
+                    "a diamond at " + eighth + "/8 of a turn: an eighth of a turn puts "
                             + "the diamond's edges back on the screen axes");
         }
     }
 
-    /** Mid-snap, between two headings, nothing is cacheable in a plan view. */
+    /** Mid-snap, between two headings, a turned floor is not cacheable. */
     @Test
-    void aTurnInFlightIsNotCacheableInEitherPlanView() {
+    void aTurnInFlightIsNotCacheable() {
         for (double deg : new double[]{5, 22.5, 30, 67.5, 100}) {
             double yaw = Math.toRadians(deg);
-            assertFalse(TerrainCache.faithfulIn(turned(Perspective.TOP_DOWN, yaw)),
-                    "top-down mid-turn at " + deg + "°");
-            assertFalse(TerrainCache.faithfulIn(turned(Perspective.ISOMETRIC, yaw)),
-                    "isometric mid-turn at " + deg + "°");
+            assertFalse(TerrainCache.faithfulIn(turned(Perspective.THREE_D, yaw)),
+                    "3D mid-turn at " + deg + "°");
+            assertFalse(TerrainCache.faithfulIn(board(yaw)),
+                    "a diamond mid-turn at " + deg + "°");
         }
     }
 
@@ -587,7 +636,7 @@ class TerrainCacheTest {
      */
     @Test
     void theCacheabilityRuleMatchesTheSeamItIsAbout() {
-        for (LevelFormat format : new LevelFormat[]{LevelFormat.TOP_DOWN, LevelFormat.ISOMETRIC}) {
+        for (LevelFormat format : new LevelFormat[]{LevelFormat.THREE_D}) {
             for (int eighth = 0; eighth < 8; eighth++) {
                 Level lvl = level(format, 24, 24);
                 Camera cam = camera(lvl);
@@ -675,16 +724,26 @@ class TerrainCacheTest {
         return cam;
     }
 
+    /** A board-game camera at {@code yaw}: the fixed diamond, not a level's. */
+    private static Camera board(double yaw) {
+        Camera cam = turned(Perspective.THREE_D, yaw);
+        cam.useBoardDiamond(TILE * 2, TILE);
+        return cam;
+    }
+
     @Test
-    void anIsometricLevelDrawsIdenticallyWithOrWithoutACache() {
-        Level lvl = level(LevelFormat.ISOMETRIC, 16, 16);
-        Camera cam = camera(lvl);
+    void aDiamondDrawsIdenticallyWithOrWithoutACache() {
+        // The cache stands aside where it is not faithful, and "stands aside"
+        // has to mean exactly that: not a smaller seam, none.
+        Level lvl = level(LevelFormat.THREE_D, 16, 16);
+        Camera cam = board(0);
+        cam.centerOn(lvl.width * TILE / 2.0, lvl.height * TILE / 2.0);
 
         BufferedImage live = paint(lvl, cam, null, bounds(lvl));
         BufferedImage withCache = paint(lvl, cam, new TerrainCache(), bounds(lvl));
 
         assertEquals(0, differingPixels(live, withCache),
-                "handing a cache to an isometric level must change nothing at all");
+                "handing a cache to a diamond projection must change nothing at all");
     }
 
     @Test
@@ -780,7 +839,7 @@ class TerrainCacheTest {
     void aDecoratorTurnsTheCacheOff() {
         // An open container's lid animates over a finished top face; baking it
         // would freeze it mid-swing until someone edited the level.
-        Level lvl = level(LevelFormat.TOP_DOWN, 16, 16);
+        Level lvl = level(LevelFormat.THREE_D, 16, 16);
         Camera cam = camera(lvl);
         TerrainCache cache = new TerrainCache();
         RecordingTarget target = new RecordingTarget(W, H);

@@ -166,7 +166,11 @@ public class DeckGameScene extends AbstractScene {
 
     @Override
     public void onEnter() {
-        camera = new Camera(Perspective.TOP_DOWN, viewportWidth, viewportHeight);
+        camera = new Camera(Perspective.THREE_D, viewportWidth, viewportHeight);
+        // A board is flat and seen from straight above: the camera sits at the top
+        // of its travel and never moves, so the projection is the plain
+        // orthographic one this scene was written against.
+        camera.setPitch(Camera.MAX_PITCH);
         camera.zoom = 1;
         camera.centerOn(viewportWidth / 2.0, viewportHeight / 2.0);
         particles.clear();
