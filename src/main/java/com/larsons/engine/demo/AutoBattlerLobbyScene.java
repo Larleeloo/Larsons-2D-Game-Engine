@@ -92,8 +92,11 @@ public class AutoBattlerLobbyScene extends AbstractScene {
         form.addAction("Customize Skins", () -> scenes.transitionTo("skins"));
         form.addAction("Customize Board", () -> scenes.transitionTo("boardtheme"));
         form.addAction("How to Play", () -> scenes.transitionTo("autoguide"));
+        // This game's own controls, not the engine's: a mini game is a separate
+        // game with a separate keyboard (GameAction.Category.AUTO_BATTLER).
         form.addAction("Controls (Key Binds)",
-                () -> KeyBindsScene.open(scenes, "autolobby"));
+                () -> KeyBindsScene.openFor(scenes, "autolobby",
+                        com.larsons.engine.input.GameAction.Category.AUTO_BATTLER));
         form.addAction("Back", () -> scenes.transitionTo("startup"));
     }
 

@@ -25,7 +25,6 @@ import com.larsons.engine.scene.AbstractScene;
 import java.awt.Color;
 import java.awt.Font;
 import java.awt.Rectangle;
-import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -50,7 +49,10 @@ import java.util.Map;
  * buy any time on your turn. <b>R</b> or the button reveals your remaining
  * hand (gold + might); <b>E</b>/the button ends your turn after revealing.
  * Right-click cancels a selection. <b>H</b> shows the rules; <b>Esc</b>
- * pauses (or closes overlays).
+ * pauses (or closes overlays). Those keys are the defaults: this game has its
+ * own group of rebindable actions ({@code GameAction.Category.DECK}) and its
+ * own controls screen on the lobby, and every prompt on screen reads the bind
+ * rather than the letter written here.
  */
 public class DeckGameScene extends AbstractScene {
 
@@ -251,11 +253,11 @@ public class DeckGameScene extends AbstractScene {
                 paused = !paused;
             }
         }
-        if (paused && input.isKeyJustPressed(KeyEvent.VK_L)) {
+        if (paused && KeyBinds.pressed(input, GameAction.DECK_LEAVE)) {
             leave();
             return;
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_H)) showHelp = !showHelp;
+        if (KeyBinds.pressed(input, GameAction.DECK_HELP)) showHelp = !showHelp;
         if (paused || showHelp || disconnected || over) return;
 
         handleKeys(input);
@@ -279,11 +281,11 @@ public class DeckGameScene extends AbstractScene {
     private void handleKeys(InputManager input) {
         DeckClient.You you = client.you();
         if (you == null || !myTurn()) return;
-        if (input.isKeyJustPressed(KeyEvent.VK_R) && !you.revealed()) {
+        if (KeyBinds.pressed(input, GameAction.DECK_REVEAL) && !you.revealed()) {
             client.sendReveal();
             ctx.sfx(AudioManager.Sfx.CLICK);
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_E)) {
+        if (KeyBinds.pressed(input, GameAction.DECK_END_TURN)) {
             client.sendDone();
             ctx.sfx(AudioManager.Sfx.CLICK);
         }
@@ -968,10 +970,15 @@ public class DeckGameScene extends AbstractScene {
     private void renderButtons(DrawTarget target, DeckClient.You you) {
         if (you == null) return;
         boolean turn = myTurn();
-        drawButton(target, revealBtn, "Reveal hand (R)", turn && !you.revealed(),
-                new Color(70, 100, 130));
-        drawButton(target, doneBtn, you.revealed() ? "End turn (E)" : "Pass — reveal & end (E)",
-                turn, new Color(70, 120, 70));
+        // The keys as bound: this game's controls are rebindable
+        // (GameAction.Category.DECK), so the prompts read them rather than
+        // spelling out the defaults.
+        String reveal = KeyBinds.label(GameAction.DECK_REVEAL);
+        String end = KeyBinds.label(GameAction.DECK_END_TURN);
+        drawButton(target, revealBtn, "Reveal hand (" + reveal + ")",
+                turn && !you.revealed(), new Color(70, 100, 130));
+        drawButton(target, doneBtn, (you.revealed() ? "End turn (" : "Pass — reveal & end (")
+                        + end + ")", turn, new Color(70, 120, 70));
         if (turn && selectedCard >= 0) {
             target.drawText("Click a highlighted location", viewportWidth - 190,
                     viewportHeight - 44, SANS_PLAIN_13, TEXT_DIM);
@@ -1077,7 +1084,8 @@ public class DeckGameScene extends AbstractScene {
                 SANS_BOLD_34, TEXT);
         drawCentered(target, "The table keeps playing online.",
                 viewportWidth / 2, viewportHeight / 2, SANS_PLAIN_17, TEXT_DIM);
-        drawCentered(target, "Esc — resume    ·    L — leave the game",
+        drawCentered(target, KeyBinds.label(GameAction.MENU_BACK) + " — resume    ·    "
+                        + KeyBinds.label(GameAction.DECK_LEAVE) + " — leave the game",
                 viewportWidth / 2, viewportHeight / 2 + 30, SANS_PLAIN_17, TEXT_DIM);
     }
 

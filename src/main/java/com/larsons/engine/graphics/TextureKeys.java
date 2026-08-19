@@ -14,6 +14,7 @@ import com.larsons.engine.entity.MobRegistry;
 import com.larsons.engine.entity.ProjectileDef;
 import com.larsons.engine.entity.ProjectileRegistry;
 import com.larsons.engine.fx.Particles;
+import com.larsons.engine.minigame.StandaloneGame;
 import com.larsons.engine.world.Block;
 import com.larsons.engine.world.BlockRegistry;
 import com.larsons.engine.world.Decor;
@@ -94,6 +95,14 @@ public final class TextureKeys {
     public static final String PROJECTILES = "projectiles";
     public static final String PARTICLES = "particles";
     public static final String BOARD = "board";
+    /**
+     * Screen furniture a pack can replace: the launch screen's mini-game
+     * buttons, and anything else the interface draws from a sheet rather than
+     * from shapes. Their sheets are read as <em>states</em> rather than as
+     * animations — see {@link Skins#stateFrame} and
+     * {@link com.larsons.engine.ui.SpriteButton}.
+     */
+    public static final String UI = "ui";
     /** Where keys from an unrecognised namespace land. */
     public static final String OTHER = "other";
 
@@ -165,7 +174,7 @@ public final class TextureKeys {
     public static List<String> folders() {
         return List.of(BLOCKS, BLOCKS_TOP, BLOCKS_SIDE, LIQUIDS, LIGHTS, MOBS,
                 ITEMS, WIELD, DECOR, BLOCK_DECOR, PLAYER, UNITS, PROJECTILES,
-                PARTICLES, BOARD);
+                PARTICLES, BOARD, UI);
     }
 
     /** Two lists, end to end, as one immutable list. */
@@ -212,6 +221,9 @@ public final class TextureKeys {
             case "projectile" -> List.of(PROJECTILES + "/" + rest);
             case "particle" -> List.of(PARTICLES + "/" + rest);
             case "board" -> List.of(BOARD + "/" + rest);
+            // ui/minigame/evolution -> ui/minigame_evolution.png, falling back
+            // to ui/minigame.png so one sheet can dress every button at once.
+            case "ui" -> progressive(UI, parts);
             default -> List.of(OTHER + "/" + key.replace('/', '_'));
         };
     }
@@ -382,6 +394,16 @@ public final class TextureKeys {
         for (String part : BOARD_PARTS) {
             out.add(new Entry("Auto-battler board", BOARD, "board/" + part, part,
                     part, List.of()));
+        }
+        // The launch screen's mini-game buttons. Each sheet is three frames
+        // wide — resting, pointed at, pressed — read by index rather than by a
+        // clock (Skins.stateFrame), which is why they are listed with no
+        // animation states of their own.
+        for (StandaloneGame game : StandaloneGame.all()) {
+            out.add(new Entry("Mini-game buttons", UI, game.textureKey(),
+                    "minigame_" + game.key(),
+                    game.title() + " — button (" + StandaloneGame.BUTTON_STATES
+                            + " states: static, hover, clicked)", List.of()));
         }
         return out;
     }

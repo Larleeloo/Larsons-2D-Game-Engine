@@ -8,6 +8,7 @@ import com.larsons.engine.input.KeyBindStore;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameTypeStore;
 import com.larsons.engine.demo.KeyBindsScene;
+import com.larsons.engine.demo.MainMenuScene;
 import com.larsons.engine.demo.StartupScene;
 import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.scene.SceneManager;
@@ -328,29 +329,65 @@ class KeyBindTest {
     }
 
     @Test
-    void theControlsFormListsEveryAction() {
+    void theControlsFormListsEveryEngineAction() {
         ConfigForm form = KeyBindForm.build("Controls", KeyBinds.defaults(), null, () -> { });
         long rows = form.options().stream()
                 .filter(o -> o.control() == ConfigForm.Control.KEYBIND)
                 .count();
-        assertEquals(GameAction.values().length, rows);
+        long engineActions = GameAction.Category.engineGroups().stream()
+                .mapToLong(c -> GameAction.in(c).size()).sum();
+        assertEquals(engineActions, rows,
+                "the engine's controls screen lists the engine's own actions");
+        assertTrue(engineActions < GameAction.values().length,
+                "and not the mini games', which have screens of their own");
+    }
+
+    /**
+     * A mini game's controls screen lists that game's keys and the menu keys
+     * used to work the screen — and nothing else. A player looking for the
+     * reroll key should not have to scroll past the creative editor's brush
+     * sizes to find it.
+     */
+    @Test
+    void aMiniGameFormListsItsOwnActionsAndTheMenuKeys() {
+        for (GameAction.Category game : GameAction.Category.miniGames()) {
+            ConfigForm form = KeyBindForm.build(game.label(), KeyBinds.defaults(), null, null,
+                    java.util.List.of(game, GameAction.Category.INTERFACE));
+            long rows = form.options().stream()
+                    .filter(o -> o.control() == ConfigForm.Control.KEYBIND)
+                    .count();
+            assertEquals(GameAction.in(game).size()
+                            + GameAction.in(GameAction.Category.INTERFACE).size(), rows,
+                    game + ": its own keys and the menu keys");
+            assertFalse(GameAction.in(game).isEmpty(), game + " has actions of its own");
+        }
     }
 
     // --- reaching the screen from the menus -------------------------------------------------
 
+    /**
+     * The game type's own menu opens the controls and gets the player back.
+     *
+     * <p><b>The launch screen no longer offers them, deliberately.</b> Key
+     * binds belong to the game they are pressed in, and the launch screen is
+     * the one screen with no game running: the engine's controls are here, on
+     * the menu of the game type you are in, and each mini game keeps its own on
+     * its lobby.
+     */
     @Test
-    void theLaunchMenuOpensTheControlsScreenAndComesBack(@TempDir Path dir) {
+    void theGameTypeMenuOpensTheControlsScreenAndComesBack(@TempDir Path dir) {
         SceneManager scenes = new SceneManager();
         scenes.setViewport(W, H);
         GameContext ctx = new GameContext(null, new GameTypeStore(dir.resolve("types").toString()));
-        StartupScene startup = new StartupScene(ctx);
+        MainMenuScene menu = new MainMenuScene(ctx);
         KeyBindsScene controls = new KeyBindsScene(
                 new KeyBindStore(dir.resolve("config").toString()));
-        scenes.register("startup", startup);
+        scenes.register("menu", menu);
         scenes.register(KeyBindsScene.NAME, controls);
-        scenes.setScene("startup");
+        scenes.setScene("menu");
+        pump(scenes);
 
-        MenuItem entry = startup.menu().items().stream()
+        MenuItem entry = menu.menu().items().stream()
                 .filter(i -> i.text().startsWith("Controls"))
                 .findFirst().orElseThrow(() -> new AssertionError("no controls entry"));
         entry.activate();
@@ -365,10 +402,26 @@ class KeyBindTest {
         back.newFrame();
         scenes.update(1 / 60.0, back);
         pump(scenes);
-        assertSame(startup, scenes.current(), "and hands the player back");
+        assertSame(menu, scenes.current(), "and hands the player back");
         assertTrue(java.nio.file.Files.exists(
                         dir.resolve("config").resolve(KeyBindStore.FILE_NAME)),
                 "leaving the screen wrote the binds");
+    }
+
+    /** The launch screen has no controls row: there is no game running there. */
+    @Test
+    void theLaunchScreenNoLongerAsksWhichControls(@TempDir Path dir) {
+        SceneManager scenes = new SceneManager();
+        scenes.setViewport(W, H);
+        GameContext ctx = new GameContext(null, new GameTypeStore(dir.resolve("types").toString()));
+        StartupScene startup = new StartupScene(ctx);
+        scenes.register("startup", startup);
+        scenes.setScene("startup");
+        pump(scenes);
+
+        assertTrue(startup.menu().items().stream()
+                        .noneMatch(i -> i.text().startsWith("Controls")),
+                "the launch screen leaves controls to the game they belong to");
     }
 
     /** Run the scene manager long enough for a fade transition to finish. */

@@ -64,6 +64,52 @@ class TerrainPainterDrawTest {
         return target;
     }
 
+    /**
+     * A block between the camera and the player is drawn at a quarter opacity,
+     * not replaced by an outline — and only the run at the top of its column.
+     *
+     * <p>An outline is "the block vanished, and here is where it used to be":
+     * a creator standing indoors could no longer tell stone from glass from
+     * open sky. A quarter of the block is still a block — the material and the
+     * shape read, and the body behind shows through. The buried runs stay solid
+     * because they are not what is in the way; fading them opens a hole in the
+     * ground under the building rather than a window in its roof.
+     */
+    @Test
+    void aBlockInTheWayIsFadedRatherThanReplacedByAnOutline() {
+        Level lvl = level(LevelFormat.THREE_D, false);
+        Block solid = lvl.blocks.all().stream().filter(b -> !b.liquid()).findFirst().orElseThrow();
+        // A column two blocks tall: only its top run is between camera and body.
+        lvl.setTile(1, 1, 1, solid.id());
+        lvl.setTile(1, 1, 2, solid.id());
+
+        RecordingTarget solidFrame = paint(lvl, null);
+        long fadesWithNothingHidden = solidFrame.ofType(RecordingTarget.Cmd.State.class).stream()
+                .filter(c -> c.op().equals("pushAlpha"))
+                .count();
+        assertEquals(0, fadesWithNothingHidden, "nothing is faded when nothing is in the way");
+
+        RecordingTarget cut = paintSeeThrough(lvl, 1, 1);
+        List<Float> alphas = cut.ofType(RecordingTarget.Cmd.State.class).stream()
+                .filter(c -> c.op().equals("pushAlpha"))
+                .map(RecordingTarget.Cmd.State::alpha)
+                .toList();
+        assertEquals(List.of(TerrainPainter.SEE_THROUGH_ALPHA), alphas,
+                "one run — the column's top — drawn at a quarter opacity");
+    }
+
+    /** One frame with the cell at (col,row) marked as standing in the way. */
+    private static RecordingTarget paintSeeThrough(Level lvl, int col, int row) {
+        RecordingTarget target = new RecordingTarget(400, 300);
+        DepthPass pass = DepthPass.of(lvl.perspective);
+        Camera cam = camera(lvl);
+        TerrainPainter.draw(target, lvl, cam,
+                new int[]{0, 0, lvl.width - 1, lvl.height - 1}, 0.0, pass, null, null, null,
+                java.util.Set.of((col & 0xFFFFFFFFL) | ((long) row << 32)));
+        pass.flush();
+        return target;
+    }
+
     @Test
     void everyFloorTileIsOneFillAndOneOutline() {
         // Sixteen untextured cells: a filled quad and its darker edge each.
@@ -85,9 +131,11 @@ class TerrainPainterDrawTest {
     }
 
     @Test
-    void everyShadowInAFrameIsFilledAsOneRegion() {
+    void everyShadowInAFrameIsFilledAsOneRegionPerLayer() {
         // Filling them separately would stack translucent black where two
         // overlap and band the floor — the reason fillShape exists at all.
+        // Two fills, not one: a shadow is a soft rim under a core, and each of
+        // those is one union of every caster in the frame.
         Level lvl = level(LevelFormat.THREE_D, false);
         Block solid = lvl.blocks.all().stream().filter(b -> !b.liquid()).findFirst().orElseThrow();
         lvl.setTile(1, 1, Level.LAYER_UPPER, solid.id());
@@ -96,8 +144,8 @@ class TerrainPainterDrawTest {
 
         RecordingTarget target = paint(lvl, null);
 
-        assertEquals(1, target.count("fillShape"),
-                "three casters, one fill — not three overlapping fills");
+        assertEquals(2, target.count("fillShape"),
+                "three casters, two fills — the rim and the core, not six overlapping ones");
     }
 
     @Test

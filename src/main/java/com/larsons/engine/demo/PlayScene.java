@@ -60,6 +60,7 @@ import com.larsons.engine.graphics.shader.LightingPass;
 import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.input.KeyBinds;
+import com.larsons.engine.input.Pointer;
 import com.larsons.engine.level.CutsceneDirector;
 import com.larsons.engine.level.CutscenePlayer;
 import com.larsons.engine.level.DoorDirectory;
@@ -537,6 +538,10 @@ public class PlayScene extends AbstractScene {
     @Override
     public void onExit() {
         sounds.reset();
+        // Whatever this scene did to the pointer, the next screen inherits a
+        // desktop pointer: menus are worked with it, and a hidden cursor left
+        // behind by a first-person view is a menu nobody can click.
+        Pointer.restore();
         if (run != null) {
             // Unconditionally, not only when the run looks dirty. The dirty
             // flag is an optimisation for the periodic autosave and an input to
@@ -611,7 +616,7 @@ public class PlayScene extends AbstractScene {
     }
 
     /**
-     * The level to play offline: whatever "Load Level" pointed at last, falling
+     * The level to play offline: whatever "Level Select" pointed at last, falling
      * back to the bundled sample.
      *
      * <p><b>A pointer that does not load is cleared rather than retried.</b> It
@@ -637,7 +642,7 @@ public class PlayScene extends AbstractScene {
         if (last != null && !last.isEmpty() && Files.exists(Path.of(last))) {
             try {
                 Level authored = LevelLoader.load(last);
-                // Even a level reached by "Load Level" is played through the
+                // Even a level reached by "Level Select" is played through the
                 // run: if this slot has already been in it, that copy is the
                 // one with the player's changes in it.
                 if (run != null && run.store().hasLevel(authored.name)) {
@@ -765,6 +770,8 @@ public class PlayScene extends AbstractScene {
             return;
         }
         if (paused) {
+            // A paused game is a menu, and a menu is worked with the pointer.
+            Pointer.restore();
             updatePaused(dt, input);
             return;
         }
@@ -903,6 +910,9 @@ public class PlayScene extends AbstractScene {
             if (showInventory || craftingPanel != null || containerPanel != null) {
                 lookFromX = -1;
                 lookFromY = -1;
+                // The pointer is arranging stacks, so it is a pointer again:
+                // visible, and left where the player put it.
+                Pointer.restore();
             } else {
                 steerLook(input, dt);
             }
@@ -913,8 +923,18 @@ public class PlayScene extends AbstractScene {
             // the authoritative step rather than with a frame drawn between two
             // of them. This is the eye's half of what camera.follow does for
             // the flat camera further down.
-            placeEye(me.x + hitSize() / 2.0, me.y + hitSize() / 2.0, me.z);
+            // At the body's own ground contact point, which is the middle of
+            // its footprint and not the middle of its box: on a plane a
+            // character stands on the *southern* edge of the box it collides
+            // with (PlayerPhysics.footTop), so an eye at the box's centre sat
+            // half a body north of the body — far enough to put your face
+            // inside the wall you were standing against, and to look through
+            // it. The billboard is anchored at the same point (standingAt), so
+            // the two agree about where the player is.
+            placeEye(me.x + hitSize() / 2.0, me.y + hitSize(), me.z);
         } else {
+            // A plan view aims with the pointer, so it has one.
+            Pointer.restore();
             // The eight-point camera: a press aims it one compass point round
             // and the animation carries it there over the next fifth of a
             // second. Both are per-frame because a snap in flight has to keep
@@ -1132,6 +1152,10 @@ public class PlayScene extends AbstractScene {
         // tower above the top of its own viewport. Plane and lift are taken
         // together (Camera.follow) so neither can be updated without the other.
         camera.follow(me.x + size / 2.0, me.y + size / 2.0, me.z);
+        // The height axis is followed with slack rather than rigidly: a hop is
+        // the character leaving the ground, and a camera that rose with them
+        // showed the ground dropping away instead. See Camera.restHeight.
+        camera.stepFollow(dt);
         // A mounted player sits (idle art); otherwise classify the action so
         // the matching skin animation plays, restarting on state changes.
         String state = riding ? "idle"
@@ -2448,7 +2472,7 @@ public class PlayScene extends AbstractScene {
         // was, and before the lighting pass, which projects through whichever
         // of the two this frame is drawn with.
         if (solidView()) {
-            placeEye(drawX() + hitSize() / 2.0, drawY() + hitSize() / 2.0, drawZ());
+            placeEye(drawX() + hitSize() / 2.0, drawY() + hitSize(), drawZ());
         }
         feedLighting(p);
 
@@ -2534,7 +2558,7 @@ public class PlayScene extends AbstractScene {
      * its own rather than a line here.
      */
     private void renderSolid(DrawTarget target, GameProfile p) {
-        solid.begin(target, eye, level);
+        solid.begin(target, eye, level, animClock);
         phase("terrain", solid::terrain);
         // Nothing queues into this in a solid view — standingAt routes to the
         // painter instead — but it is passed and flushed all the same, so that
@@ -2922,7 +2946,7 @@ public class PlayScene extends AbstractScene {
      * leave. The title is left off because {@link PauseScreen} draws a header
      * with the level and the save state in it, and two titles is one too many.
      *
-     * <p>A level's feature toggles are still edited in <em>Load Level → Edit
+     * <p>A level's feature toggles are still edited in <em>Level Select → Edit
      * Settings</em> rather than here: those belong to the level and outlive the
      * session, and a pause menu that quietly rewrites the level being played is
      * how this engine used to lose people's work.
@@ -3436,14 +3460,36 @@ public class PlayScene extends AbstractScene {
         lookFromX = mx;
         lookFromY = my;
 
+        // <b>Not drawn, and put back in the middle before it runs out of
+        // window.</b> The arrow is hidden because the crosshair is the pointer
+        // here — two pointers on one screen, one of which the game ignores, is
+        // what "the mouse doesn't match" describes — and the pointer is carried
+        // back to the centre as it nears an edge, so a turn is never cut short
+        // by the desk running out. Where the platform cannot move the pointer
+        // ({@link Pointer#canWarp()}) the edge-steering below still does that
+        // job, which is why it stays.
+        boolean locked = holdPointer();
+        int w = Math.max(1, viewportWidth), h = Math.max(1, viewportHeight);
+        double marginX = w * LOOK_EDGE, marginY = h * LOOK_EDGE;
+        if (locked && (mx < marginX || mx > w - marginX
+                || my < marginY || my > h - marginY)
+                && Pointer.warpTo(w / 2, h / 2)) {
+            // The warp's own motion is not the player's, and the event carrying
+            // it arrives after this frame — so the next reading starts a fresh
+            // origin instead of being measured against a position the pointer
+            // has already left. One frame's motion is lost per recentre, which
+            // is why this happens at the edges rather than every frame: in the
+            // middle of the window the reading is exactly what the hand did.
+            lookFromX = -1;
+            lookFromY = -1;
+        }
+
         // Steering from the edges, so a turn is never cut short by the window
         // — but only once the pointer has been moved at least once since this
         // view was entered. Without that a cursor that simply happens to be
         // resting in a corner when the key is pressed spins the world on its
         // own, which is the one way this control can behave like a fault.
-        int w = Math.max(1, viewportWidth), h = Math.max(1, viewportHeight);
-        double marginX = w * LOOK_EDGE, marginY = h * LOOK_EDGE;
-        if (pointerMoved) {
+        if (pointerMoved && !locked) {
             if (mx < marginX) lookYaw -= edgePush(marginX - mx, marginX) * dt;
             else if (mx > w - marginX) lookYaw += edgePush(mx - (w - marginX), marginX) * dt;
             // Inverted the same way the drag is: resting against an edge is the
@@ -3468,6 +3514,18 @@ public class PlayScene extends AbstractScene {
         // reads is always a heading and never an accumulated total.
         lookYaw = wrapAngle(lookYaw);
         lookPitch = Math.max(-EyeCamera.MAX_PITCH, Math.min(EyeCamera.MAX_PITCH, lookPitch));
+    }
+
+    /**
+     * Hide the pointer for a view that steers with it.
+     *
+     * @return whether this window can also <em>move</em> the pointer, which is
+     *         what lets the view recentre it instead of steering from the
+     *         window's edges
+     */
+    private boolean holdPointer() {
+        Pointer.setVisible(false);
+        return Pointer.canWarp();
     }
 
     /** Turn rate for a pointer {@code into} pixels inside an edge of {@code margin}. */
@@ -3522,7 +3580,7 @@ public class PlayScene extends AbstractScene {
      */
     private void placeEye(double cx, double cy, double bodyZ) {
         double ts = ts();
-        double eyeZ = bodyZ + drawSize() * EYE_HEIGHT;
+        double eyeZ = eyeOutOfBlocks(cx, cy, bodyZ + drawSize() * EYE_HEIGHT);
         double yaw = viewpoint.reversed() ? wrapAngle(lookYaw + Math.PI) : lookYaw;
         double pitch = viewpoint.reversed() ? -lookPitch : lookPitch;
         eye.setViewport(viewportWidth, viewportHeight);
@@ -3553,6 +3611,27 @@ public class PlayScene extends AbstractScene {
         eye.look(yaw, pitch);
         eye.place(cx - eye.dirX() * eyeDistance, cy - eye.dirY() * eyeDistance,
                 Math.max(0.1, from - eye.dirZ() * eyeDistance));
+    }
+
+    /**
+     * {@code eyeZ}, brought below whatever it is standing inside.
+     *
+     * <p>A character's eyes are just under the top of their sprite, and a
+     * character is a block tall — so walking under a ceiling exactly one block
+     * over the floor (a crawlspace, the underside of a bridge deck, the inside
+     * of a doorway with a lintel) put the eye <em>in</em> the block above.
+     * Every face around it is turned away from there, so the view fills with
+     * whatever the sky is: you are looking at the inside of a wall. The body
+     * is where the collision says it is; only the eye needs bringing back, and
+     * bringing it just under the block it was in is what ducking looks like.
+     */
+    private double eyeOutOfBlocks(double cx, double cy, double eyeZ) {
+        int ts = level.tileSize;
+        if (ts <= 0 || !level.layered()) return eyeZ;
+        int col = (int) Math.floor(cx / ts), row = (int) Math.floor(cy / ts);
+        int box = (int) Math.floor(eyeZ / ts);
+        if (!SolidPainter.filled(level, col, row, box)) return eyeZ;
+        return Math.max(0.1, box * (double) ts - ts * 0.08);
     }
 
     /**
@@ -3594,6 +3673,11 @@ public class PlayScene extends AbstractScene {
         // out should be told what they are looking through, and the HUD reads
         // this field.
         if (!hasElevation() || !camera.lock().allows(viewpoint)) viewpoint = Viewpoint.PLAN;
+        // A played level's camera trails the player's height with slack, so a
+        // jump moves the character rather than the ground (Camera.restHeight).
+        // Set here rather than once at construction because a door can replace
+        // the level under a camera that a cutscene left rigid.
+        camera.setHeightFollow(Camera.HeightFollow.EASED);
         lookYaw = camera.viewYaw();
         lookPitch = 0;
         lookFromX = -1;
@@ -3808,6 +3892,15 @@ public class PlayScene extends AbstractScene {
             // applies with the same three factors. See SolidPainter.billboard.
             double ax = x + size / 2.0, ay = y + size;
             int lift = (int) Math.round(z * camera.zoom * camera.liftScale());
+            // A patch of ground under them first: a billboard is a flat picture
+            // standing in the air, and without a shadow there is nothing in a
+            // solid view to say whether it is standing on the floor or hanging
+            // a block above it. The plan view has drawn one since it grew a
+            // height axis (drawPlayer); this is the same thing said in three
+            // dimensions.
+            double ground = level.verticality()
+                    ? PlayerPhysics.groundZ(level, x, y, size) : 0;
+            solid.groundShadow(ax, ay, ground, size * 0.42);
             solid.billboard(ax, ay, z, camera.worldToScreenX(ax, ay),
                     camera.worldToScreenY(ax, ay) - lift, camera.zoom, sprite);
             return;
@@ -4200,9 +4293,21 @@ public class PlayScene extends AbstractScene {
                 new Color(c.getRed(), c.getGreen(), c.getBlue(), 0).getRGB()});
     }
 
+    /**
+     * How far up the screen the local player is drawn by standing where they
+     * are — the one place the lift is spelled out, so everything drawn on the
+     * body agrees with the body.
+     */
+    private int bodyLift() {
+        return (int) Math.round(drawZ() * camera.zoom * camera.liftScale()
+                * PlayerPhysics.HOP_DRAW_SCALE);
+    }
+
     /** A short arc in front of the player while a mining or firing stroke plays. */
     private void drawSwing(DrawTarget target) {
         camera.worldToScreen(drawX() + hitSize() / 2, drawY() + hitSize() / 2, corner);
+        // Lifted with the body, like every other thing drawn on it.
+        corner[1] -= bodyLift();
         int r = (int) (drawSize() * camera.zoom * 0.9);
         int start = me.facingLeft ? 120 : -60;
         target.drawArc(corner[0] - r, corner[1] - r, r * 2, r * 2, start, 120,
@@ -4253,6 +4358,13 @@ public class PlayScene extends AbstractScene {
 
     private void drawMeleeArc(DrawTarget target, MeleeProfile profile) {
         camera.worldToScreen(drawX() + hitSize() / 2, drawY() + hitSize() / 2, corner);
+        // <b>Up the screen with the player.</b> The swing, the parry ring and
+        // the lunge are drawn around where the character is, and "where the
+        // character is" has had a height axis since they could climb: without
+        // this the indicators stayed on the floor while the player they belong
+        // to stood on top of a tower, which reads as somebody else's attack
+        // happening at the foot of the wall.
+        corner[1] -= bodyLift();
         int r = (int) Math.round(profile.reach() * camera.zoom);
         MeleeAction action = melee.action();
         double t = melee.progress();
@@ -4320,7 +4432,10 @@ public class PlayScene extends AbstractScene {
         int flip = dir.facingLeft() ? -1 : 1;
         int footX = camera.worldToScreenX(x + hit / 2.0, y + hit);
         int footY = camera.worldToScreenY(x + hit / 2.0, y + hit);
-        int lift = (int) Math.round(z * camera.zoom * PlayerPhysics.HOP_DRAW_SCALE);
+        // Through the camera's own lift scale, like drawPlayer: without it the
+        // object in a climbing character's hands drifted away from the hands.
+        int lift = (int) Math.round(z * camera.zoom * camera.liftScale()
+                * PlayerPhysics.HOP_DRAW_SCALE);
         double cx = footX + flip * hold.offsetX() * draw * camera.zoom;
         double cy = footY - draw * camera.zoom * 0.5 - lift
                 + hold.offsetY() * draw * camera.zoom;
@@ -4434,7 +4549,12 @@ public class PlayScene extends AbstractScene {
                 ? PlayerPhysics.groundZ(level, x, y, hit) : 0;
         int surfaceLift = (int) Math.round(surface * camera.zoom * camera.liftScale());
         double airborne = Math.max(0, z - surface);
-        if (airborne > 0) {
+        // …and not in a solid view, where the ground under an actor is a real
+        // quad on the real floor (SolidPainter.groundShadow). This oval is
+        // drawn inside the billboard, so there it would stand upright in the
+        // air beside the character rather than lying under them — two shadows,
+        // one of them facing the camera.
+        if (airborne > 0 && !solidView()) {
             // The shadow marks where they will land, shrinking with height. It
             // is cast by the body rather than the sprite: a shadow is the floor
             // they occupy, so a giant with small feet throws a small one.

@@ -6,6 +6,7 @@ import com.larsons.engine.world.Block;
 
 import java.awt.Color;
 import java.awt.geom.AffineTransform;
+import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -54,41 +55,42 @@ import java.util.List;
  *
  * <p>Requirement #4 says the JDK-only build is the one that must work, and
  * Java2D has no depth buffer — so this is a painter's algorithm, like every
- * other pass in the engine. What it sorts on is the distance from the eye to
- * the <em>nearest point of each face's box</em>, not to the face's centre.
+ * other pass in the engine. What it sorts on is <b>how many cells away from the
+ * eye's own cell a face's cell is</b>, counted along the three axes
+ * ({@link #cellOrder}).
  *
- * <p>That is a deliberate choice and the centre is the tempting wrong one. Side
- * faces are merged over vertical runs (a wall eight blocks tall is one quad,
- * not eight), so a face's centre can be a long way from the part of it that
- * does the occluding: a tall wall beside you has its centre far overhead while
- * its bottom is at your elbow. Distance to the box is distance to whatever part
- * of the face is actually nearest, which is the part that covers things — and
- * for axis-aligned geometry that has already been back-face culled, ordering by
- * it puts an occluder in front of what it occludes.
+ * <p>That is exact rather than approximate, and the argument is three lines
+ * long: along any straight ray each coordinate moves monotonically, so the sum
+ * of the three cell distances never decreases along it; so a face hit before
+ * another has a sum no larger; so drawing in decreasing order of that sum puts
+ * every occluder over what it occludes. Two faces that tie cannot occlude each
+ * other, because no ray reaches both.
  *
- * <p>It is not a proof, and this class does not claim one: two faces that
- * interpenetrate on screen at a grazing angle can still be ordered wrongly.
- * Voxel geometry does not interpenetrate, which is why the case does not arise
- * in a level — and the geometry that <em>does</em> risk it, an actor's
- * billboard standing flat against a wall, is sorted on its own anchor and can
- * bleed a pixel or two into the wall behind it at very close range.
+ * <p>It rests on one thing: <b>a face belongs to exactly one cell</b>. That is
+ * why side faces are drawn per block rather than merged up a column — see
+ * {@link #block}. Sorting merged runs by their nearest corner was the previous
+ * scheme, and it is wrong in exactly the case players report: a tall wall whose
+ * nearest corner is at your elbow drawn over the block standing halfway along
+ * it.
  *
- * <h2>Colour, not texture</h2>
+ * <h2>Texture, and the shade baked into it</h2>
  *
- * <p>Faces are filled with the block's own colour, shaded by which way they
- * face and faded into the fog by distance. They are not textured, and the
- * reason is not effort: a perspective quad's texture mapping is not affine, and
- * {@link DrawTarget#drawImage(java.awt.image.BufferedImage, AffineTransform)} —
- * the only warping blit the interface has — is. Splitting each face into
- * triangles and blitting each affinely is the PlayStation-1 answer and it warps
- * visibly at exactly the range you spend the most time at. So a block with a
- * texture pack behind it draws in its registered colour here, and every texture
- * the plan view ever drew it with is untouched — {@link TexturePack} and
- * {@link Skins} are not consulted by this painter at all.
+ * <p>A face is drawn with the block's own sheet — the same
+ * {@link TextureKeys#BLOCKS_TOP top} and {@link TextureKeys#BLOCKS_SIDE side}
+ * pools the plan view resolves, with the same fallbacks — mapped onto the
+ * projected quad through {@link TilePainter#isoTransform} and clipped to it.
+ * The map is affine where a perspective quad is not, so a face seen at a
+ * glancing angle carries a slight shear; the alternative (splitting every face
+ * into triangles and blitting each affinely) is the PlayStation-1 answer and
+ * warps visibly at the range you spend the most time at. Faces cut by the near
+ * plane, and faces a few pixels across, keep the flat fill: at that size a
+ * sheet is a smear of its own average colour, which is what the fill is.
  *
  * <p>Shading is the classic four-level scheme every blocky 3D game uses: the
  * top brightest, north/south next, east/west darker, the underside darkest,
  * which is what makes a cube read as a cube without a single light calculation.
+ * On a textured face it is baked into the sheet ({@link SolidTextures}) rather
+ * than washed over it, so a textured face is still one draw call.
  */
 public final class SolidPainter {
 
@@ -123,6 +125,18 @@ public final class SolidPainter {
     /** How far off the eye may be from a face before it stops drawing its edge. */
     private static final double EDGE_TILES = 6;
 
+    /**
+     * How many pixels across a face has to be before it is worth texturing.
+     *
+     * <p>Under this a sheet is a smear of its own average colour, which is what
+     * the flat fill already draws — for a third of the cost and with no clip
+     * region for the backend to set up.
+     */
+    private static final int MIN_TEXTURE_PIXELS = 4;
+
+    /** The patch of ground under an actor; see {@link #groundShadow}. */
+    private static final Color SHADOW = new Color(0, 0, 0, 90);
+
     /** The sky a level's backdrop is mixed toward; see {@link #begin}. */
     private static final Color DAYLIGHT = new Color(126, 172, 226);
 
@@ -133,6 +147,8 @@ public final class SolidPainter {
     private double viewDistance;
     private double fogStart;
     private int fogArgb = 0xFF8FB6E0;
+    /** Where in an animated texture's cycle this frame is. */
+    private double animClock;
 
     /**
      * The frame's queue, pooled across frames.
@@ -155,16 +171,31 @@ public final class SolidPainter {
     private final double[] eyeVerts = new double[4 * 3];
     private final double[] clipped = new double[8 * 3];
     private final double[] point = new double[3];
+    /** The clip region a textured face is drawn through; refilled per face. */
+    private final java.awt.Polygon clip = new java.awt.Polygon();
+    /** Per-frame texture lookups, so a block's sheet is resolved once a frame. */
+    private final java.util.Map<String, BufferedImage> textures = new java.util.HashMap<>();
 
     /** One queued thing: a filled polygon, or an actor's sprite. */
     private static final class Entry {
-        double depth;
+        /**
+         * What the painter sorts on: how many cells away from the eye's own
+         * cell this face's cell is, counted along the three axes. See
+         * {@link #cellOrder}.
+         */
+        long order;
         int argb;
         int count;
         final int[] xs = new int[8];
         final int[] ys = new int[8];
         boolean edge;
         int edgeArgb;
+        /** The face's texture, or {@code null} for a flat fill. */
+        BufferedImage texture;
+        /** Maps that texture's own square onto this face; only set with a texture. */
+        AffineTransform textureTransform;
+        /** Fog over a textured face, {@code 0} when it is close enough not to need any. */
+        int fogOverlay;
         // Billboard fields; sprite is null for a face.
         Runnable sprite;
         double screenX, screenY, scale, fade;
@@ -197,9 +228,20 @@ public final class SolidPainter {
      * stops.
      */
     public void begin(DrawTarget target, EyeCamera eye, Level level) {
+        begin(target, eye, level, 0);
+    }
+
+    /**
+     * {@link #begin(DrawTarget, EyeCamera, Level)} at a point in time, so
+     * animated block textures (water, lava, anything a pack gave more than one
+     * frame) play here as they do in the plan view.
+     */
+    public void begin(DrawTarget target, EyeCamera eye, Level level, double animClock) {
         this.target = target;
         this.eye = eye;
         this.level = level;
+        this.animClock = animClock;
+        this.textures.clear();
         this.used = 0;
         this.viewDistance = viewTiles * (double) Math.max(1, level.tileSize);
         this.fogStart = viewDistance * FOG_START;
@@ -282,97 +324,112 @@ public final class SolidPainter {
         if (floorId > 0 && eye.z() > 0 && level.tileAt(col, row, 1) <= 0) {
             Color colour = level.colorFor(floorId);
             if (colour != null) {
-                face(x0, y0, 0, x1, y0, 0, x1, y1, 0, x0, y1, 0, colour, SHADE_TOP);
+                Block ground = level.blocks.get(floorId);
+                face(col, row, 0, x0, y0, 0, x1, y0, 0, x1, y1, 0, x0, y1, 0,
+                        colour, SHADE_TOP, topTexture(ground));
             }
         }
 
         int depth = level.columnDepth(col, row);
-        for (int base = 1; base < depth; ) {
-            int id = level.tileAt(col, row, base);
-            if (id <= 0) {
-                base++;
-                continue;
-            }
-            int top = base + 1;
-            while (top < depth && level.tileAt(col, row, top) == id) top++;
+        for (int layer = 1; layer < depth; layer++) {
+            int id = level.tileAt(col, row, layer);
+            if (id <= 0) continue;
             Block block = level.blocks.get(id);
-            if (block != null) run(col, row, block, base, top, depth);
-            base = top;
+            if (block != null) block(col, row, block, layer, depth);
         }
     }
 
     /**
-     * One run of identical blocks in a column, layers {@code [base, top)}.
+     * The faces of the one block in {@code layer} of this column that the eye
+     * could see: exposed (nothing solid against them) and turned toward it.
      *
-     * <p>Runs rather than blocks for the same reason {@link TerrainPainter}
-     * draws them: a column of eight stones is one extrusion eight blocks tall,
-     * and its side is one quad. Here it also halves the queue on any level with
-     * walls in it.
+     * <p><b>One block at a time, not one run at a time.</b> This used to merge
+     * a column of identical blocks into a single tall quad, which halved the
+     * queue and cost two things worth more than that. A merged face spans
+     * several cells of the height axis, so it has no single place in the
+     * painter's order — a wall eight blocks tall is nearer than the block at
+     * its foot and further than the block at its top at the same time, and
+     * whatever one number it is given, some block in front of part of it sorts
+     * behind. That is the "not all vertices understand what is in front of
+     * what" a player sees as a wall drawn over the thing standing against it.
+     * The other is texture: a stretched sheet over an eight-block wall is one
+     * brick eight blocks high (the same defect the plan view had). Per block,
+     * both answers fall out: every face is one cell, so {@link #cellOrder}
+     * places it exactly, and every face is one block, so its texture is the
+     * block's.
      */
-    private void run(int col, int row, Block block, int base, int top, int depth) {
+    private void block(int col, int row, Block block, int layer, int depth) {
         int ts = level.tileSize;
         double x0 = col * (double) ts, x1 = x0 + ts;
         double y0 = row * (double) ts, y1 = y0 + ts;
-        // Layer 0 is the floor, so the block in layer 1 stands ON it at z = 0:
-        // a run covering [base, top) spans heights [base - 1, top - 1).
-        double z0 = (base - 1) * (double) ts;
-        double z1 = (top - 1) * (double) ts;
+        // Layer 0 is the floor, so the block in layer 1 stands ON it at z = 0.
+        double z0 = (layer - 1) * (double) ts;
+        double z1 = layer * (double) ts;
         Color colour = block.color();
+        BufferedImage top = topTexture(block);
+        BufferedImage side = sideTexture(block);
 
-        if (eye.z() > z1 && (top >= depth || level.tileAt(col, row, top) <= 0)) {
-            face(x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1, colour, SHADE_TOP);
+        if (eye.z() > z1 && (layer + 1 >= depth || level.tileAt(col, row, layer + 1) <= 0)) {
+            face(col, row, layer, x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1,
+                    colour, SHADE_TOP, top);
         }
-        if (eye.z() < z0 && base > 1 && level.tileAt(col, row, base - 1) <= 0) {
-            face(x0, y0, z0, x0, y1, z0, x1, y1, z0, x1, y0, z0, colour, SHADE_BOTTOM);
+        if (eye.z() < z0 && layer > 1 && level.tileAt(col, row, layer - 1) <= 0) {
+            face(col, row, layer, x0, y0, z0, x0, y1, z0, x1, y1, z0, x1, y0, z0,
+                    colour, SHADE_BOTTOM, top);
         }
-        if (eye.y() < y0) sides(col, row, 0, -1, base, top, colour, SHADE_NORTH_SOUTH);
-        if (eye.y() > y1) sides(col, row, 0, 1, base, top, colour, SHADE_NORTH_SOUTH);
-        if (eye.x() > x1) sides(col, row, 1, 0, base, top, colour, SHADE_EAST_WEST);
-        if (eye.x() < x0) sides(col, row, -1, 0, base, top, colour, SHADE_EAST_WEST);
+        if (eye.y() < y0 && open(col, row - 1, layer)) {
+            face(col, row, layer, x0, y0, z1, x1, y0, z1, x1, y0, z0, x0, y0, z0,
+                    colour, SHADE_NORTH_SOUTH, side);
+        }
+        if (eye.y() > y1 && open(col, row + 1, layer)) {
+            face(col, row, layer, x1, y1, z1, x0, y1, z1, x0, y1, z0, x1, y1, z0,
+                    colour, SHADE_NORTH_SOUTH, side);
+        }
+        if (eye.x() > x1 && open(col + 1, row, layer)) {
+            face(col, row, layer, x1, y0, z1, x1, y1, z1, x1, y1, z0, x1, y0, z0,
+                    colour, SHADE_EAST_WEST, side);
+        }
+        if (eye.x() < x0 && open(col - 1, row, layer)) {
+            face(col, row, layer, x0, y1, z1, x0, y0, z1, x0, y0, z0, x0, y1, z0,
+                    colour, SHADE_EAST_WEST, side);
+        }
+    }
+
+    /** Whether the neighbouring box is empty, so the face against it is exposed. */
+    private boolean open(int col, int row, int layer) {
+        if (col < 0 || row < 0 || col >= level.width || row >= level.height) return true;
+        return level.tileAt(col, row, layer) <= 0;
     }
 
     /**
-     * The part of one side of a run that the neighbouring column leaves
-     * exposed, as one quad per uncovered span.
-     *
-     * <p>A run is split rather than drawn whole because the column next door
-     * has a height of its own: a wall eight tall beside a wall three tall shows
-     * five blocks of face and hides three, and drawing the whole eight would
-     * paint the hidden part over whatever is standing in front of it.
+     * The sheet a block's top face is drawn with, or {@code null} for the flat
+     * colour — the same pools and the same fallbacks the plan view resolves
+     * ({@link TerrainPainter}), so a texture pack dresses a block once and it
+     * is that block in every view.
      */
-    private void sides(int col, int row, int dc, int dr, int base, int top,
-                       Color colour, double shade) {
-        int nc = col + dc, nr = row + dr;
-        boolean open = nc < 0 || nr < 0 || nc >= level.width || nr >= level.height;
-        int spanFrom = -1;
-        for (int layer = base; layer <= top; layer++) {
-            boolean clear = layer < top && (open || level.tileAt(nc, nr, layer) <= 0);
-            if (clear) {
-                if (spanFrom < 0) spanFrom = layer;
-            } else if (spanFrom >= 0) {
-                sideFace(col, row, dc, dr, spanFrom, layer, colour, shade);
-                spanFrom = -1;
-            }
-        }
+    private BufferedImage topTexture(Block block) {
+        if (block == null) return null;
+        return texture(block.topTextureKey(), block.textureKey());
     }
 
-    /** One quad on the {@code (dc, dr)} side, spanning layers {@code [from, to)}. */
-    private void sideFace(int col, int row, int dc, int dr, int from, int to,
-                          Color colour, double shade) {
-        int ts = level.tileSize;
-        double x0 = col * (double) ts, x1 = x0 + ts;
-        double y0 = row * (double) ts, y1 = y0 + ts;
-        double z0 = (from - 1) * (double) ts;
-        double z1 = (to - 1) * (double) ts;
-        if (dr < 0) {
-            face(x0, y0, z1, x1, y0, z1, x1, y0, z0, x0, y0, z0, colour, shade);
-        } else if (dr > 0) {
-            face(x1, y1, z1, x0, y1, z1, x0, y1, z0, x1, y1, z0, colour, shade);
-        } else if (dc > 0) {
-            face(x1, y0, z1, x1, y1, z1, x1, y1, z0, x1, y0, z0, colour, shade);
-        } else {
-            face(x0, y1, z1, x0, y0, z1, x0, y0, z0, x0, y1, z0, colour, shade);
-        }
+    /** The sheet a block's side faces are drawn with; see {@link #topTexture}. */
+    private BufferedImage sideTexture(Block block) {
+        if (block == null) return null;
+        return texture(block.sideTextureKey(), block.textureKey());
+    }
+
+    /** A face's frame, falling back to the block's one flat sheet; cached per frame. */
+    private BufferedImage texture(String faceKey, String flatKey) {
+        BufferedImage face = frame(faceKey);
+        return face != null ? face : frame(flatKey);
+    }
+
+    private BufferedImage frame(String key) {
+        if (key == null) return null;
+        if (textures.containsKey(key)) return textures.get(key);
+        BufferedImage img = Skins.frame(key, animClock);
+        textures.put(key, img);
+        return img;
     }
 
     /**
@@ -382,9 +439,10 @@ public final class SolidPainter {
      * the distance, and then the whole polygon being behind the eye — because
      * the projection is four divides and the rejections are comparisons.
      */
-    private void face(double ax, double ay, double az, double bx, double by, double bz,
+    private void face(int col, int row, int layer,
+                      double ax, double ay, double az, double bx, double by, double bz,
                       double cx, double cy, double cz, double dx, double dy, double dz,
-                      Color colour, double shade) {
+                      Color colour, double shade, BufferedImage texture) {
         if (colour == null) return;
         double minX = Math.min(Math.min(ax, bx), Math.min(cx, dx));
         double maxX = Math.max(Math.max(ax, bx), Math.max(cx, dx));
@@ -411,13 +469,21 @@ public final class SolidPainter {
         eyeVerts[9] = point[0];
         eyeVerts[10] = point[1];
         eyeVerts[11] = point[2];
+        // Whether the whole quad is in front of the near plane, taken before
+        // the clip cuts it: a face that had a corner behind the eye is not the
+        // quad its texture would be mapped onto any more.
+        boolean whole = eyeVerts[2] >= EyeCamera.NEAR && eyeVerts[5] >= EyeCamera.NEAR
+                && eyeVerts[8] >= EyeCamera.NEAR && eyeVerts[11] >= EyeCamera.NEAR;
 
         int n = EyeCamera.clipNear(eyeVerts, 4, clipped);
         if (n < 3) return;
 
         Entry e = claim();
         e.sprite = null;
-        e.depth = distance;
+        e.texture = null;
+        e.textureTransform = null;
+        e.fogOverlay = 0;
+        e.order = cellOrder(col, row, layer);
         e.count = n;
         int loX = Integer.MAX_VALUE, hiX = Integer.MIN_VALUE;
         int loY = Integer.MAX_VALUE, hiY = Integer.MIN_VALUE;
@@ -438,6 +504,24 @@ public final class SolidPainter {
             return;
         }
         e.argb = shadeFog(colour, shade, distance);
+        if (texture != null && whole && n == 4
+                && (hiX - loX) >= MIN_TEXTURE_PIXELS && (hiY - loY) >= MIN_TEXTURE_PIXELS) {
+            // The block's own sheet, shaded for this face and mapped onto it.
+            // The map is affine — three corners decide it and the fourth is
+            // wherever the perspective put it — which is exact for the faces
+            // that matter most (anything square-on to the eye) and a slight
+            // shear on a face seen at a glancing angle. A face too small on
+            // screen to show a texture, or one cut by the near plane, keeps the
+            // flat fill: at those sizes the sheet is a smear of its own average
+            // colour, which is what the flat fill already is.
+            e.texture = SolidTextures.shaded(texture, shade);
+            e.textureTransform = TilePainter.isoTransform(e.texture, e.xs, e.ys);
+            double fog = fogAmount(distance);
+            if (fog > 0.02) {
+                e.fogOverlay = ((int) Math.round(255 * Math.min(1, fog)) << 24)
+                        | (fogArgb & 0x00FFFFFF);
+            }
+        }
         // Every face is outlined, and the reason is a seam rather than a look.
         // Two faces that share a world edge project to the same screen edge,
         // and a scan-converted fill claims the pixels whose centres are inside
@@ -450,15 +534,56 @@ public final class SolidPainter {
         // two faces of the same colour meeting at a corner. Only near: at a
         // distance a block is a few pixels across, the outline is most of them,
         // and the picture turns into a wireframe.
-        e.edge = true;
+        //
+        // …and only on an opaque face. The outline is there to cover a
+        // half-pixel of background between two fills; on something you can see
+        // through — a pane of glass, water, the patch of shade under an actor —
+        // there is no seam to cover and the stroke doubles the alpha along the
+        // edge, which draws a hard border around a soft thing.
+        e.edge = colour.getAlpha() >= 255;
         e.edgeArgb = distance < EDGE_TILES * level.tileSize
                 ? shadeFog(colour, shade * 0.72, distance) : e.argb;
         keep();
     }
 
     /**
-     * Distance from the eye to the nearest point of a box — the sort key; see
-     * the class note on why this and not the centre.
+     * How far the cell holding a face is from the eye's own cell, counted a
+     * cell at a time along each axis — <b>the painter's order, and it is exact
+     * for this geometry rather than a good guess.</b>
+     *
+     * <p>Take any straight ray out of the eye. Each of its three coordinates
+     * moves monotonically along it, so each of {@code |col − eyeCol|},
+     * {@code |row − eyeRow|} and {@code |box − eyeBox|} can only stay the same
+     * or grow as the ray travels: their sum never decreases. So if a ray hits
+     * face A before face B, A's cell has a sum no larger than B's — which is
+     * exactly the property a painter's algorithm needs. Drawing in decreasing
+     * order of this number therefore puts every occluder on top of everything
+     * it occludes, with no exceptions to argue about, and two faces that tie
+     * cannot occlude one another at all (no ray reaches both).
+     *
+     * <p>This replaced sorting on the Euclidean distance to the nearest point
+     * of each face's box, which is a reasonable heuristic and is wrong in
+     * exactly the cases players notice: a long face whose nearest corner is at
+     * your elbow sorts in front of the small block standing halfway down it.
+     * The cost of the exact rule is that faces have to be one cell each
+     * ({@link #block}), which is why that changed with this.
+     *
+     * @param layer the block's layer; the floor lid passes {@code 0}
+     */
+    private long cellOrder(int col, int row, int layer) {
+        int ts = level.tileSize;
+        int eyeCol = (int) Math.floor(eye.x() / ts);
+        int eyeRow = (int) Math.floor(eye.y() / ts);
+        // Layer L occupies the height box [L−1, L); the eye is in the box its
+        // own height falls in, which is what makes the two comparable.
+        int eyeBox = (int) Math.floor(eye.z() / ts);
+        return Math.abs((long) col - eyeCol) + Math.abs((long) row - eyeRow)
+                + Math.abs((long) (layer - 1) - eyeBox);
+    }
+
+    /**
+     * Distance from the eye to the nearest point of a box — what the fog and
+     * the view-distance cull are measured with.
      */
     private double boxDistance(double minX, double minY, double minZ,
                                double maxX, double maxY, double maxZ) {
@@ -512,7 +637,12 @@ public final class SolidPainter {
         if (distance > viewDistance) return;
         Entry e = claim();
         e.sprite = draw;
-        e.depth = distance;
+        e.texture = null;
+        e.textureTransform = null;
+        e.fogOverlay = 0;
+        e.order = cellOrder((int) Math.floor(wx / Math.max(1, level.tileSize)),
+                (int) Math.floor(wy / Math.max(1, level.tileSize)),
+                (int) Math.floor(wz / Math.max(1, level.tileSize)) + 1);
         e.count = 0;
         e.screenX = screenX;
         e.screenY = screenY;
@@ -524,6 +654,42 @@ public final class SolidPainter {
         // against a fogged background and costs one alpha push.
         e.fade = 1 - fogAmount(distance);
         keep();
+    }
+
+    /**
+     * A soft dark patch on the ground under an actor — the solid views' shadow.
+     *
+     * <p><b>Why an actor gets one and the terrain does not.</b> A block's own
+     * faces already say where it is: the four-level shading makes a cube read
+     * as a cube, and a wall meeting a floor is two differently lit surfaces.
+     * A billboard has none of that. It is a flat picture standing in the air,
+     * and without something on the ground beneath it there is no way to tell a
+     * character standing on the floor from one hovering a block above it — the
+     * plan view has cast this shadow since it grew a height axis, and the solid
+     * views were the ones drawing characters with nothing under them at all.
+     *
+     * <p>Queued as an ordinary face at the cell it lands in, so the terrain in
+     * front of it covers it exactly as it covers everything else, and lifted a
+     * hair off the floor so it does not fight the floor's own quad for the same
+     * pixels.
+     *
+     * @param wx     the actor's ground contact point
+     * @param wy     the same, on the other axis
+     * @param groundZ the height of the surface it is standing over
+     * @param radius how wide the patch is, in world units
+     */
+    public void groundShadow(double wx, double wy, double groundZ, double radius) {
+        if (eye == null || level == null || radius <= 0) return;
+        if (eye.z() <= groundZ) return; // seen from below, a floor patch is nothing
+        int ts = Math.max(1, level.tileSize);
+        double r = Math.min(radius, ts * 0.9);
+        double z = groundZ + ts * 0.02;
+        int col = (int) Math.floor(wx / ts), row = (int) Math.floor(wy / ts);
+        int layer = (int) Math.floor(z / ts) + 1;
+        face(col, row, layer,
+                wx - r, wy - r, z, wx + r, wy - r, z,
+                wx + r, wy + r, z, wx - r, wy + r, z,
+                SHADOW, SHADE_TOP, null);
     }
 
     // --- flushing ----------------------------------------------------------
@@ -541,7 +707,7 @@ public final class SolidPainter {
         if (used == 0) return;
         if (order.length < used) order = new long[Math.max(used, order.length * 2)];
         for (int i = 0; i < used; i++) {
-            long q = quantise(pool.get(i).depth);
+            long q = Math.max(0, Math.min(QUANTA_MAX, pool.get(i).order));
             order[i] = ((QUANTA_MAX - q) << 32) | i;
         }
         Arrays.sort(order, 0, used);
@@ -551,18 +717,8 @@ public final class SolidPainter {
         used = 0;
     }
 
-    /** The largest quantised distance the sort key can hold. */
+    /** The largest cell distance the sort key can hold. */
     private static final long QUANTA_MAX = 1L << 30;
-
-    /**
-     * A distance as a whole number of quarter world-units, which is a
-     * hundred-and-twenty-eighth of a block at the engine's default tile size —
-     * far finer than anything the sort can distinguish on screen.
-     */
-    private static long quantise(double distance) {
-        long q = (long) (distance * 4);
-        return q < 0 ? 0 : Math.min(q, QUANTA_MAX);
-    }
 
     private void draw(Entry e) {
         if (e.sprite != null) {
@@ -578,7 +734,20 @@ public final class SolidPainter {
             if (faded) target.popAlpha();
             return;
         }
-        target.fillPolygon(e.xs, e.ys, e.count, e.argb);
+        if (e.texture != null) {
+            // The sheet, warped onto the face and clipped to it. The clip is
+            // what makes an affine blit safe on a quad that is not a
+            // parallelogram: the transform places the texture, the clip stops
+            // whatever falls outside the face from reaching the wall next door.
+            clip.reset();
+            for (int i = 0; i < e.count; i++) clip.addPoint(e.xs[i], e.ys[i]);
+            target.pushClip(clip);
+            target.drawImage(e.texture, e.textureTransform);
+            if (e.fogOverlay != 0) target.fillPolygon(e.xs, e.ys, e.count, e.fogOverlay);
+            target.popClip();
+        } else {
+            target.fillPolygon(e.xs, e.ys, e.count, e.argb);
+        }
         if (e.edge) target.drawPolygon(e.xs, e.ys, e.count, e.edgeArgb, 1f);
     }
 
@@ -765,6 +934,19 @@ public final class SolidPainter {
         if (d > 0) return ((cell + 1) * (double) ts - at) / d;
         if (d < 0) return (cell * (double) ts - at) / d;
         return Double.POSITIVE_INFINITY;
+    }
+
+    /**
+     * Whether the height box at ({@code col}, {@code row}, {@code box}) is
+     * filled — the same question the ray march asks, for callers placing
+     * something in the world rather than shooting at it.
+     *
+     * <p>What an eye needs before it is put somewhere: an eye inside a block
+     * sees the inside of a block, which is every face around it turned away and
+     * therefore nothing at all.
+     */
+    public static boolean filled(Level level, int col, int row, int box) {
+        return solid(level, col, row, box);
     }
 
     /** Whether the box at this grid position stops a ray; see {@link #march}. */

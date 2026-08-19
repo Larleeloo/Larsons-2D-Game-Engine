@@ -109,7 +109,8 @@ public class DeckLobbyScene extends AbstractScene {
         form.addAction("Host Game", this::startHost);
         form.addAction("How to Play", () -> showHelp = true);
         form.addAction("Controls (Key Binds)",
-                () -> KeyBindsScene.open(scenes, "decklobby"));
+                () -> KeyBindsScene.openFor(scenes, "decklobby",
+                        com.larsons.engine.input.GameAction.Category.DECK));
         form.addAction("Back", () -> scenes.transitionTo("startup"));
     }
 

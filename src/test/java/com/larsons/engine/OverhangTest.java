@@ -222,9 +222,36 @@ class OverhangTest {
         return actorPixels(lvl, cam, cut, 10.5 * TILE, 10.5 * TILE, 0);
     }
 
-    /** How much of an actor-sized marker survives a frame of this terrain. */
+    /**
+     * How much of an actor-sized marker survives a frame of this terrain,
+     * measured as the pixels the actor <em>changes</em> rather than as the
+     * pixels that come out its exact colour.
+     *
+     * <p>The difference matters now that a cutaway draws the roof over the
+     * player at a quarter opacity instead of replacing it with an outline
+     * ({@link TerrainPainter#SEE_THROUGH_ALPHA}): a player seen through a
+     * ghosted block is a blend of the two, so counting exact matches would
+     * score them as invisible — the very thing the cutaway exists to prevent.
+     * Comparing against the same frame drawn without them answers "can you see
+     * them" whatever is in front, which is the question.
+     */
     private static int actorPixels(Level lvl, Camera cam, Set<Long> cut,
                                    double footX, double footY, double z) {
+        BufferedImage with = frame(lvl, cam, cut, footX, footY, z, true);
+        BufferedImage without = frame(lvl, cam, cut, footX, footY, z, false);
+        int seen = 0;
+        for (int y = 0; y < CANVAS; y++) {
+            for (int x = 0; x < CANVAS; x++) {
+                if (with.getRGB(x, y) != without.getRGB(x, y)) seen++;
+            }
+        }
+        return seen;
+    }
+
+    /** One frame of this terrain, with or without the actor's marker in it. */
+    private static BufferedImage frame(Level lvl, Camera cam, Set<Long> cut,
+                                       double footX, double footY, double z,
+                                       boolean withActor) {
         BufferedImage canvas = new BufferedImage(CANVAS, CANVAS, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = canvas.createGraphics();
         Java2DTarget target = Java2DTarget.unsized(g);
@@ -235,18 +262,14 @@ class OverhangTest {
         int lift = (int) Math.round(z * cam.zoom * cam.liftScale());
         int[] feet = new int[2];
         cam.worldToScreen(footX, footY, feet);
-        pass.at(TerrainPainter.standingDepth(cam, TILE, footX, footY),
-                TerrainPainter.standingLayer(lvl, z),
-                cam.worldToScreenY(footX, footY),
-                () -> target.fillRect(feet[0] - 12, feet[1] - lift - 24, 24, 24, ACTOR));
+        if (withActor) {
+            pass.at(TerrainPainter.standingDepth(cam, TILE, footX, footY),
+                    TerrainPainter.standingLayer(lvl, z),
+                    cam.worldToScreenY(footX, footY),
+                    () -> target.fillRect(feet[0] - 12, feet[1] - lift - 24, 24, 24, ACTOR));
+        }
         pass.flush();
         g.dispose();
-        int seen = 0;
-        for (int y = 0; y < CANVAS; y++) {
-            for (int x = 0; x < CANVAS; x++) {
-                if (canvas.getRGB(x, y) == ACTOR.getRGB()) seen++;
-            }
-        }
-        return seen;
+        return canvas;
     }
 }

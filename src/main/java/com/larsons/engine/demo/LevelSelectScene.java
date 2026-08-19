@@ -8,6 +8,7 @@ import com.larsons.engine.input.KeyBinds;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelFormat;
 import com.larsons.engine.level.LevelStore;
+import com.larsons.engine.save.RunRecord;
 import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.scene.AbstractScene;
 import com.larsons.engine.ui.ConfigForm;
@@ -18,21 +19,27 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * "Load Level" screen: lists the individual levels saved inside the active
- * game type and, once you pick one, offers to <b>Play</b> it, open it in the
- * <b>creative editor</b>, or <b>Edit Settings</b> for it. Game types are a
- * folder grouping of levels ({@link LevelStore}), and each level carries its
- * own feature toggles — so this is the one place those per-level settings are
- * edited: the toggles live on the level, not the game type or the in-game
- * pause menu.
+ * "Level Select": lists the individual levels saved inside the active game type
+ * and, once you pick one, offers to <b>play</b> it in a save slot of your
+ * choosing, open it in the <b>creative editor</b>, <b>edit its settings</b>, or
+ * <b>delete</b> it. Game types are a folder grouping of levels
+ * ({@link LevelStore}), and each level carries its own feature toggles — so
+ * this is the one place those per-level settings are edited: the toggles live
+ * on the level, not the game type or the in-game pause menu.
  *
- * <p>Three views:
+ * <p>Five views:
  * <ul>
  *   <li><b>List</b> — the game type's levels; click one.</li>
- *   <li><b>Actions</b> — <i>Play</i>, <i>Edit in Creative</i> or <i>Edit
- *       Settings</i> for that level.</li>
+ *   <li><b>Actions</b> — <i>Play</i>, <i>Edit in Creative</i>, <i>Edit
+ *       Settings</i> or <i>Delete</i> for that level.</li>
+ *   <li><b>Slots</b> — which saved run the level is about to be played in.
+ *       Playing writes into a run, and which run it writes into is a decision
+ *       the player should be making rather than inheriting from whatever was
+ *       opened last.</li>
  *   <li><b>Edit</b> — a feature form bound to the level's own settings, saved
  *       back into the level file.</li>
+ *   <li><b>Delete</b> — a confirmation, because a level is a file and there is
+ *       no undo once it is gone.</li>
  * </ul>
  *
  * <p>Opening a saved level in the editor is this screen's job because this is
@@ -43,7 +50,7 @@ import java.util.List;
  */
 public class LevelSelectScene extends AbstractScene {
 
-    private enum View { LIST, ACTIONS, EDIT }
+    private enum View { LIST, ACTIONS, SLOTS, EDIT, DELETE }
 
     private final GameContext ctx;
     /** Where this game type's levels live; overridden by tests (see {@link LevelStore}). */
@@ -82,7 +89,7 @@ public class LevelSelectScene extends AbstractScene {
      */
     private void buildListMenu() {
         GameProfile p = ctx.profile();
-        menu = new Menu("Load Level")
+        menu = new Menu("Level Select")
                 .subtitle(p.name + " · pick a level")
                 .theme(MenuTheme.dark());
         LevelStore store = store();
@@ -123,22 +130,109 @@ public class LevelSelectScene extends AbstractScene {
                 .subtitle(format.displayName() + " · "
                         + (p.finalized ? "play this level" : "play, build or configure this level"))
                 .theme(MenuTheme.dark())
-                .add("Play Level", this::playSelected);
+                .add("Play — choose save slot", this::openSlots);
         if (!p.finalized) {
             if (p.creativeEnabled) {
                 menu.add("Edit in Creative (" + format.displayName() + ")", this::editInCreative);
             }
             menu.add("Edit Settings", this::openEditor);
+            menu.add("Delete Level", this::openDelete);
         }
         menu.add("Back", () -> { view = View.LIST; buildListMenu(); });
     }
 
-    private void playSelected() {
+    /**
+     * Which run this level is about to be played in.
+     *
+     * <p><b>Playing writes into a save slot, so the slot is part of the
+     * decision.</b> It used to be inherited — whatever slot the last
+     * <em>Continue</em> or <em>Saved Runs</em> visit had left on the context —
+     * which meant opening a level from here could quietly overwrite a run the
+     * player was keeping, and there was no way from this screen to say
+     * otherwise. The slots are the same three {@link SaveSelectScene} offers,
+     * described the same way, so the two screens cannot disagree about what is
+     * in them.
+     */
+    private void openSlots() {
+        GameProfile p = ctx.profile();
+        view = View.SLOTS;
+        menu = new Menu(selectedLevel)
+                .subtitle("which saved run should this level be played in?")
+                .theme(MenuTheme.dark());
+        for (String slot : SaveSelectScene.slotNames()) {
+            RunRecord run = SaveSelectScene.runIn(p.name, slot);
+            String label = run == null
+                    ? prettySlot(slot) + " — empty · start a new run here"
+                    : prettySlot(slot) + " — continue " + run.describe();
+            menu.add(label, () -> playSelected(slot, run == null));
+        }
+        menu.add("Back", () -> openActions(selectedLevel));
+    }
+
+    /** "Slot 2", from the stored slot name — {@link SaveSelectScene}'s wording. */
+    private static String prettySlot(String slot) {
+        return "Slot " + slot.replace("slot", "");
+    }
+
+    /**
+     * Open the chosen level in {@code slot}: the level becomes the game type's
+     * current one and the run is continued (or started, when the slot is
+     * empty), which is what the play scene reads as it enters.
+     */
+    private void playSelected(String slot, boolean fresh) {
         GameProfile p = ctx.profile();
         // PlayScene loads lastLevelPath and applies that level's own settings.
         p.lastLevelPath = store().fileFor(selectedLevel).toString();
         ctx.save();
+        if (fresh) ctx.startNewRun(slot);
+        else ctx.continueRun(slot);
         scenes.transitionTo("play");
+    }
+
+    /**
+     * The delete confirmation for the selected level. "Keep" is first and so
+     * default-selected, the way the game-type and run confirmations are: a
+     * stray Enter backs out rather than removing a level, and removing it is
+     * the deliberate second choice.
+     */
+    private void openDelete() {
+        view = View.DELETE;
+        menu = new Menu("Delete \"" + selectedLevel + "\"?")
+                .subtitle("The level file is removed from " + ctx.profile().name
+                        + " — this cannot be undone")
+                .theme(MenuTheme.dark())
+                .add("Keep this level", () -> openActions(selectedLevel))
+                .add("Delete permanently", this::deleteSelected);
+    }
+
+    /**
+     * Remove the selected level's file and go back to the list.
+     *
+     * <p>The game type's "last played level" pointer is cleared when it named
+     * the level just deleted — a pointer at a file that is gone is what makes
+     * the next play session open nothing at all.
+     */
+    private void deleteSelected() {
+        LevelStore store = store();
+        String name = selectedLevel;
+        Path file = store.fileFor(name);
+        boolean removed;
+        try {
+            removed = store.delete(name);
+        } catch (RuntimeException e) {
+            status = "Could not delete \"" + name + "\": " + e.getMessage();
+            openActions(name);
+            return;
+        }
+        GameProfile p = ctx.profile();
+        if (file.toString().equals(p.lastLevelPath)) {
+            p.lastLevelPath = "";
+            ctx.save();
+        }
+        status = removed ? "Deleted \"" + name + "\"" : "\"" + name + "\" was already gone";
+        selectedLevel = null;
+        view = View.LIST;
+        buildListMenu();
     }
 
     /**
@@ -244,10 +338,10 @@ public class LevelSelectScene extends AbstractScene {
 
     @Override
     public void update(double dt, InputManager input) {
-        // Esc steps back one view (edit → actions → list → main menu).
+        // Esc steps back one view (edit/slots/delete → actions → list → menu).
         if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
             switch (view) {
-                case EDIT -> openActions(selectedLevel);
+                case EDIT, SLOTS, DELETE -> openActions(selectedLevel);
                 case ACTIONS -> { view = View.LIST; buildListMenu(); }
                 case LIST -> scenes.transitionTo("menu");
             }
@@ -277,8 +371,10 @@ public class LevelSelectScene extends AbstractScene {
     private String hint() {
         return switch (view) {
             case LIST -> "Each level loads in its own format, with its own toggles · Esc to go back";
-            case ACTIONS -> "Play the level, build in it, or edit the settings it plays with · Esc to go back";
+            case ACTIONS -> "Play the level, build in it, edit its settings, or delete it · Esc to go back";
+            case SLOTS -> "The slot you pick is the run this level is played in · Esc to go back";
             case EDIT -> "Rename the level or change its toggles · type to edit the name · Save to keep · Esc to go back";
+            case DELETE -> "Choose \"Delete permanently\" to remove the level file · Esc to keep it";
         };
     }
 }

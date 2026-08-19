@@ -25,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * <b>Load Level → Edit in Creative</b>: a saved level can be opened in the
@@ -143,6 +144,77 @@ class LevelSelectSceneTest {
 
         assertEquals("LevelSelectScene", scenes.current().name(), "nothing opened");
         assertNull(f.ctx().takePendingCreativeLevel(), "and no level was handed over");
+    }
+
+    /**
+     * A level can be deleted from the screen that lists it, behind a
+     * confirmation whose first (and therefore default) choice is to keep it.
+     *
+     * <p>Levels are files, and until now the only way to be rid of one was to
+     * find that file — which meant a game type collected every experiment
+     * anybody ever started, and the list you pick from grew monotonically.
+     */
+    @Test
+    void aLevelCanBeDeletedFromTheList(@TempDir Path dir) {
+        Fixture f = fixture(dir, "Delete Test", LevelFormat.THREE_D, true);
+        f.ctx().profile().lastLevelPath = f.store().fileFor("Old Town").toString();
+        SceneManager scenes = scenes(f, dir, new CreativeScene(f.ctx()));
+
+        InputManager input = new InputManager();
+        Component src = new Canvas();
+        run(scenes, input, 2);
+
+        press(input, src, KeyEvent.VK_ENTER);   // the one level in the list
+        run(scenes, input, 2);
+        // Play, Edit in Creative, Edit Settings, Delete Level, Back.
+        for (int i = 0; i < 3; i++) {
+            press(input, src, KeyEvent.VK_DOWN);
+            run(scenes, input, 1);
+        }
+        press(input, src, KeyEvent.VK_ENTER);   // Delete Level
+        run(scenes, input, 2);
+
+        assertTrue(f.store().exists("Old Town"),
+                "the confirmation has not deleted anything yet");
+        press(input, src, KeyEvent.VK_DOWN);    // past "Keep this level"
+        run(scenes, input, 1);
+        press(input, src, KeyEvent.VK_ENTER);   // Delete permanently
+        run(scenes, input, 2);
+
+        assertFalse(f.store().exists("Old Town"), "the level's file is gone");
+        assertEquals("", f.ctx().profile().lastLevelPath,
+                "and the game type no longer points at a file that is not there");
+    }
+
+    /**
+     * Playing a level from here asks which saved run it is played in, rather
+     * than inheriting whichever slot was last touched.
+     */
+    @Test
+    void playingALevelAsksWhichSlotItIsPlayedIn(@TempDir Path dir) {
+        Fixture f = fixture(dir, "Slot Test", LevelFormat.THREE_D, true);
+        SceneManager scenes = scenes(f, dir, new CreativeScene(f.ctx()));
+        scenes.register("play", new StartupScene(f.ctx())); // a stand-in target
+
+        InputManager input = new InputManager();
+        Component src = new Canvas();
+        run(scenes, input, 2);
+
+        press(input, src, KeyEvent.VK_ENTER);   // the one level
+        run(scenes, input, 2);
+        press(input, src, KeyEvent.VK_ENTER);   // Play — choose save slot
+        run(scenes, input, 2);
+        assertEquals("LevelSelectScene", scenes.current().name(),
+                "choosing Play opens the slot list rather than starting a run");
+
+        press(input, src, KeyEvent.VK_DOWN);    // slot 2
+        run(scenes, input, 1);
+        press(input, src, KeyEvent.VK_ENTER);
+        run(scenes, input, 120);
+
+        assertEquals("slot2", f.ctx().runSlot(), "the run opens in the slot that was picked");
+        assertEquals(f.store().fileFor("Old Town").toString(),
+                f.ctx().profile().lastLevelPath, "on the level that was picked");
     }
 
     /** What the hand-over does, on its own: current level, settings, object. */

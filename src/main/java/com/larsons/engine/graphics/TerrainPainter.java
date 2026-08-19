@@ -68,14 +68,32 @@ public final class TerrainPainter {
      */
     public static final int SLICE_TILES = 64;
 
-    /** How far a shadow reaches from its caster, as a fraction of a tile. */
+    /** How far a shadow reaches from its caster, per block of height, as a fraction of a tile. */
     private static final double SHADOW_REACH = 0.34;
 
-    /** The shadow itself — one flat translucent black, cast toward the south-east. */
-    private static final Color SHADOW = new Color(0, 0, 0, 96);
+    /** The shadow's core — the part of the floor the caster is directly between. */
+    private static final Color SHADOW = new Color(0, 0, 0, 86);
+
+    /**
+     * The soft edge around it. A shadow with one hard outline reads as a decal
+     * lying on the floor; the rim is what makes it read as light being blocked.
+     * Filled as its own single union, under the core, so overlapping casters
+     * still cannot stack their alpha and band the ground.
+     */
+    private static final Color SHADOW_EDGE = new Color(0, 0, 0, 34);
+
+    /** How far the soft edge stands outside the core, as a fraction of a tile. */
+    private static final double SHADOW_FEATHER = 0.16;
 
     /** Darkening applied to a side face with no texture of its own. */
     private static final double SIDE_SHADE = 0.62;
+
+    /**
+     * How opaque a block between the camera and the player is drawn — a
+     * quarter, so the body behind it is legible and the block is still
+     * obviously there. See {@link Pass#drawRun}.
+     */
+    public static final float SEE_THROUGH_ALPHA = 0.25f;
 
     /** The bright line along the top of an exposed liquid surface. */
     private static final Color LIQUID_SURFACE = new Color(255, 255, 255, 90);
@@ -626,6 +644,97 @@ public final class TerrainPainter {
     public record Mining(int col, int row, double progress) {}
 
     /**
+     * A frame's shadows, in two layers: the core and the soft rim under it.
+     *
+     * <p>Each layer is one path filled once. That is not an optimisation — it
+     * is the only way the alpha comes out right, because two overlapping
+     * translucent fills are darker than one and a floor under a row of columns
+     * would band wherever their shadows met.
+     */
+    private static final class Shadows {
+        final Path2D.Double core = new Path2D.Double();
+        final Path2D.Double feather = new Path2D.Double();
+
+        /**
+         * Add one polygon, optionally grown about its own centre by
+         * {@code spread} and shifted by ({@code dx}, {@code dy}) — how the rim
+         * is built out of the core's shape.
+         */
+        void add(Path2D.Double into, double[] px, double[] py, int n,
+                 double spread, double dx, double dy) {
+            double cx = 0, cy = 0;
+            if (spread > 0) {
+                for (int i = 0; i < n; i++) {
+                    cx += px[i];
+                    cy += py[i];
+                }
+                cx /= n;
+                cy /= n;
+            }
+            for (int i = 0; i < n; i++) {
+                double x = spread > 0 ? cx + (px[i] - cx) * spread + dx : px[i];
+                double y = spread > 0 ? cy + (py[i] - cy) * spread + dy : py[i];
+                if (i == 0) into.moveTo(x, y);
+                else into.lineTo(x, y);
+            }
+            into.closePath();
+        }
+    }
+
+    /**
+     * The convex hull of {@code n} points, written into {@code outX}/{@code
+     * outY} in order; returns how many points it has.
+     *
+     * <p>Andrew's monotone chain, over eight points at most — the caster's quad
+     * and its offset copy. Written out rather than reached for from a library
+     * because the engine has no geometry dependency and this is fifteen lines.
+     */
+    private static int hull(double[] px, double[] py, int n, double[] outX, double[] outY,
+                            int[] order, double[] hx, double[] hy) {
+        for (int i = 0; i < n; i++) order[i] = i;
+        // An insertion sort over eight points, because the alternative is
+        // boxing them into an Integer[] for a comparator — once per cell per
+        // frame, on a sweep this class goes to lengths to keep allocation-free.
+        for (int i = 1; i < n; i++) {
+            int v = order[i];
+            int j = i - 1;
+            while (j >= 0 && (px[order[j]] > px[v]
+                    || (px[order[j]] == px[v] && py[order[j]] > py[v]))) {
+                order[j + 1] = order[j];
+                j--;
+            }
+            order[j + 1] = v;
+        }
+        int k = 0;
+        for (int pass = 0; pass < 2; pass++) {
+            int start = k;
+            for (int idx = 0; idx < n; idx++) {
+                int i = order[pass == 0 ? idx : n - 1 - idx];
+                while (k >= start + 2
+                        && cross(hx[k - 2], hy[k - 2], hx[k - 1], hy[k - 1], px[i], py[i]) <= 0) {
+                    k--;
+                }
+                hx[k] = px[i];
+                hy[k] = py[i];
+                k++;
+            }
+            k--; // the last point of each pass starts the next one
+        }
+        int count = Math.max(0, k);
+        for (int i = 0; i < count; i++) {
+            outX[i] = hx[i];
+            outY[i] = hy[i];
+        }
+        return count;
+    }
+
+    /** The z of the cross product of (b−a) and (c−a) — which way the corner turns. */
+    private static double cross(double ax, double ay, double bx, double by,
+                                double cx, double cy) {
+        return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    }
+
+    /**
      * Paint the terrain inside {@code bounds} ({@code {col0, row0, col1, row1}}).
      *
      * <p>The floor is drawn immediately; stacked blocks are queued into
@@ -760,6 +869,15 @@ public final class TerrainPainter {
         private final int[] corner = new int[2];
         private final int[] faceX = new int[4];
         private final int[] faceY = new int[4];
+        // A shadow's eight candidate points and the hull that comes back out
+        // of them, reused per cell for the reason everything else here is.
+        private final double[] hullX = new double[8];
+        private final double[] hullY = new double[8];
+        private final double[] hullOutX = new double[8];
+        private final double[] hullOutY = new double[8];
+        private final int[] hullOrder = new int[8];
+        private final double[] hullScratchX = new double[8 * 2 + 1];
+        private final double[] hullScratchY = new double[8 * 2 + 1];
         /** Per-frame cache: texture key -> frame (absent value = procedural). */
         private final Map<String, BufferedImage> skins = new HashMap<>();
         /**
@@ -826,7 +944,7 @@ public final class TerrainPainter {
         }
 
         void run(int[] bounds, DepthPass raisedPass, Mining mining, TerrainCache cache) {
-            Path2D.Double shadows = layered ? new Path2D.Double() : null;
+            Shadows shadows = layered ? new Shadows() : null;
             if (cache != null && TerrainCache.enabled()
                     && TerrainCache.faithfulIn(camera)) {
                 // The floor comes out of the cache as a handful of blits. The
@@ -835,14 +953,16 @@ public final class TerrainPainter {
                 // actors rather than inside a chunk image.
                 cache.drawFloor(target, level, camera, bounds, animClock, this::renderChunk);
                 cache.endFrame();
-                if (shadows != null) gatherShadows(bounds, shadows);
+                gatherShadows(bounds, shadows);
             } else {
                 sweepFloor(bounds, shadows);
             }
             if (shadows != null) {
-                // One fill for every shadow in the frame: overlapping casters
+                // Two fills for every shadow in the frame — the soft rim, then
+                // the core — rather than one per caster: overlapping casters
                 // would otherwise stack their alpha and band the floor.
-                target.fillShape(shadows, SHADOW);
+                target.fillShape(shadows.feather, SHADOW_EDGE);
+                target.fillShape(shadows.core, SHADOW);
                 queueRaised(bounds, raisedPass);
             }
             // The cracks go in last, so among everything queued at the mined
@@ -863,7 +983,7 @@ public final class TerrainPainter {
         }
 
         /** Draw every floor cell in the bounds, gathering shadows as it goes. */
-        private void sweepFloor(int[] bounds, Path2D.Double shadows) {
+        private void sweepFloor(int[] bounds, Shadows shadows) {
             for (int r = bounds[1]; r <= bounds[3]; r++) {
                 for (int c = bounds[0]; c <= bounds[2]; c++) {
                     int id = level.tileAt(c, r);
@@ -880,7 +1000,8 @@ public final class TerrainPainter {
         }
 
         /** The shadow shapes alone, for when the floor came from the cache. */
-        private void gatherShadows(int[] bounds, Path2D.Double shadows) {
+        private void gatherShadows(int[] bounds, Shadows shadows) {
+            if (shadows == null) return;
             for (int r = bounds[1]; r <= bounds[3]; r++) {
                 for (int c = bounds[0]; c <= bounds[2]; c++) {
                     int height = level.stackHeight(c, r);
@@ -986,25 +1107,52 @@ public final class TerrainPainter {
         }
 
         /**
-         * Add this cell's cast shadow to the frame's single shadow shape,
-         * thrown as far as the column is tall.
+         * Add this cell's cast shadow to the frame's shadow shapes: the
+         * caster's own quad swept along the light as far as the column is
+         * tall, and a feathered copy of that a little wider.
          *
-         * <p><b>Not raycast, and that is a decision rather than an oversight.</b>
-         * The offset scales with the caster's height and stops there: a tower's
-         * shadow falls on the floor even where a taller neighbour should have
-         * caught it, and two towers' shadows merge rather than one falling
-         * across the other. A real cast is affordable on a heightfield — march
-         * each column along the light bearing until the accumulated drop meets
-         * a taller column, which is O(reach) per column with no allocation —
-         * but it is a shadow system, and this step's job is only that height
-         * reads. Recorded in {@code HEIGHT_PLAN.md} Appendix B.
+         * <p><b>Swept rather than translated, which is what makes it line
+         * up.</b> The old shape was the cell's quad moved bodily by the reach,
+         * so a two-block wall's shadow started one third of a tile away from
+         * the wall and left clean floor in between — the shadow of nothing, in
+         * front of a wall standing in its own light. A box lit from a bearing
+         * shades every point its silhouette passes over on the way, which is
+         * the hull of the quad and its offset copy: it touches the caster's
+         * feet by construction, and it lengthens rather than sliding as the
+         * column gets taller.
+         *
+         * <p><b>Still not raycast, and that is a decision rather than an
+         * oversight.</b> The offset scales with the caster's height and stops
+         * there: a tower's shadow falls on the floor even where a taller
+         * neighbour should have caught it, and two towers' shadows merge rather
+         * than one falling across the other. A real cast is affordable on a
+         * heightfield — march each column along the light bearing until the
+         * accumulated drop meets a taller column, which is O(reach) per column
+         * with no allocation — but it is a shadow system, and this step's job
+         * is only that height reads. Recorded in {@code HEIGHT_PLAN.md}
+         * Appendix B.
          */
-        private void addShadow(Path2D.Double into, int height) {
+        private void addShadow(Shadows into, int height) {
             double reach = Math.max(1, height - 1);
             double dx = shadowX * reach, dy = shadowY * reach;
-            into.moveTo(xs[0] + dx, ys[0] + dy);
-            for (int i = 1; i < 4; i++) into.lineTo(xs[i] + dx, ys[i] + dy);
-            into.closePath();
+            // The caster's quad and the same quad at the far end of the throw.
+            for (int i = 0; i < 4; i++) {
+                hullX[i] = xs[i];
+                hullY[i] = ys[i];
+                hullX[i + 4] = xs[i] + dx;
+                hullY[i + 4] = ys[i] + dy;
+            }
+            int n = hull(hullX, hullY, 8, hullOutX, hullOutY, hullOrder, hullScratchX,
+                    hullScratchY);
+            if (n < 3) return;
+            into.add(into.core, hullOutX, hullOutY, n, 0, 0, 0);
+            // The soft rim: the same hull pushed out from its own middle, and
+            // a little further along the throw, which is where a real penumbra
+            // is widest.
+            double feather = tileSize * SHADOW_FEATHER * camera.zoom;
+            double spread = 1 + feather / Math.max(1, tileSize * camera.zoom);
+            into.add(into.feather, hullOutX, hullOutY, n, spread,
+                    shadowX * reach * 0.18, shadowY * reach * 0.18);
         }
 
         /**
@@ -1107,22 +1255,25 @@ public final class TerrainPainter {
         private void drawRun(int col, int row, Block block, int base, int top) {
             project(col, row);
             Color color = block.color();
-            if (!seeThrough.isEmpty()
-                    && seeThrough.contains((col & 0xFFFFFFFFL) | ((long) row << 32))) {
-                // Ghosted: the shape stays legible so a creator can still read
-                // the building they are inside, and the body under it shows
-                // through. Drawn as an outline rather than at reduced alpha
-                // because a translucent fill still hides a sprite behind two
-                // of them, and a player indoors is behind several.
-                drawGhost(base, top, color);
-                return;
-            }
+            boolean capping = top >= level.layerCount() || level.tileAt(col, row, top) <= 0;
+            // <b>See-through, at a quarter opacity, and only where the column
+            // meets the air.</b> This used to draw the silhouette and nothing
+            // else, which is "the block vanished" with an outline drawn where
+            // it used to be — a creator standing indoors could no longer tell
+            // stone from glass from empty sky. A quarter of the block is still
+            // a block: the material reads, the shape reads, and the body behind
+            // it reads through it. Only the run at the top of the column is
+            // faded, because that is the one between the camera and the player;
+            // fading the buried ones as well would open a hole in the ground
+            // under the building rather than a window in its roof.
+            boolean fade = capping && !seeThrough.isEmpty()
+                    && seeThrough.contains((col & 0xFFFFFFFFL) | ((long) row << 32));
+            if (fade) target.pushAlpha(SEE_THROUGH_ALPHA);
             // Layer 0 is the floor tile itself, drawn flat by the floor pass,
             // so the block in layer 1 stands ON it at a lift of zero. A run
             // covering layers [base, top) therefore spans screen heights
             // [base - 1, top - 1) — the off-by-one that draws a whole column
             // floating one block above its own floor.
-            int lower = (int) Math.round(lift * (base - 1));
             int upper = (int) Math.round(lift * (top - 1));
             // The face spans from this run's floor to its ceiling. Both ends are
             // rounded from the column's own base, so neighbouring runs share an
@@ -1130,7 +1281,7 @@ public final class TerrainPainter {
             BufferedImage side = face(block.sideTextureKey(), block.textureKey());
             drawVisibleFaces(col, row, base, top, side, color);
             for (int i = 0; i < 4; i++) ys[i] -= upper;
-            if (top >= level.layerCount() || level.tileAt(col, row, top) <= 0) {
+            if (capping) {
                 BufferedImage skin = face(block.topTextureKey(), block.textureKey());
                 if (skin != null) {
                     TilePainter.drawTexture(target, skin, xs, ys, flatBlit);
@@ -1140,6 +1291,7 @@ public final class TerrainPainter {
                 }
                 if (decor != null) decor.afterTop(target, col, row, xs, ys, block, color);
             }
+            if (fade) target.popAlpha();
         }
 
         /**
@@ -1238,36 +1390,64 @@ public final class TerrainPainter {
          * the lifted edge on top.
          */
         private void drawFace(int from, int to, BufferedImage skin, Color color, int riseUp) {
+            if (skin != null) {
+                drawTexturedFace(from, to, skin, riseUp);
+                return;
+            }
             faceX[0] = xs[from]; faceY[0] = ys[from] - riseUp;
             faceX[1] = xs[to];   faceY[1] = ys[to] - riseUp;
             faceX[2] = xs[to];   faceY[2] = ys[to];
             faceX[3] = xs[from]; faceY[3] = ys[from];
-            if (skin != null) {
-                // Never a screen-aligned rectangle: a side is a parallelogram
-                // in isometric and a plain band straight down, and the warping
-                // path draws both from the quad's own edges.
-                TilePainter.drawTexture(target, skin, faceX, faceY, false);
-                drawLayerSeams(from, to, riseUp, shade(color, SIDE_SHADE * 0.7));
-                return;
-            }
             target.fillPolygon(faceX, faceY, 4, shade(color, SIDE_SHADE));
             target.drawPolygon(faceX, faceY, 4, shade(color, SIDE_SHADE * 0.75));
             drawLayerSeams(from, to, riseUp, shade(color, SIDE_SHADE * 0.72));
         }
 
         /**
-         * A run drawn see-through: its silhouette and nothing else.
+         * The textured form of {@link #drawFace}: <b>one blit per block of the
+         * run, not one stretched over all of them.</b>
+         *
+         * <p>A run is drawn as a single extrusion (see {@link #drawRun}), and
+         * the texture path took that literally: an eight-block wall got one
+         * copy of its side texture stretched eight blocks tall, so a brick was
+         * eight bricks high and a ladder had one rung. What a stack of blocks
+         * looks like is the block's texture, once per block, which is what this
+         * does — and it makes the run's own seam lines unnecessary, because the
+         * texture now says where each block ends.
+         *
+         * <p>Each band is measured from the run's base with the same rounding
+         * the run's ends use, so the bands tile exactly and no gap of
+         * background opens between them.
          */
-        private void drawGhost(int base, int top, Color color) {
-            int lower = (int) Math.round(lift * (base - 1));
-            int upper = (int) Math.round(lift * (top - 1));
-            Color ink = new Color(color.getRed(), color.getGreen(), color.getBlue(), 70);
-            for (int i = 0; i < 4; i++) ys[i] -= upper;
-            target.drawPolygon(xs, ys, 4, ink);
-            for (int i = 0; i < 4; i++) ys[i] += upper - lower;
-            target.drawPolygon(xs, ys, 4, ink);
-            for (int i = 0; i < 4; i++) ys[i] -= lower;
+        private void drawTexturedFace(int from, int to, BufferedImage skin, int riseUp) {
+            // Never a screen-aligned rectangle: a side is a parallelogram in
+            // isometric and a plain band straight down, and the warping path
+            // draws both from the quad's own edges.
+            int blocks = lift >= 1 ? (int) Math.round(riseUp / lift) : 0;
+            if (blocks <= 1 || lift < 2) {
+                // One block tall, or zoomed out far enough that a block is a
+                // couple of pixels — a second blit would land on the same rows.
+                blit(from, to, skin, 0, riseUp);
+                return;
+            }
+            for (int k = 0; k < blocks; k++) {
+                int low = (int) Math.round(lift * k);
+                // The top band ends on the run's own top rather than on its own
+                // rounding, so the last block cannot leave a sliver behind.
+                int high = k == blocks - 1 ? riseUp : (int) Math.round(lift * (k + 1));
+                if (high > low) blit(from, to, skin, low, high);
+            }
         }
+
+        /** One textured band of a side face, between two lifts off the run's base. */
+        private void blit(int from, int to, BufferedImage skin, int low, int high) {
+            faceX[0] = xs[from]; faceY[0] = ys[from] - high;
+            faceX[1] = xs[to];   faceY[1] = ys[to] - high;
+            faceX[2] = xs[to];   faceY[2] = ys[to] - low;
+            faceX[3] = xs[from]; faceY[3] = ys[from] - low;
+            TilePainter.drawTexture(target, skin, faceX, faceY, false);
+        }
+
 
         /**
          * The lines where one block of a run meets the next.

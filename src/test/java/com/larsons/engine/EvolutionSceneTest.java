@@ -14,6 +14,9 @@ import com.larsons.engine.evolution.EvolutionStore;
 import com.larsons.engine.evolution.Genome;
 import com.larsons.engine.evolution.Nucleotide;
 import com.larsons.engine.evolution.ShopItem;
+import com.larsons.engine.graphics.MiniGameSprites;
+import com.larsons.engine.minigame.StandaloneGame;
+import com.larsons.engine.ui.SpriteButton;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.scene.SceneManager;
 import com.larsons.engine.ui.MenuItem;
@@ -296,8 +299,13 @@ class EvolutionSceneTest {
         assertTrue(offersRed, "which opens the colour choice, strands and all");
     }
 
+    /**
+     * The launch screen offers the simulator as one of the mini games' corner
+     * buttons — a picture with three states rather than a row of text in the
+     * list of game types.
+     */
     @Test
-    void theMainMenuOffersEvolutionAndOpensIt(@TempDir Path dir) {
+    void theLaunchScreenOffersEvolutionAsACornerButtonAndOpensIt(@TempDir Path dir) {
         EvolutionStore store = new EvolutionStore(dir.toString());
         GameContext ctx = context(dir);
         SceneManager scenes = new SceneManager();
@@ -311,16 +319,33 @@ class EvolutionSceneTest {
         tick(scenes, input, 2);
         render(scenes);
 
-        MenuItem entry = null;
-        for (MenuItem item : startup.menu().items()) {
-            if (item.text().startsWith("Evolution")) entry = item;
-        }
-        assertNotNull(entry, "the artificial life simulator is on the main menu");
+        SpriteButton button = startup.miniGameButtons().button(StandaloneGame.EVOLUTION);
+        assertNotNull(button, "the artificial life simulator has a button of its own");
+        assertFalse(button.bounds().isEmpty(), "and the strip has been laid out");
+        assertTrue(startup.menu().items().stream()
+                        .noneMatch(i -> i.text().startsWith("Evolution")),
+                "it is not also a row in the list of game types");
 
-        entry.activate();
+        // A press and a release inside it: the button lights up while held and
+        // opens the game when let go.
+        button.update(pointer(button.bounds().getCenterX(),
+                button.bounds().getCenterY(), true));
+        assertEquals(MiniGameSprites.State.PRESSED, button.state(), "held down");
+        button.update(pointer(button.bounds().getCenterX(),
+                button.bounds().getCenterY(), false));
+
         tick(scenes, input, 90); // let the fade finish
         assertEquals("EvolutionLobbyScene", scenes.current().name(),
-                "and choosing it opens the game");
+                "and letting go opens the game");
+    }
+
+    /** An input manager reporting the pointer at a place, with or without a press. */
+    private static InputManager pointer(double x, double y, boolean down) {
+        InputManager input = new InputManager();
+        input.moveMouse((int) x, (int) y);
+        if (down) input.pressMouse(java.awt.event.MouseEvent.BUTTON1, 0);
+        input.newFrame();
+        return input;
     }
 
     @Test

@@ -14,12 +14,26 @@ import java.util.List;
  * Launch screen: pick an existing game type to keep creating within it, or
  * create a new one. Existing game types are loaded from
  * {@code resources/gametypes/}.
+ *
+ * <p>The engine's other games — the auto battler, the deckbuilder, the
+ * evolution simulator — are not rows in that list. They are separate games, and
+ * they sit in the corner of the screen as their own picture buttons
+ * ({@link MiniGameButtons}), each opening its own lobby and each carrying its
+ * own controls.
  */
 public class StartupScene extends AbstractScene {
     private final GameContext ctx;
     private Menu menu;
+    /** The mini games' corner buttons; built on the first entry. */
+    private MiniGameButtons miniGames;
 
     public StartupScene(GameContext ctx) { this.ctx = ctx; }
+
+    /** The corner buttons — the mini games, as pictures. */
+    public MiniGameButtons miniGameButtons() {
+        if (miniGames == null) miniGames = new MiniGameButtons(scenes);
+        return miniGames;
+    }
 
     @Override
     public void onEnter() {
@@ -47,14 +61,17 @@ public class StartupScene extends AbstractScene {
             ctx.setProfile(new GameProfile());
             scenes.transitionTo("editor");
         });
-        menu.add("Auto Battler (2-10 Online)", () -> scenes.transitionTo("autolobby"));
-        menu.add("Council of Six (Deckbuilder, 2-6 Online)",
-                () -> scenes.transitionTo("decklobby"));
-        menu.add("Evolution (Artificial Life Simulator)",
-                () -> scenes.transitionTo("evolutionlobby"));
-        // Controls are a property of the player, not of a game type, so they
-        // are reachable before one is even chosen.
-        menu.add("Controls (Key Binds)", () -> KeyBindsScene.open(scenes, "startup"));
+        // The mini games are no longer rows in this list: they are separate
+        // games and they live in the corner of the screen as their own buttons
+        // (see MiniGameButtons), which is what keeps this list a list of game
+        // types.
+        if (miniGames == null) miniGames = new MiniGameButtons(scenes);
+        // No controls row here. Key binds belong to the game they are pressed
+        // in: the engine's are on the game type's own menu and in its pause
+        // screen, and each mini game keeps its own on its lobby (see
+        // KeyBindsScene.openFor). The launch screen is the one place in the
+        // engine where no game is running, which made it the one place the
+        // question "which controls?" had no answer.
         menu.add("Quit", () -> System.exit(0));
     }
 
@@ -63,13 +80,23 @@ public class StartupScene extends AbstractScene {
 
     @Override
     public void update(double dt, InputManager input) {
+        // The corner buttons get the pointer first: they sit over the bottom
+        // of the menu's own region, and a click that opened a mini game should
+        // not also land on whatever row happens to reach under it. Only the
+        // pointer is taken — the keyboard still works the list, so a cursor
+        // parked in the corner cannot trap someone navigating by arrow keys.
+        MiniGameButtons corner = miniGameButtons();
+        if (corner.update(input, viewportWidth, viewportHeight)) return;
+        if (corner.hovered() && input.isMouseJustPressed()) return;
         menu.update(dt, input);
     }
 
     @Override
     public void render(DrawTarget target, float alpha) {
         menu.render(target, viewportWidth, viewportHeight);
+        miniGameButtons().render(target, viewportWidth, viewportHeight);
         SceneChrome.hint(target, viewportHeight,
-                "Game types are saved as JSON under resources/gametypes/");
+                "Game types are saved as JSON under resources/gametypes/ · "
+                        + "the mini games are in the corner");
     }
 }

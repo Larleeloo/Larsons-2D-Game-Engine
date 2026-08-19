@@ -20,7 +20,7 @@ import java.util.List;
  * Builds the feature toggles for a level's own {@link GameProfile} — the two
  * places a level's settings are asked about, and the same rows in both:
  * <em>New Level</em> (before the level is created, see {@link NewLevelScene})
- * and <em>Load Level → Edit Settings</em> (afterwards). Each control edits the
+ * and <em>Level Select → Edit Settings</em> (afterwards). Each control edits the
  * profile in place via lambdas.
  *
  * <p>The launch-time game-type editor used to show this same list as a
@@ -39,7 +39,7 @@ final class ProfileForms {
      * what levels built before character profiles existed do.
      *
      * <p>Two screens ask this — <em>New Level</em> before the level exists and
-     * <em>Load Level → Edit Settings</em> afterwards — so the rows live beside
+     * <em>Level Select → Edit Settings</em> afterwards — so the rows live beside
      * the feature toggles they are shown with rather than in one of the two.
      *
      * @param gameType the game type whose character profiles are on offer
