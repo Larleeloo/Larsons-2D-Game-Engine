@@ -3,7 +3,6 @@ package com.larsons.engine.demo;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GamePackage;
 import com.larsons.engine.config.GameProfile;
-import com.larsons.engine.config.GameTypeStore;
 import com.larsons.engine.input.GameAction;
 import com.larsons.engine.input.InputManager;
 import com.larsons.engine.input.KeyBinds;
@@ -20,25 +19,19 @@ import com.larsons.engine.ui.MenuTheme;
 import java.awt.Color;
 import java.awt.Font;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 /**
  * Main menu for the active game type. Shows the game type's name and lets the
- * creator play the last level, load one of the game type's individual levels,
- * create a level, edit the type's default features, rename the game type, or
- * switch to a different one. Game types are a folder grouping of levels, and
- * each level carries its own feature toggles, so "Load Level" is where a
- * specific level (and its settings) is chosen.
+ * creator continue a run, pick one of the game type's levels, create a level,
+ * edit the game type itself, or switch to a different one. Game types are a
+ * folder grouping of levels, and each level carries its own feature toggles, so
+ * <em>Level Select</em> is where a specific level (and its settings) is chosen.
  */
 public class MainMenuScene extends AbstractScene {
     private final GameContext ctx;
     private Menu menu;
 
-    // Inline "rename game type" sub-form (null menu view otherwise).
-    private boolean renaming;
-    private ConfigForm renameForm;
-    private String pendingName = "";
     private String status = "";
 
     // Inline "export game type" sub-form.
@@ -59,9 +52,14 @@ public class MainMenuScene extends AbstractScene {
 
     public MainMenuScene(GameContext ctx) { this.ctx = ctx; }
 
+    /** The menu as it currently stands, exposed so tests can read the entries. */
+    public Menu menu() {
+        if (menu == null) buildMenu();
+        return menu;
+    }
+
     @Override
     public void onEnter() {
-        renaming = false;
         exporting = false;
         deleting = false;
         status = "";
@@ -86,8 +84,13 @@ public class MainMenuScene extends AbstractScene {
                 scenes.transitionTo("play");
             });
         }
-        menu.add("Play Level", () -> scenes.transitionTo("play"))
-                .add("Load Level", () -> scenes.transitionTo("levelselect"))
+        // "Level Select" and nothing beside it. There used to be a "Play Level"
+        // row above this one, which opened whichever level the profile happened
+        // to point at last — a play button whose level was chosen days ago,
+        // somewhere else, and which the menu could not name. Choosing the level
+        // is the same click, one screen along, and that screen says what it is
+        // about to open.
+        menu.add("Level Select", () -> scenes.transitionTo("levelselect"))
                 .add("Saved Runs", () -> scenes.transitionTo(SaveSelectScene.NAME));
         // A finalized (published) game type is play-only: no creative editing,
         // feature edits, renames, or re-exports — just play its levels.
@@ -96,8 +99,11 @@ public class MainMenuScene extends AbstractScene {
         }
         menu.add("Multiplayer (Host / Join)", () -> scenes.transitionTo("multiplayer"));
         if (!p.finalized) {
-            menu.add("Edit Features", () -> scenes.transitionTo("editor"))
-                    .add("Rename Game Type", this::startRename)
+            // One entry for editing the game type, not two. "Rename Game Type"
+            // used to sit here beside it and the two had grown into the same
+            // screen: what a game type still has of its own is its name, so the
+            // editor is the rename (see GameTypeRename).
+            menu.add("Edit Game Type (name, features)", () -> scenes.transitionTo("editor"))
                     .add("Export Game Type (.larsonsengine)", this::startExport);
         }
         // Controls belong to the player rather than to the game type, so the
@@ -135,71 +141,6 @@ public class MainMenuScene extends AbstractScene {
         }
         picker.add("Back", this::buildMenu);
         menu = picker;
-    }
-
-    private void startRename() {
-        pendingName = ctx.profile().name;
-        status = "";
-        renaming = true;
-        renameForm = new ConfigForm("Rename Game Type").theme(MenuTheme.dark());
-        renameForm.addText("Game type name", () -> pendingName, v -> pendingName = v, 40);
-        renameForm.addAction("Rename", this::applyRename);
-        renameForm.addAction("Cancel", () -> renaming = false);
-    }
-
-    /**
-     * Rename the active game type: move its levels folder (levels, doors,
-     * custom content) and rewrite its profile under the new name, so the whole
-     * grouping follows the rename. Refuses to overwrite another existing type.
-     */
-    private void applyRename() {
-        GameProfile p = ctx.profile();
-        String newName = pendingName == null || pendingName.isBlank() ? "" : pendingName.trim();
-        renaming = false;
-        if (newName.isEmpty() || newName.equals(p.name)) {
-            buildMenu();
-            return;
-        }
-
-        GameTypeStore store = ctx.store();
-        String oldName = p.name;
-        Path oldProfile = store.fileFor(oldName);
-        Path newProfile = store.fileFor(newName);
-        LevelStore oldLevels = new LevelStore(oldName);
-        Path oldLevelsDir = oldLevels.directory();
-        Path newLevelsDir = new LevelStore(newName).directory();
-        boolean differentFile = !newProfile.equals(oldProfile);
-
-        if (differentFile && (Files.exists(newProfile) || Files.exists(newLevelsDir))) {
-            status = "A game type named \"" + newName + "\" already exists";
-            buildMenu();
-            return;
-        }
-
-        try {
-            oldLevels.moveGameTypeFolderTo(newName); // levels + doors + custom content
-            // …and the runs through them, which belong to the game type just as
-            // much as its levels do and would otherwise be orphaned by a rename.
-            SaveStore.moveGameTypeSaves(oldName, newName);
-        } catch (RuntimeException e) {
-            status = "Could not move levels: " + e.getMessage();
-            buildMenu();
-            return;
-        }
-
-        p.name = newName;
-        // The "last played level" pointer lives under the old folder — repoint
-        // it into the moved one.
-        if (differentFile && !p.lastLevelPath.isEmpty()) {
-            Path last = Path.of(p.lastLevelPath);
-            if (last.startsWith(oldLevelsDir)) {
-                p.lastLevelPath = newLevelsDir.resolve(oldLevelsDir.relativize(last)).toString();
-            }
-        }
-        ctx.save(); // writes gametypes/<new>.json
-        if (differentFile) store.delete(oldName);
-        status = "Renamed to \"" + newName + "\"";
-        buildMenu();
     }
 
     private void startExport() {
@@ -277,13 +218,7 @@ public class MainMenuScene extends AbstractScene {
 
     @Override
     public void update(double dt, InputManager input) {
-        if (renaming) {
-            if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
-                renaming = false;
-                return;
-            }
-            renameForm.update(dt, input);
-        } else if (exporting) {
+        if (exporting) {
             if (KeyBinds.pressed(input, GameAction.MENU_BACK)) {
                 exporting = false;
                 return;
@@ -302,13 +237,6 @@ public class MainMenuScene extends AbstractScene {
 
     @Override
     public void render(DrawTarget target, float alpha) {
-        if (renaming) {
-            SceneChrome.backdrop(target, viewportWidth, viewportHeight);
-            renameForm.render(target, viewportWidth, viewportHeight);
-            SceneChrome.hint(target, viewportHeight,
-                    "Type the new name · Enter/click Rename · Esc to cancel");
-            return;
-        }
         if (exporting) {
             SceneChrome.backdrop(target, viewportWidth, viewportHeight);
             exportForm.render(target, viewportWidth, viewportHeight);

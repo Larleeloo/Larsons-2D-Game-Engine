@@ -1,11 +1,21 @@
 package com.larsons.engine;
 
+import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
+import com.larsons.engine.config.GameTypeStore;
+import com.larsons.engine.demo.CreativeScene;
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.CameraLock;
 import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.Viewpoint;
+import com.larsons.engine.graphics.draw.Java2DTarget;
+import com.larsons.engine.input.InputManager;
+import com.larsons.engine.scene.SceneManager;
 import org.junit.jupiter.api.Test;
+
+import java.awt.Graphics2D;
+import java.awt.event.KeyEvent;
+import java.awt.image.BufferedImage;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -301,6 +311,62 @@ class CameraLockTest {
         assertSame(held, p.cameraLock, "the profile still holds the object the form edits");
         assertTrue(held.isFree());
         assertTrue(p.cameraLock.allowsHeading(2));
+    }
+
+    /**
+     * <b>A play-test is play, so it is played under the level's own camera
+     * rules.</b>
+     *
+     * <p>The editor's camera is deliberately free — building a fixed-camera
+     * level means seeing the far side of every wall — but the play-test is the
+     * one place a creator finds out whether the level they are making
+     * <em>works</em> from the angle they have said it must be played from. It
+     * ran with the free camera too, which is why a lock looked like it did
+     * nothing at all while a level was being made.
+     */
+    @Test
+    void aPlayTestRunsUnderTheLevelsLock() {
+        System.setProperty("java.awt.headless", "true");
+        GameContext ctx = new GameContext(null, new GameTypeStore());
+        GameProfile p = new GameProfile("Locked Type");
+        // Two opposite headings and a fixed tilt: a corridor seen from either
+        // end, which is a lock a creator would actually set.
+        for (int h = 0; h < CameraLock.HEADINGS; h++) {
+            p.cameraLock.setHeadingAllowed(h, h == 0 || h == 4);
+        }
+        p.cameraLock.setMinPitchDegrees(50);
+        p.cameraLock.setMaxPitchDegrees(50);
+        ctx.setProfile(p);
+
+        SceneManager scenes = new SceneManager();
+        scenes.setViewport(800, 600);
+        CreativeScene editor = new CreativeScene(ctx);
+        scenes.register("creative", editor);
+        scenes.setScene("creative");
+
+        InputManager input = new InputManager();
+        Graphics2D g = new BufferedImage(800, 600, BufferedImage.TYPE_INT_ARGB).createGraphics();
+        for (int i = 0; i < 3; i++) {
+            input.newFrame();
+            scenes.update(1 / 120.0, input);
+            scenes.render(Java2DTarget.unsized(g), 0f);
+        }
+        assertTrue(editor.camera().lock().isFree(), "building looks wherever it likes");
+
+        // [P] starts the play-test.
+        input.keyPressed(new KeyEvent(new java.awt.Container(), KeyEvent.KEY_PRESSED, 0, 0,
+                KeyEvent.VK_P, 'p'));
+        input.newFrame();
+        scenes.update(1 / 120.0, input);
+        scenes.render(Java2DTarget.unsized(g), 0f);
+        g.dispose();
+
+        assertFalse(editor.camera().lock().isFree(),
+                "the test runs under the rules the level will be played under");
+        assertEquals(50, Math.toDegrees(editor.camera().pitch()), 1e-6,
+                "at the tilt the level fixes");
+        assertTrue(editor.camera().lock().allowsHeading(0), "and one of its headings");
+        assertFalse(editor.camera().lock().allowsHeading(1));
     }
 
     @Test

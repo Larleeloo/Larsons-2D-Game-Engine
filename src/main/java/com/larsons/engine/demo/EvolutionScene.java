@@ -58,7 +58,9 @@ import java.util.List;
  * WASD/arrows) pans; the wheel zooms. {@code B} opens the shop, {@code K} the
  * reference book, {@code Tab} switches dish, {@code T} toggles the thermometer
  * overlay, {@code [} and {@code ]} work the time warp, {@code H} shows help and
- * {@code Esc} pauses.
+ * {@code Esc} pauses. All of those bar the tool numbers are rebindable in this
+ * game's own controls screen ({@code GameAction.Category.EVOLUTION}), and the
+ * hints on screen read the binds rather than the letters written here.
  */
 public class EvolutionScene extends AbstractScene {
 
@@ -229,7 +231,8 @@ public class EvolutionScene extends AbstractScene {
                 // screen and coming back costs the experiment nothing.
                 .add("Controls (Key Binds)", () -> {
                     saveNow();
-                    KeyBindsScene.open(scenes, "evolution");
+                    KeyBindsScene.openFor(scenes, "evolution",
+                            GameAction.Category.EVOLUTION);
                 })
                 .add("Save and quit to menu", () -> {
                     saveNow();
@@ -278,7 +281,7 @@ public class EvolutionScene extends AbstractScene {
         }
         if (showHelp) {
             if (KeyBinds.pressed(input, GameAction.MENU_BACK)
-                    || input.isKeyJustPressed(KeyEvent.VK_H)) showHelp = false;
+                    || KeyBinds.pressed(input, GameAction.EVO_HELP)) showHelp = false;
             return;
         }
         if (showShop) {
@@ -310,37 +313,36 @@ public class EvolutionScene extends AbstractScene {
             paused = true;
             return;
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_H)) showHelp = true;
-        if (input.isKeyJustPressed(KeyEvent.VK_B)) showShop = true;
-        if (input.isKeyJustPressed(KeyEvent.VK_K)) {
+        if (KeyBinds.pressed(input, GameAction.EVO_HELP)) showHelp = true;
+        if (KeyBinds.pressed(input, GameAction.EVO_SHOP)) showShop = true;
+        if (KeyBinds.pressed(input, GameAction.EVO_CATALOG)) {
             store.save(game); // the book reads the catalog files, so flush first
             scenes.transitionTo("evolutioncatalog");
             return;
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_T)) {
+        if (KeyBinds.pressed(input, GameAction.EVO_TEMPERATURE)) {
             if (game.inventory().owns(ShopItem.THERMOMETER)) {
                 showTemperature = !showTemperature;
             } else {
-                setStatus("The thermometer is an instrument you have to buy (B)");
+                setStatus("The thermometer is an instrument you have to buy ("
+                        + KeyBinds.label(GameAction.EVO_SHOP) + ")");
             }
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_TAB)) {
+        if (KeyBinds.pressed(input, GameAction.EVO_NEXT_DISH)) {
             game.cycleDish(1);
             selected = null;
             camera.zoom = Math.max(fitZoom(), 1.15);
             camera.centerOn(0, 0);
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_OPEN_BRACKET)) timeWarp(-1);
-        if (input.isKeyJustPressed(KeyEvent.VK_CLOSE_BRACKET)) timeWarp(1);
+        if (KeyBinds.pressed(input, GameAction.EVO_SLOWER)) timeWarp(-1);
+        if (KeyBinds.pressed(input, GameAction.EVO_FASTER)) timeWarp(1);
 
         Tool[] byKey = {Tool.SPATULA, Tool.FEED_SIMPLE, Tool.FEED_COMPLEX, Tool.COLONY,
                 Tool.BARRIER, Tool.HEAT, Tool.COLD, Tool.SPOTLIGHT, Tool.MUTAGEN, Tool.TOOLKIT};
         for (int i = 0; i < byKey.length; i++) {
             if (input.isKeyJustPressed(KeyEvent.VK_0 + i)) selectTool(byKey[i]);
         }
-        if (input.isKeyJustPressed(KeyEvent.VK_I) || input.isKeyJustPressed(KeyEvent.VK_BACK_QUOTE)) {
-            selectTool(Tool.INSPECT);
-        }
+        if (KeyBinds.pressed(input, GameAction.EVO_INSPECT)) selectTool(Tool.INSPECT);
     }
 
     private void timeWarp(int delta) {
@@ -471,7 +473,8 @@ public class EvolutionScene extends AbstractScene {
     }
 
     private void updateShop(InputManager input) {
-        if (input.isKeyJustPressed(KeyEvent.VK_ESCAPE) || input.isKeyJustPressed(KeyEvent.VK_B)) {
+        if (KeyBinds.pressed(input, GameAction.MENU_BACK)
+                || KeyBinds.pressed(input, GameAction.EVO_SHOP)) {
             showShop = false;
             return;
         }
@@ -1012,7 +1015,13 @@ public class EvolutionScene extends AbstractScene {
             target.drawText(String.format("%.2f×", game.timeScale()), 810, 26, SANS_PLAIN_14, GOOD);
         }
 
-        String hint = "B shop · K book · Tab dish · H help · Esc pause";
+        // Read from the binds rather than written out: every key on this line
+        // is rebindable in Evolution's own controls screen.
+        String hint = KeyBinds.label(GameAction.EVO_SHOP) + " shop · "
+                + KeyBinds.label(GameAction.EVO_CATALOG) + " book · "
+                + KeyBinds.label(GameAction.EVO_NEXT_DISH) + " dish · "
+                + KeyBinds.label(GameAction.EVO_HELP) + " help · "
+                + KeyBinds.label(GameAction.MENU_BACK) + " pause";
         target.drawText(hint, viewportWidth - target.textWidth(hint, SANS_PLAIN_14) - 16, 26,
                 SANS_PLAIN_14, TEXT_DIM);
     }

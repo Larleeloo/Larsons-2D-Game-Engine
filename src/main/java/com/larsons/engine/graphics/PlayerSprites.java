@@ -219,7 +219,19 @@ public final class PlayerSprites {
         if (!sideScroll) {
             // Plan view: the hop's height is the airborne test, and its
             // vertical speed splits rising from falling.
-            boolean airborne = s.z > 0.01;
+            //
+            // <b>Measured against the ground under the feet, not against
+            // zero.</b> Height stopped being something only a jump had the day
+            // a body could stand on a block: a character on top of a wall has
+            // z above zero for as long as they stand there, so "z > 0" called
+            // them airborne the whole time and every step they took played the
+            // jump animation — which, for a character with no jump sheet, falls
+            // back to the walk cycle and looks like walking on the spot in
+            // mid-air. What "airborne" means is being above the thing you would
+            // land on.
+            double ground = level.verticality()
+                    ? PlayerPhysics.groundZ(level, s.x, s.y, size, s.z) : 0;
+            boolean airborne = s.z > ground + PlayerPhysics.STEP_EPS;
             return actionState(!airborne, inLiquid, s.moving,
                     sprintHeld && s.moving, -s.vz);
         }

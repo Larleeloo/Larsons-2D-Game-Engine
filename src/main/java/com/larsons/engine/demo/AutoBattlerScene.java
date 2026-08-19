@@ -35,7 +35,6 @@ import java.awt.Font;
 import java.awt.Polygon;
 import java.awt.Rectangle;
 import java.awt.Shape;
-import java.awt.event.KeyEvent;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
@@ -73,6 +72,10 @@ import java.util.Map;
  * click an item gem then a unit to equip. Click shop cards to buy; click a
  * player's name to scout their board; <b>D</b> rerolls, <b>F</b> buys XP,
  * <b>S</b> sells the selected unit; <b>Esc</b> closes the scout view / menu.
+ * Those letters are the defaults — this game has its own group of rebindable
+ * actions ({@code GameAction.Category.AUTO_BATTLER}) and its own controls
+ * screen on the lobby, and the buttons on screen name whatever they are bound
+ * to now.
  * The <b>Lock</b> toggle keeps the current shop through the round change;
  * the <b>Gather / Spread / Flip</b> buttons rearrange the fielded board in
  * one click; a selected unit with items offers a once-per-round
@@ -385,7 +388,7 @@ public class AutoBattlerScene extends AbstractScene {
                 paused = !paused;
             }
         }
-        if (paused && input.isKeyJustPressed(KeyEvent.VK_L)) {
+        if (paused && KeyBinds.pressed(input, GameAction.AUTO_LEAVE)) {
             leave();
             return;
         }
@@ -779,9 +782,9 @@ public class AutoBattlerScene extends AbstractScene {
     }
 
     private void handleKeys(InputManager input) {
-        if (input.isKeyJustPressed(KeyEvent.VK_D)) client.sendReroll();
-        if (input.isKeyJustPressed(KeyEvent.VK_F)) client.sendBuyXp();
-        if (input.isKeyJustPressed(KeyEvent.VK_S) && selectedUnitId >= 0) {
+        if (KeyBinds.pressed(input, GameAction.AUTO_REROLL)) client.sendReroll();
+        if (KeyBinds.pressed(input, GameAction.AUTO_BUY_XP)) client.sendBuyXp();
+        if (KeyBinds.pressed(input, GameAction.AUTO_SELL) && selectedUnitId >= 0) {
             client.sendSell(selectedUnitId);
             selectedUnitId = -1;
         }
@@ -1913,8 +1916,10 @@ public class AutoBattlerScene extends AbstractScene {
         if (you == null) return;
 
         // Economy buttons.
-        drawButton(target, xpBtn, "Buy XP  4g  (F)", you.gold() >= 4 && you.level() < 9);
-        drawButton(target, rerollBtn, "Reroll  2g  (D)", you.gold() >= 2);
+        drawButton(target, xpBtn, "Buy XP  4g  (" + KeyBinds.label(GameAction.AUTO_BUY_XP) + ")",
+                you.gold() >= 4 && you.level() < 9);
+        drawButton(target, rerollBtn, "Reroll  2g  (" + KeyBinds.label(GameAction.AUTO_REROLL) + ")",
+                you.gold() >= 2);
 
         // Shop lock: keep this exact shop through the round change.
         boolean locked = you.shopLocked();
@@ -1998,7 +2003,8 @@ public class AutoBattlerScene extends AbstractScene {
         if (selectedUnitId >= 0) {
             UnitInstance sel = findOwn(selectedUnitId);
             if (sel != null && sel.def() != null) {
-                drawButton(target, sellBtn, "Sell " + sellPrice(you, sel) + "g  (S)", true,
+                drawButton(target, sellBtn, "Sell " + sellPrice(you, sel) + "g  ("
+                                + KeyBinds.label(GameAction.AUTO_SELL) + ")", true,
                         new Color(120, 55, 55), new Color(235, 140, 120));
                 if (!sel.items.isEmpty()) {
                     drawButton(target, unequipBtn, you.unequipUsed()
@@ -2457,7 +2463,11 @@ public class AutoBattlerScene extends AbstractScene {
             drawCentered(target, "The match keeps running online",
                     viewportWidth / 2, viewportHeight / 2 + 10, SANS_PLAIN_17,
                     new Color(190, 195, 214));
-            drawCentered(target, "Esc — resume   ·   L — leave match",
+            // The keys as they are actually bound: this game's controls are
+            // rebindable now (GameAction.Category.AUTO_BATTLER), and a prompt
+            // naming a key nobody has any more is worse than no prompt.
+            drawCentered(target, KeyBinds.label(GameAction.MENU_BACK) + " — resume   ·   "
+                            + KeyBinds.label(GameAction.AUTO_LEAVE) + " — leave match",
                     viewportWidth / 2, viewportHeight / 2 + 40, SANS_PLAIN_17,
                     new Color(190, 195, 214));
         }

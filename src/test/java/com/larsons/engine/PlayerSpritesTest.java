@@ -1,11 +1,16 @@
 package com.larsons.engine;
 
+import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.graphics.Animation;
 import com.larsons.engine.graphics.AssetLoader;
 import com.larsons.engine.graphics.PlayerSprites;
 import com.larsons.engine.graphics.SkinDef;
 import com.larsons.engine.graphics.Skins;
+import com.larsons.engine.graphics.Perspective;
 import com.larsons.engine.graphics.TexturePack;
+import com.larsons.engine.level.Level;
+import com.larsons.engine.level.LevelFormat;
+import com.larsons.engine.sim.PlayerState;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -88,6 +93,47 @@ class PlayerSpritesTest {
         assertEquals("run", PlayerSprites.actionState(true, false, true, true, 0));
         assertEquals("walk", PlayerSprites.actionState(true, false, true, false, 0));
         assertEquals("idle", PlayerSprites.actionState(true, false, false, false, 0));
+    }
+
+    /**
+     * Standing on a block is standing, not falling.
+     *
+     * <p>Height stopped being something only a jump had the day a body could
+     * stand on one: a character on top of a wall has {@code z} above zero for
+     * as long as they are up there. Classifying that as airborne meant every
+     * step taken on a roof played the jump animation — which, for a character
+     * with no jump sheet, falls back to the walk cycle and reads as walking on
+     * the spot in mid-air. Airborne means above the thing you would land on.
+     */
+    @Test
+    void standingOnABlockIsNotAirborne() {
+        Level lvl = Level.empty("stand", 8, 8, 32);
+        lvl.setFormat(LevelFormat.THREE_D);
+        lvl.fillFloor(lvl.blocks.get("stone_path").id());
+        int stone = lvl.blocks.get("stone").id();
+        for (int layer = 1; layer <= 3; layer++) lvl.setTile(4, 4, layer, stone);
+        GameProfile p = new GameProfile("stand");
+        p.verticality = true;
+        lvl.settings = p;
+
+        PlayerState body = new PlayerState(0, "climber", 4 * 32, 4 * 32);
+        double size = body.hitSize(p.playerSize);
+        // Feet on the top of the three-block column.
+        body.x = 4 * 32 + (32 - size) / 2;
+        body.y = 4 * 32 + (32 - size) / 2;
+        body.z = lvl.surfaceZ(4);
+        body.moving = true;
+
+        assertEquals("walk",
+                PlayerSprites.actionState(body, lvl, p, Perspective.THREE_D, false),
+                "walking along the top of a wall is walking");
+
+        // …and a hop off that roof still reads as a hop.
+        body.z += 12;
+        body.vz = 40;
+        assertEquals("jump",
+                PlayerSprites.actionState(body, lvl, p, Perspective.THREE_D, false),
+                "leaving the roof is a jump");
     }
 
     @Test

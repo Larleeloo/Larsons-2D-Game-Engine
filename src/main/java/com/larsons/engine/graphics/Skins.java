@@ -148,6 +148,32 @@ public final class Skins {
     }
 
     /**
+     * The frame of {@code key}'s sheet at an explicit {@code index}, clamped to
+     * what the sheet holds — a sheet read as a set of <em>states</em> rather
+     * than as an animation.
+     *
+     * <p>What a three-state button is: one sheet whose frames are "resting",
+     * "pointed at" and "pressed", chosen by which of those is true rather than
+     * by a clock (see {@code com.larsons.engine.ui.SpriteButton}). Sharing the
+     * skin pipeline is the point — the art is a texture key like any other, so
+     * a pack replaces it by dropping a PNG in, and nothing about the button has
+     * to know where its picture came from.
+     *
+     * @return the frame, or {@code null} when the key has no (working) skin
+     */
+    public static synchronized BufferedImage stateFrame(String key, int index) {
+        SkinDef def = effective(key);
+        if (def == null) return null;
+        List<BufferedImage> frames = FRAMES.get(key);
+        if (frames == null) {
+            frames = slice(def);
+            FRAMES.put(key, frames);
+        }
+        if (frames.isEmpty()) return null;
+        return frames.get(Math.max(0, Math.min(frames.size() - 1, index)));
+    }
+
+    /**
      * The frame of {@code key}'s sheet at {@code progress} (0..1) through a
      * <em>one-shot</em> animation, rather than at a point in time: the sheet
      * is stretched over the whole action, so a melee swing's art plays exactly

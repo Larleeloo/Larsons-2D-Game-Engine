@@ -81,7 +81,8 @@ class NewLevelSceneTest {
 
         SceneManager scenes = new SceneManager();
         scenes.setViewport(W, H);
-        scenes.register("menu", new MainMenuScene(ctx));
+        MainMenuScene menu = new MainMenuScene(ctx);
+        scenes.register("menu", menu);
         scenes.register(NewLevelScene.NAME, new NewLevelScene(ctx));
         scenes.register("creative", new CreativeScene(ctx));
         scenes.setScene("menu");
@@ -90,16 +91,12 @@ class NewLevelSceneTest {
         Component src = new Canvas();
         run(scenes, input, 2);
 
-        // Main menu: Play Level, Load Level, Saved Runs, Creative Mode … — down
-        // three times, select. (There is no Continue entry above them: this
-        // game type is brand new and has no saved run to continue.)
-        press(input, src, KeyEvent.VK_DOWN);
-        run(scenes, input, 1);
-        press(input, src, KeyEvent.VK_DOWN);
-        run(scenes, input, 1);
-        press(input, src, KeyEvent.VK_DOWN);
-        run(scenes, input, 1);
-        press(input, src, KeyEvent.VK_ENTER);
+        // Creative mode, by name rather than by counting rows: what is above it
+        // on the main menu is a menu decision and this test is not about it.
+        menu.menu().items().stream()
+                .filter(i -> i.text().startsWith("Creative Mode"))
+                .findFirst().orElseThrow(() -> new AssertionError("no creative mode entry"))
+                .activate();
         run(scenes, input, 2);
 
         // The picker: its first entry is the first LevelFormat.

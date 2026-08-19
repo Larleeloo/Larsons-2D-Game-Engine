@@ -89,7 +89,8 @@ public class EvolutionLobbyScene extends AbstractScene {
         menu.add("Reference Book (" + discovered + " organisms in your history)",
                 () -> scenes.transitionTo("evolutioncatalog"));
         menu.add("Controls (Key Binds)",
-                () -> KeyBindsScene.open(scenes, "evolutionlobby"));
+                () -> KeyBindsScene.openFor(scenes, "evolutionlobby",
+                        com.larsons.engine.input.GameAction.Category.EVOLUTION));
         menu.add("Back to Game Types", () -> scenes.transitionTo("startup"));
     }
 

@@ -171,22 +171,95 @@ public enum GameAction {
     EDITOR_LAYER_UP("editor_layer_up", "Build Height Up", Category.EDITOR,
             InputBinding.key(KeyEvent.VK_PAGE_UP)),
     EDITOR_LAYER_DOWN("editor_layer_down", "Build Height Down", Category.EDITOR,
-            InputBinding.key(KeyEvent.VK_PAGE_DOWN));
+            InputBinding.key(KeyEvent.VK_PAGE_DOWN)),
 
-    /** How the controls menu is grouped, and the scope a conflict is reported in. */
+    // --- the auto battler ---------------------------------------------------------------
+    //
+    // The mini games used to read raw key codes, which meant three whole games
+    // whose controls could not be looked up, let alone changed. They are
+    // actions like any other now; each game's own category is what lets its
+    // controls screen show its keys and nothing else (KeyBindsScene.open).
+    AUTO_REROLL("auto_reroll", "Reroll Shop", Category.AUTO_BATTLER,
+            InputBinding.key(KeyEvent.VK_D)),
+    AUTO_BUY_XP("auto_buy_xp", "Buy Experience", Category.AUTO_BATTLER,
+            InputBinding.key(KeyEvent.VK_F)),
+    AUTO_SELL("auto_sell", "Sell Selected Unit", Category.AUTO_BATTLER,
+            InputBinding.key(KeyEvent.VK_S)),
+    AUTO_LEAVE("auto_leave", "Leave Game (while paused)", Category.AUTO_BATTLER,
+            InputBinding.key(KeyEvent.VK_L)),
+
+    // --- the deckbuilder -----------------------------------------------------------------
+    DECK_REVEAL("deck_reveal", "Reveal Leader", Category.DECK,
+            InputBinding.key(KeyEvent.VK_R)),
+    DECK_END_TURN("deck_end_turn", "End Turn", Category.DECK,
+            InputBinding.key(KeyEvent.VK_E)),
+    DECK_HELP("deck_help", "Show / Hide Help", Category.DECK,
+            InputBinding.key(KeyEvent.VK_H)),
+    DECK_LEAVE("deck_leave", "Leave Game (while paused)", Category.DECK,
+            InputBinding.key(KeyEvent.VK_L)),
+
+    // --- the evolution simulator ----------------------------------------------------------
+    EVO_HELP("evo_help", "Show / Hide Help", Category.EVOLUTION,
+            InputBinding.key(KeyEvent.VK_H)),
+    EVO_SHOP("evo_shop", "Open / Close Shop", Category.EVOLUTION,
+            InputBinding.key(KeyEvent.VK_B)),
+    EVO_CATALOG("evo_catalog", "Species Catalogue", Category.EVOLUTION,
+            InputBinding.key(KeyEvent.VK_K)),
+    EVO_TEMPERATURE("evo_temperature", "Thermometer Overlay", Category.EVOLUTION,
+            InputBinding.key(KeyEvent.VK_T)),
+    EVO_NEXT_DISH("evo_next_dish", "Next Dish", Category.EVOLUTION,
+            InputBinding.key(KeyEvent.VK_TAB)),
+    EVO_SLOWER("evo_slower", "Slow Time", Category.EVOLUTION,
+            InputBinding.key(KeyEvent.VK_OPEN_BRACKET)),
+    EVO_FASTER("evo_faster", "Speed Time", Category.EVOLUTION,
+            InputBinding.key(KeyEvent.VK_CLOSE_BRACKET)),
+    EVO_INSPECT("evo_inspect", "Inspect Tool", Category.EVOLUTION,
+            InputBinding.key(KeyEvent.VK_I), InputBinding.key(KeyEvent.VK_BACK_QUOTE));
+
+    /**
+     * How the controls menu is grouped, and the scope a conflict is reported in.
+     *
+     * <p>The first six are the engine's own: they are what the world, the
+     * menus and the creative editor read, and they are shown together on the
+     * controls screen the engine's menus open. The rest belong to one mini game
+     * each — a separate game with a separate keyboard, reached from its own
+     * screen ({@link Category#miniGames()}) — so a key doing one thing in the
+     * auto battler and another in the world is not a conflict and is not
+     * reported as one.
+     */
     public enum Category {
-        MOVEMENT("Movement"),
-        COMBAT("Combat"),
-        ITEMS("Items & Interaction"),
-        CAMERA("Camera"),
-        INTERFACE("Menus & Interface"),
-        EDITOR("Creative Editor");
+        MOVEMENT("Movement", true),
+        COMBAT("Combat", true),
+        ITEMS("Items & Interaction", true),
+        CAMERA("Camera", true),
+        INTERFACE("Menus & Interface", true),
+        EDITOR("Creative Editor", true),
+        AUTO_BATTLER("Auto Battler", false),
+        DECK("Council of Six", false),
+        EVOLUTION("Evolution", false);
 
         private final String label;
+        private final boolean engine;
 
-        Category(String label) { this.label = label; }
+        Category(String label, boolean engine) {
+            this.label = label;
+            this.engine = engine;
+        }
 
         public String label() { return label; }
+
+        /** Whether this is one of the engine's own groups rather than a mini game's. */
+        public boolean engine() { return engine; }
+
+        /** The engine's own groups, in declaration order. */
+        public static List<Category> engineGroups() {
+            return Arrays.stream(values()).filter(Category::engine).toList();
+        }
+
+        /** One group per mini game, in declaration order. */
+        public static List<Category> miniGames() {
+            return Arrays.stream(values()).filter(c -> !c.engine()).toList();
+        }
     }
 
     /** The hotbar actions, in slot order (paired with {@code Inventory.HOTBAR}). */

@@ -2,6 +2,8 @@ package com.larsons.engine;
 
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.graphics.EyeCamera;
+import com.larsons.engine.graphics.SkinDef;
+import com.larsons.engine.graphics.Skins;
 import com.larsons.engine.graphics.SolidPainter;
 import com.larsons.engine.graphics.TerrainPainter;
 import com.larsons.engine.graphics.Viewpoint;
@@ -9,6 +11,13 @@ import com.larsons.engine.graphics.draw.RecordingTarget;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.level.LevelFormat;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import javax.imageio.ImageIO;
+import java.awt.Color;
+import java.awt.Graphics2D;
+import java.awt.image.BufferedImage;
+import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -253,19 +262,66 @@ class SolidViewTest {
     }
 
     /**
-     * A column of one material is one quad down its side however tall it is —
-     * the run merging, which halves the queue on any level with walls.
+     * A column is one quad per block down its side, not one quad for the whole
+     * run — <b>the price of the painter's order being exact</b>.
+     *
+     * <p>Merging a column of identical blocks into a single tall face halves
+     * the queue and costs the thing the queue is for: a face spanning several
+     * cells of the height axis has no single place in an order built out of
+     * cell distances ({@code SolidPainter.cellOrder}), so a wall is nearer than
+     * the block at its foot and further than the block at its top at the same
+     * time, and whichever number it is given, something in front of part of it
+     * sorts behind. Per block, every face belongs to exactly one cell and the
+     * order is a proof rather than a heuristic.
      */
     @Test
-    void aColumnOfOneMaterialIsOneFace() {
+    void aColumnDrawsOneFacePerBlockSoEveryFaceHasACellOfItsOwn() {
         for (int height = 1; height <= 6; height++) {
             Level lvl = bare(4, 4);
             for (int layer = 1; layer <= height; layer++) lvl.setTile(1, 1, layer, stone(lvl));
             RecordingTarget target = paint(lvl,
                     eyeLookingAt(1.5 * TILE, 3.5 * TILE, height * TILE + 48,
                             1.5 * TILE, 1.5 * TILE, height * TILE / 2.0));
-            assertEquals(2, target.count("fillPolygon"),
-                    "a column " + height + " tall is still one top and one side");
+            assertEquals(1 + height, target.count("fillPolygon"),
+                    "a column " + height + " tall is one top and " + height + " side faces");
+        }
+    }
+
+    /**
+     * A block with a texture is drawn with its texture, once per block.
+     *
+     * <p>The solid views used to draw every face in the block's registered
+     * colour and consult no texture at all, so a level dressed by a texture
+     * pack was a level of flat colours the moment a player pressed F5. The
+     * "once per block" half matters as much as the "with its texture" half: a
+     * sheet stretched over a merged run is one brick eight blocks high.
+     */
+    @Test
+    void aTexturedBlockIsDrawnWithItsSheetOncePerBlock(@TempDir Path dir) throws Exception {
+        Level lvl = bare(6, 6);
+        for (int layer = 1; layer <= 3; layer++) lvl.setTile(2, 2, layer, stone(lvl));
+        String key = lvl.blocks.get("stone").textureKey();
+        BufferedImage sheet = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = sheet.createGraphics();
+        g.setColor(Color.MAGENTA);
+        g.fillRect(0, 0, 16, 16);
+        g.dispose();
+        Path file = dir.resolve("stone.png");
+        ImageIO.write(sheet, "png", file.toFile());
+        try {
+            Skins.put(new SkinDef(key, file.toString(), 16, 16, 1, 0));
+            // Above the column and south of it, so its top and its three
+            // southern faces are all turned toward the eye.
+            RecordingTarget target = paint(lvl,
+                    eyeLookingAt(2.5 * TILE, 6.5 * TILE, 5 * TILE,
+                            2.5 * TILE, 2.5 * TILE, 1.5 * TILE));
+            long blits = target.ofType(RecordingTarget.Cmd.Image.class).stream()
+                    .filter(i -> i.op().equals("drawImageTransformed"))
+                    .count();
+            assertEquals(4, blits,
+                    "three side faces and the top, each with its own copy of the sheet");
+        } finally {
+            Skins.remove(key);
         }
     }
 

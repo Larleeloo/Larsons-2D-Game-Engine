@@ -38,7 +38,7 @@ public final class KeyBindForm {
     }
 
     /**
-     * Build the full controls form.
+     * Build the full controls form — every group the engine has.
      *
      * @param title      form title
      * @param binds      the set being edited (edited in place, live)
@@ -47,8 +47,26 @@ public final class KeyBindForm {
      */
     public static ConfigForm build(String title, KeyBinds binds,
                                    Runnable onChange, Runnable onDone) {
+        return build(title, binds, onChange, onDone,
+                GameAction.Category.engineGroups());
+    }
+
+    /**
+     * The controls form for {@code groups} alone — what a mini game's own
+     * controls screen shows.
+     *
+     * <p>A mini game is a separate game with a separate keyboard, and the one
+     * thing its player wants from a controls screen is <em>its</em> keys. A
+     * screen listing the creative editor's brush sizes underneath them is a
+     * screen nobody reads to the bottom of, and it is also how the auto
+     * battler's reroll key ended up looking like a conflict with walking
+     * right.
+     */
+    public static ConfigForm build(String title, KeyBinds binds,
+                                   Runnable onChange, Runnable onDone,
+                                   List<GameAction.Category> groups) {
         return fill(new ConfigForm(title).theme(MenuTheme.dark()).rowHeight(40),
-                binds, onChange, onDone);
+                binds, onChange, onDone, groups);
     }
 
     /**
@@ -57,12 +75,21 @@ public final class KeyBindForm {
      */
     public static ConfigForm fill(ConfigForm form, KeyBinds binds,
                                   Runnable onChange, Runnable onDone) {
+        return fill(form, binds, onChange, onDone, GameAction.Category.engineGroups());
+    }
+
+    /** {@link #fill(ConfigForm, KeyBinds, Runnable, Runnable)} for {@code groups} alone. */
+    public static ConfigForm fill(ConfigForm form, KeyBinds binds,
+                                  Runnable onChange, Runnable onDone,
+                                  List<GameAction.Category> groups) {
+        List<GameAction.Category> shown = groups == null || groups.isEmpty()
+                ? GameAction.Category.engineGroups() : groups;
         form.onKeyBindChange(onChange);
         form.addNote("Any action goes on any key or mouse button, side buttons included.");
         form.addNote("Hold Ctrl/Shift/Alt while pressing to bind a combination.");
         form.addNote("Two slots per action — empty both to unbind it entirely.");
 
-        for (GameAction.Category category : GameAction.Category.values()) {
+        for (GameAction.Category category : shown) {
             List<GameAction> actions = GameAction.in(category);
             if (actions.isEmpty()) continue;
             form.addNote("— " + category.label().toUpperCase() + " —");
@@ -72,10 +99,18 @@ public final class KeyBindForm {
         }
 
         form.addNote("A key bound twice in one group shows red; across groups is fine.");
-        form.addAction("Reset All to Defaults", () -> {
-            binds.resetAll();
-            if (onChange != null) onChange.run();
-        });
+        // Only the groups on screen: a mini game's "reset" that also put the
+        // world's movement keys back would be a reset of something the player
+        // cannot see from here.
+        form.addAction(shown.size() == 1
+                        ? "Reset " + shown.get(0).label() + " to Defaults"
+                        : "Reset All to Defaults",
+                () -> {
+                    for (GameAction.Category category : shown) {
+                        for (GameAction action : GameAction.in(category)) binds.reset(action);
+                    }
+                    if (onChange != null) onChange.run();
+                });
         if (onDone != null) form.addAction("Done", onDone);
         return form;
     }

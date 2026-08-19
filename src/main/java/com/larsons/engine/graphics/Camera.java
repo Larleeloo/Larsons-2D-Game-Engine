@@ -319,8 +319,9 @@ public class Camera {
     }
 
     /**
-     * How far up the screen the camera's focus has been carried by the height
-     * axis, in pre-zoom screen pixels — the lift of whatever it is following.
+     * How high the thing the camera is following is standing, in world units —
+     * where it <em>is</em>, as opposed to where the camera has decided to key
+     * its picture ({@link #restHeight}).
      *
      * <p>Zero everywhere the focus is on the floor, which is every level that
      * has not switched its height axis on and every side-scroller ever. It is
@@ -328,7 +329,77 @@ public class Camera {
      * player climbing a tower has not moved on the plane at all, and the camera
      * still has to follow them up.
      */
-    private double elevation;
+    private double focusHeight;
+
+    /**
+     * The height the projection is actually keyed to — what {@link #elevation()}
+     * is computed from.
+     *
+     * <p><b>Two numbers rather than one, because "follow the player's height"
+     * and "hold the ground still" are both requirements and they disagree
+     * during a jump.</b> Keyed rigidly to the body, the camera rises the instant
+     * the body does: the player hangs motionless in the middle of the screen and
+     * the whole world drops away underneath them and comes back, every hop, and
+     * every step up a staircase. That reads as the ground moving rather than as
+     * the character jumping, which is precisely backwards — the jump is the
+     * thing that moved.
+     *
+     * <p>So in {@link HeightFollow#EASED} this trails the focus: it does not
+     * move at all while the body stays within {@link #FOLLOW_SLACK_BLOCKS} of
+     * it (a hop's whole arc, and the first steps of a climb), and closes the
+     * remainder smoothly when a real climb takes the body past that. The lift
+     * is still one uniform offset applied to the whole picture, so the "world
+     * moves as one rigid sheet" property the class note is about is untouched:
+     * this changes <em>when</em> the sheet moves, not whether it shears.
+     */
+    private double restHeight;
+
+    /** Whether anything has been followed yet; the first follow places rather than eases. */
+    private boolean followed;
+
+    /** How the camera's height keeps up with what it follows. */
+    public enum HeightFollow {
+        /**
+         * The camera's height <em>is</em> the focus's height, every frame — a
+         * cutscene's mark, a test, a camera being placed. What the engine has
+         * always done.
+         */
+        RIGID,
+        /**
+         * The camera's height trails the focus, ignoring anything inside the
+         * slack and gliding over the rest — what a played level wants, so a
+         * jump moves the player and not the ground.
+         */
+        EASED
+    }
+
+    /**
+     * How far the focus may rise or fall before the camera goes with it, in
+     * blocks.
+     *
+     * <p>Three, because a hop is under two ({@code HOP_SPEED²/2·HOP_GRAVITY} is
+     * about 1.8 blocks) and a staircase should be climbable a step or two
+     * without the view lurching. Past it, the camera has to move or a player
+     * climbing a tower walks off the top of their own screen.
+     */
+    public static final double FOLLOW_SLACK_BLOCKS = 3;
+
+    /**
+     * A height change no body could have made in one step, in blocks — a
+     * placement rather than a movement.
+     *
+     * <p>A door, a respawn, a teleport, a test putting the camera somewhere:
+     * those are not climbs and easing into them would show the world sliding
+     * from wherever the last level left the camera. Falling at terminal speed
+     * covers a small fraction of a block per tick, so nothing a body does
+     * reaches this.
+     */
+    public static final double FOLLOW_PLACE_BLOCKS = 2;
+
+    /** How long the camera takes to close the height it has fallen behind by. */
+    public static final double FOLLOW_SECONDS = 0.28;
+
+    private HeightFollow heightFollow = HeightFollow.RIGID;
 
     /**
      * Screen pixels of lift per world unit of height, before zoom — how far up
@@ -359,14 +430,71 @@ public class Camera {
         return Math.max(MIN_LIFT, cosPitch);
     }
 
-    /** Set the focus's lift; see {@link #elevation}. */
-    public void setElevation(double screenPixels) {
-        this.elevation = screenPixels;
+    /**
+     * Key the camera's picture to {@code z} world units above the floor,
+     * immediately — the placement form of the height axis.
+     */
+    public void setFocusHeight(double z) {
+        this.focusHeight = z;
+        this.restHeight = z;
+        this.followed = true;
     }
 
-    /** The focus's lift, in pre-zoom screen pixels. */
+    /** How high the thing being followed is standing, in world units. */
+    public double focusHeight() { return focusHeight; }
+
+    /** The height the picture is keyed to, in world units; see {@link #restHeight}. */
+    public double restHeight() { return restHeight; }
+
+    /**
+     * The focus's lift, in pre-zoom screen pixels.
+     *
+     * <p><b>Derived rather than stored, and that is a fix rather than a
+     * tidy-up.</b> It used to be a screen distance set at the moment something
+     * was followed — which meant it was measured against the tilt the camera
+     * had <em>then</em>. Raising or lowering the camera changes how far a block
+     * of height lifts something ({@link #liftScale}), so every frame that
+     * tilted while a player stood on a tower drew that tower's height at the
+     * previous frame's scale: the world jumped as the key was held, and jumped
+     * further the higher the player was standing. Asking for the answer in
+     * world units and converting at the moment of use cannot go out of step
+     * with the tilt, because there is nothing left to go out of step.
+     */
     public double elevation() {
-        return elevation;
+        return restHeight * liftScale();
+    }
+
+    /** How the camera's height keeps up with what it follows. */
+    public HeightFollow heightFollow() { return heightFollow; }
+
+    /**
+     * Choose how the height axis follows: rigidly (the default — a cutscene's
+     * mark, a placed camera) or eased with slack (a played level; see
+     * {@link #restHeight}).
+     */
+    public void setHeightFollow(HeightFollow mode) {
+        this.heightFollow = mode == null ? HeightFollow.RIGID : mode;
+    }
+
+    /**
+     * Advance an {@linkplain HeightFollow#EASED eased} follow by {@code dt}
+     * seconds: nothing while the focus is inside the slack, and a smooth close
+     * of whatever is beyond it.
+     *
+     * <p>A no-op in {@link HeightFollow#RIGID}, so a scene may call it
+     * unconditionally.
+     */
+    public void stepFollow(double dt) {
+        if (heightFollow != HeightFollow.EASED || dt <= 0 || !followed) return;
+        double slack = Math.max(0, tileSize) * FOLLOW_SLACK_BLOCKS;
+        double gap = focusHeight - restHeight;
+        double over = Math.abs(gap) - slack;
+        if (over <= 0) return;
+        // Close the part that is past the slack, over FOLLOW_SECONDS. The
+        // fraction is clamped so a long frame closes it rather than
+        // overshooting into an oscillation.
+        double closed = over * Math.min(1, dt / FOLLOW_SECONDS);
+        restHeight += Math.signum(gap) * closed;
     }
 
     public void centerOn(double wx, double wy) {
@@ -400,7 +528,18 @@ public class Camera {
      */
     public void follow(double wx, double wy, double z) {
         centerOn(wx, wy);
-        setElevation(z * liftScale());
+        // Measured against the last height this body was reported at, not
+        // against where the camera has settled: an eased camera is *meant* to
+        // be trailing the body by up to the slack, and testing that gap would
+        // call every ordinary climb a teleport and snap on it.
+        boolean place = !followed || heightFollow == HeightFollow.RIGID
+                || Math.abs(z - focusHeight) > Math.max(0, tileSize) * FOLLOW_PLACE_BLOCKS;
+        focusHeight = z;
+        followed = true;
+        // A door, a respawn, a teleport — or a rigid follow, which is every one
+        // of them by definition. Easing into a jump the body could not have
+        // made would show the world sliding in from wherever it was last.
+        if (place) restHeight = z;
     }
 
     /**
@@ -412,7 +551,7 @@ public class Camera {
      */
     public void frameOn(double wx, double wy) {
         centerOn(wx, wy);
-        setElevation(0);
+        setFocusHeight(0);
     }
 
     /**
@@ -903,7 +1042,7 @@ public class Camera {
         // The focus's own lift, on the axis that carries it. Applied to the
         // camera's offset rather than to each point, so the whole world slides
         // together and the pixel lattice the class note is about is untouched.
-        if (vertical) offset += Math.round(elevation * zoom);
+        if (vertical) offset += Math.round(elevation() * zoom);
         return offset;
     }
 

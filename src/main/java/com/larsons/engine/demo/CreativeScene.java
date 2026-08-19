@@ -2661,6 +2661,18 @@ public class CreativeScene extends AbstractScene {
         testSounds.setCharacter(testCharacter.key);
         ctx.sound(SoundKeys.world("level_load"));
         camera.zoom = Math.max(profile().minZoom, Math.min(profile().maxZoom, 1.0));
+        // <b>A play-test is play, so it is played under the level's own camera
+        // rules.</b> Building is the job the free camera exists for (see
+        // afterLevelSwap); testing is the job that answers "is this level
+        // playable from the angle I have said it must be played from", and a
+        // test that ignored the lock could not answer it at all — which is
+        // what made a level's camera lock look like it did nothing.
+        camera.setLock(profile().cameraLock);
+        camera.setYaw(level.authoredHeading * Camera.EIGHTH_TURN);
+        camera.setPitch(Camera.pitchFor(level.authoredPitchDegrees));
+        // …and the played level's height slack, so a test hop moves the
+        // character rather than the ground.
+        camera.setHeightFollow(Camera.HeightFollow.EASED);
         setStatus("Play-test — [" + KeyBinds.label(GameAction.SPRINT) + "] sprint · hold ["
                 + KeyBinds.label(GameAction.ATTACK) + "] to mine · ["
                 + KeyBinds.label(GameAction.INTERACT) + "] doors/stations · ["
@@ -2764,7 +2776,11 @@ public class CreativeScene extends AbstractScene {
         // inherit whatever height the play-test's player was standing at, and
         // an editor opened after testing on a tower would be framed above the
         // level it is editing.
+        camera.setHeightFollow(Camera.HeightFollow.RIGID);
         camera.frameOn(camera.x, camera.y);
+        // Building looks wherever it likes again — the lock the test ran under
+        // is the level's rule for playing it, not for making it.
+        camera.setLock(com.larsons.engine.graphics.CameraLock.free());
         buildPalette();
         setStatus("Back to editing — " + format().displayName() + " creative mode");
     }
@@ -2975,6 +2991,9 @@ public class CreativeScene extends AbstractScene {
         // so climbing a tower in a play-test walked off the top of the view.
         camera.follow(testMe.x + testHitSize() / 2.0,
                 testMe.y + testHitSize() / 2.0, testMe.z);
+        // …with the same slack a played level has, so a test hop moves the
+        // character and not the ground (Camera.restHeight).
+        camera.stepFollow(dt);
 
         // Cutscene triggers watch the player: zones fire on entry, INTERACT
         // ones on E (doors and stations already had their chance above).
@@ -6920,7 +6939,11 @@ public class CreativeScene extends AbstractScene {
         int w = (int) Math.round(size * camera.zoom);
         int h = w;
         int dx = pcorner[0] - w / 2;
-        int lift = (int) Math.round(pz * camera.zoom * PlayerPhysics.HOP_DRAW_SCALE);
+        // Through the camera's own lift scale, like the play scene's: the tilt
+        // decides how far a block of height carries something up the screen,
+        // and a lift taken without it drifts from the body as the camera moves.
+        int lift = (int) Math.round(pz * camera.zoom * camera.liftScale()
+                * PlayerPhysics.HOP_DRAW_SCALE);
         if (lift > 0) {
             int foot = (int) Math.round(hit * camera.zoom);
             double shrink = Math.max(0.35, 1 - pz / (size * 3));
@@ -6948,7 +6971,9 @@ public class CreativeScene extends AbstractScene {
                     ? (int) Math.round((testMe.facingLeft ? 180 : 0) + arc / 2
                     - arc * testMelee.progress() - arc / 4)
                     : (testMe.facingLeft ? 120 : -60);
-            target.drawArc(pcorner[0] - r, pcorner[1] - w / 2 - r, r * 2, r * 2,
+            // Lifted with the body: the arc belongs to the character, and a
+            // character on a tower is not swinging at the floor below them.
+            target.drawArc(pcorner[0] - r, pcorner[1] - w / 2 - r - lift, r * 2, r * 2,
                     start, (int) Math.round(move ? arc / 2 : arc),
                     new Color(255, 255, 255, (int) (150 * Math.max(0,
                             move ? (testMelee.striking() ? 1 : 0.4) : swingTime / 0.2))), 3f);

@@ -36,7 +36,7 @@ import java.util.List;
  * rows <em>Edit Settings</em> shows — above the two things only a new level has
  * to answer: what it is called and how big the canvas is. <b>Create Level</b>
  * builds the starter canvas for the chosen format, saves it into the game type
- * (so it is listed under <em>Load Level</em> and is what the editor returns to),
+ * (so it is listed under <em>Level Select</em> and is what the editor returns to),
  * and opens the editor on it.
  */
 public class NewLevelScene extends AbstractScene {
@@ -201,7 +201,7 @@ public class NewLevelScene extends AbstractScene {
                     () -> scenes.transitionTo("creative"));
         }
         form.addNote("Everything below is this level's own settings — the same "
-                + "list Load Level → Edit Settings shows, saved into the level "
+                + "list Level Select → Edit Settings shows, saved into the level "
                 + "when it is created.");
         ProfileForms.addRosterOptions(form, ctx.profile().name, roster);
         ProfileForms.addFeatureOptions(form, settings);
@@ -224,7 +224,7 @@ public class NewLevelScene extends AbstractScene {
      * Create the level this screen describes and open the editor on it: the
      * format's starter canvas at the chosen size, carrying the name, roster and
      * settings asked for. It is saved straight away, so a level that has been
-     * created is a level that exists — listed under <em>Load Level</em>, and
+     * created is a level that exists — listed under <em>Level Select</em>, and
      * the one the editor comes back to.
      */
     private void createLevel() {

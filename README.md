@@ -92,8 +92,8 @@ over in a generic, data-driven form and wired to the same toggles:
 - **Parallax backgrounds and particles** — procedural, keeping the engine
   asset-free and JDK-only; the same is true of sound, which falls back to
   synthesized effects and, beyond those, to silence.
-- **Auto Battler** — a complete standalone game mode, its own option on the
-  launch menu: an
+- **Auto Battler** — a complete standalone game mode, its own picture button in
+  the corner of the launch screen: an
   online auto-battler for **2-10 players** in the style of Dota Auto Chess /
   Teamfight Tactics, played on an **isometric** board with synergies, rounds,
   items, and units collected over the game — shops, a shared unit pool,
@@ -109,8 +109,8 @@ over in a generic, data-driven form and wired to the same toggles:
   units, items, projectiles, and the board), and **personal board
   customization** (color schemes, background images, decorative props). See
   [Auto Battler](#auto-battler-online-2-10-players).
-- **Council of Six** — a second complete standalone game mode, its own option
-  on the launch menu: an online **deckbuilding board game for 2-6 players**
+- **Council of Six** — a second complete standalone game mode, its own picture
+  button on the launch screen: an online **deckbuilding board game for 2-6 players**
   in the spirit of Dune Imperium and Inis, themed around the crew itself —
   play cards to place agents on board locations, buy from a shared market
   row, deploy troops for territory majorities, and win round-end conflicts,
@@ -118,8 +118,8 @@ over in a generic, data-driven form and wired to the same toggles:
   to fill seats, turn timers, and **shader-lit particle effects** (every
   table event bursts through the mode's bloom pass). Deliberately simpler
   than Magic. See [Council of Six](#council-of-six-deckbuilding-board-game-2-6-online).
-- **Evolution** — a third complete standalone game mode, its own option on the
-  launch menu: an **artificial life simulator** where organisms are strands of
+- **Evolution** — a third complete standalone game mode, its own picture button
+  on the launch screen: an **artificial life simulator** where organisms are strands of
   red/green/blue DNA that replicate imperfectly, express traits and shapes from
   hard-coded genetic rules, and are pruned by hunger, crowding, temperature and
   each other. You seed one square cell, feed the dish, and earn shop credit for
@@ -128,11 +128,13 @@ over in a generic, data-driven form and wired to the same toggles:
   whenever you like while your history of every organism ever found is kept
   forever. See [Evolution](#evolution-artificial-life-simulator).
 - **Custom key binds** — every action in the engine, from *jump* to the
-  creative editor's *undo*, is rebindable to **any key or any mouse button**
-  (side buttons included, with `Ctrl`/`Shift`/`Alt` combinations) from a
-  **Controls (Key Binds)** menu that is on the launch menu, every main menu,
-  the pause menus and the editor. Two slots per action, conflicts flagged, one
-  readable `config/keybinds.json` for the whole engine. See
+  creative editor's *undo* to the auto battler's *reroll*, is rebindable to
+  **any key or any mouse button** (side buttons included, with
+  `Ctrl`/`Shift`/`Alt` combinations) from a **Controls (Key Binds)** menu that
+  is on every game type's main menu, the pause menus and the editor — and on
+  each mini game's own lobby, showing that game's keys rather than the
+  engine's. Two slots per action, conflicts flagged, one readable
+  `config/keybinds.json` for the whole engine. See
   [Custom key binds](#custom-key-binds-rebind-anything).
 - **Skins (texture overrides)** — drop PNG sprite sheets in
   `resources/skins/` and assign them in the lobby's **Customize Skins** menu:
@@ -259,7 +261,7 @@ This engine was built against six explicit requirements:
 | 5 | **Shader support** | ✅ Implemented — see [Shaders](#shaders). Every [`ShaderPass`](src/main/java/com/larsons/engine/graphics/shader/ShaderPass.java) is defined **GLSL-first** (real GPU fragment-shader source, exportable as `.frag` files) beside a multithreaded CPU implementation, and every pass is compiled on a real driver and diffed against its CPU twin (`ShaderCompileTest`, `ShaderParityTest`: five passes at 0.00 mean channel error out of 255, worst 3.58). **Both sides now execute**: the GL backend compiles each pass's `glsl()` once and runs the chain as a framebuffer ping-pong over the scene texture, and the Java2D backend runs the CPU implementation in parallel row stripes. `GlShaderChainTest` renders every pass both ways through the shipping chain and reproduces those same per-pass errors — which is what says the backend is right, since the shaders were measured before it existed. |
 | ★ | **Rendering backend** | Two, chosen at startup by a real probe. Java2D is the floor and runs anywhere; the OpenGL 3.3 backend is used when a driver gives a context, and the engine falls back to Java2D with a stated reason when it does not. `-Dlarsons.render.backend=auto\|java2d\|gl` overrides, and every frame report names the backend and the driver. See [Rendering backends](#rendering-backends-java2d-and-opengl). |
 | 6 | **Editing outline of game essentials** | Working, minimal implementations of sprite sheets, level loading, and menu customization, wired together by the demo scenes. |
-| ★ | **Feature toggles + game types** | Clickable toggles enable/disable features. Toggles are stored **per level** ([`Level.settings`](src/main/java/com/larsons/engine/level/Level.java)) so one game type can group diverse levels; the game type ([`GameProfile`](src/main/java/com/larsons/engine/config/GameProfile.java) under `resources/gametypes/`) is just the folder, with its own feature values pinned to the defaults so there is exactly one place — the level — where a feature is decided. **Load Level** picks an individual level and either plays it or edits its settings. |
+| ★ | **Feature toggles + game types** | Clickable toggles enable/disable features. Toggles are stored **per level** ([`Level.settings`](src/main/java/com/larsons/engine/level/Level.java)) so one game type can group diverse levels; the game type ([`GameProfile`](src/main/java/com/larsons/engine/config/GameProfile.java) under `resources/gametypes/`) is just the folder, with its own feature values pinned to the defaults so there is exactly one place — the level — where a feature is decided. **Level Select** picks an individual level and either plays it or edits its settings. |
 
 ---
 
@@ -436,9 +438,9 @@ On launch you'll choose or create a **game type** before playing — see
 ### Demo controls
 
 Everything below is the **default** binding. Every one of them can be moved
-onto any key or any mouse button from *Controls (Key Binds)*, which is on the
-launch menu, every game's main menu, and the in-game pause menu — see
-[Custom key binds](#custom-key-binds-rebind-anything).
+onto any key or any mouse button from *Controls (Key Binds)*, which is on every
+game type's main menu, the in-game pause menu, and each mini game's own lobby —
+see [Custom key binds](#custom-key-binds-rebind-anything).
 
 - **Menus / forms:** arrow keys to move, **Left/Right** to adjust a value,
   **Enter** to activate, or use the mouse (hover + click the toggles/steppers).
@@ -634,8 +636,11 @@ com.larsons.engine
 └── demo
     ├── StartupScene.java        Choose or create a game type
     ├── GameTypeEditorScene.java Name + configure a game type's default features
-    ├── MainMenuScene.java       Per-game-type main menu (Play / Load Level / Rename Game Type / …)
-    ├── LevelSelectScene.java    "Load Level": pick a level → Play or Edit Settings (rename + toggles)
+    ├── MainMenuScene.java       Per-game-type main menu (Continue / Level Select / Edit Game Type / …)
+    ├── LevelSelectScene.java    "Level Select": pick a level → play it in a slot, edit,
+    │                          or delete it
+    ├── MiniGameButtons.java     The mini games as three-state picture buttons in the corner
+    │                          of the launch screen (art from StandaloneGame's texture keys)
     ├── MultiplayerScene.java    Host a server / join by host[:port]
     ├── PlayScene.java           Play with every enabled feature; doubles as MP client
     ├── CreativeScene.java       Creative mode: paint blocks/lights/mobs/items
@@ -646,7 +651,7 @@ com.larsons.engine
     ├── AutoBattlerGuideScene.java  Illustrated field guide (rules/synergies/items/odds/units)
     ├── AutoHud.java             The auto-battler HUD's screen geometry (overlap-checked)
     ├── SkinEditorScene.java     The lobby's skin customization menu (sheet imports)
-    └── ProfileForms.java        Shared feature options (game-type editor + Load Level's Edit Settings)
+    └── ProfileForms.java        Shared feature options (New Level + Level Select's Edit Settings)
 ```
 
 ### The game loop
@@ -735,6 +740,27 @@ to read, not yet cut — so the tilt keys **drop through it** (`Camera.SLICE_DET
 and one press off the floor comes back out the other side. `Camera.setPitch`
 has no detent, because a level's own camera rules and a test are not a held key.
 
+**The tilt is applied to the height axis at the moment it is used, not at the
+moment a body was followed.** How far a block of height carries something up the
+screen is `Camera.liftScale()`, which is the tilt's own cosine — so a lift
+stored in *pixels* when the camera followed the player is a lift measured
+against an angle the camera may since have left. Holding `Home` while standing
+on a tower made the world jump for exactly that reason, and further the higher
+you stood. `Camera.elevation()` is derived from a height in world units instead,
+and cannot go stale.
+
+**The camera follows the player's height with slack.** Keyed rigidly to the
+body it rises the instant the body does, so the player hangs motionless in the
+middle of the screen and the whole world drops away and comes back — every hop,
+and every step up a staircase — which reads as the ground moving rather than as
+the character jumping. So a played level's camera ignores anything within
+`Camera.FOLLOW_SLACK_BLOCKS` of where it is keyed (a hop's whole arc, and the
+first steps of a climb) and glides over the rest, which is what still keeps
+somebody climbing a tower on their own screen. A height change no body could
+have made in one step — a door, a respawn, a teleport — is placed rather than
+eased into, and a cutscene's camera stays rigid
+(`Camera.HeightFollow`).
+
 Three things stop working at 0° if nothing is done about them, and the engine
 does something about each:
 
@@ -754,7 +780,7 @@ measured by eye at one tilt is a different jump at another.
 
 So a level can say where its camera may stand
 ([`CameraLock`](src/main/java/com/larsons/engine/graphics/CameraLock.java)),
-in *Load Level → Edit Settings* (and on the *New Level* screen). Each axis is
+in *Level Select → Edit Settings* (and on the *New Level* screen). Each axis is
 restricted on its own and each defaults to unrestricted, so a level that never
 opens the section behaves exactly as it did before locks existed:
 
@@ -968,18 +994,24 @@ thousand blocks has a few hundred exposed faces, and the rest cost one array
 read each to reject. Of the six faces of a box the eye can see only those whose
 outward normal points at it, and for an axis-aligned box that is a comparison
 rather than a dot product: the top is visible when the eye is above it, the
-north face when the eye is north of it. Side faces are merged over vertical runs
-the way the plan view merges them, so a wall eight blocks tall is one quad down
-its side. Measured on a 128×128 level of rolling terrain at 1280×720 with a
-20-tile view distance: **2.8 ms a frame** through Java2D, sky and all.
+north face when the eye is north of it. Measured on a 128×128 level of rolling
+terrain at 1280×720 with a 20-tile view distance: **2.8 ms a frame** through
+Java2D, sky and all.
 
-**Depth without a depth buffer.** Requirement #4 says the JDK-only build is the
-one that must work and Java2D has no depth buffer, so this is a painter's
-algorithm like every other pass in the engine. It sorts on the distance from the
-eye to the *nearest point of each face's box* rather than to the face's centre —
-because a merged run's centre can be a long way from the part that does the
-occluding, and a tall wall beside you has its centre overhead while its bottom is
-at your elbow.
+**Depth without a depth buffer, and it is exact.** Requirement #4 says the
+JDK-only build is the one that must work and Java2D has no depth buffer, so this
+is a painter's algorithm like every other pass in the engine. It sorts on **how
+many cells away from the eye's own cell each face's cell is**, counted along the
+three axes (`SolidPainter.cellOrder`), and that ordering is a proof rather than a
+heuristic: along any straight ray each coordinate moves monotonically, so the sum
+of the three never decreases along it; so a face hit before another has a sum no
+larger; so drawing in decreasing order of it puts every occluder over what it
+occludes, and two faces that tie cannot occlude each other at all. It rests on
+one thing — **a face belongs to exactly one cell** — which is why side faces are
+drawn per block rather than merged up a column. Merging them was the previous
+scheme, sorted on the nearest corner of each run's box, and it is wrong in
+exactly the case players report: a tall wall whose nearest corner is at your
+elbow drawn over the block standing halfway along it.
 
 **Actors are the scene's own sprites, billboarded.** A mob is not just an image:
 it is an image plus a health bar plus status tints plus whatever it is holding,
@@ -1000,27 +1032,45 @@ camera asked. The ground is given the box below zero it would have if it were a
 block, because layer 0 is a *surface* with no thickness and a ray aimed at the
 ground would otherwise go straight through the world.
 
-**Looking around.** Move the mouse to look; resting the pointer in the outer
-tenth of the window keeps turning, so a turn is never cut short by running out
-of window. (Every 3D game locks the pointer to the middle of the screen and
-reads its motion forever; this engine draws through two window systems and
-neither offers that, so the edge is the answer to what happens when you reach
-it.) `,` and `.` — the plan view's camera-rotate keys — turn the eye too, and
+**Looking around.** Move the mouse to look. The pointer is **hidden** while a
+solid view is up — the crosshair is the pointer here, and an arrow sliding
+across the world that the game ignores is the second one — and it is **carried
+back to the middle of the window as it nears an edge**
+([`Pointer`](src/main/java/com/larsons/engine/input/Pointer.java), which the
+window installs and which is a no-op where the platform cannot do it), so a turn
+is never cut short by running out of desk. Recentring happens at the edges
+rather than every frame because the event carrying the warp arrives a frame
+later: in the middle of the window the reading is exactly what the hand did.
+Where the pointer cannot be moved at all, resting it in the outer tenth of the
+window keeps turning instead. `,` and `.` — the plan view's camera-rotate keys — turn the eye too, and
 `Home`/`End` tilt it, for anyone who would rather not steer with the mouse.
 Everything about the view is **local to the client**: like the flat camera's
 heading it is never networked, so two players in one world can be standing in
 entirely different views.
 
+**Block faces are textured**, from the same `blocks_top` / `blocks_side` pools
+the plan view resolves and with the same fallbacks, so a texture pack dresses a
+block once and it is that block in every view. The sheet is mapped onto the
+projected quad through `TilePainter.isoTransform` and clipped to it; the map is
+affine where a perspective quad is not, so a face seen at a glancing angle
+carries a slight shear — the alternative, splitting every face into affinely
+blitted triangles, is the PlayStation-1 answer and warps visibly at the range
+you spend the most time at. Faces cut by the near plane and faces a few pixels
+across keep the flat fill, because at that size a sheet is a smear of its own
+average colour. The four-level face shading is **baked into the sheet**
+(`SolidTextures`) rather than washed over it, so a textured face is still one
+draw call.
+
+**Actors throw a shadow on the ground** — a soft patch on the surface under
+them, queued as an ordinary face so the terrain in front of it covers it like
+anything else. A billboard is a flat picture standing in the air; without
+something under it there is no way to tell a character standing on the floor
+from one hovering a block above it.
+
 **What the solid views do not draw yet.** Scenery and surface decor, the editor
-grid, painted doors, the parallax backdrop, particles and the mini-game's
-floor markings are all plan-view painters that project through the flat camera;
-they are skipped rather than drawn in the wrong place. Block *face textures* are
-skipped too, and that one is not effort: a perspective quad's texture mapping is
-not affine, and the only warping blit `DrawTarget` has is — splitting each face
-into affinely-blitted triangles is the PlayStation-1 answer and it warps visibly
-at exactly the range you spend the most time at. Faces are filled with the
-block's own colour instead, shaded by which way they face and faded into the
-fog, which is the look these games have anyway. Creative mode still builds in
+grid, painted doors, the parallax backdrop, particles and the mini-game's floor
+markings are all plan-view painters that project through the flat camera; they
+are skipped rather than drawn in the wrong place. Creative mode still builds in
 the plan view; the toggle is a play-mode one.
 
 ### Stacked blocks (the plan views' geometry)
@@ -1101,6 +1151,29 @@ sun's bearing, and every stacked block throws its shadow away from it; the
 level redraws live as the slider moves, and the bearing saves with the level
 (`"lightAngle"`). One sun per level, because shadows that disagree stop reading
 as light at all.
+
+A shadow is the caster's own tile **swept** along the light as far as the
+column is tall — the convex hull of the tile and its offset copy — rather than
+that tile moved bodily by the reach. Sweeping is what makes it touch the
+caster's feet: translated, a two-block wall's shadow started a third of a tile
+away from the wall and left clean floor in between, which is the shadow of
+nothing in front of a wall standing in its own light. A softer rim is filled
+under the core, each of them one union of every caster in the frame so
+overlapping shadows cannot stack their alpha and band the ground.
+
+**A stack's side face is textured once per block**, not once per run. Runs are
+drawn as a single extrusion for the seams and the speed, and the texture path
+used to take that literally: an eight-block wall got one copy of its side
+sheet stretched eight blocks tall, so a brick was eight bricks high. Each block
+of the run gets its own blit, measured from the run's base with the run's own
+rounding so the bands tile exactly.
+
+**A column between the camera and the player is drawn at a quarter opacity**
+rather than replaced by an outline, and only the run where the column meets the
+air (`TerrainPainter.SEE_THROUGH_ALPHA`): a quarter of a block is still a
+block, so the material and the shape read while the body behind shows through,
+and the buried runs stay solid because fading them opens a hole in the ground
+rather than a window in the roof.
 
 **A side-scroller has one layer and is untouched.** Its blocks are drawn
 edge-on, so they already show their own height; solidity comes from the block
@@ -1386,7 +1459,7 @@ enabled the pipeline is skipped entirely and costs nothing.
 
 **In the demo:** every level has shader toggles (master switch, global
 strength, one toggle per effect) in the game-type editor (defaults) and in
-Load Level → Edit Settings (per level), saved with the level. The *Export
+Level Select → Edit Settings (per level), saved with the level. The *Export
 shaders as GLSL* action writes
 ready-to-compile `fullscreen.vert` + `<effect>.frag` files to `shaders/` —
 drop them into any GLSL tool, engine, or your own OpenGL backend.
@@ -1668,13 +1741,13 @@ screen ([`NewLevelScene`](src/main/java/com/larsons/engine/demo/NewLevelScene.ja
 the level's name, its canvas size, and the per-level settings form, all
 answered *before* anything is built. **Create Level** builds the starter
 canvas for the chosen format, saves it into the game type — so a created level
-is one that exists, listed under *Load Level* — and hands it to the editor.
+is one that exists, listed under *Level Select* — and hands it to the editor.
 Those decisions used to be made for you and then only changeable afterwards,
 each somewhere else: the name in the editor's *Save* dialog, the size in its
-*New Level* dialog, the toggles in *Load Level → Edit Settings*. When the game
+*New Level* dialog, the toggles in *Level Select → Edit Settings*. When the game
 type's last level is in the format you picked, the screen offers to **continue
 editing it** instead, which is what picking a format used to do by itself. Any
-*other* saved level opens in the editor from *Load Level → **Edit in
+*other* saved level opens in the editor from *Level Select → **Edit in
 Creative***, which loads it in its own format with its own settings in force.
 The editor's own *New Level* and *Generate* dialogs still carry a **Format**
 row, so you can switch modes in place without leaving it.
@@ -1940,8 +2013,9 @@ carries across levels). The terrain is restored when you return to editing.
 [`LevelStore`](src/main/java/com/larsons/engine/level/LevelStore.java) writes
 `resources/levels/<game-type>/<level>.json`. Saving snapshots the active feature
 toggles into the level, so each level reloads with its own settings. The game
-type remembers its last saved level — *Play Level* and *Host Server* run it,
-while *Load Level* lists every level in the type so you can pick another.
+type remembers its last saved level — *Continue*, *Host Server* and the
+creative editor open it, while *Level Select* lists every level in the type so
+you can pick another (and choose the save slot it is played in).
 
 **Online**, the editor opens from the pause menu and paints into the
 <em>server's</em> world: strokes become protocol requests, the server
@@ -2305,7 +2379,7 @@ size. The character picker draws its roster to scale against each other for the
 same reason, so a line-up with a giant in it looks like one.
 
 **Each level decides which characters it offers.** The Characters palette's
-*Level Roster…* window (and the same toggles on the *Load Level → Edit
+*Level Roster…* window (and the same toggles on the *Level Select → Edit
 Settings* screen) tick the profiles this level allows; the roster saves inside
 the level file. When the level starts, a **character picker** shows a card per
 profile — its sprite walking, its traits, its ultimate — and the one you
@@ -2386,8 +2460,10 @@ pre-generated fallback** and a missing file never breaks anything.
 ## Auto Battler (online, 2-10 players)
 
 A complete standalone game inside the engine, launched straight from the
-launch menu as its own option:
-**Auto Battler (2-10 Online)** — no need to pick or create a game type first.
+launch screen's **mini-game buttons** — the picture buttons in the corner, one
+per mini game ([`StandaloneGame`](src/main/java/com/larsons/engine/minigame/StandaloneGame.java),
+[`MiniGameButtons`](src/main/java/com/larsons/engine/demo/MiniGameButtons.java))
+— with no need to pick or create a game type first.
 It plays like Dota Auto Chess / Teamfight
 Tactics on the engine's fixed **board diamond** projection, and it is
 online-first: one
@@ -2530,8 +2606,8 @@ traits, items, creep waves, pool sizes, and shop odds are all rows in
 
 ## Council of Six (deckbuilding board game, 2-6 online)
 
-A second complete standalone game on the launch menu:
-**Council of Six (Deckbuilder, 2-6 Online)** — a deckbuilding board game in
+A second complete standalone game, on the launch screen's mini-game buttons:
+**Council of Six** — a deckbuilding board game in
 the spirit of **Dune Imperium** (play a card → send an agent to a board
 location, buy from a shared market row, commit might to a round-end
 conflict) crossed with **Inis** (persistent troops on territories, strict
@@ -2606,8 +2682,8 @@ pauses (the table keeps playing online).
 
 ## Evolution (artificial life simulator)
 
-A third complete standalone game on the launch menu: **Evolution (Artificial
-Life Simulator)** — a Petri dish you scan like a microscope slide, full of
+A third complete standalone game, on the launch screen's mini-game buttons:
+**Evolution** — a Petri dish you scan like a microscope slide, full of
 organisms that are nothing but **strands of coloured DNA**. Every rule for
 reading that DNA is hard-coded and deterministic; *which* strands ever exist is
 not. The game ships with an empty reference book, and the whole point is
@@ -2902,7 +2978,7 @@ it runs out of vertical room, so the panel order is also a priority order. Three
 golden frames pin the three layouts: `pause-screen` (1280×720, everything),
 `pause-screen-narrow` (640×420, one column) and `pause-screen-online`.
 
-Its feature toggles are still edited in *Load Level → Edit Settings* rather than
+Its feature toggles are still edited in *Level Select → Edit Settings* rather than
 here. Those belong to the level and outlive the session, and a pause menu that
 quietly rewrites the level being played is how this engine used to lose people's
 work.
@@ -3028,17 +3104,24 @@ whether sounds drift in pitch; only how loud it all is moved out.
 ## Custom key binds (rebind anything)
 
 Nothing in the engine names a key any more. Gameplay asks whether an **action**
-is down — `JUMP`, `INTERACT`, `EDITOR_UNDO` — and the player decides what
-"down" means, from a controls menu reachable everywhere:
+is down — `JUMP`, `INTERACT`, `EDITOR_UNDO`, `AUTO_REROLL` — and the player
+decides what "down" means, from a controls menu reachable wherever a game is
+running:
 
-- the **launch menu** (before a game type is even chosen),
 - every game type's **main menu** and the **game-type editor**,
 - the **pause menu** while playing, and the creative editor's
   **Controls (Key Binds)…** tool, both of which open the same sheet *over* the
   level so rebinding mid-session costs you neither the level nor the server
   connection,
 - the **Auto Battler**, **Council of Six** and **Evolution** lobbies, and
-  Evolution's pause menu.
+  Evolution's pause menu — each of which opens the screen on **its own game's
+  keys** plus the menu keys, because a mini game is a separate game with a
+  separate keyboard and its player is not looking for the creative editor's
+  brush sizes.
+
+The **launch screen** deliberately has no controls row: it is the one screen in
+the engine with no game running, which made it the one place where "which
+controls?" had no answer.
 
 **Any key, any mouse button.** A slot takes whatever you press: a letter, a
 function key, the numpad, `Ctrl+S`-style combinations (hold the modifiers while
@@ -3164,6 +3247,8 @@ share/textures/
 ├── particles/  embers.png · sparks.png · shards.png · …
 ├── projectiles/ arrow.png · fireball.png · …
 ├── decor/  ·  block_decor/  ·  lights/  ·  units/  ·  board/
+└── ui/         minigame_auto_battler.png · minigame_deckbuilder.png ·
+                minigame_evolution.png   (the launch screen's corner buttons)
 ```
 
 **Subfolders are palette categories, files are objects.** A sheet is picked
@@ -3188,6 +3273,16 @@ or side sheet falls back to its `blocks/` sheet, and with none of the three to
 its procedural colour, so a pack can dress one format, both, or neither.
 **"+ New Block" always asks** which faces your block has and names the exact
 files to draw for them.
+
+**Screen furniture is in the pack too.** `ui/minigame_<game>.png` is the picture
+button that opens a mini game from the launch screen. Its sheet is read as
+**three states laid out left to right** — resting, pointed at, pressed — rather
+than as an animation, because a picture button with one frame cannot say that
+the pointer is on it or that a press registered. Supply all three at the same
+frame size; a pack that supplies none gets the generated plaques the engine
+draws from each game's own accent colour
+([`StandaloneGame`](src/main/java/com/larsons/engine/minigame/StandaloneGame.java),
+[`MiniGameSprites`](src/main/java/com/larsons/engine/graphics/MiniGameSprites.java)).
 
 **One spec for the whole pack.** Every sheet plays at the universal settings
 in `texturepack.json` — **32×32 frames, 3 frames, 3 fps** — so a pack is
@@ -3548,7 +3643,7 @@ designed for: *input commands in, state snapshots out*.
   disconnected), and one tick thread that owns all state. Silent connections
   time out after 15 s.
 
-The pause menu never edits features (per-level toggles are edited in Load Level
+The pause menu never edits features (per-level toggles are edited in Level Select
 → Edit Settings); in multiplayer the simulation keeps running server-side while
 the menu is open, again like Minecraft.
 
@@ -3587,16 +3682,22 @@ default.
    that row could only ever be right about some of them.
 2. **Editor** — name it. That is the whole screen.
 3. **Save** — written to `resources/gametypes/<name>.json`.
-4. **Main menu** — **Play Level** opens the last level you played; **Load Level**
-   lists the game type's individual levels
+4. **Main menu** — **Level Select** lists the game type's individual levels
    ([`LevelSelectScene`](src/main/java/com/larsons/engine/demo/LevelSelectScene.java)).
-   Click a level and you get three buttons: **Play Level** (load and play it),
-   **Edit in Creative** (open it in the editor, in the format it was built in,
-   with its own settings in force — the way to go back to building a level
-   without playing it and pausing first), and **Edit Settings** (a form to
+   Click a level and you get four buttons: **Play** (which then asks *which
+   saved run* to play it in, rather than inheriting whichever slot was last
+   touched), **Edit in Creative** (open it in the editor, in the format it was
+   built in, with its own settings in force — the way to go back to building a
+   level without playing it and pausing first), **Edit Settings** (a form to
    **rename the level** and edit *that level's* own toggles, saved back into the
-   level). The main menu also has **Rename Game Type**, which renames the
-   folder — its levels, doors, and custom content move with it.
+   level), and **Delete Level** (behind a confirmation whose default choice is
+   to keep it). There is no separate *Play Level* row on the main menu: it
+   opened whichever level the profile happened to point at last, which is a
+   play button whose level was chosen days ago and which the menu could not
+   name. Renaming the game type is part of **Edit Game Type**
+   ([`GameTypeRename`](src/main/java/com/larsons/engine/config/GameTypeRename.java)),
+   which moves the folder — its levels, doors, custom content and saved runs
+   travel with it.
 5. **New level** — **Creative Mode** asks two questions before it builds
    anything: which **format** (side-scroller, 3D), then the
    **New Level** screen
@@ -3616,7 +3717,7 @@ toggles into the level on every save, and are stored under
 
 **Currently configurable features** — all of them per level, asked in the two
 places a level's settings are decided: *Creative Mode → New Level* (before it
-exists) and *Load Level → Edit Settings* (afterwards), both built from
+exists) and *Level Select → Edit Settings* (afterwards), both built from
 [`ProfileForms`](src/main/java/com/larsons/engine/demo/ProfileForms.java) so
 neither can drift from the other:
 
