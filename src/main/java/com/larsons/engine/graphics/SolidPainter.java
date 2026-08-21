@@ -83,9 +83,13 @@ import java.util.List;
  * what a player sees as the surface bending and folding, because three corners
  * decide such a map and the divide puts the fourth somewhere else entirely;
  * halving a face until each piece is nearly a parallelogram costs a handful of
- * blits on the tiles underfoot and one on everything else. Faces cut by the
- * near plane, and faces a few pixels across, keep the flat fill: at that size a
- * sheet is a smear of its own average colour, which is what the fill is.
+ * blits on the tiles underfoot and one on everything else. The same halving is
+ * what carries a texture onto the face you are standing <em>against</em>: a
+ * patch with a corner behind your own eye cannot be projected, so it is cut
+ * down until the part that can be is, rather than the face giving up its
+ * texture — which is what it used to do, and always on the nearest face in the
+ * frame. Faces a few pixels across keep the flat fill: at that size a sheet is
+ * a smear of its own average colour, which is what the fill is.
  *
  * <p>Shading is the classic four-level scheme every blocky 3D game uses: the
  * top brightest, north/south next, east/west darker, the underside darkest,
@@ -113,6 +117,16 @@ public final class SolidPainter {
      * thing whatever a level's tile size is.
      */
     public static final int DEFAULT_VIEW_TILES = 20;
+
+    /**
+     * How far the coarse pass reaches when a player turns it on, in tiles.
+     *
+     * <p>Six times the detailed distance, which is the point of the setting:
+     * anything less and the horizon is still close enough to read as a wall of
+     * fog. It is affordable at that range only because what it draws is one box
+     * per {@linkplain #distantGroup group of cells} — see {@link #distant}.
+     */
+    public static final int DISTANT_VIEW_TILES = 120;
 
     /**
      * Where the fog starts, as a fraction of the view distance.
@@ -193,6 +207,38 @@ public final class SolidPainter {
      */
     private static final double MIN_PATCH_PIXELS = 8;
 
+    /**
+     * How many times a patch may be halved to get it clear of the near plane,
+     * on top of whatever the bending costs.
+     *
+     * <p>Counted separately from the splitting above because it is answering a
+     * different question — <em>can</em> this be projected, not <em>how well</em>
+     * — and a face that spends six halvings finding the near plane would
+     * otherwise have nothing left to spend on the bend. In practice the sheet
+     * runs out first: a 32-pixel texture cannot be halved past five times an
+     * axis, and the cut stops there whatever this says.
+     */
+    private static final int MAX_NEAR_CUTS = 12;
+
+    /** How many numbers one patch takes on {@link #work}. */
+    private static final int STRIDE = 6;
+
+    /**
+     * What a coarse box's sort key carries so that it is always behind the
+     * detailed terrain — more than any cell distance a level can hold, and far
+     * short of the key's own ceiling.
+     */
+    private static final long DISTANT_ORDER = 1L << 20;
+
+    /** Cells to a box in the ring that meets the detailed terrain. */
+    private static final int NEAR_RING_CELLS = 4;
+
+    /** Cells to a box out at the horizon, where nothing smaller would show. */
+    private static final int FAR_RING_CELLS = 16;
+
+    /** Where the near ring gives way to the far one, in detailed distances. */
+    private static final double RING_SPLIT = 3;
+
     /** The patch of ground under an actor; see {@link #groundShadow}. */
     private static final Color SHADOW = new Color(0, 0, 0, 90);
 
@@ -203,7 +249,21 @@ public final class SolidPainter {
     private EyeCamera eye;
     private Level level;
     private int viewTiles = DEFAULT_VIEW_TILES;
+    private int distantTiles;
     private double viewDistance;
+    private double distantDistance;
+    /**
+     * How far a face may be and still be queued, which is the detailed reach
+     * for the ordinary sweep and the whole horizon while {@link #distant} runs.
+     */
+    private double faceReach;
+    /**
+     * Added to every face's sort key while {@link #distant} runs, so a coarse
+     * box is always behind everything drawn in detail — including the detailed
+     * cells of the ring it overlaps, which are the only ones it could argue
+     * with. See {@link #cellOrder}.
+     */
+    private long orderBias;
     private double fogStart;
     private int fogArgb = 0xFF8FB6E0;
     /** Where in an animated texture's cycle this frame is. */
@@ -245,7 +305,7 @@ public final class SolidPainter {
      * evenly over a face that does not. Depth-first, so it only ever holds one
      * patch per level.
      */
-    private final int[] work = new int[5 * (MAX_SPLIT_DEPTH + 2)];
+    private final int[] work = new int[STRIDE * (MAX_SPLIT_DEPTH + MAX_NEAR_CUTS + 2)];
     /** Per-frame texture lookups, so a block's sheet is resolved once a frame. */
     private final java.util.Map<String, BufferedImage> textures = new java.util.HashMap<>();
 
@@ -287,6 +347,18 @@ public final class SolidPainter {
         this.viewTiles = Math.max(2, Math.min(256, tiles));
     }
 
+    /** How far the coarse pass reaches, in tiles; {@code 0} when it is off. */
+    public int distantTiles() { return distantTiles; }
+
+    /**
+     * Draw the world beyond {@link #viewTiles} as coarse boxes, out to
+     * {@code tiles}. Zero, or anything inside the detailed distance, turns it
+     * off. See {@link #distant}.
+     */
+    public void setDistantTiles(int tiles) {
+        this.distantTiles = tiles <= 0 ? 0 : Math.max(2, Math.min(1024, tiles));
+    }
+
     // --- a frame -----------------------------------------------------------
 
     /**
@@ -320,8 +392,17 @@ public final class SolidPainter {
         this.animClock = animClock;
         this.textures.clear();
         this.used = 0;
-        this.viewDistance = viewTiles * (double) Math.max(1, level.tileSize);
-        this.fogStart = viewDistance * FOG_START;
+        int ts = Math.max(1, level.tileSize);
+        this.viewDistance = viewTiles * (double) ts;
+        this.distantDistance = distantTiles > viewTiles ? distantTiles * (double) ts : 0;
+        this.faceReach = viewDistance;
+        this.orderBias = 0;
+        // Fog is measured against the furthest thing that will be drawn, which
+        // is the coarse horizon when there is one. That is not bookkeeping: fog
+        // exists to hide the edge of what is drawn, so pushing the edge out
+        // has to push the fog out with it — otherwise turning the distant
+        // terrain on would draw a mountain range and then paint it out.
+        this.fogStart = horizon() * FOG_START;
 
         Color backdrop = level.background != null ? level.background : DAYLIGHT;
         Color sky = mix(backdrop, DAYLIGHT, 0.75);
@@ -384,6 +465,154 @@ public final class SolidPainter {
                 if (cullBehind && dx * fx + dy * fy < behind) continue;
                 column(c, r);
             }
+        }
+    }
+
+    /** How far the furthest thing this frame draws can be. */
+    private double horizon() {
+        return Math.max(viewDistance, distantDistance);
+    }
+
+    /**
+     * Queue the world beyond the detailed distance as coarse boxes — the
+     * engine's answer to a landscape that otherwise ends in fog thirty paces
+     * out. Off unless {@link #setDistantTiles} asked for it.
+     *
+     * <p><b>What is drawn.</b> One box per square group of cells, standing on
+     * the floor, as tall as the tallest column in the group and in that
+     * column's own colour: a hill reads as a hill and a wall as a wall, for a
+     * few hundred flat quads over the whole horizon rather than the hundred
+     * thousand block faces the detailed sweep would queue at that range. No
+     * textures — a 32-pixel sheet stretched over four tiles is not that block,
+     * it is a smear — no per-block faces, and the sides only where the eye is
+     * on that side.
+     *
+     * <p><b>In rings, at two coarsenesses.</b> One group size over the whole
+     * distance is wrong at both ends: fine enough to meet the detailed terrain
+     * without a visible step is thousands of groups out at the horizon, and
+     * coarse enough to afford the horizon puts a staircase of eight-tile steps
+     * right where the player can see what it should have been. So the near ring
+     * is drawn at {@link #NEAR_RING_CELLS} cells to a box and the far one at
+     * {@link #FAR_RING_CELLS}, which is the same trade Distant Horizons makes
+     * and for the same reason. Between them the error stays roughly one
+     * <em>angular</em> size all the way out.
+     *
+     * <p><b>Every ring overlaps the one inside it</b> rather than abutting it:
+     * a box is drawn whenever any part of its group falls outside the inner
+     * radius, so the boundary is covered twice and never missed. It has to be —
+     * a group is square and the radius is round, so groups that straddle the
+     * circle would otherwise leave a gap the width of a group, which is a
+     * ring of bare sky between the terrain you are standing on and the terrain
+     * on the horizon. What resolves the overlap is {@link #orderBias}: each
+     * ring sorts strictly behind the ring inside it, and all of them behind the
+     * detailed pass, whatever the cell arithmetic says.
+     */
+    public void distant() {
+        if (level == null || eye == null || distantDistance <= viewDistance) return;
+        int ts = level.tileSize;
+        if (ts <= 0) return;
+        double middle = Math.min(distantDistance, viewDistance * RING_SPLIT);
+        ring(NEAR_RING_CELLS, viewDistance, middle, 1);
+        ring(FAR_RING_CELLS, middle, distantDistance, 2);
+    }
+
+    /** One ring of coarse boxes, {@code group} cells to a box. */
+    private void ring(int group, double inner, double outer, int behindDetail) {
+        if (outer <= inner) return;
+        int ts = level.tileSize;
+        double span = group * (double) ts;
+        int g0c = Math.max(0, (int) Math.floor((eye.x() - outer) / span));
+        int g1c = Math.min((level.width - 1) / group, (int) Math.floor((eye.x() + outer) / span));
+        int g0r = Math.max(0, (int) Math.floor((eye.y() - outer) / span));
+        int g1r = Math.min((level.height - 1) / group, (int) Math.floor((eye.y() + outer) / span));
+
+        double fx = eye.forwardX(), fy = eye.forwardY();
+        boolean cullBehind = Math.abs(eye.pitch()) + eye.fov() / 2 < Math.toRadians(85);
+        double behind = -1.5 * span;
+        double outerSq = outer * outer;
+        double half = span / 2;
+
+        faceReach = outer;
+        orderBias = DISTANT_ORDER * behindDetail;
+        try {
+            for (int gr = g0r; gr <= g1r; gr++) {
+                for (int gc = g0c; gc <= g1c; gc++) {
+                    double dx = (gc + 0.5) * span - eye.x();
+                    double dy = (gr + 0.5) * span - eye.y();
+                    if (dx * dx + dy * dy > outerSq) continue;
+                    // Kept when any corner of the group is outside the inner
+                    // radius, not when its centre is: a square group straddling
+                    // a round boundary belongs to both sides, and dropping it
+                    // from this one leaves a gap the width of a group.
+                    double reach = Math.hypot(Math.abs(dx) + half, Math.abs(dy) + half);
+                    if (reach <= inner) continue;
+                    if (cullBehind && dx * fx + dy * fy < behind) continue;
+                    distantBox(gc, gr, group);
+                }
+            }
+        } finally {
+            faceReach = viewDistance;
+            orderBias = 0;
+        }
+    }
+
+    /** One coarse box: the tallest column in a group of cells, as a solid. */
+    private void distantBox(int gc, int gr, int group) {
+        int ts = level.tileSize;
+        int c0 = gc * group, r0 = gr * group;
+        int c1 = Math.min(level.width, c0 + group), r1 = Math.min(level.height, r0 + group);
+        if (c0 >= c1 || r0 >= r1) return;
+
+        int tallest = -1;
+        int tallestId = 0;
+        for (int r = r0; r < r1; r++) {
+            for (int c = c0; c < c1; c++) {
+                int floor = level.tileAt(c, r);
+                if (floor <= 0) continue;
+                int layer = 0, id = floor;
+                int depth = level.columnDepth(c, r);
+                for (int l = 1; l < depth; l++) {
+                    int at = level.tileAt(c, r, l);
+                    if (at > 0) {
+                        layer = l;
+                        id = at;
+                    }
+                }
+                if (layer > tallest) {
+                    tallest = layer;
+                    tallestId = id;
+                }
+            }
+        }
+        if (tallest < 0) return; // nothing but a hole out here
+
+        Color colour = level.colorFor(tallestId);
+        if (colour == null) return;
+        double x0 = c0 * (double) ts, x1 = c1 * (double) ts;
+        double y0 = r0 * (double) ts, y1 = r1 * (double) ts;
+        double z1 = tallest * (double) ts;
+        int col = (c0 + c1) / 2, row = (r0 + r1) / 2;
+
+        if (eye.z() > z1) {
+            face(col, row, tallest, x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1,
+                    colour, SHADE_TOP, null);
+        }
+        if (z1 <= 0) return; // flat ground: the lid is the whole of it
+        if (eye.y() < y0) {
+            face(col, row, tallest, x0, y0, z1, x1, y0, z1, x1, y0, 0, x0, y0, 0,
+                    colour, SHADE_NORTH_SOUTH, null);
+        }
+        if (eye.y() > y1) {
+            face(col, row, tallest, x1, y1, z1, x0, y1, z1, x0, y1, 0, x1, y1, 0,
+                    colour, SHADE_NORTH_SOUTH, null);
+        }
+        if (eye.x() > x1) {
+            face(col, row, tallest, x1, y0, z1, x1, y1, z1, x1, y1, 0, x1, y0, 0,
+                    colour, SHADE_EAST_WEST, null);
+        }
+        if (eye.x() < x0) {
+            face(col, row, tallest, x0, y1, z1, x0, y0, z1, x0, y0, 0, x0, y1, 0,
+                    colour, SHADE_EAST_WEST, null);
         }
     }
 
@@ -528,7 +757,7 @@ public final class SolidPainter {
         double minZ = Math.min(Math.min(az, bz), Math.min(cz, dz));
         double maxZ = Math.max(Math.max(az, bz), Math.max(cz, dz));
         double distance = boxDistance(minX, minY, minZ, maxX, maxY, maxZ);
-        if (distance > viewDistance) return;
+        if (distance > faceReach) return;
 
         eye.toEye(ax, ay, az, point);
         eyeVerts[0] = point[0];
@@ -546,11 +775,6 @@ public final class SolidPainter {
         eyeVerts[9] = point[0];
         eyeVerts[10] = point[1];
         eyeVerts[11] = point[2];
-        // Whether the whole quad is in front of the near plane, taken before
-        // the clip cuts it: a face that had a corner behind the eye is not the
-        // quad its texture would be mapped onto any more.
-        boolean whole = eyeVerts[2] >= EyeCamera.NEAR && eyeVerts[5] >= EyeCamera.NEAR
-                && eyeVerts[8] >= EyeCamera.NEAR && eyeVerts[11] >= EyeCamera.NEAR;
 
         int n = EyeCamera.clipNear(eyeVerts, 4, clipped);
         if (n < 3) return;
@@ -580,7 +804,16 @@ public final class SolidPainter {
             return;
         }
         e.argb = shadeFog(colour, shade, distance);
-        if (texture != null && whole && n == 4
+        // A face cut by the near plane is textured too, and that it was not is
+        // what a player standing against a block saw as the texture falling
+        // off it. The face nearest you is the one most likely to have a corner
+        // behind your own eye — the floor tile you are standing on always does
+        // — and the part of it you can see is nowhere near that corner. What
+        // the near plane rules out is projecting the whole quad at once, and
+        // nothing here does that any more: the corners are kept in world space
+        // and the patches that cannot be projected are dropped one at a time
+        // (see drawTextured).
+        if (texture != null
                 && (hiX - loX) >= MIN_TEXTURE_PIXELS && (hiY - loY) >= MIN_TEXTURE_PIXELS) {
             // The block's own sheet, shaded for this face. The face is kept in
             // *world* coordinates rather than as one screen-space transform:
@@ -653,7 +886,7 @@ public final class SolidPainter {
         // Layer L occupies the height box [L−1, L); the eye is in the box its
         // own height falls in, which is what makes the two comparable.
         int eyeBox = (int) Math.floor(eye.z() / ts);
-        return Math.abs((long) col - eyeCol) + Math.abs((long) row - eyeRow)
+        return orderBias + Math.abs((long) col - eyeCol) + Math.abs((long) row - eyeRow)
                 + Math.abs((long) (layer - 1) - eyeBox);
     }
 
@@ -868,8 +1101,8 @@ public final class SolidPainter {
         double vx = q[9] - q[0], vy = q[10] - q[1], vz = q[11] - q[2];
 
         // The whole face, waiting to be drawn or split.
-        push(0, w, 0, h, 0, 0);
-        int top = 5;
+        push(0, w, 0, h, 0, 0, 0);
+        int top = STRIDE;
         // Whether this face turned out to need more than one patch, which is
         // the same question as whether it has any joins to close — and the
         // reason the clip is pushed here rather than around the whole call. A
@@ -881,19 +1114,44 @@ public final class SolidPainter {
         boolean split = false;
         boolean clipped = false;
 
-        while (top >= 5) {
-            top -= 5;
+        while (top >= STRIDE) {
+            top -= STRIDE;
             int sx0 = work[top], sx1 = work[top + 1];
             int sy0 = work[top + 2], sy1 = work[top + 3];
-            int depth = work[top + 4];
+            int depth = work[top + 4], nearCuts = work[top + 5];
             if (sx1 <= sx0 || sy1 <= sy0) continue;
+            boolean divisible = (sx1 - sx0 > 1 || sy1 - sy0 > 1)
+                    && top + 2 * STRIDE <= work.length;
             double u0 = sx0 / (double) w, u1 = sx1 / (double) w;
             double v0 = sy0 / (double) h, v1 = sy1 / (double) h;
-            if (!patchCorner(q, ux, uy, uz, vx, vy, vz, u0, v0, 0)
-                    || !patchCorner(q, ux, uy, uz, vx, vy, vz, u1, v0, 1)
-                    || !patchCorner(q, ux, uy, uz, vx, vy, vz, u1, v1, 2)
-                    || !patchCorner(q, ux, uy, uz, vx, vy, vz, u0, v1, 3)) {
-                continue; // behind the near plane; the face's own colour stands
+            double d0 = patchCorner(q, ux, uy, uz, vx, vy, vz, u0, v0, 0);
+            double d1 = patchCorner(q, ux, uy, uz, vx, vy, vz, u1, v0, 1);
+            double d2 = patchCorner(q, ux, uy, uz, vx, vy, vz, u1, v1, 2);
+            double d3 = patchCorner(q, ux, uy, uz, vx, vy, vz, u0, v1, 3);
+            double nearest = Math.min(Math.min(d0, d1), Math.min(d2, d3));
+            double furthest = Math.max(Math.max(d0, d1), Math.max(d2, d3));
+            if (furthest <= EyeCamera.NEAR) continue; // wholly behind the eye
+            if (nearest <= EyeCamera.NEAR) {
+                // <b>Cut down to the part that is in front, rather than giving
+                // up on the face.</b> A patch with a corner behind the near
+                // plane cannot be projected at all — the divide changes sign —
+                // but the face it belongs to is mostly in front, and dropping
+                // the whole of it is what a player standing against a block saw
+                // as the texture disappearing. Halving the axis the depth
+                // changes along walks the split toward the plane: every cut
+                // leaves one child entirely in front, which is drawn, and one
+                // that straddles a little less than its parent did. What is
+                // finally left is a sliver a texel wide against the near plane,
+                // which is behind the player's own nose.
+                if (divisible && nearCuts < MAX_NEAR_CUTS) {
+                    boolean alongU = sx1 - sx0 > 1
+                            && (sy1 - sy0 <= 1
+                                    || Math.abs(d1 - d0) >= Math.abs(d3 - d0));
+                    halve(sx0, sx1, sy0, sy1, alongU, depth, nearCuts + 1, top);
+                    top += 2 * STRIDE;
+                    split = true;
+                }
+                continue;
             }
             // How far this patch is from being a parallelogram, which is how
             // far an affine map over it would land from its own corners.
@@ -901,22 +1159,13 @@ public final class SolidPainter {
             double defectY = patchY[0] - patchY[1] + patchY[2] - patchY[3];
             double defect = Math.hypot(defectX, defectY);
             double alongEdge = edge(0, 1), downEdge = edge(0, 3);
-            boolean splittable = depth < MAX_SPLIT_DEPTH
-                    && (sx1 - sx0 > 1 || sy1 - sy0 > 1)
+            boolean splittable = depth < MAX_SPLIT_DEPTH && divisible
                     && Math.max(alongEdge, downEdge) > MIN_PATCH_PIXELS;
             if (splittable && defect > MAX_PATCH_DEFECT) {
                 boolean alongU = sx1 - sx0 > 1
                         && (sy1 - sy0 <= 1 || alongEdge >= downEdge);
-                if (alongU) {
-                    int mid = (sx0 + sx1) / 2;
-                    push(sx0, mid, sy0, sy1, depth + 1, top);
-                    push(mid, sx1, sy0, sy1, depth + 1, top + 5);
-                } else {
-                    int mid = (sy0 + sy1) / 2;
-                    push(sx0, sx1, sy0, mid, depth + 1, top);
-                    push(sx0, sx1, mid, sy1, depth + 1, top + 5);
-                }
-                top += 10;
+                halve(sx0, sx1, sy0, sy1, alongU, depth + 1, nearCuts, top);
+                top += 2 * STRIDE;
                 split = true;
                 continue;
             }
@@ -932,13 +1181,28 @@ public final class SolidPainter {
         if (clipped) target.popClip();
     }
 
-    /** Put a patch's texture bounds and split depth on the stack at {@code at}. */
-    private void push(int sx0, int sx1, int sy0, int sy1, int depth, int at) {
+    /** Put both halves of a patch on the stack at {@code at}, in place of it. */
+    private void halve(int sx0, int sx1, int sy0, int sy1, boolean alongU,
+                       int depth, int nearCuts, int at) {
+        if (alongU) {
+            int mid = (sx0 + sx1) / 2;
+            push(sx0, mid, sy0, sy1, depth, nearCuts, at);
+            push(mid, sx1, sy0, sy1, depth, nearCuts, at + STRIDE);
+        } else {
+            int mid = (sy0 + sy1) / 2;
+            push(sx0, sx1, sy0, mid, depth, nearCuts, at);
+            push(sx0, sx1, mid, sy1, depth, nearCuts, at + STRIDE);
+        }
+    }
+
+    /** Put a patch's texture bounds and its two split counts on the stack. */
+    private void push(int sx0, int sx1, int sy0, int sy1, int depth, int nearCuts, int at) {
         work[at] = sx0;
         work[at + 1] = sx1;
         work[at + 2] = sy0;
         work[at + 3] = sy1;
         work[at + 4] = depth;
+        work[at + 5] = nearCuts;
     }
 
     /** How long the patch edge between two of its projected corners is. */
@@ -950,18 +1214,22 @@ public final class SolidPainter {
      * Project the patch corner at ({@code u}, {@code v}) into
      * {@link #patchX}/{@link #patchY} slot {@code at}.
      *
-     * @return whether it is in front of the near plane
+     * @return how far in front of the eye it is; the screen coordinates are
+     *         written only when that is past the near plane, since past it
+     *         there are no screen coordinates to write — the divide changes
+     *         sign and a point behind you comes out in front of you, mirrored
      */
-    private boolean patchCorner(double[] q, double ux, double uy, double uz,
-                                double vx, double vy, double vz,
-                                double u, double v, int at) {
-        if (!eye.project(q[0] + ux * u + vx * v, q[1] + uy * u + vy * v,
-                q[2] + uz * u + vz * v, point)) {
-            return false;
+    private double patchCorner(double[] q, double ux, double uy, double uz,
+                               double vx, double vy, double vz,
+                               double u, double v, int at) {
+        eye.toEye(q[0] + ux * u + vx * v, q[1] + uy * u + vy * v,
+                q[2] + uz * u + vz * v, point);
+        double depth = point[2];
+        if (depth > EyeCamera.NEAR) {
+            patchX[at] = eye.screenX(point[0], depth);
+            patchY[at] = eye.screenY(point[1], depth);
         }
-        patchX[at] = point[0];
-        patchY[at] = point[1];
-        return true;
+        return depth;
     }
 
     /**
@@ -1048,7 +1316,7 @@ public final class SolidPainter {
     /** How much of the fog colour a face at this distance takes, in [0,1]. */
     private double fogAmount(double distance) {
         if (distance <= fogStart) return 0;
-        double span = viewDistance - fogStart;
+        double span = horizon() - fogStart;
         if (span <= 0) return 1;
         return Math.max(0, Math.min(1, (distance - fogStart) / span));
     }

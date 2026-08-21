@@ -413,6 +413,9 @@ public class PlayScene extends AbstractScene {
 
     PlayerState player() { return me; }
 
+    /** Where the eye is looking, in a solid view; see {@link #steerLook}. */
+    double lookHeading() { return lookYaw; }
+
     Inventory carried() { return inventory; }
 
     PlayerStats runStats() { return stats; }
@@ -2558,8 +2561,15 @@ public class PlayScene extends AbstractScene {
      * its own rather than a line here.
      */
     private void renderSolid(DrawTarget target, GameProfile p) {
+        // Per frame rather than on a change, because the setting is a global
+        // the options screen edits in place and there is no event to hang a
+        // listener on — and because it costs an integer compare.
+        solid.setDistantTiles(PlayerSettings.active().distantTerrain
+                ? SolidPainter.DISTANT_VIEW_TILES : 0);
         solid.begin(target, eye, level, animClock);
         phase("terrain", solid::terrain);
+        // After the detailed sweep and drawn behind it; see SolidPainter.distant.
+        phase("distant", solid::distant);
         // Nothing queues into this in a solid view — standingAt routes to the
         // painter instead — but it is passed and flushed all the same, so that
         // anything that ever did queue into it directly would be drawn rather
@@ -3468,10 +3478,18 @@ public class PlayScene extends AbstractScene {
         // by the desk running out. Where the platform cannot move the pointer
         // ({@link Pointer#canWarp()}) the edge-steering below still does that
         // job, which is why it stays.
+        //
+        // …and where the window <em>holds</em> the pointer — a real lock, which
+        // the GL window has and AWT has not — neither is wanted. There is no
+        // edge to reach, so recentring would throw away a frame of motion for
+        // nothing and edge-steering would spin the world on a reading that is
+        // simply a long way from where the cursor started. Both are answers to
+        // a limitation that window does not have.
         boolean locked = holdPointer();
+        boolean held = Pointer.held();
         int w = Math.max(1, viewportWidth), h = Math.max(1, viewportHeight);
         double marginX = w * LOOK_EDGE, marginY = h * LOOK_EDGE;
-        if (locked && (mx < marginX || mx > w - marginX
+        if (!held && locked && (mx < marginX || mx > w - marginX
                 || my < marginY || my > h - marginY)
                 && Pointer.warpTo(w / 2, h / 2)) {
             // The warp's own motion is not the player's, and the event carrying
@@ -3489,7 +3507,7 @@ public class PlayScene extends AbstractScene {
         // view was entered. Without that a cursor that simply happens to be
         // resting in a corner when the key is pressed spins the world on its
         // own, which is the one way this control can behave like a fault.
-        if (pointerMoved && !locked) {
+        if (pointerMoved && !locked && !held) {
             if (mx < marginX) lookYaw -= edgePush(marginX - mx, marginX) * dt;
             else if (mx > w - marginX) lookYaw += edgePush(mx - (w - marginX), marginX) * dt;
             // Inverted the same way the drag is: resting against an edge is the

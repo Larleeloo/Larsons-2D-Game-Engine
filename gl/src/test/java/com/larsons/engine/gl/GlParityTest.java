@@ -176,11 +176,25 @@ class GlParityTest {
      * rather than the renderer, and it would be measuring it in the flattering
      * direction. The stream is identical by construction; the counts have to be
      * identical too.
+     *
+     * <p><b>Both are counted on a warmed atlas, and that is not a fudge.</b>
+     * The batching key is the atlas page a draw reads from, and
+     * {@link com.larsons.engine.graphics.atlas.SpriteAtlas} grows a page by
+     * replacing its image with a bigger one — so the <em>first</em> frame that
+     * packs a sprite larger than anything before it changes that key halfway
+     * through itself, and reports one more batch than the same frame does ever
+     * again. That is a true cost and a real re-bind, but it belongs to the
+     * frame that grew the atlas rather than to a backend, and whichever of the
+     * two renders first is the one that pays it. Comparing a cold render
+     * against a warm one is exactly the "measuring the instrument" this test
+     * exists to prevent, so both are rendered once first and neither is.
      */
     @Test
     void bothBackendsCountTheSameOperations() {
         List<String> mismatched = new ArrayList<>();
         for (GoldenFrames.Frame frame : SceneFrames.allFrames()) {
+            java2d(frame);
+            render(frame);
             Java2DResult reference = java2d(frame);
             GlResult gl = render(frame);
             if (reference.operations() != gl.stats().operations()

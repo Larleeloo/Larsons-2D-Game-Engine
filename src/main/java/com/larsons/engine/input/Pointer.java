@@ -41,6 +41,23 @@ public final class Pointer {
 
         /** Whether {@link #warpPointer} does anything on this window. */
         default boolean canWarpPointer() { return false; }
+
+        /**
+         * Whether this window <em>holds</em> the pointer while it is hidden —
+         * a real pointer lock, where motion is reported without bound and the
+         * cursor cannot reach an edge because it no longer has a position on
+         * the desktop at all.
+         *
+         * <p>The distinction is not pedantry, it is a difference a player
+         * feels. A window that only hides the arrow has to be carried back to
+         * the middle before it runs out of screen, and every recentre throws
+         * away the frame of motion it happens on, because the event carrying
+         * the warp arrives after it. A window that holds the pointer needs
+         * none of that: every frame's reading is exactly what the hand did.
+         * AWT cannot do this at all; GLFW can, which is why the answer belongs
+         * to the window rather than to the view asking.
+         */
+        default boolean holdsPointer() { return false; }
     }
 
     private static Handler handler;
@@ -70,6 +87,15 @@ public final class Pointer {
     /** Whether this window can put the pointer where the game asks. */
     public static synchronized boolean canWarp() {
         return handler != null && handler.canWarpPointer();
+    }
+
+    /**
+     * Whether this window holds the pointer itself while it is hidden, so a
+     * view steering with it needs neither to recentre it nor to steer from the
+     * window's edges. See {@link Handler#holdsPointer()}.
+     */
+    public static synchronized boolean held() {
+        return handler != null && !visible && handler.holdsPointer();
     }
 
     /** Put the pointer at ({@code x}, {@code y}) in viewport pixels. */
