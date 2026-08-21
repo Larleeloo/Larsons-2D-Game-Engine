@@ -2558,8 +2558,15 @@ public class PlayScene extends AbstractScene {
      * its own rather than a line here.
      */
     private void renderSolid(DrawTarget target, GameProfile p) {
+        // Per frame rather than on a change, because the setting is a global
+        // the options screen edits in place and there is no event to hang a
+        // listener on — and because it costs an integer compare.
+        solid.setDistantTiles(PlayerSettings.active().distantTerrain
+                ? SolidPainter.DISTANT_VIEW_TILES : 0);
         solid.begin(target, eye, level, animClock);
         phase("terrain", solid::terrain);
+        // After the detailed sweep and drawn behind it; see SolidPainter.distant.
+        phase("distant", solid::distant);
         // Nothing queues into this in a solid view — standingAt routes to the
         // painter instead — but it is passed and flushed all the same, so that
         // anything that ever did queue into it directly would be drawn rather

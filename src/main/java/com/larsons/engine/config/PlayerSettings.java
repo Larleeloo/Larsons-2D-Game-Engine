@@ -80,6 +80,25 @@ public final class PlayerSettings {
      */
     public double hudScale = 1.0;
 
+    /**
+     * Draw the world past the ordinary view distance, coarsely.
+     *
+     * <p>What Distant Horizons does for Minecraft, and for the same reason: a
+     * render distance chosen so that a machine can draw every block of it is a
+     * render distance that ends in fog a few dozen paces out, and a landscape
+     * that ends a few dozen paces out is not a landscape. Past the detailed
+     * distance the terrain is drawn as one box per group of cells, at the
+     * height of the tallest column in it and in that block's colour — no
+     * textures, no per-block faces, no edges. A mountain range on the horizon
+     * costs a few hundred flat quads, which is what makes it affordable at all.
+     *
+     * <p>A player setting rather than a level one: it is a statement about the
+     * machine in front of the person playing, and the same level has to be
+     * playable on both. Off by default, because the machine that needs the
+     * setting is the one that cannot afford it turned on.
+     */
+    public boolean distantTerrain = false;
+
     public static final double MIN_SENSITIVITY = 0.1;
     public static final double MAX_SENSITIVITY = 5.0;
     public static final double MIN_HUD_SCALE = 0.75;
@@ -106,6 +125,7 @@ public final class PlayerSettings {
         m.put("lookSensitivity", lookSensitivity);
         m.put("invertLook", invertLook);
         m.put("hudScale", hudScale);
+        m.put("distantTerrain", distantTerrain);
         return m;
     }
 
@@ -124,6 +144,8 @@ public final class PlayerSettings {
         s.lookSensitivity = dbl(m, "lookSensitivity", s.lookSensitivity);
         s.invertLook = m.get("invertLook") instanceof Boolean b ? b : s.invertLook;
         s.hudScale = dbl(m, "hudScale", s.hudScale);
+        s.distantTerrain = m.get("distantTerrain") instanceof Boolean d
+                ? d : s.distantTerrain;
         s.normalize();
         return s;
     }

@@ -1044,6 +1044,20 @@ later: in the middle of the window the reading is exactly what the hand did.
 Where the pointer cannot be moved at all, resting it in the outer tenth of the
 window keeps turning instead. `,` and `.` — the plan view's camera-rotate keys — turn the eye too, and
 `Home`/`End` tilt it, for anyone who would rather not steer with the mouse.
+
+**Both** windows answer that request now, and only one used to. Hiding a cursor
+is a property of a window, so the view can only ask and the window has to
+answer — and the GLFW window, which is the one you get whenever the GL backend
+is chosen, had never registered an answer. A player on it steered a
+first-person view with the desktop's arrow sliding over the world, and nothing
+in the engine could tell. It answers with `GLFW_CURSOR_DISABLED`, which is a
+real pointer lock rather than AWT's approximation of one: the cursor is hidden
+*and* the position reported is virtual and unbounded, so motion is motion
+however far your hand travels and the recentring above is belt and braces
+rather than the thing holding it together. The pointer comes back on the pause
+screen, in any panel you open, in the plan view, and on the way out of the
+scene — all four, because a hidden cursor left behind is a menu nobody can
+click ([`PointerTest`](src/test/java/com/larsons/engine/demo/PointerTest.java)).
 Everything about the view is **local to the client**: like the flat camera's
 heading it is never networked, so two players in one world can be standing in
 entirely different views.
@@ -1066,9 +1080,19 @@ too slowly to afford. A face square-on to the eye is already a parallelogram and
 is still exactly one blit, which is most of what a frame draws; the tile at your
 feet is a handful. Each patch is grown by the error its own fit is known to
 have, so neighbours overlap by a fraction of a pixel rather than parting to show
-a seam, and only a face that was actually split pays for a clip. Faces cut by
-the near plane and faces a few pixels across keep the flat fill, because at that
-size a sheet is a smear of its own average colour. The four-level face shading is
+a seam, and only a face that was actually split pays for a clip.
+
+The same halving is what carries a texture onto the block you are standing
+**against**. Stand beside a wall rather than facing it and it runs from in front
+of your eye to behind it: two of its corners are behind the near plane, the quad
+cannot be projected as a whole, and the rule used to be that such a face fell
+back to a flat fill — so the nearest and largest face in the frame lost its
+sheet, and lost it exactly when you walked up to it. A patch with a corner
+behind your eye still cannot be drawn, but it can be *cut down* until the part
+that can be is, and what is finally left over is a sliver a texel wide against
+the near plane, which is behind your own nose. Faces a few pixels across still
+keep the flat fill, because at that size a sheet is a smear of its own average
+colour. The four-level face shading is
 **baked into the sheet** (`SolidTextures`), which also hands Java2D an *opaque*
 image wherever the sheet has no transparent pixel in it — a warped blit of one
 of those is a read and a write per pixel where a maybe-translucent one is a
@@ -3110,12 +3134,30 @@ text you can copy between machines):
 | mouse sensitivity | `[F5]` first- and third-person look speed, 10–500% |
 | invert look (Y axis) | for whom an uninvertible Y axis means those views may as well not exist |
 | HUD size | 75–300%, for a HUD sized in pixels on a 4K display |
+| distant terrain | draw the world past the view distance, coarsely — see below |
 
 They are edited from **Options** in the pause menu — the first place in the
 engine a player rather than an author can change how the game feels — and from
 the creative editor's sound dialog, which now moves *your* volume rather than
 the game type's. Whether a level *has* music is still the creator's call, as is
 whether sounds drift in pitch; only how loud it all is moved out.
+
+**Distant terrain** is the one that changes the picture rather than the feel,
+and it is here rather than on the game type for the same reason as the rest: it
+is a statement about the machine in front of you, and the same level has to be
+playable on both. Off, the `[F5]` views draw twenty tiles and fog, which is a
+landscape that ends thirty paces out. On, everything past that is drawn as
+**one box per group of cells** — as tall as the tallest column in the group and
+in that column's colour, no textures and no per-block faces — out to six times
+the distance, and the fog moves out with it so it is a horizon rather than a
+wall of weather. This is what
+[Distant Horizons](https://modrinth.com/mod/distanthorizons) does for
+Minecraft, and it makes the same trade: a group is a box, so a valley inside
+one is filled in and a lone tower makes its whole group tall. Two ring sizes
+rather than one — four cells to a box where it meets the detailed terrain,
+sixteen out at the horizon — because a single size is either a visible
+staircase up close or thousands of boxes far away. Off by default, because the
+machine that needs the setting is the one that cannot afford it turned on.
 
 
 ## Custom key binds (rebind anything)

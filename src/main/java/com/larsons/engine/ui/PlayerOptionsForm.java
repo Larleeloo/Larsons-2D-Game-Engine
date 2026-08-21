@@ -95,6 +95,13 @@ public final class PlayerOptionsForm {
             changed.run();
         }, (int) Math.round(PlayerSettings.MIN_HUD_SCALE * 100),
                 (int) Math.round(PlayerSettings.MAX_HUD_SCALE * 100));
+        // Named for what it does rather than for how it does it: a player
+        // deciding whether their machine can afford this is asking about the
+        // horizon, not about levels of detail.
+        form.addToggle("Distant terrain ([F5] views)", () -> settings.distantTerrain, v -> {
+            settings.distantTerrain = v;
+            changed.run();
+        });
 
         form.addAction("Reset to defaults", () -> {
             PlayerSettings defaults = new PlayerSettings();
@@ -104,6 +111,7 @@ public final class PlayerOptionsForm {
             settings.lookSensitivity = defaults.lookSensitivity;
             settings.invertLook = defaults.invertLook;
             settings.hudScale = defaults.hudScale;
+            settings.distantTerrain = defaults.distantTerrain;
             changed.run();
         });
         if (onDone != null) form.addAction("Back", onDone);

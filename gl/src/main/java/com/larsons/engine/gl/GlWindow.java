@@ -2,6 +2,7 @@ package com.larsons.engine.gl;
 
 import com.larsons.engine.graphics.BackendWindow;
 import com.larsons.engine.input.InputManager;
+import com.larsons.engine.input.Pointer;
 
 import org.lwjgl.glfw.Callbacks;
 import org.lwjgl.glfw.GLFWVidMode;
@@ -182,7 +183,49 @@ public final class GlWindow implements BackendWindow {
     @Override public int height() { return height; }
 
     @Override
-    public void attachInput(InputManager input) { this.input = input; }
+    public void attachInput(InputManager input) {
+        this.input = input;
+        Pointer.install(new GlfwPointer());
+    }
+
+    /**
+     * The pointer, as GLFW can offer it — which is better than AWT can.
+     *
+     * <p><b>Why this exists at all.</b> Hiding the cursor for a first-person
+     * view is a property of the window, so the engine asks {@link Pointer} and
+     * the window answers; the AWT window has answered since the view existed
+     * and this one never did, so a player on the GL backend — the default on
+     * every machine with a driver — steered a first-person view with the
+     * desktop's arrow sliding over the world. That is the "the pointer is still
+     * visible" this fixes, and it was never a bug in the view: it was a window
+     * that had not been asked.
+     *
+     * <p><b>What GLFW gives that AWT cannot.</b> {@code GLFW_CURSOR_DISABLED}
+     * is a real pointer lock: the cursor is hidden <em>and</em> the position
+     * reported is virtual and unbounded, so motion is motion however far the
+     * hand travels and the desk never runs out. AWT has no such mode, which is
+     * why the other window has to carry the pointer back to the middle with a
+     * {@code Robot} and why the view can steer from the window's edges at all.
+     * Under this mode neither is needed — but {@link #warpPointer} is still
+     * honoured, because the view recentres on entry and the two backends are
+     * better off agreeing about what a recentre does than about who needs one.
+     */
+    private final class GlfwPointer implements Pointer.Handler {
+        @Override
+        public void setPointerVisible(boolean visible) {
+            glfwSetInputMode(handle, GLFW_CURSOR,
+                    visible ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+        }
+
+        @Override
+        public boolean canWarpPointer() { return true; }
+
+        @Override
+        public boolean warpPointer(int x, int y) {
+            glfwSetCursorPos(handle, x, y);
+            return true;
+        }
+    }
 
     @Override
     public void pumpEvents() { glfwPollEvents(); }
@@ -225,6 +268,11 @@ public final class GlWindow implements BackendWindow {
     public void close() {
         if (closed) return;
         closed = true;
+        // Give the pointer back before the window it belongs to goes away, and
+        // let go of it: a handler holding a freed window handle is a crash the
+        // next time anything asks for a cursor.
+        Pointer.restore();
+        Pointer.install(null);
         try {
             Callbacks.glfwFreeCallbacks(handle);
         } catch (Throwable ignored) {

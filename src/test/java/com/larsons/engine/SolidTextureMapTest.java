@@ -132,6 +132,33 @@ class SolidTextureMapTest {
         }
     }
 
+    /**
+     * The block you are standing <em>against</em> keeps its texture.
+     *
+     * <p>This is the one case where the near plane cuts a face that is still
+     * most of the screen, and it is the case a player reported as the textures
+     * disappearing when they stood very close to something. Stand beside a wall
+     * rather than facing it and the wall runs from in front of your eye to
+     * behind it: two of its corners are behind the near plane, the quad cannot
+     * be projected as a whole, and the rule used to be that such a face fell
+     * back to a flat fill. So the nearest and largest face in the frame was the
+     * one that lost its sheet, and it lost it exactly when you walked up to it.
+     */
+    @Test
+    void theBlockYouAreStandingAgainstKeepsItsTexture(@TempDir Path dir) throws Exception {
+        Level lvl = oneBlock();
+        String key = lvl.blocks.get("grass").textureKey();
+        Skins.put(new SkinDef(key, quadrants(dir).toString(), TILE, TILE, 1, 0));
+        try {
+            // A pace south of the block's south face, looking east along it.
+            assertTrue(blits(lvl, 1.5 * TILE, 2 * TILE + 3, 0.8 * TILE,
+                            Math.PI / 2, 0) > 0,
+                    "the wall at your shoulder should still be drawn with its sheet");
+        } finally {
+            Skins.remove(key);
+        }
+    }
+
     // --- fixtures ------------------------------------------------------------------
 
     private static Level flatFloor() {
@@ -240,9 +267,14 @@ class SolidTextureMapTest {
 
     /** How many times the sheet is put down for a frame of {@code lvl}. */
     private static int blits(Level lvl, double x, double y, double z, double pitchDegrees) {
+        return blits(lvl, x, y, z, 0, Math.toRadians(pitchDegrees));
+    }
+
+    private static int blits(Level lvl, double x, double y, double z,
+                             double yaw, double pitch) {
         EyeCamera eye = new EyeCamera(W, H);
         eye.place(x, y, z);
-        eye.look(0, Math.toRadians(pitchDegrees));
+        eye.look(yaw, pitch);
         RecordingTarget target = new RecordingTarget(W, H);
         SolidPainter painter = new SolidPainter();
         painter.begin(target, eye, lvl, 0);
