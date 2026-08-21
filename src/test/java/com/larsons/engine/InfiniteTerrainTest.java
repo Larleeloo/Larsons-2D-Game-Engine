@@ -493,6 +493,65 @@ class InfiniteTerrainTest {
         world.close();
     }
 
+    // --- the plan view of a world ---------------------------------------------------
+
+    /**
+     * The plan view draws a generated world as a map: one quad per column, in
+     * the material on top of it, and nothing lifted.
+     *
+     * <p>Lifting a column of three hundred one tile per layer — which is what
+     * this view does to a hand-built level, correctly — would draw a
+     * cross-section of the crust three hundred tiles up the screen. The check
+     * that matters is the count: one draw per visible cell, not one per layer
+     * of every visible cell.
+     */
+    @Test
+    void thePlanViewOfAWorldIsAMap() {
+        Level lvl = worldLevel(3003);
+        int[] authored = lvl.terrain().authoredBounds();
+        com.larsons.engine.graphics.Camera camera =
+                new com.larsons.engine.graphics.Camera(lvl.perspective, 320, 240);
+        camera.tileSize = lvl.tileSize;
+        camera.centerOn((authored[0] + authored[2] + 120) * 32.0,
+                (authored[1] + 120) * 32.0);
+        int[] bounds = com.larsons.engine.graphics.TerrainPainter.visibleBounds(
+                camera, lvl, 320, 240);
+        int cells = (bounds[2] - bounds[0] + 1) * (bounds[3] - bounds[1] + 1);
+        assertTrue(cells > 0 && cells < 4000,
+                "a flat world needs no lift margin, so the sweep stays tight: " + cells);
+
+        var target = new com.larsons.engine.graphics.draw.RecordingTarget(320, 240);
+        com.larsons.engine.graphics.DepthPass raised =
+                com.larsons.engine.graphics.DepthPass.of(lvl.perspective);
+        com.larsons.engine.graphics.TerrainPainter.draw(target, lvl, camera, bounds,
+                0, raised, null);
+        raised.flush();
+        int drawn = target.commands().size();
+        assertTrue(drawn > 0, "the map is drawn");
+        assertTrue(drawn <= cells * 3,
+                "one quad per column, not one per layer of every column: "
+                        + drawn + " draws over " + cells + " cells");
+    }
+
+    /** Aiming in that view lands on the cell under the cursor, at its own top. */
+    @Test
+    void aimingAtAWorldLandsOnTheGround() {
+        Level lvl = worldLevel(3004);
+        int[] authored = lvl.terrain().authoredBounds();
+        double wx = (authored[0] + authored[2] + 120) * 32.0;
+        double wy = (authored[1] + 120) * 32.0;
+        com.larsons.engine.graphics.Camera camera =
+                new com.larsons.engine.graphics.Camera(lvl.perspective, 320, 240);
+        camera.tileSize = lvl.tileSize;
+        camera.centerOn(wx, wy);
+        var aim = com.larsons.engine.graphics.TerrainPainter.pick(camera, lvl, 160, 120);
+        assertNotNull(aim, "the cursor is over ground");
+        assertEquals((int) (wx / 32), aim.col(), 1, "the cell under the cursor");
+        assertEquals((int) (wy / 32), aim.row(), 1);
+        assertEquals(lvl.topFilledLayer(aim.col(), aim.row()), aim.layer(),
+                "and the top of that column");
+    }
+
     // --- biomes are data -----------------------------------------------------------
 
     /** The standard set is the ten places above ground and eight below it. */
