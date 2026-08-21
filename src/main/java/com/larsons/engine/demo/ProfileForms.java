@@ -123,7 +123,22 @@ final class ProfileForms {
         form.addAction("Unlock the camera (allow everything)", lock::reset);
     }
 
+    /**
+     * The feature list, with no way to rebuild it. Rows that change how many
+     * rows there are — the biome {@code +} buttons — still edit the settings,
+     * but the form only shows the new row the next time it is built. The two
+     * screens that show this list both pass a rebuild; this overload is for
+     * anywhere that builds the form once and throws it away.
+     */
     static void addFeatureOptions(ConfigForm form, GameProfile p) {
+        addFeatureOptions(form, p, null);
+    }
+
+    /**
+     * @param rebuild what a row calls when it changes which rows there are —
+     *                see {@link TerrainForms}. May be {@code null}.
+     */
+    static void addFeatureOptions(ConfigForm form, GameProfile p, Runnable rebuild) {
         // No level-format row here. The level's format is its own property and
         // the settings screen already asks for it directly, above this list —
         // a second "default format" control beside it could only disagree with
@@ -184,6 +199,10 @@ final class ProfileForms {
                 .enabledWhen(() -> p.lightingEnabled);
         form.addDouble("· Ambient light", () -> p.ambientLight, v -> p.ambientLight = v, 0.0, 1.0, 0.05)
                 .enabledWhen(() -> p.lightingEnabled);
+
+        // The procedural world: its own section, because it is the one setting
+        // here that changes what the level *is* rather than what it does.
+        TerrainForms.addTerrainOptions(form, p, rebuild);
 
         form.addToggle("Parallax background", () -> p.parallaxEnabled, v -> p.parallaxEnabled = v);
         form.addToggle("Particles", () -> p.particlesEnabled, v -> p.particlesEnabled = v);

@@ -1038,6 +1038,9 @@ public class CreativeScene extends AbstractScene {
         // top-down map's shards spray across its floor while a side-scroller's
         // rain down the screen — in the editor exactly as in play.
         particles.setSpace(PerspectiveSpace.of(camera.getPerspective()));
+        // Keep a generated world building itself around wherever the editor is
+        // looking, so panning across it never waits on a chunk.
+        streamTerrain();
 
         // The paint window is the top layer: while it is open every click and
         // keystroke is a brush stroke or a button in it, so a stroke that runs
@@ -7624,10 +7627,40 @@ public class CreativeScene extends AbstractScene {
                 new Color(220, 220, 235));
     }
 
+    /**
+     * What the editor says about a generated world: the seed it grew from, how
+     * much of it is resident, how far it has been explored, and how much of it
+     * the save file is carrying. The last two are the numbers a creator needs
+     * before turning generation off, since that is the moment the explored
+     * ground becomes the level.
+     */
+    private String worldInfo() {
+        var world = level.terrain();
+        if (world == null) return "";
+        return " · world seed " + world.seed()
+                + " · " + world.loadedChunks() + " chunks loaded / "
+                + world.exploredChunks() + " explored / "
+                + world.editedChunks() + " edited"
+                + (world.generating() ? "" : " · frozen");
+    }
+
+    /**
+     * Keep the world's chunks built around the editor's view. A no-op on a
+     * level that is not generated.
+     */
+    private void streamTerrain() {
+        if (level == null || !level.isWorld()) return;
+        var terrain = level.settings != null ? level.settings.terrain : null;
+        int view = terrain != null ? terrain.renderDistance
+                : com.larsons.engine.graphics.SolidPainter.DEFAULT_VIEW_TILES;
+        level.streamTerrain(camera.x, camera.y, view);
+    }
+
     private void drawTopBar(DrawTarget target) {
         int x0 = testing ? 0 : SIDEBAR_W;
         target.fillRect(x0, 0, viewportWidth - x0, 28, new Color(0, 0, 0, 150));
-        String chunkInfo = level.isChunked()
+        String chunkInfo = level.isWorld() ? worldInfo()
+                : level.isChunked()
                 ? " · chunked: " + level.chunkedTiles().loadedCount() + " loaded / "
                 + level.chunkedTiles().dirtyCount() + " edited"
                 : "";

@@ -333,6 +333,117 @@ public class Level {
         return layerChunks.length > 0;
     }
 
+    // --- the procedural world ---------------------------------------------------
+
+    /**
+     * The endless procedural world this level was expanded into, or
+     * {@code null} — which is every level that has not turned infinite terrain
+     * on, and so every level that existed before it could be.
+     *
+     * <p>When it is set it is the level's <em>only</em> storage: the dense
+     * grids and the chunk maps are both empty, and every read and write goes
+     * through it. That is deliberate. A world with two storages behind it would
+     * need every one of the dozen methods below to ask which one a cell belongs
+     * to, and the one place that question is worth asking is where the level
+     * was expanded — the authored blocks were imported into the world as edits
+     * there, once, and the generator was told to leave their rectangle alone
+     * (see {@link com.larsons.engine.world.gen.WorldTerrain}).
+     */
+    private transient com.larsons.engine.world.gen.WorldTerrain terrain;
+
+    /** The world this level generates, or {@code null} for an ordinary level. */
+    public com.larsons.engine.world.gen.WorldTerrain terrain() {
+        return terrain;
+    }
+
+    /** Whether this level's geometry is an endless generated world. */
+    public boolean isWorld() {
+        return terrain != null;
+    }
+
+    /**
+     * Make this level a generated world, replacing whatever storage it had.
+     * Only {@link com.larsons.engine.world.gen.WorldExpansion} calls this — it
+     * is what carries the authored blocks across.
+     */
+    public void setTerrain(com.larsons.engine.world.gen.WorldTerrain world) {
+        if (terrain != null && terrain != world) terrain.close();
+        this.terrain = world;
+        if (world != null) {
+            layers = NO_LAYERS;
+            layerChunks = NO_CHUNKS;
+            width = world.worldWidth();
+            height = world.worldHeight();
+        }
+        bumpTerrainRevision();
+    }
+
+    /**
+     * Bring this level into line with its own terrain settings — the one call
+     * that turns infinite terrain on and off.
+     *
+     * <p>Called after the level is loaded and again whenever its settings are
+     * applied, so the toggle in the settings menu is what takes effect rather
+     * than the state the level happened to be saved in. Three cases:
+     * <ul>
+     *   <li><b>On, and no world yet</b> — the level is expanded into one
+     *       ({@link com.larsons.engine.world.gen.WorldExpansion}), which is a
+     *       one-time transform.</li>
+     *   <li><b>On, with a world</b> — generation resumes where it left off.</li>
+     *   <li><b>Off, with a world</b> — generation stops and the world keeps
+     *       what has been explored. The level is <em>not</em> collapsed back:
+     *       a creator who walked a valley and then froze it still has the
+     *       valley, which is the point.</li>
+     * </ul>
+     */
+    public void applyTerrainSettings() {
+        com.larsons.engine.world.gen.TerrainSettings t =
+                settings != null ? settings.terrain : null;
+        if (t == null) return;
+        // A world has to be somewhere a body can *be*. With the height axis off
+        // a plan view reads the column rather than the layer — a floor tile is
+        // a path and two stacked blocks are a wall — and every column of a
+        // generated world is a hundred and fifty blocks of rock, so the player
+        // would stand on a mountain range unable to take a step. This is not a
+        // preference the setting overrides, it is what the setting means.
+        if (t.enabled) settings.verticality = true;
+        if (terrain == null) {
+            if (t.enabled) com.larsons.engine.world.gen.WorldExpansion.expand(this, t);
+            return;
+        }
+        // A world that no longer matches the settings it is supposed to be
+        // built from grows back to them, keeping everything that was built in
+        // it — a retuned biome, a new sea level or a different seed changes the
+        // ground and leaves the buildings standing on it.
+        if (!terrain.matches(t)) {
+            setTerrain(terrain.rebuiltWith(t));
+            if (t.seed == 0) t.seed = terrain.seed();
+        }
+        if (t.enabled) {
+            terrain.thaw();
+        } else {
+            terrain.freeze();
+        }
+    }
+
+    /**
+     * Keep the world's chunks built ahead of a point — call it once a frame
+     * with wherever the camera is. A no-op on a level that is not a world.
+     *
+     * @param viewTiles how far the detailed sweep reaches, so the ring of
+     *                  chunks kept ready always covers what is being drawn
+     */
+    public void streamTerrain(double worldX, double worldY, int viewTiles) {
+        if (terrain == null) return;
+        int ts = Math.max(1, tileSize);
+        int col = (int) Math.floor(worldX / ts);
+        int row = (int) Math.floor(worldY / ts);
+        int chunks = viewTiles / com.larsons.engine.world.gen.WorldTerrain.CHUNK + 2;
+        int radius = Math.max(chunks, settings != null && settings.terrain != null
+                ? settings.terrain.prefetchRadius : 4);
+        terrain.prefetch(col, row, radius);
+    }
+
     // --- layer storage ----------------------------------------------------------
 
     /**
@@ -345,6 +456,10 @@ public class Level {
      * that were never allocated.
      */
     public int layerCount() {
+        // A generated world is as tall as the format allows everywhere: there
+        // are no layers to have allocated, so there is nothing to count. What
+        // bounds a sweep there is columnDepth, which is exact per column.
+        if (terrain != null) return layerLimit();
         return layerChunks.length > 0 ? layerChunks.length : layers.length;
     }
 
@@ -532,7 +647,10 @@ public class Level {
      * {@link #DENSE_TILE_LIMIT} and is chunked anyway.
      */
     public int storageCeiling() {
-        if (isChunked()) return MAX_LAYERS;
+        // A generated world stores columns rather than grids, so its height
+        // costs nothing per cell that is not built in — the same reason chunked
+        // storage is free of the volume budget below.
+        if (isWorld() || isChunked()) return MAX_LAYERS;
         long area = Math.max(1L, (long) width * height);
         return (int) Math.max(2, Math.min(MAX_LAYERS, DENSE_VOLUME_LIMIT / area));
     }
@@ -647,6 +765,7 @@ public class Level {
      */
     public int tileAt(int col, int row, int layer) {
         if (layer < 0) return 0;
+        if (terrain != null) return terrain.blockAt(col, row, layer);
         // Written against the fields rather than through grid()/chunks()
         // because this is the hottest read in the engine — LiquidSim surveys
         // the whole grid through it every tick, and SIM_PLAN.md already has
@@ -674,6 +793,19 @@ public class Level {
     public boolean setTile(int col, int row, int layer, int id) {
         if (id < 0 || layer < 0 || layer >= layerLimit()) return false;
         if (id != 0 && registryTiles && blocks.get(id) == null) return false;
+        if (terrain != null) {
+            if (col < 0 || row < 0 || col >= width || row >= height) return false;
+            boolean changed = terrain.set(col, row, layer, id);
+            if (changed) {
+                markTerrainChanged(col, row);
+                noteColumnWrite(col, row, layer, id);
+                // No clearCellAttachments here: in a generated world the floor
+                // is bedrock rather than a lid something is standing on, and
+                // mining one block is not a reason to delete the column over it.
+                if (id == 0 && layer == LAYER_GROUND) removeSurfaceDecorAt(col, row);
+            }
+            return changed;
+        }
         if (layer > LAYER_GROUND) {
             // Above the floor the bounds are checked here, because an
             // unallocated layer has no grid to check them against.
@@ -798,6 +930,9 @@ public class Level {
      */
     public int columnDepth(int col, int row) {
         if (col < 0 || row < 0 || col >= width || row >= height) return 0;
+        // A generated world knows this exactly and for nothing: a column is
+        // stored as runs, so its top is the last number in the array.
+        if (terrain != null) return terrain.columnDepth(col, row);
         int[] bounds = columnBounds();
         if (bounds == null) return layerCount();
         int at = row * width + col;
@@ -806,6 +941,93 @@ public class Level {
         int depth = topFilledLayer(col, row) + 1;
         bounds[at] = depth;
         return depth;
+    }
+
+    /**
+     * The layers of one column a terrain sweep has to look at, written into
+     * {@code out} in ascending order; returns how many.
+     *
+     * <p>Every layer from 1 to {@link #columnDepth}, on every level whose
+     * columns are a handful of blocks deep: there is nothing to save by picking
+     * through a stack of three, and the sweep has to see layer 1 on the formats
+     * where that is the wall you are standing next to.
+     *
+     * <p>On a generated world it is the layers that are not walled in on all
+     * six sides, which is the difference between drawing a mountain and drawing
+     * every block inside one. A hundred and fifty layers of buried rock per
+     * visible cell is not a slow frame, it is no frame at all; see
+     * {@link com.larsons.engine.world.gen.WorldTerrain#visibleLayers}.
+     */
+    public int visibleLayers(int col, int row, int[] out) {
+        int depth = columnDepth(col, row);
+        if (terrain != null) return terrain.visibleLayers(col, row, depth, out);
+        int n = 0;
+        for (int layer = 1; layer < depth && n < out.length; layer++) out[n++] = layer;
+        return n;
+    }
+
+    /**
+     * The tallest ground in a rectangle of cells and what it is made of, for
+     * the coarse pass that draws the horizon —
+     * {@code out[0]} the layer, {@code out[1]} the block id.
+     *
+     * <p>On an ordinary level this is the obvious sweep of the cells. On a
+     * generated world it is answered from sampled heights instead, because the
+     * horizon reaches two thousand blocks and the sixteen million columns
+     * inside that radius are not something to generate in order to find out how
+     * tall they are.
+     *
+     * @return whether there was anything there — {@code false} for open sky,
+     *         and for a generated world whose horizon has not been sampled yet
+     */
+    public boolean groupTop(int c0, int r0, int c1, int r1, int[] out) {
+        c0 = Math.max(0, c0);
+        r0 = Math.max(0, r0);
+        c1 = Math.min(width, c1);
+        r1 = Math.min(height, r1);
+        if (c0 >= c1 || r0 >= r1) return false;
+        if (terrain != null) return terrain.groupTop(c0, r0, c1, r1, out);
+        int tallest = -1, tallestId = 0;
+        for (int r = r0; r < r1; r++) {
+            for (int c = c0; c < c1; c++) {
+                int floor = tileAt(c, r);
+                if (floor <= 0) continue;
+                int layer = 0, id = floor;
+                int depth = columnDepth(c, r);
+                for (int l = 1; l < depth; l++) {
+                    int at = tileAt(c, r, l);
+                    if (at > 0) {
+                        layer = l;
+                        id = at;
+                    }
+                }
+                if (layer > tallest) {
+                    tallest = layer;
+                    tallestId = id;
+                }
+            }
+        }
+        if (tallest < 0) return false;
+        out[0] = tallest;
+        out[1] = tallestId;
+        return true;
+    }
+
+    /**
+     * The highest layer of one column worth looking at, walking downward: the
+     * top of the column on a generated world, and the top of the level
+     * everywhere else.
+     *
+     * <p>The two are the same number on a hand-built level, whose layer count
+     * is only as tall as something has been put. They are not on a world, whose
+     * columns are stored as runs and whose ceiling is the format's 512 — so a
+     * downward walk that started there would read three hundred and fifty
+     * layers of empty sky before reaching the ground, on every call, for every
+     * body, every tick.
+     */
+    private int ceilingOf(int col, int row) {
+        if (terrain != null) return Math.max(0, terrain.columnDepth(col, row) - 1);
+        return layerCount() - 1;
     }
 
     /** Sentinel for a column whose depth has not been worked out yet. */
@@ -922,7 +1144,7 @@ public class Level {
      * asking {@link #supportHeight} and get what it always got.
      */
     public int supportUnder(int col, int row, int fromLayer) {
-        int top = Math.min(fromLayer, layerCount() - 1);
+        int top = Math.min(fromLayer, ceilingOf(col, row));
         for (int layer = top; layer >= 0; layer--) {
             if (supports(col, row, layer)) return layer + 1;
         }
@@ -969,7 +1191,7 @@ public class Level {
      * {@code HEIGHT_PLAN.md} O1 lets a column have a gap in it.
      */
     public int stackHeight(int col, int row) {
-        int layers = layerCount();
+        int layers = terrain != null ? terrain.columnDepth(col, row) : layerCount();
         for (int layer = 0; layer < layers; layer++) {
             if (tileAt(col, row, layer) <= 0) return layer;
         }
@@ -1056,7 +1278,10 @@ public class Level {
      * a gap on purpose, and it should find the semantics already decided.
      */
     public int topSolidLayer(int col, int row) {
-        for (int layer = layerCount() - 1; layer >= 0; layer--) {
+        // A generated world knows where its own top is, so the walk starts
+        // there rather than at the ceiling of the format — 512 layers down to
+        // 150 is 360 reads of empty sky, per call, per body, per tick.
+        for (int layer = ceilingOf(col, row); layer >= 0; layer--) {
             if (solidAt(col, row, layer)) return layer;
         }
         return -1;
@@ -1075,6 +1300,7 @@ public class Level {
      * ({@code HEIGHT_PLAN.md} O1).
      */
     public int topFilledLayer(int col, int row) {
+        if (terrain != null) return terrain.columnDepth(col, row) - 1;
         for (int layer = layerCount() - 1; layer >= 0; layer--) {
             if (tileAt(col, row, layer) > 0) return layer;
         }
@@ -1177,6 +1403,11 @@ public class Level {
         newWidth = Math.max(4, Math.min(MAX_GIANT_SIZE, newWidth));
         newHeight = Math.max(4, Math.min(MAX_GIANT_SIZE, newHeight));
         if (newWidth == width && newHeight == height) return;
+        // A generated world's bounds are the world's, not a slider's: shrinking
+        // them would cut off ground that has been walked on and is saved, and
+        // growing them would claim ground the world was not built to hold. The
+        // size that matters there is set with the terrain settings.
+        if (terrain != null) return;
         if (isChunked()) {
             // Chunked levels resize in place: chunks outside the bounds unload.
             // A null layer is one nothing was ever built in (ensureLayer) and
@@ -1411,6 +1642,7 @@ public class Level {
      * {@link #restoreTiles} puts it back afterwards.
      */
     public Object snapshotTiles() {
+        if (terrain != null) return terrain.snapshot();
         return new TerrainSnapshot(snapshotLayers());
     }
 
@@ -1427,6 +1659,13 @@ public class Level {
      * {@link #bumpTerrainRevision} is for.
      */
     public void restoreTiles(Object snapshot) {
+        if (terrain != null) {
+            if (snapshot instanceof com.larsons.engine.world.gen.WorldTerrain.Snapshot saved) {
+                terrain.restore(saved);
+            }
+            bumpTerrainRevision();
+            return;
+        }
         if (snapshot instanceof TerrainSnapshot saved) {
             restoreLayers(saved.layers());
         } else {
@@ -1782,7 +2021,13 @@ public class Level {
         spawn.put("x", spawnX);
         spawn.put("y", spawnY);
         m.put("spawn", spawn);
-        if (isChunked()) {
+        if (terrain != null) {
+            // A generated world: the seed it rebuilds from, the chunks that
+            // have been visited, and the ones that have been changed. The
+            // terrain itself is never written down — it is a function of the
+            // seed, and the file would be gigabytes to say so.
+            m.put("world", terrain.toMap());
+        } else if (isChunked()) {
             // Giant levels: only edited chunks persist (RLE-compressed); the
             // rest rebuilds from the generator seed on load.
             ChunkedTiles floor = chunkedTiles();

@@ -258,6 +258,9 @@ public final class TerrainPainter {
         // is the whole half of the level in front of it, which is the slice
         // cull's job (see queueRaised) rather than a see-through hole's.
         if (camera.sliced()) return java.util.Set.of();
+        // A generated world's plan view lifts nothing, so nothing is ever
+        // drawn over the body standing in it.
+        if (level.isWorld()) return java.util.Set.of();
         int ts = level.tileSize;
         double[] step = camera.inversePlanar(0,
                 BLOCK_HEIGHT * ts * camera.liftScale());
@@ -418,7 +421,7 @@ public final class TerrainPainter {
             maxX = Math.max(maxX, maxX + back[0]);
             minY = Math.min(minY, minY + back[1]);
             maxY = Math.max(maxY, maxY + back[1]);
-        } else if (level.layered()) {
+        } else if (level.layered() && !level.isWorld()) {
             // A block at cell T drawn n layers up lands on the floor point
             // T − n·step, so the cells that can paint over this viewport run
             // out to its corners + n·step. Along the step and not against it:
@@ -444,6 +447,16 @@ public final class TerrainPainter {
         double[] floor = camera.screenToWorld(screenX, screenY);
         int ts = level.tileSize;
         double lift = BLOCK_HEIGHT * ts;
+        // A generated world is drawn flat in this view (see Pass.sweepSurface),
+        // so the cursor is over the cell it is over and the block it is on is
+        // the top of that column. Marching up the lift would find a cell a
+        // hundred and fifty tiles away that is not on screen at all.
+        if (level.isWorld()) {
+            int col = (int) Math.floor(floor[0] / ts), row = (int) Math.floor(floor[1] / ts);
+            if (!inside(level, col, row)) return null;
+            int top = level.topFilledLayer(col, row);
+            return top < 0 ? null : new Aim(col, row, top, true, col, row);
+        }
         if (lift <= 0 || !level.layered()) {
             int col = (int) Math.floor(floor[0] / ts), row = (int) Math.floor(floor[1] / ts);
             return inside(level, col, row) ? new Aim(col, row, 0, true, col, row) : null;
@@ -934,7 +947,10 @@ public final class TerrainPainter {
             // heading. The shadow reaches in whichever direction the level's
             // sun throws it, and both scale with how tall the level is known to
             // get (Level.tallestColumn).
-            int tallest = level.tallestColumn();
+            // A generated world is drawn flat in this view (Pass.sweepSurface),
+            // so nothing lifts and nothing casts: its columns are three hundred
+            // deep and a margin scaled to that would cull nothing at all.
+            int tallest = level.isWorld() ? 1 : level.tallestColumn();
             double stories = Math.max(1, tallest - 1);
             double slack = tileSize * camera.zoom;
             this.cullMarginSide = (int) Math.ceil(Math.abs(shadowX) * stories + slack);
@@ -944,6 +960,10 @@ public final class TerrainPainter {
         }
 
         void run(int[] bounds, DepthPass raisedPass, Mining mining, TerrainCache cache) {
+            if (level.isWorld()) {
+                sweepSurface(bounds);
+                return;
+            }
             Shadows shadows = layered ? new Shadows() : null;
             if (cache != null && TerrainCache.enabled()
                     && TerrainCache.faithfulIn(camera)) {
@@ -980,6 +1000,73 @@ public final class TerrainPainter {
                         drawMiningCracks(target, camera, level, mining.col(), mining.row(),
                                 mining.progress()));
             }
+        }
+
+        /**
+         * A generated world's plan view: the top of every column, laid flat and
+         * shaded by how high it stands.
+         *
+         * <p><b>Why this view is a map and not an extrusion.</b> The plan view
+         * draws height by lifting a block up the screen one tile per layer,
+         * which is exactly right for a level whose walls are two blocks and a
+         * tower is eight. A generated world's ground is at layer 150 and its
+         * peaks are near 300, so the same rule would draw every cell as a
+         * three-hundred-tile column marching off the top of the screen — a
+         * cross-section of the crust, in which the landscape is the last four
+         * pixels. Nothing about the projection is wrong; the numbers it was
+         * designed around are two orders of magnitude out.
+         *
+         * <p>So the world is drawn from above the way an atlas draws it: one
+         * quad per column in the material of whatever is on top of it, lit by
+         * its height relative to the water line. Grass reads as grass, a
+         * coastline reads as a coastline, and a mountain reads as pale ground
+         * standing where the valleys are dark. The view with the extrusions in
+         * it is the one from inside the world — {@code [F5]} into first or
+         * third person, which is where a generated world is meant to be walked
+         * anyway ({@link SolidPainter}).
+         */
+        private void sweepSurface(int[] bounds) {
+            int datum = level.settings != null && level.settings.terrain != null
+                    ? level.settings.terrain.seaLevel
+                    : com.larsons.engine.world.gen.TerrainSettings.DEFAULT_SEA_LEVEL;
+            for (int r = bounds[1]; r <= bounds[3]; r++) {
+                for (int c = bounds[0]; c <= bounds[2]; c++) {
+                    int top = level.columnDepth(c, r) - 1;
+                    if (top < 0) continue;
+                    int id = level.tileAt(c, r, top);
+                    if (id <= 0) continue;
+                    project(c, r);
+                    if (offScreen()) continue;
+                    drawSurface(c, r, id, heightShade(top - datum));
+                }
+            }
+        }
+
+        /**
+         * How much darker or lighter a column is drawn for standing above or
+         * below the water line — the whole of the relief in a map view, so it
+         * has to be readable at a glance and never hide the material.
+         */
+        private int heightShade(int aboveDatum) {
+            double t = Math.max(-1, Math.min(1, aboveDatum / 70.0));
+            int alpha = (int) Math.round(Math.abs(t) * 96);
+            if (alpha <= 2) return 0;
+            return t > 0 ? (alpha << 24) | 0xFFFFFF : (alpha << 24);
+        }
+
+        /** One column's top block, drawn flat with its height shading over it. */
+        private void drawSurface(int col, int row, int id, int shadeArgb) {
+            Block block = level.blocks.get(id);
+            Color color = level.colorFor(id);
+            BufferedImage skin = block == null ? null
+                    : face(block.topTextureKey(), block.textureKey());
+            if (skin != null) {
+                TilePainter.drawTexture(target, skin, xs, ys, flatBlit);
+            } else {
+                target.fillPolygon(xs, ys, 4, color != null ? color : Color.GRAY);
+            }
+            if (shadeArgb != 0) target.fillPolygon(xs, ys, 4, shadeArgb);
+            if (decor != null) decor.afterTop(target, col, row, xs, ys, block, color);
         }
 
         /** Draw every floor cell in the bounds, gathering shadows as it goes. */

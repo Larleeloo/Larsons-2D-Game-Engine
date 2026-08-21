@@ -266,12 +266,131 @@ public final class BlockRegistry {
         r.register(Block.terrain(94, "wood_stairs", "Wood Stairs",
                 new Color(160, 120, 75)).withStep(true));
 
+        registerWorldPalette(r);
         tuneDurability(r);
         // Loose granular blocks obey gravity (creators opt custom blocks in
         // with the "+ New Block" form's falling toggle).
         r.setFalling("sand", true);
         r.setFalling("gravel", true);
+        r.setFalling("red_sand", true);
+        r.setFalling("ash", true);
         return r;
+    }
+
+    /**
+     * The palette the procedural world is built out of (ids 95–165).
+     *
+     * <p><b>Why a second helping of blocks.</b> The set above was assembled for
+     * levels a person paints by hand, where one grey stone and one green leaf
+     * are enough because the creator supplies the variety. A generated world
+     * has to supply its own: the difference between a pine forest and a jungle
+     * is not the shape of the ground, it is that one is dark needles over
+     * podzol and the other is bright fronds over rich earth. So every biome in
+     * {@link com.larsons.engine.world.gen.Biomes} names blocks that look like
+     * the place it is — six kinds of tree rather than one, coral and sea grass
+     * for the shallows, dripstone and glowing lichen for the caves, and a
+     * building palette so a village reads as a village from the hilltop.
+     *
+     * <p>They are ordinary blocks: paintable in creative mode, minable in play,
+     * placeable from the hotbar, and available to hand-built levels that never
+     * turn generation on. Nothing here is generator-only.
+     */
+    private static void registerWorldPalette(BlockRegistry r) {
+        // Trees, one pair per biome that has a forest in it.
+        r.register(Block.terrain(95, "pine_log", "Pine Log", new Color(92, 66, 46)));
+        r.register(Block.passable(96, "pine_needles", "Pine Needles", new Color(40, 90, 62)));
+        r.register(Block.passable(97, "birch_leaves", "Birch Leaves", new Color(126, 180, 92)));
+        r.register(Block.terrain(98, "jungle_log", "Jungle Log", new Color(108, 84, 44)));
+        r.register(Block.passable(99, "jungle_leaves", "Jungle Leaves", new Color(46, 138, 52)));
+        r.register(Block.terrain(100, "palm_log", "Palm Log", new Color(150, 122, 78)));
+        r.register(Block.passable(101, "palm_leaves", "Palm Fronds", new Color(96, 174, 88)));
+        r.register(Block.terrain(102, "acacia_log", "Acacia Log", new Color(146, 92, 56)));
+        r.register(Block.passable(103, "acacia_leaves", "Acacia Canopy", new Color(126, 158, 70)));
+        r.register(Block.terrain(104, "cherry_log", "Cherry Log", new Color(120, 80, 78)));
+        r.register(Block.passable(105, "cherry_blossom", "Cherry Blossom", new Color(240, 170, 200)));
+
+        // Ground the biomes are capped and floored with.
+        r.register(Block.terrain(106, "podzol", "Podzol", new Color(96, 68, 40)));
+        r.register(Block.terrain(107, "red_sand", "Red Sand", new Color(206, 128, 72)));
+        r.register(Block.terrain(108, "terracotta", "Terracotta", new Color(178, 104, 70)));
+        r.register(Block.terrain(109, "permafrost", "Permafrost", new Color(150, 158, 172)));
+        r.register(Block.terrain(110, "mycelium", "Mycelium", new Color(134, 120, 138)));
+        r.register(Block.terrain(111, "savanna_grass", "Savanna Grass", new Color(158, 168, 84)));
+        r.register(Block.terrain(112, "rich_soil", "Rich Soil", new Color(84, 62, 42)));
+        r.register(Block.terrain(113, "ash", "Ash", new Color(96, 92, 90)));
+
+        // Cold.
+        r.register(Block.passable(114, "snow_layer", "Snow Layer", new Color(242, 246, 250)));
+        r.register(Block.terrain(115, "blue_ice", "Blue Ice", new Color(120, 172, 228)));
+        r.register(Block.passable(116, "icicle", "Icicle", new Color(196, 226, 244, 210)));
+
+        // Caves: what makes one hole in the rock a different place from the next.
+        r.register(Block.terrain(117, "dripstone", "Dripstone", new Color(146, 118, 104)));
+        r.register(Block.passable(118, "stalagmite", "Stalagmite", new Color(158, 132, 116)));
+        r.register(Block.terrain(119, "cave_moss", "Cave Moss", new Color(72, 104, 74)));
+        r.register(Block.light(120, "glow_lichen", "Glow Lichen", new Color(150, 220, 160),
+                3, new Color(170, 255, 190)));
+        r.register(Block.solidLight(121, "rainbow_crystal", "Rainbow Crystal",
+                new Color(200, 140, 235), 7, new Color(230, 180, 255)));
+        r.register(Block.terrain(122, "rainbow_moss", "Rainbow Moss", new Color(180, 130, 200)));
+        r.register(Block.terrain(123, "sulphur", "Sulphur", new Color(216, 202, 84)));
+        r.register(Block.terrain(124, "acid_stone", "Acid Stone", new Color(118, 148, 92)));
+        r.register(Block.light(125, "obsidian_shard", "Obsidian Shard", new Color(58, 40, 82),
+                3, new Color(150, 110, 220)));
+        r.register(new Block(126, "magma_stone", "Magma Stone", new Color(150, 62, 40),
+                true, 4, new Color(255, 130, 70), "magma_stone", false, 4));
+        r.register(Block.terrain(127, "soul_sand", "Soul Sand", new Color(96, 76, 64)));
+        r.register(Block.light(128, "crystal_shard", "Crystal Shard", new Color(150, 230, 240),
+                4, new Color(180, 250, 255)));
+        r.register(Block.solidLight(129, "shroomlight", "Shroomlight", new Color(240, 175, 95),
+                6, new Color(255, 205, 130)));
+
+        // Water: the shallows a coast is worth swimming out to.
+        r.register(Block.terrain(130, "prismarine", "Prismarine", new Color(94, 160, 150)));
+        r.register(Block.passable(131, "coral_pink", "Pink Coral", new Color(240, 128, 168)));
+        r.register(Block.passable(132, "coral_blue", "Blue Coral", new Color(96, 150, 240)));
+        r.register(Block.passable(133, "coral_yellow", "Yellow Coral", new Color(244, 208, 96)));
+        r.register(Block.passable(134, "sea_grass", "Sea Grass", new Color(70, 150, 110)));
+        r.register(Block.passable(135, "lily_pad", "Lily Pad", new Color(88, 158, 88)));
+
+        // Ground cover and crops.
+        r.register(Block.passable(136, "berry_bush", "Berry Bush", new Color(84, 122, 68)));
+        r.register(Block.passable(137, "sugar_cane", "Sugar Cane", new Color(150, 196, 118)));
+        r.register(Block.terrain(138, "pumpkin", "Pumpkin", new Color(226, 140, 52)));
+        r.register(Block.passable(139, "orchid", "Orchid", new Color(206, 116, 216)));
+        r.register(Block.passable(140, "lavender", "Lavender", new Color(168, 140, 224)));
+        r.register(Block.passable(141, "tulip_pink", "Pink Tulip", new Color(236, 140, 176)));
+        r.register(Block.passable(142, "desert_shrub", "Desert Shrub", new Color(168, 148, 96)));
+        r.register(Block.passable(143, "cattail", "Cattail", new Color(120, 148, 84)));
+        r.register(Block.passable(144, "jungle_fern", "Jungle Fern", new Color(58, 132, 66)));
+        r.register(Block.passable(145, "tundra_shrub", "Tundra Shrub", new Color(122, 140, 124)));
+        r.register(Block.passable(146, "bamboo_shoot", "Bamboo Shoot", new Color(162, 196, 96)));
+
+        // Buildings: villages, temples and the ruins of both.
+        r.register(Block.terrain(147, "ancient_bricks", "Ancient Bricks", new Color(158, 148, 122)));
+        r.register(Block.terrain(148, "gilded_bricks", "Gilded Bricks", new Color(196, 168, 96)));
+        r.register(Block.solidLight(149, "rune_stone", "Rune Stone", new Color(96, 104, 132),
+                5, new Color(140, 180, 255)));
+        r.register(Block.terrain(150, "cracked_bricks", "Cracked Bricks", new Color(132, 126, 112)));
+        r.register(Block.terrain(151, "temple_pillar", "Temple Pillar", new Color(186, 178, 152)));
+        r.register(Block.terrain(152, "village_planks", "Village Planks", new Color(190, 152, 96)));
+        r.register(Block.terrain(153, "village_roof", "Village Roof", new Color(152, 76, 60)));
+        r.register(Block.terrain(154, "hay_bale", "Hay Bale", new Color(206, 176, 78)));
+        r.register(Block.passable(155, "cobbled_path", "Cobbled Path", new Color(150, 146, 138)));
+        r.register(Block.terrain(156, "well_stone", "Well Stone", new Color(118, 116, 118)));
+        r.register(Block.terrain(157, "bone_block", "Bone Block", new Color(226, 222, 202)));
+        r.register(Block.terrain(158, "fossil", "Fossil", new Color(198, 190, 164)));
+
+        // Odds and ends the world is brighter for.
+        r.register(Block.light(159, "rainbow_glass", "Rainbow Glass", new Color(210, 160, 240, 150),
+                4, new Color(240, 200, 255)));
+        r.register(Block.terrain(160, "obsidian_glass", "Obsidian Glass", new Color(60, 44, 90, 150)));
+        r.register(Block.light(161, "frost_lantern", "Frost Lantern", new Color(190, 226, 246),
+                6, new Color(200, 235, 255)));
+        r.register(Block.terrain(162, "lava_rock", "Lava Rock", new Color(78, 58, 54)));
+        r.register(Block.terrain(163, "charred_log", "Charred Log", new Color(62, 52, 50)));
+        r.register(Block.terrain(164, "mossy_cobble", "Mossy Cobblestone", new Color(104, 124, 96)));
+        r.register(Block.terrain(165, "glacier_ice", "Glacier Ice", new Color(168, 208, 236)));
     }
 
     /**
@@ -283,7 +402,9 @@ public final class BlockRegistry {
     private static void tuneDurability(BlockRegistry r) {
         // Soft earth: shovels.
         for (String k : new String[]{"dirt", "grass", "sand", "gravel", "mud",
-                "clay", "snow", "snow_bricks"}) {
+                "clay", "snow", "snow_bricks", "podzol", "red_sand", "mycelium",
+                "savanna_grass", "rich_soil", "ash", "snow_layer", "soul_sand",
+                "cave_moss", "rainbow_moss"}) {
             r.tune(k, 0.6, "shovel");
         }
         // Rock and masonry: pickaxes.
@@ -317,6 +438,27 @@ public final class BlockRegistry {
         r.tune("neon_block", 0.5, "pickaxe");
         r.tune("cactus", 0.5, "axe");
         r.tune("alchemy_station", 1.6, "pickaxe");
+        // The world palette, tuned by the same families as the set above.
+        for (String k : new String[]{"pine_log", "jungle_log", "palm_log",
+                "acacia_log", "cherry_log", "charred_log", "village_planks",
+                "village_roof", "hay_bale", "bamboo_shoot", "pumpkin"}) {
+            r.tune(k, 1.2, "axe");
+        }
+        for (String k : new String[]{"terracotta", "permafrost", "dripstone",
+                "sulphur", "acid_stone", "prismarine", "ancient_bricks",
+                "gilded_bricks", "cracked_bricks", "temple_pillar", "well_stone",
+                "bone_block", "fossil", "lava_rock", "mossy_cobble", "obsidian_glass"}) {
+            r.tune(k, 1.6, "pickaxe");
+        }
+        for (String k : new String[]{"blue_ice", "glacier_ice"}) {
+            r.tune(k, 0.8, "pickaxe");
+        }
+        r.tune("magma_stone", 2.2, "pickaxe");
+        r.tune("rune_stone", 3.4, "pickaxe");
+        r.tune("rainbow_crystal", 1.2, "pickaxe");
+        r.tune("shroomlight", 0.5, null);
+        r.tune("rainbow_glass", 0.2, null);
+        r.tune("frost_lantern", 0.5, null);
     }
 
     /** The flow twin for a liquid source (or {@code null} for non-liquids). */

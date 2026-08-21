@@ -3727,6 +3727,107 @@ the menu is open, again like Minecraft.
 
 ---
 
+## Infinite terrain (worlds that generate themselves)
+
+Tick **Infinite terrain** in a 3D level's settings and the level stops being a
+canvas and becomes a *world*: its bounds grow to 16,384 blocks a side, the
+blocks that were authored are moved into the middle of that, and everything
+outside them is generated as you walk into it. Turn it off again and generation
+stops, keeping the ground that has already been explored.
+
+Everything below is edited in the level's own settings menu — **New Level**
+before it exists, **Level Select → Edit Settings** afterwards — and saved inside
+the level, so one game type can hold an endless overworld beside a hand-built
+dungeon.
+
+### What the world is made of
+
+Terrain is **biome-driven, and the biomes are data**
+([`Biome`](src/main/java/com/larsons/engine/world/gen/Biome.java),
+[`Biomes`](src/main/java/com/larsons/engine/world/gen/Biomes.java)). Eighteen come
+as standard — ten above ground (**plains, deciduous forest, pine forest, icy
+tundra, mountains, tropics, jungle, desert, village, ancient city**) and eight
+below it (**caves, glowing rainbow caves, ice caves, acid caves, obsidian caves,
+lava caves, water caves, ancient temple**) — and nothing in the generator knows
+those names. The settings menu edits one biome at a time behind a picker, and
+**+ New above-ground biome** / **+ New below-ground biome** add your own. A world
+built entirely out of biomes you invented works exactly as well as the standard
+one.
+
+Every biome answers four questions, and every answer is a row in the menu:
+
+| | |
+| --- | --- |
+| **Where does it belong** | above ground or below, likelihood 0–100, temperature and humidity 0–100 |
+| **What shape is the ground** | target generation level (0–512 — the level's own height axis) and how far it wanders from it |
+| **What it is made of** | surface, subsurface, stone, shoreline and liquid blocks, soil depth, water level offset, snowy |
+| **What grows on it** | tree density with its own trunk and canopy blocks and height range, ground cover, a list of scattered decorations, cave density, ore richness, a glowing block, and buildings with their own wall and roof blocks |
+
+Land starts at **layer 150** and climbs; everything at or below **layer 149**
+floods. Mountains reach past 280, ocean floors sink into the 120s, and caves are
+carved out of the rock by two 3D noise fields and then *dressed* by whichever
+underground biome owns their depth — so an ice cave is blue ice and frost near
+the top of the rock and a lava cave is basalt and a lava lake at the bottom of
+the world. Villages and ancient cities level a plot, build on it and light it.
+
+The world palette exists so those biomes have something to be made of: **71 new
+blocks** — six kinds of tree, podzol and red sand and terracotta, coral and sea
+grass and lily pads, dripstone and stalagmites and glowing lichen, rainbow
+crystal and sulphur and magma stone, and a building set of ancient bricks,
+gilded bricks, rune stone, village planks and hay bales. They are ordinary
+blocks: paintable in creative mode, minable in play, and available to levels that
+never turn generation on.
+
+### How it stays fast
+
+- **Columns, not cells.** A column of the world is stored run-length encoded
+  from bedrock to sky
+  ([`WorldTerrain`](src/main/java/com/larsons/engine/world/gen/WorldTerrain.java)),
+  so a mountain three hundred blocks tall is about eight pairs of numbers.
+  Storing the same world as one grid per layer would be hundreds of megabytes
+  for what fits in twelve, and "how tall is the ground here" is the last number
+  in an array rather than three hundred reads.
+- **Chunks, streamed.** Columns live in 32×32 chunks built on background worker
+  threads well ahead of where you are walking, dropped furthest-first once the
+  budget is passed, and rebuilt *identically* from the seed when you come back.
+  Generation never happens on the frame that needs it.
+- **Only what can be seen is drawn.** The solid painter's column sweep visits
+  the layers that are not walled in on all six sides rather than every layer
+  from the floor
+  ([`Level.visibleLayers`](src/main/java/com/larsons/engine/level/Level.java)) —
+  the difference between drawing a mountain and drawing every block inside one.
+- **A horizon that costs the same at any distance.** The coarse pass draws
+  landforms in rings whose box size is proportional to how far away they are, so
+  pushing the horizon out further no longer multiplies the number of boxes.
+
+**Render distance** slides to **192 blocks** and **distant generation** reaches
+**2048**. The horizon also needs *Distant terrain* on in Options, which stays the
+player's own say over what their machine draws.
+
+Seen from the **plan view** a generated world is drawn as a height-shaded map
+rather than as extrusions: lifting a column of three hundred one tile per layer
+draws a cross-section of the crust in which the landscape is the last four
+pixels. Press `F5` into first or third person to walk about in it, which is
+where a world of this shape is meant to be seen from.
+
+### What a save carries
+
+The seed, the list of chunks that have been visited, and the contents of the
+chunks that have been **changed** — never the terrain itself, which is a function
+of the seed and would be gigabytes to write down. Two levels with the same seed
+and the same biomes are the same world, block for block.
+
+- **Turning it off** freezes the world: the ground that has been explored still
+  loads, and a chunk nobody has ever reached is now empty rather than a continent
+  waiting to happen. The explored list becomes the level's new boundary.
+- **Retuning a biome, moving the sea level or typing a new seed** regrows the
+  ground you have not built on and leaves everything you *have* built standing
+  exactly where it was.
+- **Save every explored chunk** writes the visited ground down as well, for a
+  world that has to survive a change of recipe.
+
+---
+
 ## Game types, levels & feature toggles
 
 A **game type** is a named **folder of levels**, stored as a JSON
@@ -4193,6 +4294,7 @@ true before it starts and the instrument that proves it worked.
 [`MeleeCombatTest`](src/test/java/com/larsons/engine/MeleeCombatTest.java),
 [`CreativeUndoTest`](src/test/java/com/larsons/engine/CreativeUndoTest.java),
 [`SolidViewTest`](src/test/java/com/larsons/engine/SolidViewTest.java),
+[`InfiniteTerrainTest`](src/test/java/com/larsons/engine/InfiniteTerrainTest.java),
 [`KeyBindTest`](src/test/java/com/larsons/engine/KeyBindTest.java))
 covering JSON read/write, level loading (both tile modes + round-trips),
 sprite-sheet slicing, input edge detection, custom key binds (what ships
@@ -4364,3 +4466,26 @@ and [`TexturePackTest`](src/test/java/com/larsons/engine/TexturePackTest.java)
 name, plays them at one universal spec that any single texture can override,
 lets each object opt out or point elsewhere, and keeps palette icons showing
 the texture that actually renders).
+
+Infinite terrain has its own suite,
+[`InfiniteTerrainTest`](src/test/java/com/larsons/engine/InfiniteTerrainTest.java),
+which pins the four things a generated world would otherwise be quietly wrong
+about: **determinism** (a chunk built twice is the same chunk, two generators on
+one seed are the same world, and a tree that straddles a chunk boundary comes out
+whole whichever side is built first — chunks are dropped and rebuilt behind the
+player, so a column that came back different would be a world rearranging
+itself); **the vertical layout** (land at 150 and above, sea water never above
+149, a biome aiming anywhere in the 0–512 height axis, and a world varied enough
+that most of the biome list actually appears and the palette runs to sixty-odd
+blocks); **what a save costs** (the seed, the visited list and the edited chunks
+round-trip, pristine ground rebuilds from the seed rather than from the file,
+turning generation off keeps the explored ground and stops at its edge, and
+retuning a biome or typing a new seed regrows the ground while what was built on
+it stays put); and **the sweep bounds** (a buried column is skipped, nothing with
+an empty neighbour is ever left off the list, an ordinary level still sweeps
+every layer, and the coarse horizon answers without generating the ground it
+describes). Plus the settings themselves — the sliders reaching 192 and 2048,
+biomes and terrain settings round-tripping through a level file, the `+` button
+producing a working biome, a world of one invented biome being made of it, a
+disabled biome not being generated, and a level saved before any of this existed
+still loading as a level.
