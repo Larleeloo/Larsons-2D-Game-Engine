@@ -1053,11 +1053,30 @@ first-person view with the desktop's arrow sliding over the world, and nothing
 in the engine could tell. It answers with `GLFW_CURSOR_DISABLED`, which is a
 real pointer lock rather than AWT's approximation of one: the cursor is hidden
 *and* the position reported is virtual and unbounded, so motion is motion
-however far your hand travels and the recentring above is belt and braces
-rather than the thing holding it together. The pointer comes back on the pause
-screen, in any panel you open, in the plan view, and on the way out of the
-scene — all four, because a hidden cursor left behind is a menu nobody can
-click ([`PointerTest`](src/test/java/com/larsons/engine/demo/PointerTest.java)).
+however far your hand travels. That window says so
+([`Pointer.Handler.holdsPointer`](src/main/java/com/larsons/engine/input/Pointer.java)),
+and the view then does neither of the things above — no recentring, no
+edge-steering, because both are workarounds for a limitation it does not have,
+and each of them costs something: a recentre throws away the frame of motion it
+lands on, and edge-steering would read a virtual position resting far outside
+the window as a player leaning on the edge.
+
+Registering that handler was the obvious half of the fix and it was not the
+half that mattered. **Every GLFW window function may only be called from the
+thread that created the window** — which here is the one pumping events, while
+a scene asks for the pointer from the *game loop's* thread. A request made from
+there is undefined behaviour: on X11 it happens to work, on macOS it is a crash
+rather than a no-op. So the request is recorded and carried out by
+`GlWindow.pumpEvents()`, at most one pump — two milliseconds — later.
+[`GlPointerTest`](gl/src/test/java/com/larsons/engine/gl/GlPointerTest.java)
+checks it on a real GLFW window and asks from another thread on purpose, since
+a test that asked from the right one would pass against the broken version;
+`xvfb-run ./gradlew :gl:test` runs it under a software rasteriser.
+
+The pointer comes back on the pause screen, in any panel you open, in the plan
+view, and on the way out of the scene — all four, because a hidden cursor left
+behind is a menu nobody can click
+([`PointerTest`](src/test/java/com/larsons/engine/demo/PointerTest.java)).
 Everything about the view is **local to the client**: like the flat camera's
 heading it is never networked, so two players in one world can be standing in
 entirely different views.

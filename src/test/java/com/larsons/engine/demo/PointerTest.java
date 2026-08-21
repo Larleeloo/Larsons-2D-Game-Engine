@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -49,6 +50,7 @@ class PointerTest {
     private static final class Fake implements Pointer.Handler {
         boolean visible = true;
         boolean warpable;
+        boolean holds;
         int warps;
 
         @Override
@@ -62,6 +64,9 @@ class PointerTest {
             warps++;
             return warpable;
         }
+
+        @Override
+        public boolean holdsPointer() { return holds; }
     }
 
     private final List<PlayScene> opened = new ArrayList<>();
@@ -160,6 +165,42 @@ class PointerTest {
         tick(play, input);
         assertTrue(window.warps > askedWhenItCannot,
                 "a window that can warp is asked to when the pointer nears the edge");
+    }
+
+    /**
+     * A window that <em>holds</em> the pointer is left to do it: nothing
+     * recentres the cursor and nothing steers from the edges.
+     *
+     * <p>Both of those exist to work around a window that can only hide the
+     * arrow, and both cost something on one that can lock it — a recentre
+     * throws away the frame of motion it happens on, and edge-steering would
+     * read an unbounded virtual position resting far outside the window as a
+     * player leaning on the edge and spin the world. Under a lock the reading
+     * is simply what the hand did, every frame.
+     */
+    @Test
+    void aWindowThatHoldsThePointerIsLeftToHoldIt(@TempDir Path dir) {
+        Fake window = new Fake();
+        window.warpable = true;
+        window.holds = true;
+        Pointer.install(window);
+        PlayScene play = enter(dir);
+        InputManager input = new InputManager();
+        press(play, input, KeyEvent.VK_F5);
+        assertFalse(window.visible, "hidden, as on any window");
+
+        // A locked pointer reports positions that wander out of the window
+        // entirely, and getting there is a real turn: the hand moved. Resting
+        // there is not, and on an unlocked window it would be — that reading is
+        // exactly what "leaning on the edge" looks like.
+        input.moveMouse(W + 400, H / 2);
+        tick(play, input);
+        double settled = play.lookHeading();
+        for (int i = 0; i < 30; i++) tick(play, input);
+
+        assertEquals(0, window.warps, "there is no edge to be carried back from");
+        assertEquals(settled, play.lookHeading(), 1e-9,
+                "and a reading that does not move is not a turn, however far out it is");
     }
 
     /** With no window attached at all, everything here is a no-op. */

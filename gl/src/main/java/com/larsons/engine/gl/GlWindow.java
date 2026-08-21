@@ -206,15 +206,26 @@ public final class GlWindow implements BackendWindow {
      * hand travels and the desk never runs out. AWT has no such mode, which is
      * why the other window has to carry the pointer back to the middle with a
      * {@code Robot} and why the view can steer from the window's edges at all.
-     * Under this mode neither is needed — but {@link #warpPointer} is still
-     * honoured, because the view recentres on entry and the two backends are
-     * better off agreeing about what a recentre does than about who needs one.
+     * This window says so through {@link Pointer.Handler#holdsPointer()}, and
+     * the view then does neither.
+     *
+     * <p><b>Why nothing here touches GLFW.</b> <em>This is the whole of why the
+     * first attempt did not work.</em> Every GLFW window function —
+     * {@code glfwSetInputMode} and {@code glfwSetCursorPos} among them — may
+     * only be called from the thread that created the window, which for this
+     * engine is the one pumping events; and a scene asks for the pointer from
+     * the <em>game loop's</em> thread, which is a different one (see the class
+     * note above, and {@code Engine.pumpUntilStopped}). Called from there the
+     * request is undefined behaviour: on the machine it was written on it was
+     * quietly dropped, and on macOS it is a crash rather than a no-op. So a
+     * request is recorded here and applied by {@link #pumpEvents} on the thread
+     * that is allowed to make it. The wait is at most one pump — two
+     * milliseconds — which is a quarter of a frame at 120 FPS.
      */
     private final class GlfwPointer implements Pointer.Handler {
         @Override
         public void setPointerVisible(boolean visible) {
-            glfwSetInputMode(handle, GLFW_CURSOR,
-                    visible ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+            pointerWanted = visible;
         }
 
         @Override
@@ -222,13 +233,54 @@ public final class GlWindow implements BackendWindow {
 
         @Override
         public boolean warpPointer(int x, int y) {
-            glfwSetCursorPos(handle, x, y);
+            warpRequest = ((long) x << 32) | (y & 0xFFFFFFFFL);
             return true;
         }
+
+        /** Yes: {@code GLFW_CURSOR_DISABLED} is a lock, not just a hidden arrow. */
+        @Override
+        public boolean holdsPointer() { return true; }
     }
 
+    /** What the game asked the pointer to be; applied on the pump's thread. */
+    private volatile boolean pointerWanted = true;
+
+    /** What it currently is. Read and written only on the pump's thread. */
+    private boolean pointerShown = true;
+
+    /** A queued warp, packed as two ints, or {@link #NO_WARP}. */
+    private volatile long warpRequest = NO_WARP;
+
+    private static final long NO_WARP = Long.MIN_VALUE;
+
     @Override
-    public void pumpEvents() { glfwPollEvents(); }
+    public void pumpEvents() {
+        applyPointerRequests();
+        glfwPollEvents();
+    }
+
+    /**
+     * Carry out whatever the game asked of the pointer since the last pump.
+     *
+     * <p>Before polling rather than after, so the events read this pump are
+     * read under the mode the game asked for rather than under the previous
+     * one — which matters exactly once per lock, and matters a lot then: the
+     * first reading after the cursor is captured is the one a view turns into
+     * a look delta.
+     */
+    private void applyPointerRequests() {
+        boolean want = pointerWanted;
+        if (want != pointerShown) {
+            glfwSetInputMode(handle, GLFW_CURSOR,
+                    want ? GLFW_CURSOR_NORMAL : GLFW_CURSOR_DISABLED);
+            pointerShown = want;
+        }
+        long warp = warpRequest;
+        if (warp != NO_WARP) {
+            warpRequest = NO_WARP;
+            glfwSetCursorPos(handle, (int) (warp >> 32), (int) warp);
+        }
+    }
 
     @Override
     public boolean closeRequested() { return glfwWindowShouldClose(handle); }
@@ -270,9 +322,16 @@ public final class GlWindow implements BackendWindow {
         closed = true;
         // Give the pointer back before the window it belongs to goes away, and
         // let go of it: a handler holding a freed window handle is a crash the
-        // next time anything asks for a cursor.
+        // next time anything asks for a cursor. Applied here rather than left
+        // for the next pump, because there is not going to be one — and this
+        // runs on the pump's own thread (Engine.shutdown), so it may.
         Pointer.restore();
         Pointer.install(null);
+        try {
+            applyPointerRequests();
+        } catch (Throwable ignored) {
+            // A window already gone; the release below is what matters.
+        }
         try {
             Callbacks.glfwFreeCallbacks(handle);
         } catch (Throwable ignored) {
