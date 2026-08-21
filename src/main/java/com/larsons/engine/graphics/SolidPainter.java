@@ -78,19 +78,28 @@ import java.util.List;
  * <p>A face is drawn with the block's own sheet — the same
  * {@link TextureKeys#BLOCKS_TOP top} and {@link TextureKeys#BLOCKS_SIDE side}
  * pools the plan view resolves, with the same fallbacks — mapped onto the
- * projected quad through {@link TilePainter#isoTransform} and clipped to it.
- * The map is affine where a perspective quad is not, so a face seen at a
- * glancing angle carries a slight shear; the alternative (splitting every face
- * into triangles and blitting each affinely) is the PlayStation-1 answer and
- * warps visibly at the range you spend the most time at. Faces cut by the near
- * plane, and faces a few pixels across, keep the flat fill: at that size a
+ * projected quad in <b>patches</b>, each one small enough that an affine blit
+ * covers it: see {@link #drawTextured}. One affine map over a whole face is
+ * what a player sees as the surface bending and folding, because three corners
+ * decide such a map and the divide puts the fourth somewhere else entirely;
+ * halving a face until each piece is nearly a parallelogram costs a handful of
+ * blits on the tiles underfoot and one on everything else. Faces cut by the
+ * near plane, and faces a few pixels across, keep the flat fill: at that size a
  * sheet is a smear of its own average colour, which is what the fill is.
  *
  * <p>Shading is the classic four-level scheme every blocky 3D game uses: the
  * top brightest, north/south next, east/west darker, the underside darkest,
  * which is what makes a cube read as a cube without a single light calculation.
  * On a textured face it is baked into the sheet ({@link SolidTextures}) rather
- * than washed over it, so a textured face is still one draw call.
+ * than washed over it, so no face is ever drawn twice to be lit.
+ *
+ * <p><b>What it costs.</b> Nine milliseconds a frame at 1280&times;720 against
+ * two and a half for the same view untextured, measured over an open plain at
+ * eye level — which is this pass's worst case rather than its average, since
+ * every face in it is floor seen at a glancing angle and floor at a glancing
+ * angle is the only thing that needs many patches. It is Java2D's warped blit
+ * that costs it, near enough in proportion to the pixels covered, so the
+ * tolerance below buys quality far more cheaply than it looks like it should.
  */
 public final class SolidPainter {
 
@@ -129,10 +138,60 @@ public final class SolidPainter {
      * How many pixels across a face has to be before it is worth texturing.
      *
      * <p>Under this a sheet is a smear of its own average colour, which is what
-     * the flat fill already draws — for a third of the cost and with no clip
-     * region for the backend to set up.
+     * the flat fill already draws — for a fraction of the cost and without
+     * asking the backend to warp anything.
      */
     private static final int MIN_TEXTURE_PIXELS = 4;
+
+    /**
+     * How far a patch's corners may sit from the affine map that draws it,
+     * in pixels, before the patch is split in two.
+     *
+     * <p><b>Measured, not predicted from the depth.</b> The obvious criterion —
+     * how much the depth changes across the face — is the wrong one, and wrong
+     * in the direction that matters: the error it produces is that fraction of
+     * the face's <em>screen size</em>, so a tile a few paces away whose depth
+     * varies by a seventh is out by fifteen pixels while a distant wall at the
+     * same ratio is out by one. Judging the projected corners instead asks the
+     * question the eye is asking.
+     *
+     * <p>What is measured is the quad's <em>parallelogram defect</em>:
+     * {@code A − B + C − D}, which is zero exactly when the four projected
+     * corners form a parallelogram and an affine map can therefore land on all
+     * four. A least-squares fit spreads that defect over the corners as a
+     * quarter of it each, so four pixels here is one pixel of error — about
+     * what a 32-pixel sheet blown up to fill a tile underfoot can show at all.
+     *
+     * <p>Four rather than two because two costs a third again as much and looks
+     * the same: halving the tolerance doubles the patches, and the pass is paid
+     * for by the pixels those patches cover rather than by how many of them
+     * there are, so the second half of that trade buys almost nothing.
+     */
+    private static final double MAX_PATCH_DEFECT = 4.0;
+
+    /**
+     * How many times a face may be halved, so how many patches it may cost:
+     * two to the sixth, sixty-four, and only for a face filling the screen.
+     *
+     * <p>A limit on the <em>depth</em> rather than on the count, which is the
+     * distinction that took a rewrite to find. A shared budget is spent by
+     * whichever patch happens to come up first, and on a floor tile that is the
+     * far half — the half that bends least and needs it least. The near half
+     * then finds the budget gone and is drawn at a defect of fifty pixels,
+     * which is a triangular tear along its own edge, which is the artefact
+     * this was reported as. A depth limit is per patch, so each half of a face
+     * is refined on its own merits and only what bends costs anything.
+     */
+    private static final int MAX_SPLIT_DEPTH = 6;
+
+    /**
+     * How small a patch may get on screen before splitting it stops paying.
+     *
+     * <p>A quad's defect is bounded by its own perimeter, so a patch this size
+     * is inside the tolerance whatever else is true of it, and halving it again
+     * buys nothing for the price of another blit.
+     */
+    private static final double MIN_PATCH_PIXELS = 8;
 
     /** The patch of ground under an actor; see {@link #groundShadow}. */
     private static final Color SHADOW = new Color(0, 0, 0, 90);
@@ -171,8 +230,22 @@ public final class SolidPainter {
     private final double[] eyeVerts = new double[4 * 3];
     private final double[] clipped = new double[8 * 3];
     private final double[] point = new double[3];
-    /** The clip region a textured face is drawn through; refilled per face. */
+    /** The face a textured blit is kept inside; refilled per face. */
     private final java.awt.Polygon clip = new java.awt.Polygon();
+    /** One patch's projected corners, and the map that puts the sheet on them. */
+    private final double[] patchX = new double[4];
+    private final double[] patchY = new double[4];
+    private final AffineTransform patchMap = new AffineTransform();
+    /**
+     * The patches of one face still to be drawn or split — the texture bounds
+     * they cover and how many splits deep they are, five numbers each.
+     *
+     * <p>A stack rather than a grid because the splitting is adaptive: a face
+     * bends where the divide bends it, and a uniform grid spends its patches
+     * evenly over a face that does not. Depth-first, so it only ever holds one
+     * patch per level.
+     */
+    private final int[] work = new int[5 * (MAX_SPLIT_DEPTH + 2)];
     /** Per-frame texture lookups, so a block's sheet is resolved once a frame. */
     private final java.util.Map<String, BufferedImage> textures = new java.util.HashMap<>();
 
@@ -192,8 +265,12 @@ public final class SolidPainter {
         int edgeArgb;
         /** The face's texture, or {@code null} for a flat fill. */
         BufferedImage texture;
-        /** Maps that texture's own square onto this face; only set with a texture. */
-        AffineTransform textureTransform;
+        /**
+         * The face in world coordinates — its four corners, in the order they
+         * were queued — so a textured face can be re-projected in patches at
+         * draw time. Only meaningful with a texture.
+         */
+        final double[] quad = new double[4 * 3];
         /** Fog over a textured face, {@code 0} when it is close enough not to need any. */
         int fogOverlay;
         // Billboard fields; sprite is null for a face.
@@ -481,7 +558,6 @@ public final class SolidPainter {
         Entry e = claim();
         e.sprite = null;
         e.texture = null;
-        e.textureTransform = null;
         e.fogOverlay = 0;
         e.order = cellOrder(col, row, layer);
         e.count = n;
@@ -506,16 +582,16 @@ public final class SolidPainter {
         e.argb = shadeFog(colour, shade, distance);
         if (texture != null && whole && n == 4
                 && (hiX - loX) >= MIN_TEXTURE_PIXELS && (hiY - loY) >= MIN_TEXTURE_PIXELS) {
-            // The block's own sheet, shaded for this face and mapped onto it.
-            // The map is affine — three corners decide it and the fourth is
-            // wherever the perspective put it — which is exact for the faces
-            // that matter most (anything square-on to the eye) and a slight
-            // shear on a face seen at a glancing angle. A face too small on
-            // screen to show a texture, or one cut by the near plane, keeps the
-            // flat fill: at those sizes the sheet is a smear of its own average
-            // colour, which is what the flat fill already is.
+            // The block's own sheet, shaded for this face. The face is kept in
+            // *world* coordinates rather than as one screen-space transform:
+            // how it is mapped is decided at draw time, in patches, because one
+            // affine map over a whole perspective quad is what made surfaces
+            // bend (see drawTextured).
             e.texture = SolidTextures.shaded(texture, shade);
-            e.textureTransform = TilePainter.isoTransform(e.texture, e.xs, e.ys);
+            e.quad[0] = ax; e.quad[1] = ay; e.quad[2] = az;
+            e.quad[3] = bx; e.quad[4] = by; e.quad[5] = bz;
+            e.quad[6] = cx; e.quad[7] = cy; e.quad[8] = cz;
+            e.quad[9] = dx; e.quad[10] = dy; e.quad[11] = dz;
             double fog = fogAmount(distance);
             if (fog > 0.02) {
                 e.fogOverlay = ((int) Math.round(255 * Math.min(1, fog)) << 24)
@@ -638,7 +714,6 @@ public final class SolidPainter {
         Entry e = claim();
         e.sprite = draw;
         e.texture = null;
-        e.textureTransform = null;
         e.fogOverlay = 0;
         e.order = cellOrder((int) Math.floor(wx / Math.max(1, level.tileSize)),
                 (int) Math.floor(wy / Math.max(1, level.tileSize)),
@@ -734,21 +809,220 @@ public final class SolidPainter {
             if (faded) target.popAlpha();
             return;
         }
+        // The face's own colour goes down first whether or not it is textured.
+        // On a textured face it is the backing: a patch's affine map covers its
+        // patch to within a fraction of a pixel rather than exactly, and a
+        // fraction of a pixel of the block's own colour is invisible where a
+        // fraction of a pixel of sky, seen through a wall, is not.
+        target.fillPolygon(e.xs, e.ys, e.count, e.argb);
         if (e.texture != null) {
-            // The sheet, warped onto the face and clipped to it. The clip is
-            // what makes an affine blit safe on a quad that is not a
-            // parallelogram: the transform places the texture, the clip stops
-            // whatever falls outside the face from reaching the wall next door.
-            clip.reset();
-            for (int i = 0; i < e.count; i++) clip.addPoint(e.xs[i], e.ys[i]);
-            target.pushClip(clip);
-            target.drawImage(e.texture, e.textureTransform);
+            drawTextured(e);
             if (e.fogOverlay != 0) target.fillPolygon(e.xs, e.ys, e.count, e.fogOverlay);
-            target.popClip();
-        } else {
-            target.fillPolygon(e.xs, e.ys, e.count, e.argb);
         }
         if (e.edge) target.drawPolygon(e.xs, e.ys, e.count, e.edgeArgb, 1f);
+    }
+
+    /**
+     * Draw a face's texture onto it, in patches.
+     *
+     * <p><b>Why not one blit.</b> The only warping blit {@link DrawTarget} has
+     * is affine, and a perspective quad is not an affine image of a rectangle:
+     * three corners decide an affine map and the fourth lands wherever the
+     * divide put it. Used over a whole face that is what a player sees as the
+     * surface <em>bending</em> — the texture shears away from the geometry it
+     * is painted on, worst on exactly the faces that run away from the eye,
+     * which is most of the floor and every wall seen at an angle. Clipping it
+     * to the face hides the overspill and turns the rest into a fold.
+     *
+     * <p><b>What is drawn instead.</b> The face is halved, in its own texture
+     * coordinates, until every piece of it <em>is</em> nearly a parallelogram
+     * on screen — until its {@linkplain #MAX_PATCH_DEFECT defect} is under a
+     * couple of pixels — and an affine map over such a patch is the perspective
+     * map, to within that. A face square-on to the eye is already a
+     * parallelogram and is one patch, which is the common case and costs
+     * exactly what one blit did before; a floor tile stretching away underfoot
+     * is a handful. Each patch takes the slice of the sheet that belongs to it,
+     * so the texture stays continuous across the joins.
+     *
+     * <p><b>Which edge is halved</b> is whichever is longer <em>on screen</em>,
+     * not whichever is longer on the sheet. Splitting one axis over and over
+     * looks like the answer — a floor recedes along one axis, so strips across
+     * it ought to do — and it converges far too slowly to afford: the defect of
+     * a strip falls in proportion to how many strips there are, so a tile
+     * underfoot whose near edge is a hundred pixels wider than its far one
+     * wants fifty of them. Halving the longer edge takes both axes down
+     * together and gets to the same place in a dozen.
+     *
+     * <p>The map for a patch is the affine that fits its four projected corners
+     * <em>least-squares</em> rather than the one pinned to three of them: the
+     * residual is then a quarter of the defect at each corner instead of the
+     * whole of it at one, and it is the same size on both sides of a join,
+     * which is what {@link #blit} needs to be able to close them.
+     */
+    private void drawTextured(Entry e) {
+        int w = e.texture.getWidth(), h = e.texture.getHeight();
+        double[] q = e.quad;
+        // The face's own axes: P(u, v) = A + u·(B − A) + v·(D − A). A block
+        // face is a rectangle, so this covers it exactly.
+        double ux = q[3] - q[0], uy = q[4] - q[1], uz = q[5] - q[2];
+        double vx = q[9] - q[0], vy = q[10] - q[1], vz = q[11] - q[2];
+
+        // The whole face, waiting to be drawn or split.
+        push(0, w, 0, h, 0, 0);
+        int top = 5;
+        // Whether this face turned out to need more than one patch, which is
+        // the same question as whether it has any joins to close — and the
+        // reason the clip is pushed here rather than around the whole call. A
+        // face drawn in one patch has nothing to overlap, so it is not grown,
+        // so it does not overhang its own outline, so it needs no clip; and
+        // that is most of a frame's faces. Paying Java2D's most expensive verb
+        // on all of them to serve the few costs a couple of milliseconds a
+        // frame, measured, which is most of a mid-range machine's headroom.
+        boolean split = false;
+        boolean clipped = false;
+
+        while (top >= 5) {
+            top -= 5;
+            int sx0 = work[top], sx1 = work[top + 1];
+            int sy0 = work[top + 2], sy1 = work[top + 3];
+            int depth = work[top + 4];
+            if (sx1 <= sx0 || sy1 <= sy0) continue;
+            double u0 = sx0 / (double) w, u1 = sx1 / (double) w;
+            double v0 = sy0 / (double) h, v1 = sy1 / (double) h;
+            if (!patchCorner(q, ux, uy, uz, vx, vy, vz, u0, v0, 0)
+                    || !patchCorner(q, ux, uy, uz, vx, vy, vz, u1, v0, 1)
+                    || !patchCorner(q, ux, uy, uz, vx, vy, vz, u1, v1, 2)
+                    || !patchCorner(q, ux, uy, uz, vx, vy, vz, u0, v1, 3)) {
+                continue; // behind the near plane; the face's own colour stands
+            }
+            // How far this patch is from being a parallelogram, which is how
+            // far an affine map over it would land from its own corners.
+            double defectX = patchX[0] - patchX[1] + patchX[2] - patchX[3];
+            double defectY = patchY[0] - patchY[1] + patchY[2] - patchY[3];
+            double defect = Math.hypot(defectX, defectY);
+            double alongEdge = edge(0, 1), downEdge = edge(0, 3);
+            boolean splittable = depth < MAX_SPLIT_DEPTH
+                    && (sx1 - sx0 > 1 || sy1 - sy0 > 1)
+                    && Math.max(alongEdge, downEdge) > MIN_PATCH_PIXELS;
+            if (splittable && defect > MAX_PATCH_DEFECT) {
+                boolean alongU = sx1 - sx0 > 1
+                        && (sy1 - sy0 <= 1 || alongEdge >= downEdge);
+                if (alongU) {
+                    int mid = (sx0 + sx1) / 2;
+                    push(sx0, mid, sy0, sy1, depth + 1, top);
+                    push(mid, sx1, sy0, sy1, depth + 1, top + 5);
+                } else {
+                    int mid = (sy0 + sy1) / 2;
+                    push(sx0, sx1, sy0, mid, depth + 1, top);
+                    push(sx0, sx1, mid, sy1, depth + 1, top + 5);
+                }
+                top += 10;
+                split = true;
+                continue;
+            }
+            if (split && !clipped) {
+                clip.reset();
+                for (int i = 0; i < e.count; i++) clip.addPoint(e.xs[i], e.ys[i]);
+                target.pushClip(clip);
+                clipped = true;
+            }
+            blit(e.texture, sx0, sy0, sx1 - sx0, sy1 - sy0,
+                    split ? defect / 4 + 0.5 : 0);
+        }
+        if (clipped) target.popClip();
+    }
+
+    /** Put a patch's texture bounds and split depth on the stack at {@code at}. */
+    private void push(int sx0, int sx1, int sy0, int sy1, int depth, int at) {
+        work[at] = sx0;
+        work[at + 1] = sx1;
+        work[at + 2] = sy0;
+        work[at + 3] = sy1;
+        work[at + 4] = depth;
+    }
+
+    /** How long the patch edge between two of its projected corners is. */
+    private double edge(int from, int to) {
+        return Math.hypot(patchX[to] - patchX[from], patchY[to] - patchY[from]);
+    }
+
+    /**
+     * Project the patch corner at ({@code u}, {@code v}) into
+     * {@link #patchX}/{@link #patchY} slot {@code at}.
+     *
+     * @return whether it is in front of the near plane
+     */
+    private boolean patchCorner(double[] q, double ux, double uy, double uz,
+                                double vx, double vy, double vz,
+                                double u, double v, int at) {
+        if (!eye.project(q[0] + ux * u + vx * v, q[1] + uy * u + vy * v,
+                q[2] + uz * u + vz * v, point)) {
+            return false;
+        }
+        patchX[at] = point[0];
+        patchY[at] = point[1];
+        return true;
+    }
+
+    /**
+     * Blit the sheet's ({@code sx}, {@code sy}, {@code sw}, {@code sh}) region
+     * onto the patch in {@link #patchX}/{@link #patchY}.
+     *
+     * <p><b>No clip per patch, and no seams either.</b> The obvious way to keep
+     * a patch inside its own outline is to clip to it, and it is the wrong one
+     * twice over: it is the most expensive verb {@link DrawTarget} has — four
+     * and a half milliseconds a frame of the ten this pass took, measured — and
+     * it <em>opens</em> the joins rather than closing them, because a fit that
+     * lands a quarter of the defect short of a shared corner, cut off at
+     * exactly that short line, leaves the sliver between the two patches
+     * showing whatever was under them. Instead the sheet is drawn where the map
+     * puts it and the patch is grown, about its own centre, by
+     * {@code margin} — the error the fit is known to have, a quarter of the
+     * defect, plus half a pixel for the rounding. Neighbours then overlap by
+     * that much instead of parting by it, and a pixel of a texture over itself
+     * is nothing to look at. The face's own clip, pushed once by
+     * {@link #drawTextured} and only for a face that has joins at all, catches
+     * the outermost patches where they hang over the edge.
+     *
+     * @param margin how far to grow the patch, in pixels; zero for a face drawn
+     *               whole, which has no neighbour to meet and so is left to
+     *               land exactly where the fit puts it
+     */
+    private void blit(BufferedImage sheet, int sx, int sy, int sw, int sh, double margin) {
+        // The least-squares affine over the patch's four corners: the u and v
+        // edges averaged, and the origin placed so the fit is centred.
+        double bx = ((patchX[1] + patchX[2]) - (patchX[0] + patchX[3])) / 2;
+        double by = ((patchY[1] + patchY[2]) - (patchY[0] + patchY[3])) / 2;
+        double cx = ((patchX[3] + patchX[2]) - (patchX[0] + patchX[1])) / 2;
+        double cy = ((patchY[3] + patchY[2]) - (patchY[0] + patchY[1])) / 2;
+        double mx = (patchX[0] + patchX[1] + patchX[2] + patchX[3]) / 4;
+        double my = (patchY[0] + patchY[1] + patchY[2] + patchY[3]) / 4;
+
+        // Grown outward by what the fit misses its corners by, so that patches
+        // meet in an overlap rather than in a gap. Each axis is grown on its own
+        // length: a strip four pixels across and two hundred long needs the same
+        // half-pixel on both of its ends, which one shared scale cannot give it.
+        double along = Math.hypot(bx, by), down = Math.hypot(cx, cy);
+        if (margin > 0 && along > 1e-6 && down > 1e-6) {
+            double growU = 1 + 2 * margin / along;
+            double growV = 1 + 2 * margin / down;
+            bx *= growU;
+            by *= growU;
+            cx *= growV;
+            cy *= growV;
+        }
+        double ox = mx - (bx + cx) / 2;
+        double oy = my - (by + cy) / 2;
+        // …expressed in the sheet's own pixel coordinates, so the region can be
+        // drawn where it sits in the sheet rather than being sliced out first.
+        double m00 = bx / sw, m10 = by / sw;
+        double m01 = cx / sh, m11 = cy / sh;
+        patchMap.setTransform(m00, m10, m01, m11,
+                ox - m00 * sx - m01 * sy, oy - m10 * sx - m11 * sy);
+
+        target.pushTransform(patchMap);
+        target.drawImage(sheet, sx, sy, sw, sh, sx, sy, sw, sh);
+        target.popTransform();
     }
 
     private Entry claim() {
