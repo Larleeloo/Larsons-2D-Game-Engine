@@ -138,9 +138,20 @@ public final class LevelLoader {
         // than merely old.
         boolean describesItsLayers = root.containsKey("layersRle")
                 || root.containsKey("layerChunks")
-                || root.containsKey("upperRle") || root.containsKey("upperChunks");
+                || root.containsKey("upperRle") || root.containsKey("upperChunks")
+                || root.containsKey("world");
 
-        if (Boolean.TRUE.equals(root.get("chunked"))) {
+        if (root.get("world") instanceof Map<?, ?> worldMap) {
+            // A generated world: the seed, the chunks that have been visited,
+            // and the ones that have been changed. Everything else regrows.
+            @SuppressWarnings("unchecked")
+            Map<String, Object> wm = (Map<String, Object>) worldMap;
+            com.larsons.engine.world.gen.TerrainSettings terrain =
+                    lvl.settings != null ? lvl.settings.terrain
+                            : new com.larsons.engine.world.gen.TerrainSettings();
+            lvl.setTerrain(com.larsons.engine.world.gen.WorldTerrain.fromMap(
+                    wm, terrain, lvl.blocks));
+        } else if (Boolean.TRUE.equals(root.get("chunked"))) {
             // Giant chunked level: bounds + edited chunks + optional generator.
             lvl.width = intOf(root.get("width"), 1024);
             lvl.height = intOf(root.get("height"), 1024);
@@ -308,6 +319,10 @@ public final class LevelLoader {
         // other way round — its corridors are air, which is a hole now — so it
         // is re-cut into layers that mean what its author drew.
         if (!describesItsLayers) lvl.liftSolidsToUpperLayer();
+        // Last, because expanding a level into a world moves everything read
+        // above it — the spawn, the entities, the decor and the containers all
+        // shift with the terrain, and there is nothing left to read afterwards.
+        lvl.applyTerrainSettings();
         return lvl;
     }
 

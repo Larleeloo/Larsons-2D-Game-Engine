@@ -826,6 +826,12 @@ public class PlayScene extends AbstractScene {
         mouseX = input.getMouseX();
         mouseY = input.getMouseY();
         if (ruleStatusTime > 0) ruleStatusTime -= dt;
+        // Keep the world building itself ahead of the player. A no-op on a
+        // level that is not generated, and on a generated one it is the whole
+        // of "chunk loading to prevent lag": the ground a player is walking
+        // toward was built on a worker thread several seconds before they
+        // arrive, so no frame ever pays for it.
+        streamTerrain();
 
         // Walk into a painted door and press E: load its target level; with no
         // door, E opens a nearby crafting/alchemy station, and with neither,
@@ -2564,8 +2570,7 @@ public class PlayScene extends AbstractScene {
         // Per frame rather than on a change, because the setting is a global
         // the options screen edits in place and there is no event to hang a
         // listener on — and because it costs an integer compare.
-        solid.setDistantTiles(PlayerSettings.active().distantTerrain
-                ? SolidPainter.DISTANT_VIEW_TILES : 0);
+        applyViewDistance(p);
         solid.begin(target, eye, level, animClock);
         phase("terrain", solid::terrain);
         // After the detailed sweep and drawn behind it; see SolidPainter.distant.
@@ -2594,6 +2599,45 @@ public class PlayScene extends AbstractScene {
         });
         drawCrosshair(target);
         if (viewpoint == Viewpoint.FIRST_PERSON) drawHandItem(target, p);
+    }
+
+    /**
+     * Ask the level to keep the world built around the player.
+     *
+     * <p>Around the <em>player</em> rather than around the camera, because the
+     * camera can be looking anywhere and the player is who is about to walk
+     * into a chunk. The radius covers whatever the view distance reaches, so
+     * everything being drawn is ground that is already there.
+     */
+    private void streamTerrain() {
+        if (level == null || !level.isWorld()) return;
+        GameProfile p = profile();
+        int view = p != null && p.terrain != null
+                ? p.terrain.renderDistance : SolidPainter.DEFAULT_VIEW_TILES;
+        level.streamTerrain(me.x + hitSize() / 2, me.y + hitSize() / 2, view);
+    }
+
+    /**
+     * How far this frame draws: the level's own render distance, and its
+     * horizon behind it.
+     *
+     * <p><b>Two settings, and they belong to different people.</b> How far the
+     * world is drawn in <em>detail</em> is the level's — a generated world is
+     * meant to be seen across, and a creator who built one sets how much of it
+     * the player is standing in. Whether the coarse horizon is drawn at all
+     * stays the player's ({@link PlayerSettings#distantTerrain}), because it is
+     * a statement about their machine; a level that asks for one is asking, and
+     * a player who has turned it off is answering.
+     */
+    private void applyViewDistance(GameProfile p) {
+        var terrain = p != null ? p.terrain : null;
+        boolean world = level != null && level.isWorld();
+        int view = terrain != null && world
+                ? terrain.renderDistance : SolidPainter.DEFAULT_VIEW_TILES;
+        solid.setViewTiles(view);
+        int horizon = terrain != null && world
+                ? terrain.distantDistance : SolidPainter.DISTANT_VIEW_TILES;
+        solid.setDistantTiles(PlayerSettings.active().distantTerrain ? horizon : 0);
     }
 
     /**

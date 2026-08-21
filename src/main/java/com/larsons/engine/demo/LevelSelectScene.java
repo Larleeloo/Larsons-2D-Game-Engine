@@ -304,10 +304,21 @@ public class LevelSelectScene extends AbstractScene {
         // this is the one here because per-level settings are edited on this
         // screen.
         ProfileForms.addRosterOptions(form, ctx.profile().name, editLevel.characters);
-        ProfileForms.addFeatureOptions(form, editLevel.settings);
+        ProfileForms.addFeatureOptions(form, editLevel.settings, this::rebuildEditForm);
         ProfileForms.addCameraOptions(form, editLevel.settings);
         form.addAction("Save", this::saveEdited);
         form.addAction("Back", () -> openActions(selectedLevel));
+    }
+
+    /**
+     * Rebuild the settings form from a row that changed which rows there are
+     * (adding a biome, adding a decoration slot), keeping the cursor where it
+     * was rather than throwing it back to the top of a long screen.
+     */
+    private void rebuildEditForm() {
+        int cursor = form.getSelectedIndex();
+        buildEditForm();
+        form.select(cursor);
     }
 
     /** Persist the level's new name + settings, renaming its file if needed. */
@@ -320,6 +331,11 @@ public class LevelSelectScene extends AbstractScene {
         // claim a different one when they are applied on load.
         editLevel.settings.perspective = editLevel.perspective;
         editLevel.settings.normalize();
+        // Turning infinite terrain on here is what expands the level into a
+        // world, and turning it off is what freezes the one it has — done
+        // before the save so the file that lands on disk is the level the
+        // settings just described.
+        editLevel.applyTerrainSettings();
         Path newFile = store.save(editLevel);
         if (!newFile.equals(oldFile)) {
             // Renamed: drop the old file and follow the rename everywhere it's

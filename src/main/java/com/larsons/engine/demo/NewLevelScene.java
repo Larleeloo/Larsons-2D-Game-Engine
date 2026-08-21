@@ -204,7 +204,7 @@ public class NewLevelScene extends AbstractScene {
                 + "list Level Select → Edit Settings shows, saved into the level "
                 + "when it is created.");
         ProfileForms.addRosterOptions(form, ctx.profile().name, roster);
-        ProfileForms.addFeatureOptions(form, settings);
+        ProfileForms.addFeatureOptions(form, settings, this::rebuildForm);
         ProfileForms.addCameraOptions(form, settings);
         form.addAction("Back", () -> scenes.transitionTo("menu"));
     }
@@ -272,6 +272,10 @@ public class NewLevelScene extends AbstractScene {
         // so the copy stored inside the level can never contradict it.
         level.captureSettings(settings);
         level.settings.normalize();
+        // Before it is saved, so a level created with infinite terrain on is
+        // already the world it asked for — its file carries the seed and the
+        // editor opens on generated ground rather than on the starter canvas.
+        level.applyTerrainSettings();
         store.save(level);
         return level;
     }

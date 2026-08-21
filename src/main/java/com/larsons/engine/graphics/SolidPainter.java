@@ -129,6 +129,21 @@ public final class SolidPainter {
     public static final int DISTANT_VIEW_TILES = 120;
 
     /**
+     * The furthest the detailed sweep may be set to, in tiles.
+     *
+     * <p>192, which is what a generated world's render-distance slider tops out
+     * at. It is a long way past what this renderer keeps at 60 Hz and that is
+     * the point of a slider: the machine at the far end of it is not the one
+     * the default was measured on.
+     */
+    public static final int MAX_VIEW_TILES =
+            com.larsons.engine.world.gen.TerrainSettings.MAX_RENDER_DISTANCE;
+
+    /** The furthest the coarse horizon may be set to, in tiles. */
+    public static final int MAX_DISTANT_TILES =
+            com.larsons.engine.world.gen.TerrainSettings.MAX_DISTANT_DISTANCE;
+
+    /**
      * Where the fog starts, as a fraction of the view distance.
      *
      * <p>Late, and that is the tuning that matters: fog exists to hide the
@@ -233,11 +248,25 @@ public final class SolidPainter {
     /** Cells to a box in the ring that meets the detailed terrain. */
     private static final int NEAR_RING_CELLS = 4;
 
-    /** Cells to a box out at the horizon, where nothing smaller would show. */
-    private static final int FAR_RING_CELLS = 16;
-
     /** Where the near ring gives way to the far one, in detailed distances. */
     private static final double RING_SPLIT = 3;
+
+    /**
+     * How many rings the horizon is drawn in before it gives up.
+     *
+     * <p>Each ring reaches {@link #RING_SPLIT} times as far as the one inside
+     * it, so five of them cover two hundred times the detailed distance — well
+     * past the furthest the settings offer. The cap is there so that a
+     * pathological render distance cannot spin here, not because five is a
+     * meaningful number of rings.
+     */
+    private static final int MAX_RINGS = 5;
+
+    /**
+     * How wide a coarse box is as a fraction of how far away it is — the
+     * angular size every ring is drawn at. See {@link #groupFor}.
+     */
+    private static final double RING_ANGLE = 0.2;
 
     /** The patch of ground under an actor; see {@link #groundShadow}. */
     private static final Color SHADOW = new Color(0, 0, 0, 90);
@@ -284,6 +313,12 @@ public final class SolidPainter {
 
     /** Sort keys, {@code (depth, index)} packed into a long; see {@link #flush}. */
     private long[] order = new long[1024];
+
+    /** One coarse box's answer from {@link Level#groupTop}: {layer, block id}. */
+    private final int[] groupScratch = new int[2];
+
+    /** One column's worth of layers to look at; see {@link Level#visibleLayers}. */
+    private final int[] layerScratch = new int[Level.MAX_LAYERS];
 
     // Scratch for one face's worth of projection, reused for the same reason
     // the pool exists.
@@ -344,7 +379,7 @@ public final class SolidPainter {
 
     /** Set how far the eye can see, in tiles. */
     public void setViewTiles(int tiles) {
-        this.viewTiles = Math.max(2, Math.min(256, tiles));
+        this.viewTiles = Math.max(2, Math.min(MAX_VIEW_TILES, tiles));
     }
 
     /** How far the coarse pass reaches, in tiles; {@code 0} when it is off. */
@@ -356,7 +391,7 @@ public final class SolidPainter {
      * off. See {@link #distant}.
      */
     public void setDistantTiles(int tiles) {
-        this.distantTiles = tiles <= 0 ? 0 : Math.max(2, Math.min(1024, tiles));
+        this.distantTiles = tiles <= 0 ? 0 : Math.max(2, Math.min(MAX_DISTANT_TILES, tiles));
     }
 
     // --- a frame -----------------------------------------------------------
@@ -487,15 +522,17 @@ public final class SolidPainter {
      * it is a smear — no per-block faces, and the sides only where the eye is
      * on that side.
      *
-     * <p><b>In rings, at two coarsenesses.</b> One group size over the whole
-     * distance is wrong at both ends: fine enough to meet the detailed terrain
-     * without a visible step is thousands of groups out at the horizon, and
-     * coarse enough to afford the horizon puts a staircase of eight-tile steps
-     * right where the player can see what it should have been. So the near ring
-     * is drawn at {@link #NEAR_RING_CELLS} cells to a box and the far one at
-     * {@link #FAR_RING_CELLS}, which is the same trade Distant Horizons makes
-     * and for the same reason. Between them the error stays roughly one
-     * <em>angular</em> size all the way out.
+     * <p><b>In rings, each coarser than the one inside it.</b> One group size
+     * over the whole distance is wrong at both ends: fine enough to meet the
+     * detailed terrain without a visible step is tens of thousands of groups
+     * out at the horizon, and coarse enough to afford the horizon puts a
+     * staircase of eight-tile steps right where the player can see what it
+     * should have been. So each ring reaches {@link #RING_SPLIT} times as far
+     * as the last and is drawn at {@link #groupFor} that distance — the same
+     * trade Distant Horizons makes and for the same reason. The error stays
+     * roughly one <em>angular</em> size all the way out, and so does the cost
+     * per ring, which is what lets the horizon reach two thousand blocks for
+     * about what it used to spend on a hundred and twenty.
      *
      * <p><b>Every ring overlaps the one inside it</b> rather than abutting it:
      * a box is drawn whenever any part of its group falls outside the inner
@@ -511,9 +548,34 @@ public final class SolidPainter {
         if (level == null || eye == null || distantDistance <= viewDistance) return;
         int ts = level.tileSize;
         if (ts <= 0) return;
-        double middle = Math.min(distantDistance, viewDistance * RING_SPLIT);
-        ring(NEAR_RING_CELLS, viewDistance, middle, 1);
-        ring(FAR_RING_CELLS, middle, distantDistance, 2);
+        double inner = viewDistance;
+        for (int behind = 1; inner < distantDistance && behind <= MAX_RINGS; behind++) {
+            double outer = Math.min(distantDistance, inner * RING_SPLIT);
+            ring(groupFor(inner), inner, outer, behind);
+            inner = outer;
+        }
+    }
+
+    /**
+     * How many cells to a box in a ring that starts {@code inner} away.
+     *
+     * <p><b>Proportional to the distance, not a constant.</b> A box should
+     * subtend about the same angle wherever it is — that is the whole argument
+     * for rings — and a box of a fixed number of cells does not: four cells is
+     * a tenth of the screen at forty paces and a pixel at four hundred. Fixing
+     * the cell count instead fixes the <em>cost</em> to the distance, and badly:
+     * at the default render distance the near ring is six hundred boxes, and at
+     * a render distance of 192 the same constant makes it six thousand, which
+     * is the difference between a horizon and a slideshow.
+     *
+     * <p>The factor is chosen so that this reproduces the constants the rings
+     * were originally tuned with at the default render distance — four cells at
+     * twenty, sixteen at sixty — and goes on meaning the same thing at any
+     * other.
+     */
+    private static int groupFor(double innerDistance) {
+        double tiles = innerDistance / 32.0;
+        return Math.max(NEAR_RING_CELLS, (int) Math.round(tiles * RING_ANGLE));
     }
 
     /** One ring of coarse boxes, {@code group} cells to a box. */
@@ -563,28 +625,14 @@ public final class SolidPainter {
         int c1 = Math.min(level.width, c0 + group), r1 = Math.min(level.height, r0 + group);
         if (c0 >= c1 || r0 >= r1) return;
 
-        int tallest = -1;
-        int tallestId = 0;
-        for (int r = r0; r < r1; r++) {
-            for (int c = c0; c < c1; c++) {
-                int floor = level.tileAt(c, r);
-                if (floor <= 0) continue;
-                int layer = 0, id = floor;
-                int depth = level.columnDepth(c, r);
-                for (int l = 1; l < depth; l++) {
-                    int at = level.tileAt(c, r, l);
-                    if (at > 0) {
-                        layer = l;
-                        id = at;
-                    }
-                }
-                if (layer > tallest) {
-                    tallest = layer;
-                    tallestId = id;
-                }
-            }
-        }
-        if (tallest < 0) return; // nothing but a hole out here
+        // Asked of the level rather than swept here, because a generated world
+        // answers it from sampled heights: the horizon reaches two thousand
+        // blocks, and generating the sixteen million columns inside that to
+        // find out how tall they are would cost more than drawing the world in
+        // detail. An ordinary level does the sweep this used to do.
+        if (!level.groupTop(c0, r0, c1, r1, groupScratch)) return;
+        int tallest = groupScratch[0];
+        int tallestId = groupScratch[1];
 
         Color colour = level.colorFor(tallestId);
         if (colour == null) return;
@@ -637,7 +685,14 @@ public final class SolidPainter {
         }
 
         int depth = level.columnDepth(col, row);
-        for (int layer = 1; layer < depth; layer++) {
+        // The layers worth looking at, rather than all of them. Every layer of
+        // the column on an ordinary level — there is nothing to save in a stack
+        // of three — and on a generated world the handful that are not walled
+        // in on all six sides, which is the difference between drawing a
+        // mountain and drawing every block inside one. See Level.visibleLayers.
+        int count = level.visibleLayers(col, row, layerScratch);
+        for (int i = 0; i < count; i++) {
+            int layer = layerScratch[i];
             int id = level.tileAt(col, row, layer);
             if (id <= 0) continue;
             Block block = level.blocks.get(id);

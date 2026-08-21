@@ -108,6 +108,18 @@ public class GameProfile {
      */
     public boolean fallDamageEnabled = false;
 
+    /**
+     * This level's procedural-terrain settings: whether the world generates
+     * itself beyond the level's own bounds, the seed it generates from, the
+     * biomes it is built out of, and how far the player can see it.
+     *
+     * <p>Never {@code null} — a level that has never been asked carries the
+     * defaults, which have generation off. See
+     * {@link com.larsons.engine.world.gen.TerrainSettings}.
+     */
+    public com.larsons.engine.world.gen.TerrainSettings terrain =
+            new com.larsons.engine.world.gen.TerrainSettings();
+
     // Lighting (rendered as a shader pass, so it composes with post-FX).
     public boolean lightingEnabled = false;
     public boolean dayNightCycle = false;     // time-driven darkness
@@ -226,6 +238,7 @@ public class GameProfile {
         m.put("nightMode", nightMode);
         m.put("nightDarkness", nightDarkness);
         m.put("ambientLight", ambientLight);
+        m.put("terrain", terrain.toMap());
         m.put("parallaxEnabled", parallaxEnabled);
         m.put("particlesEnabled", particlesEnabled);
         m.put("audioEnabled", audioEnabled);
@@ -325,6 +338,7 @@ public class GameProfile {
         nightMode = s.nightMode;
         nightDarkness = s.nightDarkness;
         ambientLight = s.ambientLight;
+        terrain = s.terrain;
         parallaxEnabled = s.parallaxEnabled;
         particlesEnabled = s.particlesEnabled;
         audioEnabled = s.audioEnabled;
@@ -383,6 +397,11 @@ public class GameProfile {
         p.nightMode = bool(m, "nightMode", p.nightMode);
         p.nightDarkness = dbl(m, "nightDarkness", p.nightDarkness);
         p.ambientLight = dbl(m, "ambientLight", p.ambientLight);
+        if (m.get("terrain") instanceof Map<?, ?> terrainMap) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> tm = (Map<String, Object>) terrainMap;
+            p.terrain = com.larsons.engine.world.gen.TerrainSettings.fromMap(tm);
+        }
         p.parallaxEnabled = bool(m, "parallaxEnabled", p.parallaxEnabled);
         p.particlesEnabled = bool(m, "particlesEnabled", p.particlesEnabled);
         p.audioEnabled = bool(m, "audioEnabled", p.audioEnabled);
@@ -429,6 +448,8 @@ public class GameProfile {
         ambientLight = Math.max(0.0, Math.min(1.0, ambientLight));
         if (cameraLock == null) cameraLock = CameraLock.free();
         cameraLock.normalize();
+        if (terrain == null) terrain = new com.larsons.engine.world.gen.TerrainSettings();
+        terrain.normalize();
         if (lastLevelPath == null) lastLevelPath = "";
         if (texturePackDir == null) texturePackDir = "";
         if (soundPackDir == null) soundPackDir = "";
