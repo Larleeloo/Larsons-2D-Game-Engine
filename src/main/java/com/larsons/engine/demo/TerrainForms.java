@@ -50,12 +50,22 @@ final class TerrainForms {
         Runnable refresh = rebuild != null ? rebuild : () -> {};
 
         form.addNote("Infinite procedural terrain — the world beyond this "
-                + "level's own bounds, generated as you walk into it. Turn it on "
-                + "and the level is moved into the middle of a world "
-                + t.worldSize + " blocks across; turn it off again and "
-                + "generation stops, keeping the ground you have already "
-                + "explored.");
-        form.addToggle("Infinite terrain", () -> t.enabled, v -> t.enabled = v);
+                + "level's own bounds, generated as you walk into it.");
+        form.addNote("Turning it on moves this level into the middle of a "
+                + "world " + t.worldSize + " blocks across.");
+        form.addNote("Turning it off stops generation and keeps the ground you "
+                + "have already explored.");
+        form.addToggle("Infinite terrain", () -> t.enabled, v -> {
+            t.enabled = v;
+            // A world is a landscape, and a landscape you cannot climb is a
+            // wall: with the height axis off, every column of generated rock
+            // reads as a barrier and the player cannot take a step. Turning
+            // this on turns that on, visibly, rather than leaving a creator to
+            // find a world they cannot walk in.
+            if (v) p.verticality = true;
+        });
+        form.addNote("This also turns on \"Standing on blocks (height)\" — a "
+                + "generated landscape is climbed, not walked around.");
 
         // The seed is a text field rather than a stepper because it is a
         // number people copy to each other, not one they nudge.
@@ -69,9 +79,8 @@ final class TerrainForms {
             }
         }, 20).enabledWhen(() -> t.enabled);
         form.addAction("Roll a new seed", () -> t.seed = System.nanoTime() | 1L);
-        form.addNote("Two levels with the same seed and the same biomes are the "
-                + "same world, block for block. 0 means \"choose one when the "
-                + "world is first built\".");
+        form.addNote("Same seed and same biomes is the same world, block for "
+                + "block. 0 picks one when the world is first built.");
 
         form.addInt("World size (blocks per side)", () -> t.worldSize,
                         v -> t.worldSize = v, TerrainSettings.MIN_WORLD_SIZE,
@@ -84,21 +93,19 @@ final class TerrainForms {
                         v -> t.distantDistance = v, 0,
                         TerrainSettings.MAX_DISTANT_DISTANCE, 64)
                 .enabledWhen(() -> t.enabled);
-        form.addNote("Render distance is what is drawn block by block. Distant "
-                + "generation is the horizon behind it, drawn as landforms — "
-                + "cheap enough to reach "
-                + TerrainSettings.MAX_DISTANT_DISTANCE + " blocks. The horizon "
-                + "also needs \"Distant terrain\" on in Options, which is the "
-                + "player's own say over what their machine draws.");
+        form.addNote("Render distance is what is drawn block by block; "
+                + "distant generation is the horizon behind it, as landforms.");
+        form.addNote("The horizon also needs \"Distant terrain\" on in Options — "
+                + "the player's own say over what their machine draws.");
 
         form.addInt("Sea level (layer)", () -> t.seaLevel, v -> t.seaLevel = v,
                 1, TerrainSettings.MAX_LEVEL - 2, 1).enabledWhen(() -> t.enabled);
         form.addInt("Ground level (layer)", () -> t.groundLevel, v -> t.groundLevel = v,
                 2, TerrainSettings.MAX_LEVEL - 1, 1).enabledWhen(() -> t.enabled);
         form.addNote("Land starts at the ground level and climbs; everything at "
-                + "or below sea level floods. The height axis runs 0 to "
-                + TerrainSettings.MAX_LEVEL + ", so a biome can aim anywhere in "
-                + "that range.");
+                + "or below sea level floods.");
+        form.addNote("The height axis runs 0 to " + TerrainSettings.MAX_LEVEL
+                + ", so a biome can aim anywhere in that range.");
 
         form.addInt("Landform scale (%)", () -> t.terrainScale, v -> t.terrainScale = v,
                 10, 400, 10).enabledWhen(() -> t.enabled);
@@ -119,21 +126,20 @@ final class TerrainForms {
                 v -> t.workerThreads = v, 1, 8, 1).enabledWhen(() -> t.enabled);
         form.addToggle("Save every explored chunk", () -> t.saveExplored,
                 v -> t.saveExplored = v).enabledWhen(() -> t.enabled);
-        form.addNote("Chunks you have changed are always saved. Explored ground "
-                + "that you have not changed is not — it is a function of the "
-                + "seed and grows back identical, so saving it would store a "
-                + "megabyte to say what the seed already says. Turn this on to "
-                + "write it down anyway, and the world stops dropping chunks "
-                + "behind you.");
+        form.addNote("Chunks you have changed are always saved. Explored "
+                + "ground you have not changed grows back from the seed.");
+        form.addNote("Turn this on to write it down anyway — the world then "
+                + "stops dropping chunks behind you, and costs more memory.");
 
         addBiomeOptions(form, t, refresh);
     }
 
     /** The biome picker, the {@code +} buttons, and the selected biome's rows. */
     private static void addBiomeOptions(ConfigForm form, TerrainSettings t, Runnable rebuild) {
-        form.addNote("Biomes — the recipes the world is built from. Pick one to "
-                + "edit it, or add your own with a \"+\" button. Everything "
-                + "below the picker edits whichever biome it is pointing at.");
+        form.addNote("Biomes — the recipes the world is built from. Pick one "
+                + "to edit it, or add your own with a \"+\" button.");
+        form.addNote("Every row below the picker edits whichever biome it is "
+                + "pointing at.");
 
         if (t.biomes.isEmpty()) t.addBiome(Biome.Realm.SURFACE);
         Biome[] all = t.biomes.toArray(new Biome[0]);
@@ -178,19 +184,16 @@ final class TerrainForms {
                 v -> b.get().targetLevel = v, 0, TerrainSettings.MAX_LEVEL);
         form.addSlider("· Height variation", () -> b.get().relief,
                 v -> b.get().relief = v, 0, 200);
-        form.addNote("Above ground the target level is the height its land aims "
-                + "for and the variation is how far it wanders. Below ground "
-                + "they are the depth its caverns centre on and how deep a band "
-                + "they fill — which is what keeps lava at the bottom of the "
-                + "world and ice caves up near the rock.");
+        form.addNote("Above ground: the height its land aims for, and how far "
+                + "it wanders from that.");
+        form.addNote("Below ground: the depth its caverns centre on, and how "
+                + "deep a band they fill.");
         form.addSlider("· Temperature (0-100)", () -> b.get().temperature,
                 v -> b.get().temperature = v, 0, 100);
         form.addSlider("· Humidity (0-100)", () -> b.get().humidity,
                 v -> b.get().humidity = v, 0, 100);
-        form.addNote("Climate is where a biome belongs, not how often it wins: "
-                + "the world's own temperature and rainfall decide which biomes "
-                + "fit a region, and the likelihood decides between the ones "
-                + "that do.");
+        form.addNote("Climate is where a biome belongs; likelihood decides "
+                + "between the biomes that fit the same region.");
 
         blockRow(form, "· Surface block", blocks, () -> b.get().surfaceBlock,
                 v -> b.get().surfaceBlock = v);
@@ -244,9 +247,8 @@ final class TerrainForms {
             if (!list.isEmpty()) list.remove(list.size() - 1);
             rebuild.run();
         });
-        form.addNote("Decorations are the one-block details scattered across "
-                + "the biome — flowers, bushes, coral, crystals. Underground "
-                + "they land on cave floors instead.");
+        form.addNote("Decorations are the one-block details scattered over the "
+                + "biome. Underground they land on cave floors instead.");
 
         form.addSlider("· Cave density", () -> b.get().caveDensity,
                 v -> b.get().caveDensity = v, 0, 100);
@@ -264,10 +266,10 @@ final class TerrainForms {
         blockRow(form, "· Building floor & roof", blocks,
                 () -> b.get().structureAccentBlock,
                 v -> b.get().structureAccentBlock = v);
-        form.addNote("Buildings are what makes a village a village and an "
-                + "ancient city a ruin: a biome with a wall block and some "
-                + "density scatters plots across itself, levels the ground "
-                + "under each one and builds on it. Denser also means bigger.");
+        form.addNote("A biome with a wall block scatters plots across itself, "
+                + "levels the ground under each one and builds on it.");
+        form.addNote("Denser also means bigger — this is what makes a village "
+                + "a village and an ancient city a ruin.");
     }
 
     /** A cycler over every block in the registry, plus "no block at all". */

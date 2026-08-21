@@ -761,6 +761,52 @@ class InfiniteTerrainTest {
         assertEquals(24, back.width);
     }
 
+    // --- walking in a world --------------------------------------------------------
+
+    /**
+     * A world turns the height axis on, because a landscape you cannot climb is
+     * a wall.
+     *
+     * <p>With it off, a plan view reads the whole column — a floor tile is a
+     * path, two stacked blocks are a barrier — and every column of a generated
+     * world is a hundred and fifty blocks of rock. A player would stand on a
+     * mountain range unable to take a step, which is not a preference anybody
+     * would have chosen.
+     */
+    @Test
+    void aWorldStandsOnItsOwnGround() {
+        Level lvl = LevelFormat.THREE_D.starterLevel("Home", 64, 48, 32);
+        lvl.settings = new GameProfile();
+        assertFalse(lvl.settings.verticality, "off until something asks for it");
+        lvl.settings.terrain = settings(4004);
+        lvl.applyTerrainSettings();
+        assertTrue(lvl.settings.verticality, "a world is somewhere a body can be");
+        assertTrue(lvl.verticality());
+    }
+
+    /**
+     * A body walks a generated landscape: it stands on the ground, climbs what
+     * it can step onto, and is stopped by what it cannot.
+     */
+    @Test
+    void abodyWalksTheLandscape() {
+        Level lvl = worldLevel(90210);
+        int[] authored = lvl.terrain().authoredBounds();
+        int col = authored[0] + authored[2] + 180, row = authored[1] + 180;
+        int ground = lvl.supportHeight(col, row);
+        assertTrue(ground > 100, "the ground under a body is the landscape, got " + ground);
+
+        double ts = lvl.tileSize;
+        double z = lvl.surfaceZ(ground);
+        assertEquals(z, com.larsons.engine.sim.PlayerPhysics.groundZ(
+                        lvl, col * ts + ts / 2, row * ts + ts / 2, ts * 0.8), 0.001,
+                "standing on the top of the column");
+        assertFalse(com.larsons.engine.sim.PlayerPhysics.barrierAt(lvl, col, row, z),
+                "the ground you are standing on is not a wall");
+        assertTrue(com.larsons.engine.sim.PlayerPhysics.barrierAt(lvl, col, row, 0),
+                "and it is one from the bottom of the world");
+    }
+
     // --- editing a world -----------------------------------------------------------
 
     /** Blocks placed and mined in a generated world behave like blocks. */

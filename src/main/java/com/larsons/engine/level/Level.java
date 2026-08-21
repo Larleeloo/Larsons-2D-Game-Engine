@@ -400,6 +400,13 @@ public class Level {
         com.larsons.engine.world.gen.TerrainSettings t =
                 settings != null ? settings.terrain : null;
         if (t == null) return;
+        // A world has to be somewhere a body can *be*. With the height axis off
+        // a plan view reads the column rather than the layer — a floor tile is
+        // a path and two stacked blocks are a wall — and every column of a
+        // generated world is a hundred and fifty blocks of rock, so the player
+        // would stand on a mountain range unable to take a step. This is not a
+        // preference the setting overrides, it is what the setting means.
+        if (t.enabled) settings.verticality = true;
         if (terrain == null) {
             if (t.enabled) com.larsons.engine.world.gen.WorldExpansion.expand(this, t);
             return;
