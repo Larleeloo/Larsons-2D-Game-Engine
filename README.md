@@ -1050,16 +1050,33 @@ entirely different views.
 
 **Block faces are textured**, from the same `blocks_top` / `blocks_side` pools
 the plan view resolves and with the same fallbacks, so a texture pack dresses a
-block once and it is that block in every view. The sheet is mapped onto the
-projected quad through `TilePainter.isoTransform` and clipped to it; the map is
-affine where a perspective quad is not, so a face seen at a glancing angle
-carries a slight shear — the alternative, splitting every face into affinely
-blitted triangles, is the PlayStation-1 answer and warps visibly at the range
-you spend the most time at. Faces cut by the near plane and faces a few pixels
-across keep the flat fill, because at that size a sheet is a smear of its own
-average colour. The four-level face shading is **baked into the sheet**
-(`SolidTextures`) rather than washed over it, so a textured face is still one
-draw call.
+block once and it is that block in every view. The sheet goes on **in patches**
+(`SolidPainter.drawTextured`), and that is the whole of why the surfaces stay
+flat. The only warping blit Java2D has is affine, and a perspective quad is not
+an affine image of a rectangle: three of its corners decide the map and the
+divide puts the fourth somewhere else. Over a whole face that is what a player
+sees as the surface *bending and folding* — worst on the floor underfoot and on
+any wall seen at an angle, which is most of a frame. So a face is halved, in its
+own texture coordinates, until each piece is nearly a parallelogram on screen —
+until its four projected corners are within four pixels of forming one — and an
+affine map over such a piece *is* the perspective map to within a quarter of
+that. Which edge is halved is whichever is longer **on screen**, since a defect
+falls with the product of the two splits and strips across one axis converge far
+too slowly to afford. A face square-on to the eye is already a parallelogram and
+is still exactly one blit, which is most of what a frame draws; the tile at your
+feet is a handful. Each patch is grown by the error its own fit is known to
+have, so neighbours overlap by a fraction of a pixel rather than parting to show
+a seam, and only a face that was actually split pays for a clip. Faces cut by
+the near plane and faces a few pixels across keep the flat fill, because at that
+size a sheet is a smear of its own average colour. The four-level face shading is
+**baked into the sheet** (`SolidTextures`), which also hands Java2D an *opaque*
+image wherever the sheet has no transparent pixel in it — a warped blit of one
+of those is a read and a write per pixel where a maybe-translucent one is a
+read, a blend and a write, and it is worth about a tenth of the pass. Nine
+milliseconds a frame at 1280×720 over an open plain at eye level, against two
+and a half for the same view untextured; `SolidTextureMapTest` checks the result
+against a per-pixel ray cast, which is what says the texture is where the
+perspective puts it rather than merely somewhere plausible.
 
 **Actors throw a shadow on the ground** — a soft patch on the surface under
 them, queued as an ordinary face so the terrain in front of it covers it like

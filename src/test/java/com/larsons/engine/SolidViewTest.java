@@ -295,6 +295,12 @@ class SolidViewTest {
      * pack was a level of flat colours the moment a player pressed F5. The
      * "once per block" half matters as much as the "with its texture" half: a
      * sheet stretched over a merged run is one brick eight blocks high.
+     *
+     * <p>What is counted is faces that carry the sheet rather than blits,
+     * because a face is not one blit any more — a face that bends is drawn in
+     * patches, and how many is a judgement {@link SolidTextureMapTest} pins on
+     * its own. Here every face has to have the sheet on it and no face may be
+     * skipped, whatever it took to put it there.
      */
     @Test
     void aTexturedBlockIsDrawnWithItsSheetOncePerBlock(@TempDir Path dir) throws Exception {
@@ -315,10 +321,7 @@ class SolidViewTest {
             RecordingTarget target = paint(lvl,
                     eyeLookingAt(2.5 * TILE, 6.5 * TILE, 5 * TILE,
                             2.5 * TILE, 2.5 * TILE, 1.5 * TILE));
-            long blits = target.ofType(RecordingTarget.Cmd.Image.class).stream()
-                    .filter(i -> i.op().equals("drawImageTransformed"))
-                    .count();
-            assertEquals(4, blits,
+            assertEquals(4, texturedFaces(target),
                     "three side faces and the top, each with its own copy of the sheet");
         } finally {
             Skins.remove(key);
@@ -495,6 +498,33 @@ class SolidViewTest {
         painter.terrain();
         painter.flush();
         return target;
+    }
+
+    /**
+     * How many drawn faces had the sheet put down on them.
+     *
+     * <p>Read from the order the commands came in rather than by counting
+     * either kind: a face is a {@code fillPolygon} and the blits that follow it
+     * are its texture, in however many patches it took. The one {@code
+     * fillPolygon} that is not a face is the fog wash, which is laid over a
+     * face's patches and so is the only one that ever directly follows a blit.
+     */
+    private static int texturedFaces(RecordingTarget target) {
+        int textured = 0;
+        boolean open = false;      // a face is being read
+        boolean hasSheet = false;  // …and something has been drawn on it
+        for (RecordingTarget.Cmd cmd : target.commands()) {
+            if (cmd instanceof RecordingTarget.Cmd.Image) {
+                hasSheet = true;
+            } else if (cmd.op().equals("fillPolygon") && !hasSheet) {
+                open = true;
+            } else if (cmd.op().equals("fillPolygon") || cmd.op().equals("drawPolygon")) {
+                if (open && hasSheet) textured++;
+                open = cmd.op().equals("fillPolygon");
+                hasSheet = false;
+            }
+        }
+        return open && hasSheet ? textured + 1 : textured;
     }
 
     private static java.util.List<RecordingTarget.Cmd.Shape> shapes(RecordingTarget target) {
