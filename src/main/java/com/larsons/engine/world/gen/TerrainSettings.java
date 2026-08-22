@@ -53,17 +53,38 @@ public final class TerrainSettings {
     /** Largest world the settings menu offers — the engine's level ceiling. */
     public static final int MAX_WORLD_SIZE = 65536;
 
-    /** How far the detailed sweep may be pushed, in blocks. */
-    public static final int MAX_RENDER_DISTANCE = 192;
+    /**
+     * Blocks to a chunk, <em>as the settings screens count them</em>.
+     *
+     * <p>Sixteen, which is Minecraft's, because that is the unit every player
+     * who has ever chosen a render distance already thinks in — "twelve chunks"
+     * is a decision somebody can make and "192 blocks" is arithmetic. It is
+     * deliberately not {@link WorldTerrain#CHUNK}: how the world is
+     * <em>stored</em> (32 columns to a chunk, run-encoded up the height axis)
+     * is the storage's business and has never been something a slider should
+     * expose.
+     */
+    public static final int BLOCKS_PER_CHUNK = 16;
 
-    /** How far the coarse horizon may be pushed, in blocks. */
-    public static final int MAX_DISTANT_DISTANCE = 2048;
+    /**
+     * How far the world may be drawn, in blocks — ninety chunks.
+     *
+     * <p>Reachable because what is drawn out there is not blocks: past the
+     * detail distance the world is a cached, greedy-meshed
+     * {@linkplain WorldLod level-of-detail tree}, so the cost of the far field
+     * is a few thousand quads whatever this says. See
+     * {@link com.larsons.engine.graphics.SolidPainter#setDetailTiles(int)}.
+     */
+    public static final int MAX_RENDER_DISTANCE = 90 * BLOCKS_PER_CHUNK;
 
-    /** The render distance a level starts at — what the engine sweeps comfortably. */
-    public static final int DEFAULT_RENDER_DISTANCE = 24;
+    /** How far the coarse horizon may be pushed, in blocks — 256 chunks. */
+    public static final int MAX_DISTANT_DISTANCE = 256 * BLOCKS_PER_CHUNK;
+
+    /** The render distance a level starts at, in blocks — twelve chunks. */
+    public static final int DEFAULT_RENDER_DISTANCE = 12 * BLOCKS_PER_CHUNK;
 
     /** The horizon a generated world starts at: far enough to read as landscape. */
-    public static final int DEFAULT_DISTANT_DISTANCE = 320;
+    public static final int DEFAULT_DISTANT_DISTANCE = 48 * BLOCKS_PER_CHUNK;
 
     /**
      * Whether this level generates terrain beyond its own bounds. Off is the

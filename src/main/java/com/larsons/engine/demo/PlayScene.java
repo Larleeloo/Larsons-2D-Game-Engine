@@ -2709,6 +2709,7 @@ public class PlayScene extends AbstractScene {
                 ? terrain.renderDistance : SolidPainter.DEFAULT_VIEW_TILES;
         solid.setViewTiles(view);
         solid.setDetailTiles(PlayerSettings.active().detailDistance);
+        solid.setDecorTiles(PlayerSettings.active().decorDistance);
         int horizon = terrain != null && world
                 ? terrain.distantDistance : SolidPainter.DISTANT_VIEW_TILES;
         solid.setDistantTiles(PlayerSettings.active().distantTerrain ? horizon : 0);
@@ -3153,31 +3154,44 @@ public class PlayScene extends AbstractScene {
         PlayerSettings settings = PlayerSettings.active();
         PlayerSettingsStore store = new PlayerSettingsStore();
 
+        int per = TerrainSettings.BLOCKS_PER_CHUNK;
         pauseForm.addNote("");
         pauseForm.addNote("— VIEW —");
-        pauseForm.addSlider("Render distance (blocks)", () -> terrain.renderDistance,
+        pauseForm.addSlider("Render distance (chunks)", () -> terrain.renderDistance / per,
                 v -> {
-                    terrain.renderDistance = v;
+                    terrain.renderDistance = v * per;
                     // The horizon is measured from the render distance, so it
-                    // cannot be inside it — the coarse pass would have nothing
-                    // to draw and the setting would read as broken.
-                    if (terrain.distantDistance > 0 && terrain.distantDistance < v) {
-                        terrain.distantDistance = v;
+                    // cannot be inside it — the far pass would have nothing to
+                    // draw and the setting would read as broken.
+                    if (terrain.distantDistance > 0
+                            && terrain.distantDistance < terrain.renderDistance) {
+                        terrain.distantDistance = terrain.renderDistance;
                     }
-                }, 2, TerrainSettings.MAX_RENDER_DISTANCE);
-        pauseForm.addSlider("Detail distance (blocks)", () -> settings.detailDistance,
+                }, 1, TerrainSettings.MAX_RENDER_DISTANCE / per);
+        pauseForm.addSlider("Detail distance (chunks)", () -> settings.detailDistance / per,
                 v -> {
-                    settings.detailDistance = v;
+                    settings.detailDistance = v * per;
                     store.trySave(settings);
-                }, PlayerSettings.MIN_DETAIL_DISTANCE, PlayerSettings.MAX_DETAIL_DISTANCE);
-        pauseForm.addSlider("Horizon (blocks, 0 = off)", () -> terrain.distantDistance,
+                }, Math.max(1, PlayerSettings.MIN_DETAIL_DISTANCE / per),
+                PlayerSettings.MAX_DETAIL_DISTANCE / per);
+        pauseForm.addSlider("Decorations (chunks)", () -> settings.decorDistance / per,
+                v -> {
+                    settings.decorDistance = v * per;
+                    store.trySave(settings);
+                }, Math.max(1, PlayerSettings.MIN_DECOR_DISTANCE / per),
+                PlayerSettings.MAX_DECOR_DISTANCE / per);
+        pauseForm.addSlider("Distant generation (chunks, 0 = off)",
+                        () -> terrain.distantDistance / per,
                         v -> terrain.distantDistance = v == 0 ? 0
-                                : Math.max(v, terrain.renderDistance),
-                        0, TerrainSettings.MAX_DISTANT_DISTANCE)
+                                : Math.max(v * per, terrain.renderDistance),
+                        0, TerrainSettings.MAX_DISTANT_DISTANCE / per)
                 .enabledWhen(() -> PlayerSettings.active().distantTerrain);
-        pauseForm.addNote("Past the detail distance the world is drawn as "
-                + "landforms — cheaper, and the same however far you see.");
-        pauseForm.addNote("The horizon needs \"Distant terrain\" on in Options.");
+        pauseForm.addNote("Blocks out to the detail distance; landforms past it, "
+                + "for about the same cost however far you see.");
+        pauseForm.addNote("Detail is what costs a frame — turn it down first, "
+                + "and the render distance last.");
+        pauseForm.addNote("Distant generation needs \"Distant terrain\" on in "
+                + "Options. A chunk is " + per + " blocks.");
     }
 
     /** Open the controls sheet over the pause menu (see {@link #updatePaused}). */

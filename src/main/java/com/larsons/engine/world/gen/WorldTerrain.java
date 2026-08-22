@@ -90,6 +90,11 @@ public final class WorldTerrain {
     /** One chunk: {@value #CHUNK}&sup2; run-encoded columns. */
     private static final class Chunk {
         final int[][] columns = new int[CHUNK * CHUNK][];
+        /**
+         * Each column's visible faces, worked out on first use and kept until
+         * something writes near it — see {@link #columnFaces}.
+         */
+        final int[][] faces = new int[CHUNK * CHUNK][];
         /** Edited (or explicitly kept), so it is written into the save file. */
         volatile boolean dirty;
         volatile int cx, cy;
@@ -109,6 +114,7 @@ public final class WorldTerrain {
         this.authoredWidth = Math.max(0, authoredWidth);
         this.authoredHeight = Math.max(0, authoredHeight);
         this.generator = new WorldGenerator(settings, this.blocks, seed);
+        this.lod = new WorldLod(this.generator, this.worldWidth, this.worldHeight, this::pool);
         TerrainSettings recipe = settings.copy();
         recipe.normalize();
         recipe.seed = seed;
@@ -120,6 +126,14 @@ public final class WorldTerrain {
     public TerrainSettings settings() { return settings; }
 
     public WorldGenerator generator() { return generator; }
+
+    /**
+     * The cached level-of-detail terrain this world's far field is drawn from.
+     * See {@link WorldLod}.
+     */
+    public WorldLod lod() { return lod; }
+
+    private final WorldLod lod;
 
     public int worldWidth() { return worldWidth; }
 
@@ -237,17 +251,108 @@ public final class WorldTerrain {
      * it cost two microseconds a cell, which was most of the frame.
      */
     public int visibleLayers(int col, int row, int depth, int[] out) {
-        int limit = Math.min(depth, out.length);
-        if (limit <= 1) return 0;
+        int[] faces = columnFaces(col, row);
+        int n = 0;
+        for (int packed : faces) {
+            int layer = (packed >>> FACE_BITS) & LAYER_MASK;
+            if (layer >= depth || n >= out.length) break;
+            out[n++] = layer;
+        }
+        return n;
+    }
+
+    // --- the column mesh -------------------------------------------------------
+
+    /**
+     * How a face entry is packed: the mask in the low {@value #FACE_BITS} bits,
+     * the layer in the {@value #LAYER_BITS} above it, and the block id above
+     * that — thirty-one bits in all, so a column's whole mesh is one
+     * {@code int[]} and reading a face costs no lookup at all.
+     */
+    public static final int FACE_BITS = 6;
+    /** Bits of a packed face entry that hold the layer; see {@link #FACE_BITS}. */
+    public static final int LAYER_BITS = 9;
+    /** Mask for the layer once it has been shifted down. */
+    public static final int LAYER_MASK = (1 << LAYER_BITS) - 1;
+
+    /** The face toward the sky. */
+    public static final int FACE_UP = 1;
+    /** The face toward the floor. */
+    public static final int FACE_DOWN = 2;
+    /** The face toward row&nbsp;&minus;&nbsp;1. */
+    public static final int FACE_NORTH = 4;
+    /** The face toward row&nbsp;+&nbsp;1. */
+    public static final int FACE_SOUTH = 8;
+    /** The face toward col&nbsp;+&nbsp;1. */
+    public static final int FACE_EAST = 16;
+    /** The face toward col&nbsp;&minus;&nbsp;1. */
+    public static final int FACE_WEST = 32;
+
+    /**
+     * Every face of one column that could be seen, as
+     * {@code (layer << FACE_BITS) | mask}, ascending — <b>worked out once and
+     * kept</b>.
+     *
+     * <p><b>This is the chunk mesh, in the shape this engine's storage takes.</b>
+     * Minecraft does not decide what a chunk looks like while it is drawing a
+     * frame; it builds the geometry when the chunk changes and then spends
+     * every frame until the next change simply drawing it. That is the single
+     * biggest thing a voxel renderer can do, and the reason is arithmetic: the
+     * question "is this face exposed" is answered from five columns of
+     * neighbours and cannot change unless one of them does, while the frame
+     * asks it again for every cell of the view distance, sixty or a hundred and
+     * twenty times a second.
+     *
+     * <p>So the answer is computed on the first ask and kept on the chunk, and
+     * a frame reads an array. What that removes from the sweep is all of
+     * {@code visibleLayers}, all six neighbour lookups per block, and the run
+     * scans under them — measured at about two fifths of the whole detailed
+     * pass.
+     *
+     * <p><b>What invalidates it</b> is any write to this column or the four
+     * beside it, which is exactly what {@link #set} clears. Nothing else can
+     * change the answer: exposure is a fact about six cells.
+     *
+     * <p>The mask is deliberately <em>not</em> view-dependent. Which faces
+     * point at the eye is a comparison the painter makes per frame and cannot
+     * be cached; which faces exist at all is a property of the world.
+     */
+    public int[] columnFaces(int col, int row) {
+        if (col < 0 || row < 0 || col >= worldWidth || row >= worldHeight) return NO_FACES;
+        Chunk chunk = chunk(col >> 5, row >> 5, true);
+        if (chunk == null) return NO_FACES;
+        int index = (row & (CHUNK - 1)) * CHUNK + (col & (CHUNK - 1));
+        int[] cached = chunk.faces[index];
+        if (cached != null) return cached;
+        int[] built = buildColumnFaces(col, row);
+        chunk.faces[index] = built;
+        return built;
+    }
+
+    /** A column with nothing in it to draw. */
+    private static final int[] NO_FACES = new int[0];
+
+    /**
+     * Work out {@link #columnFaces} for one column.
+     *
+     * <p>The walk is the one {@code visibleLayers} used to do — runs rather than
+     * layers, with a cursor into each of the five columns so none of them is
+     * scanned twice — with one difference: where that stopped at the first
+     * neighbour which left the layer exposed, this asks all six, because the
+     * answer it is storing is <em>which</em> faces rather than <em>whether</em>
+     * any. That costs a little more per column and it is paid once.
+     */
+    private int[] buildColumnFaces(int col, int row) {
         int[] self = column(col, row);
-        if (self.length == 0) return 0;
-        // Read once for the whole column rather than per id: the set of blocks
-        // cannot change while one column is being looked at.
+        if (self.length == 0) return NO_FACES;
+        int limit = self[self.length - 2];
+        if (limit <= 1) return NO_FACES;
         boolean[] covers = blocks.coversTable();
         int[] west = column(col - 1, row);
         int[] east = column(col + 1, row);
         int[] north = column(col, row - 1);
         int[] south = column(col, row + 1);
+        int[] out = new int[16];
         int n = 0;
         int y = 1;
         int ci = 0, wi = 0, ei = 0, ni = 0, si = 0;
@@ -268,40 +373,60 @@ public final class WorldTerrain {
             int entryEnd = self[ci];
             int under = ci == 0 ? 0 : self[ci - 2];
             int below = y - 1 >= under ? id : (ci >= 2 ? self[ci - 1] : 0);
-            if (!hides(below, like, covers)) {
-                out[n++] = y++;
-                continue;
-            }
             int above = y + 1 < entryEnd ? id : (ci + 2 < self.length ? self[ci + 3] : 0);
-            if (!hides(above, like, covers)) {
-                out[n++] = y++;
-                continue;
-            }
+
+            int mask = 0;
+            if (!hides(above, like, covers)) mask |= FACE_UP;
+            if (!hides(below, like, covers)) mask |= FACE_DOWN;
+
             // Never past the run this layer's own block occupies: what follows
             // is an argument about a cell of this id, and the cell above may be
             // something else that its neighbours do not hide.
             int stop = entryEnd - 1;
             long side = hidesFrom(west, y, like, covers, wi);
             wi = (int) (side >>> 32);
-            if ((int) side < 0) { out[n++] = y++; continue; }
-            stop = Math.min(stop, (int) side);
+            if ((int) side < 0) mask |= FACE_WEST; else stop = Math.min(stop, (int) side);
             side = hidesFrom(east, y, like, covers, ei);
             ei = (int) (side >>> 32);
-            if ((int) side < 0) { out[n++] = y++; continue; }
-            stop = Math.min(stop, (int) side);
+            if ((int) side < 0) mask |= FACE_EAST; else stop = Math.min(stop, (int) side);
             side = hidesFrom(north, y, like, covers, ni);
             ni = (int) (side >>> 32);
-            if ((int) side < 0) { out[n++] = y++; continue; }
-            stop = Math.min(stop, (int) side);
+            if ((int) side < 0) mask |= FACE_NORTH; else stop = Math.min(stop, (int) side);
             side = hidesFrom(south, y, like, covers, si);
             si = (int) (side >>> 32);
-            if ((int) side < 0) { out[n++] = y++; continue; }
-            stop = Math.min(stop, (int) side);
-            // Everything from here to the next gap in any of the six directions
-            // is walled in on all of them.
+            if ((int) side < 0) mask |= FACE_SOUTH; else stop = Math.min(stop, (int) side);
+
+            if (mask != 0) {
+                if (n == out.length) out = java.util.Arrays.copyOf(out, n * 2);
+                out[n++] = (id << (FACE_BITS + LAYER_BITS)) | (y << FACE_BITS) | mask;
+                y++;
+                continue;
+            }
+            // Walled in on all six sides, from here to wherever the first of
+            // those walls runs out.
             y = Math.max(y + 1, stop);
         }
-        return n;
+        return n == 0 ? NO_FACES : java.util.Arrays.copyOf(out, n);
+    }
+
+    /**
+     * Forget the cached faces of a column and of the four beside it — the four
+     * because a face is a fact about two cells, so a block put down here is a
+     * face that stopped existing next door.
+     */
+    private void forgetFaces(int col, int row) {
+        forgetFace(col, row);
+        forgetFace(col - 1, row);
+        forgetFace(col + 1, row);
+        forgetFace(col, row - 1);
+        forgetFace(col, row + 1);
+    }
+
+    private void forgetFace(int col, int row) {
+        if (col < 0 || row < 0 || col >= worldWidth || row >= worldHeight) return;
+        Chunk chunk = chunk(col >> 5, row >> 5, false);
+        if (chunk == null) return;
+        chunk.faces[(row & (CHUNK - 1)) * CHUNK + (col & (CHUNK - 1))] = null;
     }
 
     /**
@@ -424,6 +549,10 @@ public final class WorldTerrain {
         if (at(runs, layer) == id) return false;
         chunk.columns[index] = withLayer(runs, layer, id);
         chunk.dirty = true;
+        forgetFaces(col, row);
+        // The far field is a picture of the ground, so changing the ground
+        // makes it a picture of what used to be there.
+        lod.invalidate();
         return true;
     }
 
@@ -636,6 +765,7 @@ public final class WorldTerrain {
         if (frozen && explored.isEmpty()) return;
         int cx = Math.floorDiv(col, CHUNK), cy = Math.floorDiv(row, CHUNK);
         centreKey = key(cx, cy);
+        lod.centreOn(col, row);
         if (radiusChunks <= 0) return;
         ExecutorService pool = pool();
         int queued = 0;
@@ -725,6 +855,7 @@ public final class WorldTerrain {
     public void close() {
         ExecutorService pool = workers;
         workers = null;
+        lod.clear();
         if (pool != null) pool.shutdownNow();
     }
 

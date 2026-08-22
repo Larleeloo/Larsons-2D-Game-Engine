@@ -362,6 +362,29 @@ public class Level {
     }
 
     /**
+     * The cached level-of-detail terrain the far field is drawn from, or
+     * {@code null} on a level that is not a generated world — those are small
+     * enough to draw to their own edges. See
+     * {@link com.larsons.engine.world.gen.WorldLod}.
+     */
+    public com.larsons.engine.world.gen.WorldLod lod() {
+        return terrain == null ? null : terrain.lod();
+    }
+
+    /**
+     * One column's visible faces, worked out once and kept — or {@code null} on
+     * a level that is not a generated world, whose columns are three blocks
+     * deep and have nothing to save.
+     *
+     * @see com.larsons.engine.world.gen.WorldTerrain#columnFaces(int, int)
+     */
+    public int[] columnFaces(int col, int row) {
+        if (terrain == null) return null;
+        if (col < 0 || row < 0 || col >= width || row >= height) return null;
+        return terrain.columnFaces(col, row);
+    }
+
+    /**
      * Whether reading a cell of a generated world may <em>build</em> the chunk
      * it belongs to, on the calling thread. Returns what it was, so a caller
      * can put it back.

@@ -107,12 +107,21 @@ public final class PlayerOptionsForm {
         // taste. It is also on the pause menu, beside the render distance it
         // is measured against, because that is where somebody notices they need
         // it — this copy is for the player who goes looking in Options.
-        form.addSlider("Detail distance (blocks)", () -> settings.detailDistance, v -> {
-            settings.detailDistance = v;
+        int per = com.larsons.engine.world.gen.TerrainSettings.BLOCKS_PER_CHUNK;
+        form.addSlider("Detail distance (chunks)", () -> settings.detailDistance / per, v -> {
+            settings.detailDistance = v * per;
             changed.run();
-        }, PlayerSettings.MIN_DETAIL_DISTANCE, PlayerSettings.MAX_DETAIL_DISTANCE);
-        form.addNote("How much of the render distance is drawn block by block. "
-                + "Past it the world is drawn as landforms.");
+        }, Math.max(1, PlayerSettings.MIN_DETAIL_DISTANCE / per),
+                PlayerSettings.MAX_DETAIL_DISTANCE / per);
+        form.addSlider("Decorations (chunks)", () -> settings.decorDistance / per, v -> {
+            settings.decorDistance = v * per;
+            changed.run();
+        }, Math.max(1, PlayerSettings.MIN_DECOR_DISTANCE / per),
+                PlayerSettings.MAX_DECOR_DISTANCE / per);
+        form.addNote("How much of the render distance is drawn block by block, "
+                + "and how far flowers and grass are drawn.");
+        form.addNote("Past the detail distance the world is landforms, which "
+                + "cost the same however far you see.");
 
         form.addAction("Reset to defaults", () -> {
             PlayerSettings defaults = new PlayerSettings();
@@ -124,6 +133,7 @@ public final class PlayerOptionsForm {
             settings.hudScale = defaults.hudScale;
             settings.distantTerrain = defaults.distantTerrain;
             settings.detailDistance = defaults.detailDistance;
+            settings.decorDistance = defaults.decorDistance;
             changed.run();
         });
         if (onDone != null) form.addAction("Back", onDone);

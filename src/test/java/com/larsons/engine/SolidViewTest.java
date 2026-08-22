@@ -544,6 +544,58 @@ class SolidViewTest {
         lvl.terrain().close();
     }
 
+    /**
+     * <b>Ninety chunks of view distance costs what twelve does.</b> The thing
+     * the whole two-distance arrangement exists for, at the scale the sliders
+     * now reach: the detailed sweep is bounded by the detail distance, and
+     * everything past it is a cached level-of-detail tree whose cost is a
+     * function of angle rather than of distance. Nine hundred and sixty blocks
+     * further of visible world may not cost several times the frame.
+     */
+    @Test
+    void ninetyChunksOfViewCostsWhatTwelveDoes() {
+        Level plain = rolling(220);
+        int near = faces(plain, plainEye(), 12 * 16, 32);
+        int far = faces(plain, plainEye(), 90 * 16, 32);
+        assertTrue(far > near, "the world out there is still drawn: " + far + " vs " + near);
+        assertTrue(far < near * 2, "and seven times the view distance cost " + far
+                + " faces against " + near + ", which is not a level-of-detail tree");
+    }
+
+    /**
+     * Scenery has its own reach, and turning it down takes flowers out of a
+     * frame without taking the ground out with them.
+     */
+    @Test
+    void decorationsHaveTheirOwnReach() {
+        Level meadow = bare(64, 64);
+        meadow.fillFloor(meadow.blocks.get("stone_path").id());
+        int flower = meadow.blocks.get("flower_red").id();
+        for (int col = 0; col < 64; col += 2) {
+            for (int row = 0; row < 64; row += 2) meadow.setTile(col, row, 1, flower);
+        }
+        EyeCamera eye = eyeAt(32 * TILE, 60 * TILE, TILE * 2.5, 0, -0.1);
+
+        int all = decorFaces(meadow, eye, 64);
+        int near = decorFaces(meadow, eye, 8);
+        assertTrue(near < all, "a shorter decoration reach draws fewer of them: "
+                + near + " against " + all);
+        assertTrue(near > 0, "…and still draws the ones you are standing in");
+    }
+
+    /** Faces drawn with the ground at full reach and the scenery at {@code decor}. */
+    private static int decorFaces(Level lvl, EyeCamera eye, int decorTiles) {
+        RecordingTarget target = new RecordingTarget(eye.viewportWidth(), eye.viewportHeight());
+        SolidPainter painter = new SolidPainter();
+        painter.setViewTiles(64);
+        painter.setDetailTiles(64);
+        painter.setDecorTiles(decorTiles);
+        painter.begin(target, eye, lvl);
+        painter.terrain();
+        painter.flush();
+        return target.count("fillPolygon");
+    }
+
     /** How many faces one frame queues at these two distances. */
     private static int faces(Level lvl, EyeCamera eye, int viewTiles, int detailTiles) {
         RecordingTarget target = new RecordingTarget(eye.viewportWidth(), eye.viewportHeight());
