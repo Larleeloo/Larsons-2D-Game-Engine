@@ -190,17 +190,33 @@ class SolidViewTest {
         }
     }
 
-    /** First person is the only view that hides the body, and the only solid one at zero range. */
+    /** First person is the only view that hides the body, and the only one at zero range. */
     @Test
     void onlyFirstPersonHidesTheBody() {
         for (Viewpoint v : Viewpoint.values()) {
             assertEquals(v != Viewpoint.FIRST_PERSON, v.showsSelf(), v + " draws the body");
-            assertEquals(v != Viewpoint.PLAN, v.solid(), v + " is drawn through the eye");
+            assertTrue(v.solid(), v + " is drawn through the eye");
         }
         assertEquals(0, Viewpoint.FIRST_PERSON.distanceTiles(), 1e-9);
         assertTrue(Viewpoint.THIRD_PERSON_BACK.distanceTiles() > 0);
         assertTrue(Viewpoint.THIRD_PERSON_FRONT.reversed(), "the front view looks back");
         assertFalse(Viewpoint.THIRD_PERSON_BACK.reversed());
+    }
+
+    /**
+     * The plan view is the one stop the mouse does not steer, and it stands the
+     * furthest back — which together are the whole of what makes it a plan view
+     * now that every stop is drawn through the eye.
+     */
+    @Test
+    void thePlanViewIsSnappedAndStandsBack() {
+        assertFalse(Viewpoint.PLAN.freeLook(),
+                "the plan view turns in eights, so the eight sprite angles land square");
+        assertTrue(Viewpoint.PLAN.distanceTiles() > Viewpoint.THIRD_PERSON_BACK.distanceTiles(),
+                "and it is drawn from further away than the over-the-shoulder views");
+        for (Viewpoint v : Viewpoint.values()) {
+            assertEquals(v != Viewpoint.PLAN, v.freeLook(), v + " steers with the mouse");
+        }
     }
 
     // --- what gets drawn --------------------------------------------------------
@@ -438,6 +454,204 @@ class SolidViewTest {
         assertNull(SolidPainter.pick(eye, lvl, 10_000));
         eye.look(0, EyeCamera.MAX_PITCH);
         assertNull(SolidPainter.pick(eye, lvl, 10_000), "straight up, out of the world");
+    }
+
+    // --- what the eye cannot see ----------------------------------------------
+
+    /**
+     * A wall across the world removes everything behind it from the sweep, and
+     * a gap in that wall puts back exactly what can be seen through the gap.
+     *
+     * <p><b>Both halves matter, and the second is the one that is easy to get
+     * wrong.</b> Culling by line of sight is what makes a long render distance
+     * affordable — indoors it is most of the world — and a cull that is a
+     * little too eager deletes the corridor you were about to walk down. So the
+     * two levels here differ by one column of one wall, and the count has to
+     * differ with them.
+     */
+    @Test
+    void aWallHidesTheWorldBehindItAndADoorwayPutsItBack() {
+        RecordingTarget sealed = paint(courtyard(false), courtyardEye());
+        RecordingTarget open = paint(courtyard(true), courtyardEye());
+        assertTrue(open.count("fillPolygon") > sealed.count("fillPolygon"),
+                "the ground seen through the doorway is drawn, and it was not before");
+    }
+
+    /**
+     * On open ground nothing is culled: every floor tile inside the view
+     * distance and in front of the eye is drawn.
+     *
+     * <p>The safety half of the cull. A heightfield horizon can only ever
+     * remove what the ground has already risen above, and on a flat plain the
+     * ground never rises — so the test that it removes nothing here is the test
+     * that it is measuring height rather than distance.
+     */
+    @Test
+    void anOpenPlainIsNotCulled() {
+        Level flat = bare(24, 24);
+        flat.fillFloor(flat.blocks.get("stone_path").id());
+        EyeCamera eye = eyeAt(12 * TILE, 20 * TILE, TILE * 1.5, 0, 0);
+        int drawn = paint(flat, eye).count("fillPolygon");
+
+        // The same plain with one block on it: strictly more to draw, and the
+        // block cannot have hidden any of the floor it is standing beside.
+        Level withBlock = bare(24, 24);
+        withBlock.fillFloor(withBlock.blocks.get("stone_path").id());
+        withBlock.setTile(12, 10, 1, stone(withBlock));
+        assertTrue(paint(withBlock, eyeAt(12 * TILE, 20 * TILE, TILE * 1.5, 0, 0))
+                        .count("fillPolygon") >= drawn,
+                "a block adds faces and takes none of the plain away");
+    }
+
+    // --- blocks you can walk into ----------------------------------------------
+
+    /**
+     * Standing inside a flower does not open a hole in the world.
+     *
+     * <p>The reported fault, in the smallest arrangement that shows it: a
+     * non-colliding block occupies a cell the player can stand in, so the walls
+     * around that cell must still draw the faces turned toward them. Treating
+     * "there is a block there" as "the face behind it is covered" culled every
+     * one of them, and the player looked straight out through the terrain.
+     */
+    @Test
+    void standingInAPlantDoesNotOpenTheWorld() {
+        Level lvl = bare(6, 6);
+        lvl.fillFloor(lvl.blocks.get("stone_path").id());
+        for (int layer = 1; layer <= 2; layer++) lvl.setTile(2, 1, layer, stone(lvl));
+        lvl.setTile(2, 2, 1, lvl.blocks.get("flower_red").id());
+        // The eye is inside the flower's own cell, looking north at the wall.
+        RecordingTarget target = paint(lvl,
+                eyeAt(2.5 * TILE, 2.5 * TILE, TILE * 0.5, 0, 0));
+        assertTrue(target.count("fillPolygon") > 0,
+                "the wall in front of the player is drawn, not culled by the flower");
+    }
+
+    /**
+     * A plant is a stem and a sprite, not a cube: fewer than six faces, and one
+     * of them carries an image that no block texture supplied.
+     */
+    @Test
+    void aPlantIsAStemWithASpriteOnIt() {
+        Level lvl = bare(6, 6);
+        lvl.fillFloor(lvl.blocks.get("stone_path").id());
+        lvl.setTile(2, 2, 1, lvl.blocks.get("flower_red").id());
+        RecordingTarget target = paint(lvl,
+                eyeLookingAt(2.5 * TILE, 5.0 * TILE, TILE, 2.5 * TILE, 2.5 * TILE, TILE * 0.5));
+        assertFalse(target.ofType(RecordingTarget.Cmd.Image.class).isEmpty(),
+                "the flower's own sprite is blitted onto its billboard");
+
+        // …and the cell it stands in is still open: a plant is a stem and a
+        // card with sky between them, so the floor under it is drawn and so is
+        // whatever is on the far side of it. A cube of petal colour was both of
+        // those the other way round.
+        com.larsons.engine.world.Block flower = lvl.blocks.get("flower_red");
+        assertTrue(flower.plant(), "registered as something that grows");
+        assertFalse(flower.covers(), "and therefore not something that hides a face");
+    }
+
+    // --- the plan view's cutaway -------------------------------------------------
+
+    /**
+     * What stands between the camera and the player is drawn see-through.
+     *
+     * <p>Checked on the alpha of the fills rather than on their number: the
+     * roof is still drawn — a ghost of it says the roof is there where a hole
+     * says nothing — and what changes is how much of it you can see past.
+     */
+    @Test
+    void theCutawayFadesWhatStandsBetweenTheCameraAndThePlayer() {
+        Level lvl = bare(8, 8);
+        lvl.fillFloor(lvl.blocks.get("stone_path").id());
+        for (int col = 2; col <= 5; col++) lvl.setTile(col, 4, 4, stone(lvl)); // a roof
+
+        EyeCamera eye = eyeLookingAt(4 * TILE, 9 * TILE, 7 * TILE,
+                4 * TILE, 4 * TILE, TILE);
+        RecordingTarget plain = new RecordingTarget(400, 300);
+        SolidPainter a = new SolidPainter();
+        a.begin(plain, eye, lvl);
+        a.terrain();
+        a.flush();
+
+        RecordingTarget ghosted = new RecordingTarget(400, 300);
+        SolidPainter b = new SolidPainter();
+        b.begin(ghosted, eye, lvl);
+        b.setCutaway(4 * TILE, 4 * TILE, TILE, TILE * 1.4);
+        b.terrain();
+        b.flush();
+
+        assertTrue(translucentFills(ghosted) > translucentFills(plain),
+                "the roof between the two is drawn see-through, and was opaque without it");
+    }
+
+    private static int translucentFills(RecordingTarget target) {
+        int n = 0;
+        for (RecordingTarget.Cmd cmd : target.commands()) {
+            if (cmd instanceof RecordingTarget.Cmd.Shape s
+                    && s.op().equals("fillPolygon")) {
+                int alpha = (s.argb() >>> 24) & 0xFF;
+                if (alpha > 0 && alpha < 255) n++;
+            }
+        }
+        return n;
+    }
+
+    // --- aiming at a face rather than at a column ---------------------------------
+
+    /**
+     * A crosshair on the side of a wall builds outward from that face, at that
+     * height — not on top of the column the face belongs to, and not at the
+     * bottom of it.
+     *
+     * <p>The reported fault: the aim knew which box of which cell it had struck
+     * and the placement threw the height away and asked the column instead, so
+     * every block went to the foot of the stack.
+     */
+    @Test
+    void aimingAtAWallPlacesAgainstTheFaceAndNotTheColumn() {
+        Level lvl = walled();
+        // Level with the middle block of the wall, looking due north at it.
+        EyeCamera eye = eyeAt(8.5 * TILE, 8.5 * TILE, 1.5 * TILE, 0, 0);
+        TerrainPainter.Aim aim = SolidPainter.pick(eye, lvl, 8 * TILE);
+        assertNotNull(aim);
+        assertEquals(4, aim.row(), "the wall's row");
+        assertEquals(2, aim.layer(), "the block at eye height, not the top of the wall");
+        assertFalse(aim.top(), "a side face");
+        assertEquals(5, aim.placeRow(), "a block goes on the near side of the face");
+        assertEquals(2, aim.placeLayer(), "…at the height it was struck at, not at the floor");
+    }
+
+    /** Looking down on the top of the wall builds one higher, in the same cell. */
+    @Test
+    void aimingAtTheTopOfAWallBuildsHigher() {
+        Level lvl = walled();
+        EyeCamera eye = eyeLookingAt(8.5 * TILE, 8.5 * TILE, 6 * TILE,
+                8.5 * TILE, 4.5 * TILE, 3 * TILE);
+        TerrainPainter.Aim aim = SolidPainter.pick(eye, lvl, 12 * TILE);
+        assertNotNull(aim);
+        assertTrue(aim.top(), "the lid of the wall");
+        assertEquals(4, aim.placeRow(), "the same cell");
+        assertEquals(4, aim.placeLayer(), "one layer up from the three-block wall");
+    }
+
+    /** A level's own courtyard: four walls, with or without a doorway south. */
+    private static Level courtyard(boolean doorway) {
+        Level lvl = bare(24, 24);
+        lvl.fillFloor(lvl.blocks.get("stone_path").id());
+        for (int col = 6; col <= 17; col++) {
+            for (int layer = 1; layer <= 4; layer++) {
+                lvl.setTile(col, 17, layer, stone(lvl));
+            }
+        }
+        if (doorway) {
+            for (int layer = 1; layer <= 4; layer++) lvl.setTile(12, 17, layer, 0);
+        }
+        return lvl;
+    }
+
+    /** South of that wall, at eye height, looking north through it. */
+    private static EyeCamera courtyardEye() {
+        return eyeAt(12.5 * TILE, 20.5 * TILE, TILE * 1.5, 0, 0);
     }
 
     // --- fixtures ------------------------------------------------------------------

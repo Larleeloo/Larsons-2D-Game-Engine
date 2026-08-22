@@ -55,7 +55,11 @@ class SaveStoreTest {
         Map<String, String> out = new LinkedHashMap<>();
         try (Stream<Path> paths = Files.walk(dir)) {
             for (Path p : paths.filter(Files::isRegularFile).sorted().toList()) {
-                out.put(dir.relativize(p).toString(), Files.readString(p));
+                // Bytes rather than text: a saved level is deflated on disk
+                // (LevelFile), and what this is proving is that the file did
+                // not change — which its contents answer whatever they are.
+                out.put(dir.relativize(p).toString(),
+                        java.util.HexFormat.of().formatHex(Files.readAllBytes(p)));
             }
         }
         return out;

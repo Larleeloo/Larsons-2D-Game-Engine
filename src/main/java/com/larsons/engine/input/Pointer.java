@@ -104,6 +104,37 @@ public final class Pointer {
     }
 
     /**
+     * Hold the pointer at ({@code x}, {@code y}) — the real pointer lock a
+     * mouse-look view wants, expressed once here rather than at every view
+     * that needs one.
+     *
+     * <p>Three windows answer this three ways and a caller should not have to
+     * know which it has. A window that {@linkplain Handler#holdsPointer()
+     * holds} the pointer itself (GLFW's disabled cursor) is already doing this
+     * and is left alone. A window that can only {@linkplain #warpTo warp} it
+     * (AWT, through a {@code Robot}) is carried back to the point every frame,
+     * which is what keeps the arrow from ever reaching an edge — and
+     * {@link InputManager#pointerWarped} is told, so the move event that warp
+     * produces is not read back as the player's own hand.
+     *
+     * <p>A pointer that is still <em>visible</em> is not locked: hiding it is
+     * the view saying it has taken the mouse over, and warping a visible arrow
+     * back to the middle of the window every frame is a fault rather than a
+     * control.
+     *
+     * @return whether the pointer is now held — {@code false} on a window that
+     *         can do neither, where the caller falls back to steering from the
+     *         window's edges
+     */
+    public static synchronized boolean lockTo(InputManager input, int x, int y) {
+        if (handler == null || visible) return false;
+        if (handler.holdsPointer()) return true;
+        if (!handler.canWarpPointer() || !handler.warpPointer(x, y)) return false;
+        if (input != null) input.pointerWarped(x, y);
+        return true;
+    }
+
+    /**
      * Put the pointer back the way the desktop expects it — visible. Called on
      * the way out of anything that hid it, and safe to call twice.
      */

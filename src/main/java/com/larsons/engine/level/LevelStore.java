@@ -124,12 +124,14 @@ public final class LevelStore {
     public LevelFormat formatOf(String levelName) {
         Path file = fileFor(levelName);
         if (!Files.exists(file)) return LevelFormat.SIDE_SCROLLER;
-        try (java.io.Reader in = Files.newBufferedReader(file)) {
-            char[] head = new char[HEADER_CHARS];
-            int read = in.read(head);
-            if (read <= 0) return LevelFormat.SIDE_SCROLLER;
-            return LevelLoader.peekFormat(new String(head, 0, read),
-                    LevelFormat.SIDE_SCROLLER);
+        try {
+            // Through LevelFile, because a level on disk is deflated and the
+            // point of reading a header rather than the file is that it stays
+            // cheap — see LevelFile.head, which inflates the first block and
+            // stops.
+            String head = LevelFile.head(file, HEADER_CHARS);
+            if (head.isEmpty()) return LevelFormat.SIDE_SCROLLER;
+            return LevelLoader.peekFormat(head, LevelFormat.SIDE_SCROLLER);
         } catch (IOException e) {
             return LevelFormat.SIDE_SCROLLER;
         }
@@ -154,12 +156,22 @@ public final class LevelStore {
         return LevelLoader.load(fileFor(levelName).toString());
     }
 
-    /** Persist a level; returns the path it was written to. */
+    /**
+     * Persist a level; returns the path it was written to.
+     *
+     * <p><b>Deflated, and still a {@code .json}.</b> The bytes are the same
+     * JSON {@link Level#toJson()} has always produced, run through gzip — see
+     * {@link LevelFile}, which is also what reads them back and what still
+     * reads every level written before this. The name is unchanged because the
+     * <em>content</em> is unchanged: a level file is a level file, and a player
+     * who has one in a folder, a profile that points at one by path, and a
+     * package that carries one all go on working.
+     */
     public Path save(Level level) {
         Path file = fileFor(level.name);
         try {
             Files.createDirectories(directory());
-            Files.writeString(file, level.toJson());
+            LevelFile.write(file, level.toJson());
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }

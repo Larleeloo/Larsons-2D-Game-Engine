@@ -268,6 +268,25 @@ public final class SolidPainter {
      */
     private static final double RING_ANGLE = 0.2;
 
+    /** Half a plant stem's width, as a fraction of a tile. */
+    private static final double STEM_HALF_WIDTH = 0.055;
+
+    /** How far up the cell a plant's stem reaches, as a fraction of a tile. */
+    private static final double STEM_HEIGHT = 0.45;
+
+    /** Half a plant billboard's width, as a fraction of a tile. */
+    private static final double PLANT_HALF_WIDTH = 0.42;
+
+    /** Where a plant's billboard starts and ends up the cell, in tiles. */
+    private static final double PLANT_BASE = 0.10;
+    private static final double PLANT_TOP = 0.95;
+
+    /** How many pixels across a procedural plant sprite is drawn. */
+    private static final int PLANT_SPRITE_PIXELS = 32;
+
+    /** The green a plant's stem is drawn in, whatever colour its head is. */
+    private static final Color STEM_GREEN = new Color(72, 128, 62);
+
     /** The patch of ground under an actor; see {@link #groundShadow}. */
     private static final Color SHADOW = new Color(0, 0, 0, 90);
 
@@ -320,6 +339,22 @@ public final class SolidPainter {
     /** One column's worth of layers to look at; see {@link Level#visibleLayers}. */
     private final int[] layerScratch = new int[Level.MAX_LAYERS];
 
+    /**
+     * Which block ids hide what is behind them, indexed by id — rebuilt once a
+     * frame in {@link #begin}. See {@link #covers(int)}.
+     */
+    private boolean[] coversById = new boolean[0];
+    /** The registry {@link #coversById} was built from, and how big it was. */
+    private com.larsons.engine.world.BlockRegistry coversFrom;
+    private int coversCount = -1;
+
+    /** The cell the eye is standing in, so the faces around it are never culled. */
+    private int eyeCol, eyeRow, eyeLayer;
+
+    // Where the camera is looking from and at while something stands between
+    // the two; see setCutaway. cutRadius <= 0 means the pass is off.
+    private double cutX, cutY, cutZ, cutRadius;
+
     // Scratch for one face's worth of projection, reused for the same reason
     // the pool exists.
     private final double[] eyeVerts = new double[4 * 3];
@@ -358,6 +393,15 @@ public final class SolidPainter {
         final int[] ys = new int[8];
         boolean edge;
         int edgeArgb;
+        /**
+         * Whether the face's own colour is painted under its texture.
+         *
+         * <p>True for a block face, where the fill is the backing that stops a
+         * fraction of a pixel of sky showing through a wall. False for a
+         * billboard — a plant's sprite is mostly transparent, and a coloured
+         * quad behind it is a coloured quad.
+         */
+        boolean fill = true;
         /** The face's texture, or {@code null} for a flat fill. */
         BufferedImage texture;
         /**
@@ -377,6 +421,20 @@ public final class SolidPainter {
     /** How far the eye can see, in tiles. */
     public int viewTiles() { return viewTiles; }
 
+    /**
+     * Whether a point on the world plane is inside this frame's view distance.
+     *
+     * <p>For callers that have their own list to walk — the scenery painters,
+     * which hold every decoration in the level and would otherwise project all
+     * of them to find out that ten are on screen. {@link #billboard} answers the
+     * same question for what it is handed; this lets the walk stop earlier.
+     */
+    public boolean inRange(double wx, double wy) {
+        if (eye == null) return false;
+        double dx = wx - eye.x(), dy = wy - eye.y();
+        return dx * dx + dy * dy <= viewDistance * viewDistance;
+    }
+
     /** Set how far the eye can see, in tiles. */
     public void setViewTiles(int tiles) {
         this.viewTiles = Math.max(2, Math.min(MAX_VIEW_TILES, tiles));
@@ -393,6 +451,61 @@ public final class SolidPainter {
     public void setDistantTiles(int tiles) {
         this.distantTiles = tiles <= 0 ? 0 : Math.max(2, Math.min(MAX_DISTANT_TILES, tiles));
     }
+
+    /**
+     * Draw whatever stands between the eye and {@code (x, y, z)} see-through,
+     * out to {@code radius} world units either side of the line between them.
+     *
+     * <p><b>What this is for.</b> A camera pulled back from the player is a
+     * camera with the world in the way — a wall as you back into a doorway, the
+     * roof of the room you are standing in, the hillside you have just walked
+     * behind. Every third-person game answers one of two ways: pull the camera
+     * in until nothing is in the way, or leave it where it is and stop drawing
+     * what is. The mouse-look views take the first ({@code PlayScene.placeEye}),
+     * because their arm is short and a wall a pace behind you is a wall; the
+     * plan view takes this one, because its arm is a dozen tiles and pulling in
+     * that far is not a plan view any more, it is a shove into first person
+     * every time you walk indoors.
+     *
+     * <p>Faded rather than dropped: a ghost of the wall in front of you still
+     * says the wall is there, and a hole in the world says nothing.
+     *
+     * <p>Set per frame, and cleared by {@link #begin} — a caller that stops
+     * asking stops getting it.
+     */
+    public void setCutaway(double x, double y, double z, double radius) {
+        this.cutX = x;
+        this.cutY = y;
+        this.cutZ = z;
+        this.cutRadius = radius;
+    }
+
+    /** How much of a face survives the cutaway: 1 for all of it, 0 for none. */
+    private double cutawayAlpha(double x, double y, double z) {
+        if (cutRadius <= 0) return 1;
+        double ax = cutX - eye.x(), ay = cutY - eye.y(), az = cutZ - eye.z();
+        double lenSq = ax * ax + ay * ay + az * az;
+        if (lenSq <= 1e-9) return 1;
+        double t = ((x - eye.x()) * ax + (y - eye.y()) * ay + (z - eye.z()) * az) / lenSq;
+        // Only what is actually between the two. Behind the eye there is
+        // nothing to see through, and past the player the wall is scenery.
+        if (t <= 0.02 || t >= 1) return 1;
+        double px = eye.x() + ax * t, py = eye.y() + ay * t, pz = eye.z() + az * t;
+        double off = Math.sqrt((x - px) * (x - px) + (y - py) * (y - py)
+                + (z - pz) * (z - pz));
+        if (off >= cutRadius) return 1;
+        // Fully out along the middle of the line and fading back in at the
+        // edge, so the hole has a soft rim rather than a cut circle in it.
+        double edge = off / cutRadius;
+        return CUTAWAY_MIN + (1 - CUTAWAY_MIN) * edge * edge;
+    }
+
+    /**
+     * How much of a face is left where the cutaway is at its strongest. Not
+     * zero: a wall you can see the outline of is a wall, and one that has
+     * simply gone is a hole in the world.
+     */
+    private static final double CUTAWAY_MIN = 0.13;
 
     // --- a frame -----------------------------------------------------------
 
@@ -432,6 +545,11 @@ public final class SolidPainter {
         this.distantDistance = distantTiles > viewTiles ? distantTiles * (double) ts : 0;
         this.faceReach = viewDistance;
         this.orderBias = 0;
+        this.cutRadius = 0;
+        this.eyeCol = (int) Math.floor(eye.x() / ts);
+        this.eyeRow = (int) Math.floor(eye.y() / ts);
+        this.eyeLayer = (int) Math.floor(eye.z() / ts) + 1;
+        buildCoversTable();
         // Fog is measured against the furthest thing that will be drawn, which
         // is the coarse horizon when there is one. That is not bookkeeping: fog
         // exists to hide the edge of what is drawn, so pushing the edge out
@@ -463,15 +581,74 @@ public final class SolidPainter {
     }
 
     /**
-     * Queue every exposed, camera-facing block face within the view distance.
+     * Fill {@link #coversById} from this level's block registry, when it is not
+     * already the table for that registry.
      *
-     * <p>The sweep is a square of cells trimmed to a circle, because a square
-     * of view distance is a third more cells than a circle of it and the corner
+     * <p>Rebuilt on a change rather than every frame: the registry is a couple
+     * of hundred entries and a scan of it is nothing beside a frame, but it is
+     * also nothing that ever needs doing twice, and a creator adding a block
+     * mid-session is what the size check catches.
+     */
+    private void buildCoversTable() {
+        java.util.List<Block> all = level.blocks.all();
+        if (level.blocks == coversFrom && all.size() == coversCount) return;
+        coversFrom = level.blocks;
+        coversCount = all.size();
+        int top = 0;
+        for (Block b : all) top = Math.max(top, b.id());
+        if (coversById.length < top + 1) coversById = new boolean[top + 1];
+        // A level in palette mode has no block definitions at all, and its tile
+        // ids are opaque paint: every one of them covers, which is what the
+        // default of "no entry" has to mean rather than "not opaque".
+        java.util.Arrays.fill(coversById, true);
+        coversById[0] = false;
+        for (Block b : all) coversById[b.id()] = b.covers();
+    }
+
+    /**
+     * Queue every exposed, camera-facing block face the eye can actually see.
+     *
+     * <p>The sweep is a square of cells trimmed to a circle, because a square of
+     * view distance is a third more cells than a circle of it and the corner
      * ones are the furthest away — the least worth drawing and the most of
-     * them. Cells behind the eye are dropped too, but only when the pitch is
-     * shallow enough for "behind" to mean anything: tilt the eye far enough and
-     * the top of the frustum swings back over your own shoulder, and the exact
-     * angle at which that starts is {@code 90° - fov/2}.
+     * them. Two culls then run over what is left, and between them they are why
+     * a long render distance is affordable at all:
+     *
+     * <ul>
+     *   <li><b>The frustum</b> ({@link EyeCamera#boxVisible}). A screen is a
+     *       wedge of the disc and not the disc — about a quarter of it at an
+     *       ordinary field of view — and this used to be a half-space test
+     *       against the heading, which keeps everything <em>beside</em> you as
+     *       well as everything in front. Four exact planes drop three cells in
+     *       four before anything about their contents is read.</li>
+     *   <li><b>Line of sight</b> ({@link #hiddenBehindHorizon}). A column of
+     *       ground standing between the eye and a cell hides that cell, and a
+     *       heightfield says so without tracing anything: sweep outward, and
+     *       remember for each direction how high the terrain has already
+     *       reached. Everything behind and below that line is not drawn. Inside
+     *       a room it removes the world outside the walls; in mountains it
+     *       removes the far side of the ridge; on an open plain it removes
+     *       nothing, correctly, because on an open plain you can see the
+     *       plain.</li>
+     * </ul>
+     *
+     * <p><b>What the two are worth.</b> Over generated terrain at
+     * 1280&times;720, measured: 12&nbsp;ms a frame becomes 9 at the default
+     * render distance of twenty tiles, 60 becomes 20 at sixty-four, 256 becomes
+     * 34 at a hundred and twenty-eight, and 688&nbsp;ms becomes 47 at the
+     * slider's own ceiling of a hundred and ninety-two. The far end of that is
+     * the point: a long render distance used to be a setting that could not be
+     * used, and what it costs now grows with how much of the world can be seen
+     * rather than with the area of the disc.
+     *
+     * <p><b>Which is why the sweep runs in rings.</b> Line of sight is only
+     * sound if a cell is tested against occluders that are actually in front of
+     * it, so the cells are visited nearest first — squares of growing radius
+     * about the eye's own cell, rather than the rows of a rectangle. Chebyshev
+     * rings are only approximately sorted by distance (a ring's corner is
+     * further than the next ring's edge), so the horizon also remembers how far
+     * away the column that set it was, and a cell nearer than that is drawn
+     * whatever the height says.
      */
     public void terrain() {
         if (level == null || eye == null) return;
@@ -482,25 +659,225 @@ public final class SolidPainter {
         int c1 = Math.min(level.width - 1, (int) Math.floor((eye.x() + reach) / ts));
         int r0 = Math.max(0, (int) Math.floor((eye.y() - reach) / ts));
         int r1 = Math.min(level.height - 1, (int) Math.floor((eye.y() + reach) / ts));
+        if (c0 > c1 || r0 > r1) return;
 
-        double fx = eye.forwardX(), fy = eye.forwardY();
-        // Every ray of the frustum keeps a forward component while the eye is
-        // tilted less than a quarter turn minus half the field of view; past
-        // that the half-space test below would cull cells that are on screen.
-        boolean cullBehind = Math.abs(eye.pitch()) + eye.fov() / 2
-                < Math.toRadians(85);
-        double behind = -1.5 * ts;
+        clearHorizon();
         double reachSq = reach * reach;
-
-        for (int r = r0; r <= r1; r++) {
-            for (int c = c0; c <= c1; c++) {
-                double dx = (c + 0.5) * ts - eye.x();
-                double dy = (r + 0.5) * ts - eye.y();
-                if (dx * dx + dy * dy > reachSq) continue;
-                if (cullBehind && dx * fx + dy * fy < behind) continue;
-                column(c, r);
+        int ec = Math.max(c0, Math.min(c1, (int) Math.floor(eye.x() / ts)));
+        int er = Math.max(r0, Math.min(r1, (int) Math.floor(eye.y() / ts)));
+        int rings = Math.max(Math.max(ec - c0, c1 - ec), Math.max(er - r0, r1 - er));
+        for (int k = 0; k <= rings; k++) {
+            if (k == 0) {
+                cell(ec, er, reachSq);
+                continue;
+            }
+            int left = ec - k, right = ec + k, up = er - k, down = er + k;
+            for (int c = Math.max(c0, left); c <= Math.min(c1, right); c++) {
+                if (up >= r0) cell(c, up, reachSq);
+                if (down <= r1) cell(c, down, reachSq);
+            }
+            for (int r = Math.max(r0, up + 1); r <= Math.min(r1, down - 1); r++) {
+                if (left >= c0) cell(left, r, reachSq);
+                if (right <= c1) cell(right, r, reachSq);
             }
         }
+    }
+
+    /**
+     * One cell of the sweep: cull it, draw it, and let it raise the horizon
+     * behind itself.
+     */
+    private void cell(int col, int row, double reachSq) {
+        int ts = level.tileSize;
+        double x0 = col * (double) ts, x1 = x0 + ts;
+        double y0 = row * (double) ts, y1 = y0 + ts;
+        double dx = x0 + ts * 0.5 - eye.x(), dy = y0 + ts * 0.5 - eye.y();
+        double centreSq = dx * dx + dy * dy;
+        if (centreSq > reachSq) return;
+
+        int depth = level.columnDepth(col, row);
+        // The whole column plus a tile of headroom, which is what a plant's
+        // billboard and an actor's shadow can add to a cell's own height.
+        double topZ = Math.max(0, depth) * (double) ts + ts;
+        if (!eye.boxVisible(x0, y0, -ts, x1, y1, topZ)) return;
+
+        double centre = Math.sqrt(centreSq);
+        double near = Math.hypot(axisGap(eye.x(), x0, x1), axisGap(eye.y(), y0, y1));
+        double far = Math.hypot(Math.max(Math.abs(eye.x() - x0), Math.abs(eye.x() - x1)),
+                Math.max(Math.abs(eye.y() - y0), Math.abs(eye.y() - y1)));
+        double angle = pseudoAngle(dx, dy);
+        if (hiddenBehindHorizon(angle, near, far, topZ)) return;
+
+        column(col, row);
+        raiseHorizon(angle, centre, groundedTopZ(col, row, depth));
+    }
+
+    /**
+     * How many directions the horizon is remembered in.
+     *
+     * <p>A thousand, which is finer than a cell subtends at any distance this
+     * pass draws at: a tile at the furthest render distance the settings offer
+     * is about a three-hundredth of a radian across, and a sector here is a
+     * six-hundredth. Finer would cost the sweep more array reads than the
+     * culling saves; coarser would let a doorway's worth of visible world be
+     * rounded away into the wall beside it.
+     */
+    private static final int HORIZON_SECTORS = 1024;
+
+    /**
+     * How high the terrain has already reached in each direction, as a
+     * <em>slope</em> — {@code (height − eye height) / horizontal distance} —
+     * and how far away the column that set it was.
+     *
+     * <p>Slopes rather than angles because nothing here needs an angle: they
+     * order the same way, and an arc tangent per cell per sector is the one
+     * cost this cull cannot afford.
+     */
+    private final double[] horizonSlope = new double[HORIZON_SECTORS];
+    private final double[] horizonAt = new double[HORIZON_SECTORS];
+
+    /**
+     * The widest half-span a cell may have, in {@link #pseudoAngle} units,
+     * before the line-of-sight test gives up and draws it.
+     *
+     * <p>Four tenths of a unit is a twentieth of the circle either side of the
+     * cell's middle. A cell that subtends more than that is a cell you are
+     * standing next to, which is never the one worth culling, and testing it
+     * would walk a tenth of the buffer to find that out.
+     */
+    private static final double MAX_TEST_SPAN = 0.4;
+
+    private void clearHorizon() {
+        java.util.Arrays.fill(horizonSlope, Double.NEGATIVE_INFINITY);
+        java.util.Arrays.fill(horizonAt, Double.POSITIVE_INFINITY);
+    }
+
+    /**
+     * A direction on the ground plane as a number in {@code [0, 4)}, increasing
+     * with the true bearing.
+     *
+     * <p>The "diamond angle": the same ordering {@link Math#atan2} gives, for
+     * two divides and no transcendental. Only the ordering is used — the
+     * buffer is a bucketing of directions, not a measurement of them — and
+     * {@link #SPAN_SKEW} carries the one place that distinction leaks.
+     */
+    private static double pseudoAngle(double dx, double dy) {
+        double sum = Math.abs(dx) + Math.abs(dy);
+        if (sum <= 0) return 0;
+        double p = dx / sum;
+        return dy < 0 ? 3 + p : 1 - p;
+    }
+
+    /**
+     * How much a true angle can be stretched by {@link #pseudoAngle}, per
+     * radian. The diamond angle runs at up to one unit per radian along the
+     * axes and as little as a half at the diagonals; using the larger for a
+     * span that must not be under-stated and the smaller for one that must not
+     * be over-stated is what keeps both uses of it safe.
+     */
+    private static final double SPAN_SKEW = 1.0;
+    private static final double SPAN_SKEW_SAFE = 0.5;
+
+    /**
+     * Whether a column is entirely behind terrain already drawn in front of it.
+     *
+     * <p>The test is the reason the sweep can afford a long render distance,
+     * and it is exact for a heightfield rather than a guess. Take the highest
+     * point of this cell and the shortest distance to it: that is the steepest
+     * line of sight anything in the cell could occupy. If, in <em>every</em>
+     * direction the cell can be seen along, the ground has already come up
+     * higher than that line — and did so nearer than this cell is — then no ray
+     * that reaches this cell got past the ground, and there is nothing here to
+     * draw.
+     *
+     * <p><b>Which distance the steepest line uses depends on which side of the
+     * eye the cell's top is.</b> Above the eye the line is steepest at the
+     * cell's <em>near</em> edge, because the rise is divided by less. Below it
+     * the numerator is negative, so the same division makes the angle
+     * <em>more</em> negative, and the shallowest — that is, highest — line to a
+     * cell below you is the one to its far edge. Using the near distance for
+     * both is the one way this test can be wrong in the direction that matters:
+     * it would understate how high a low cell can be seen along, and cull
+     * something the player is looking straight at.
+     *
+     * @param near the shortest horizontal distance to the cell
+     * @param far  the longest, which is the one a cell below the eye is seen
+     *             along most shallowly
+     * @param topZ the highest point anything in this cell reaches
+     */
+    private boolean hiddenBehindHorizon(double angle, double near, double far, double topZ) {
+        int ts = level.tileSize;
+        if (near < ts) return false;      // standing in it, or against it
+        double span = SPAN_SKEW * (ts * 0.7072 / near);
+        if (span > MAX_TEST_SPAN) return false;
+        double slope = (topZ - eye.z()) / Math.max(1e-6, topZ >= eye.z() ? near : far);
+        int from = sectorOf(angle - span), to = sectorOf(angle + span);
+        int count = Math.floorMod(to - from, HORIZON_SECTORS);
+        for (int i = 0; i <= count; i++) {
+            int s = (from + i) % HORIZON_SECTORS;
+            if (horizonAt[s] > near || horizonSlope[s] < slope) return false;
+        }
+        return true;
+    }
+
+    /**
+     * Record that this column blocks every line of sight below its own top, in
+     * the directions it certainly covers.
+     *
+     * <p>Certainly, and only certainly: the span written is narrower than the
+     * cell's silhouette and the height is measured at the cell's <em>centre</em>
+     * rather than at its near edge, so a ray counted as blocked really did pass
+     * through the column. Under-claiming costs a few cells that could have been
+     * culled; over-claiming would delete something the player can see, which is
+     * the failure a cull is not allowed to have.
+     */
+    private void raiseHorizon(double angle, double centre, double topZ) {
+        if (topZ == Double.NEGATIVE_INFINITY) return;
+        int ts = level.tileSize;
+        if (centre < ts * 0.5) return;
+        double span = SPAN_SKEW_SAFE * (ts * 0.4 / centre);
+        double slope = (topZ - eye.z()) / centre;
+        int from = sectorOf(angle - span), to = sectorOf(angle + span);
+        int count = Math.floorMod(to - from, HORIZON_SECTORS);
+        for (int i = 0; i <= count; i++) {
+            int s = (from + i) % HORIZON_SECTORS;
+            if (slope > horizonSlope[s]) {
+                horizonSlope[s] = slope;
+                horizonAt[s] = centre;
+            }
+        }
+    }
+
+    private static int sectorOf(double pseudo) {
+        return Math.floorMod((int) Math.floor(pseudo * (HORIZON_SECTORS / 4.0)),
+                HORIZON_SECTORS);
+    }
+
+    /**
+     * The height of the unbroken run of opaque blocks standing on this cell's
+     * floor — how high this column occludes to, and no higher.
+     *
+     * <p><b>Not the top of the column.</b> The classic heightfield answer would
+     * be, and it is wrong in exactly the two places this engine has: a cave
+     * mouth is a column whose middle is empty under a mountain of rock, and
+     * treating it as solid to the summit paints out the whole world seen
+     * through it. So the run is measured from the ground and stops at the first
+     * gap. It stops at the first thing you can see <em>through</em> as well —
+     * water, glass — because a lake's surface hides nothing behind it.
+     *
+     * @return the world height the column occludes up to, or
+     *         {@link Double#NEGATIVE_INFINITY} when it occludes nothing at all
+     */
+    private double groundedTopZ(int col, int row, int depth) {
+        if (!covers(level.tileAt(col, row, Level.LAYER_GROUND))) {
+            return Double.NEGATIVE_INFINITY;   // a hole in the floor
+        }
+        int grounded = Math.min(level.groundedDepth(col, row), Math.max(0, depth - 1));
+        // Only the run's own lid has to be checked for transparency: a pane
+        // buried inside a hillside is not a thing anyone can look through, and
+        // walking the whole run to find one would cost more than the cull saves.
+        while (grounded > 0 && !covers(level.tileAt(col, row, grounded))) grounded--;
+        return grounded * (double) level.tileSize;
     }
 
     /** How far the furthest thing this frame draws can be. */
@@ -588,9 +965,6 @@ public final class SolidPainter {
         int g0r = Math.max(0, (int) Math.floor((eye.y() - outer) / span));
         int g1r = Math.min((level.height - 1) / group, (int) Math.floor((eye.y() + outer) / span));
 
-        double fx = eye.forwardX(), fy = eye.forwardY();
-        boolean cullBehind = Math.abs(eye.pitch()) + eye.fov() / 2 < Math.toRadians(85);
-        double behind = -1.5 * span;
         double outerSq = outer * outer;
         double half = span / 2;
 
@@ -608,7 +982,14 @@ public final class SolidPainter {
                     // from this one leaves a gap the width of a group.
                     double reach = Math.hypot(Math.abs(dx) + half, Math.abs(dy) + half);
                     if (reach <= inner) continue;
-                    if (cullBehind && dx * fx + dy * fy < behind) continue;
+                    // The frustum, exactly, where this used to keep everything
+                    // in the forward half-plane: a horizon ring is thousands of
+                    // groups and three quarters of them are beside or behind
+                    // the screen. The box is given the level's full height,
+                    // since how tall the group is has not been asked yet.
+                    double gx = gc * span, gy = gr * span;
+                    if (!eye.boxVisible(gx, gy, 0, gx + span, gy + span,
+                            level.layerCount() * (double) ts)) continue;
                     distantBox(gc, gr, group);
                 }
             }
@@ -675,7 +1056,7 @@ public final class SolidPainter {
         // skipped when a block sits on it, because that block's own underside
         // is the same quad and drawing both is two coplanar fills fighting.
         int floorId = level.tileAt(col, row);
-        if (floorId > 0 && eye.z() > 0 && level.tileAt(col, row, 1) <= 0) {
+        if (floorId > 0 && eye.z() > 0 && open(col, row, 1)) {
             Color colour = level.colorFor(floorId);
             if (colour != null) {
                 Block ground = level.blocks.get(floorId);
@@ -696,8 +1077,88 @@ public final class SolidPainter {
             int id = level.tileAt(col, row, layer);
             if (id <= 0) continue;
             Block block = level.blocks.get(id);
-            if (block != null) block(col, row, block, layer, depth);
+            if (block == null) continue;
+            if (block.plant()) plant(col, row, block, layer);
+            else block(col, row, block, layer, depth);
         }
+    }
+
+    /**
+     * A growing thing: a stem standing in the middle of the cell, and a sprite
+     * on it turned to face the eye. See {@link Block.Shape#PLANT}.
+     *
+     * <p><b>The two halves are drawn differently on purpose.</b> The stem is
+     * ordinary geometry — a narrow box, four faces of it, back-face culled and
+     * sorted like any other block — so it stays exactly where it was planted
+     * and you can walk round it. The sprite is one quad built square to the
+     * view, so it turns with the camera and never goes edge-on; it is queued
+     * through the same {@link #face} the terrain uses, so it sorts against the
+     * terrain by the cell it stands in and needs no second pass.
+     *
+     * <p>The sprite quad carries no backing fill and no outline. Both exist to
+     * stop a fraction of a pixel of sky showing through a wall, and a plant is
+     * mostly sky by design — filled and outlined it would be a coloured card
+     * with a flower printed on it.
+     */
+    private void plant(int col, int row, Block block, int layer) {
+        int ts = level.tileSize;
+        double cx = (col + 0.5) * ts, cy = (row + 0.5) * ts;
+        double z0 = (layer - 1) * (double) ts;
+        double half = ts * STEM_HALF_WIDTH;
+        double stemTop = z0 + ts * STEM_HEIGHT;
+        Color stem = STEM_GREEN;
+
+        // The stalk. Only the two faces turned toward the eye are queued, by
+        // the same comparison a cube's are — a box this narrow is still a box.
+        if (eye.y() < cy - half) {
+            face(col, row, layer, cx - half, cy - half, stemTop, cx + half, cy - half, stemTop,
+                    cx + half, cy - half, z0, cx - half, cy - half, z0,
+                    stem, SHADE_NORTH_SOUTH, null);
+        }
+        if (eye.y() > cy + half) {
+            face(col, row, layer, cx + half, cy + half, stemTop, cx - half, cy + half, stemTop,
+                    cx - half, cy + half, z0, cx + half, cy + half, z0,
+                    stem, SHADE_NORTH_SOUTH, null);
+        }
+        if (eye.x() > cx + half) {
+            face(col, row, layer, cx + half, cy - half, stemTop, cx + half, cy + half, stemTop,
+                    cx + half, cy + half, z0, cx + half, cy - half, z0,
+                    stem, SHADE_EAST_WEST, null);
+        }
+        if (eye.x() < cx - half) {
+            face(col, row, layer, cx - half, cy + half, stemTop, cx - half, cy - half, stemTop,
+                    cx - half, cy - half, z0, cx - half, cy + half, z0,
+                    stem, SHADE_EAST_WEST, null);
+        }
+
+        // The foliage, square to the view: the quad's horizontal axis is the
+        // eye's own right vector, so it is never seen edge-on however the
+        // camera turns, and its vertical axis is the world's up, so a flower
+        // stands up rather than leaning back as you look down at it.
+        BufferedImage sprite = plantSprite(block);
+        if (sprite == null) return;
+        double rx = eye.rightX() * ts * PLANT_HALF_WIDTH;
+        double ry = eye.rightY() * ts * PLANT_HALF_WIDTH;
+        double base = z0 + ts * PLANT_BASE;
+        double top = z0 + ts * PLANT_TOP;
+        Entry e = face(col, row, layer,
+                cx - rx, cy - ry, top, cx + rx, cy + ry, top,
+                cx + rx, cy + ry, base, cx - rx, cy - ry, base,
+                block.color(), SHADE_TOP, sprite);
+        if (e == null) return;
+        e.fill = false;
+        e.edge = false;
+        // Fog over a sprite would paint the whole quad, transparent parts
+        // included, which is a rectangle of haze hanging in the air. A plant is
+        // small enough that losing its share of the fog is invisible.
+        e.fogOverlay = 0;
+    }
+
+    /** A plant's billboard: the pack's sheet where there is one, else drawn. */
+    private BufferedImage plantSprite(Block block) {
+        BufferedImage sheet = frame(block.textureKey());
+        if (sheet != null) return sheet;
+        return BlockSprites.procedural(block, PLANT_SPRITE_PIXELS);
     }
 
     /**
@@ -730,11 +1191,11 @@ public final class SolidPainter {
         BufferedImage top = topTexture(block);
         BufferedImage side = sideTexture(block);
 
-        if (eye.z() > z1 && (layer + 1 >= depth || level.tileAt(col, row, layer + 1) <= 0)) {
+        if (eye.z() > z1 && (layer + 1 >= depth || open(col, row, layer + 1))) {
             face(col, row, layer, x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1,
                     colour, SHADE_TOP, top);
         }
-        if (eye.z() < z0 && layer > 1 && level.tileAt(col, row, layer - 1) <= 0) {
+        if (eye.z() < z0 && layer > 1 && open(col, row, layer - 1)) {
             face(col, row, layer, x0, y0, z0, x0, y1, z0, x1, y1, z0, x1, y0, z0,
                     colour, SHADE_BOTTOM, top);
         }
@@ -756,10 +1217,46 @@ public final class SolidPainter {
         }
     }
 
-    /** Whether the neighbouring box is empty, so the face against it is exposed. */
+    /**
+     * Whether the neighbouring box leaves this face visible, so it is worth
+     * queueing.
+     *
+     * <p><b>Not "is the neighbour empty".</b> That was the test, and it is
+     * wrong in two ways that a player finds in the first minute. A neighbour
+     * you can see <em>through</em> — a pane of glass, a pool of water — does not
+     * hide the face behind it, and treating it as if it did makes a wall vanish
+     * when somebody glazes it. A neighbour that does not <em>fill</em> its cell
+     * does not either, and that one is worse: a flower occupies a cell you can
+     * walk into, so a player standing in one had every face around them culled
+     * as covered and could look straight out through the world. The block
+     * itself answers both ({@link Block#covers()}).
+     *
+     * <p>The eye's own cell is always open, whatever is standing in it. That is
+     * belt and braces rather than a second rule — a cell the eye can be inside
+     * is by definition not a covering one — but it costs a comparison and it is
+     * the case the bug was reported from.
+     */
     private boolean open(int col, int row, int layer) {
         if (col < 0 || row < 0 || col >= level.width || row >= level.height) return true;
-        return level.tileAt(col, row, layer) <= 0;
+        if (col == eyeCol && row == eyeRow && layer == eyeLayer) return true;
+        return !covers(level.tileAt(col, row, layer));
+    }
+
+    /**
+     * Whether block {@code id} hides what is behind it, from a table built once
+     * a frame.
+     *
+     * <p>A lookup rather than {@code level.blocks.get(id).covers()} because this
+     * runs up to six times per block face and a map lookup per neighbour is a
+     * measurable share of the sweep. The table is rebuilt in {@link #begin} —
+     * a registry is a couple of hundred entries and a frame is thousands of
+     * faces, so a scan a frame is free and cannot go stale.
+     */
+    private boolean covers(int id) {
+        if (id <= 0) return false;
+        if (id < coversById.length) return coversById[id];
+        Block b = level.blocks.get(id);
+        return b == null || b.covers();
     }
 
     /**
@@ -800,11 +1297,11 @@ public final class SolidPainter {
      * the distance, and then the whole polygon being behind the eye — because
      * the projection is four divides and the rejections are comparisons.
      */
-    private void face(int col, int row, int layer,
+    private Entry face(int col, int row, int layer,
                       double ax, double ay, double az, double bx, double by, double bz,
                       double cx, double cy, double cz, double dx, double dy, double dz,
                       Color colour, double shade, BufferedImage texture) {
-        if (colour == null) return;
+        if (colour == null) return null;
         double minX = Math.min(Math.min(ax, bx), Math.min(cx, dx));
         double maxX = Math.max(Math.max(ax, bx), Math.max(cx, dx));
         double minY = Math.min(Math.min(ay, by), Math.min(cy, dy));
@@ -812,7 +1309,7 @@ public final class SolidPainter {
         double minZ = Math.min(Math.min(az, bz), Math.min(cz, dz));
         double maxZ = Math.max(Math.max(az, bz), Math.max(cz, dz));
         double distance = boxDistance(minX, minY, minZ, maxX, maxY, maxZ);
-        if (distance > faceReach) return;
+        if (distance > faceReach) return null;
 
         eye.toEye(ax, ay, az, point);
         eyeVerts[0] = point[0];
@@ -832,11 +1329,12 @@ public final class SolidPainter {
         eyeVerts[11] = point[2];
 
         int n = EyeCamera.clipNear(eyeVerts, 4, clipped);
-        if (n < 3) return;
+        if (n < 3) return null;
 
         Entry e = claim();
         e.sprite = null;
         e.texture = null;
+        e.fill = true;
         e.fogOverlay = 0;
         e.order = cellOrder(col, row, layer);
         e.count = n;
@@ -856,9 +1354,19 @@ public final class SolidPainter {
         // Entirely off screen: the entry was claimed but never accepted, so
         // returning here leaves it in the pool for the next face to reuse.
         if (hiX < 0 || hiY < 0 || loX > eye.viewportWidth() || loY > eye.viewportHeight()) {
-            return;
+            return null;
         }
+        // Anything standing between the camera and what it is looking at is
+        // drawn see-through, so walking indoors is not walking into a wall of
+        // roof (see setCutaway). Measured at the face's own middle, which is
+        // the one point of it every corner is within half a tile of.
+        double seen = cutawayAlpha((minX + maxX) / 2, (minY + maxY) / 2,
+                (minZ + maxZ) / 2);
         e.argb = shadeFog(colour, shade, distance);
+        if (seen < 1) {
+            e.argb = (e.argb & 0x00FFFFFF)
+                    | (((int) Math.round(((e.argb >>> 24) & 0xFF) * seen)) << 24);
+        }
         // A face cut by the near plane is textured too, and that it was not is
         // what a player standing against a block saw as the texture falling
         // off it. The face nearest you is the one most likely to have a corner
@@ -868,7 +1376,10 @@ public final class SolidPainter {
         // nothing here does that any more: the corners are kept in world space
         // and the patches that cannot be projected are dropped one at a time
         // (see drawTextured).
-        if (texture != null
+        // A ghosted face keeps its colour and loses its sheet: a texture is
+        // blitted rather than blended, so it would come back at full strength
+        // over the faded fill and undo the whole effect.
+        if (texture != null && seen >= 1
                 && (hiX - loX) >= MIN_TEXTURE_PIXELS && (hiY - loY) >= MIN_TEXTURE_PIXELS) {
             // The block's own sheet, shaded for this face. The face is kept in
             // *world* coordinates rather than as one screen-space transform:
@@ -904,10 +1415,11 @@ public final class SolidPainter {
         // through — a pane of glass, water, the patch of shade under an actor —
         // there is no seam to cover and the stroke doubles the alpha along the
         // edge, which draws a hard border around a soft thing.
-        e.edge = colour.getAlpha() >= 255;
+        e.edge = colour.getAlpha() >= 255 && seen >= 1;
         e.edgeArgb = distance < EDGE_TILES * level.tileSize
                 ? shadeFog(colour, shade * 0.72, distance) : e.argb;
         keep();
+        return e;
     }
 
     /**
@@ -1102,7 +1614,7 @@ public final class SolidPainter {
         // patch to within a fraction of a pixel rather than exactly, and a
         // fraction of a pixel of the block's own colour is invisible where a
         // fraction of a pixel of sky, seen through a wall, is not.
-        target.fillPolygon(e.xs, e.ys, e.count, e.argb);
+        if (e.fill) target.fillPolygon(e.xs, e.ys, e.count, e.argb);
         if (e.texture != null) {
             drawTextured(e);
             if (e.fogOverlay != 0) target.fillPolygon(e.xs, e.ys, e.count, e.fogOverlay);
@@ -1431,12 +1943,27 @@ public final class SolidPainter {
      *         nothing within {@code reach}
      */
     public static TerrainPainter.Aim pick(EyeCamera eye, Level level, double reach) {
-        Hit hit = march(eye, level, reach);
+        return pick(eye, level, reach, eye.dirX(), eye.dirY(), eye.dirZ());
+    }
+
+    /**
+     * {@link #pick(EyeCamera, Level, double)} along a ray of the caller's own
+     * choosing rather than along the view axis — what a view that still aims
+     * with a visible pointer needs, where the ray goes through the pixel under
+     * the cursor instead of through the middle of the screen.
+     */
+    public static TerrainPainter.Aim pick(EyeCamera eye, Level level, double reach,
+                                          double dx, double dy, double dz) {
+        Hit hit = march(eye, level, reach, dx, dy, dz);
         if (hit == null) return null;
-        int placeCol = hit.top ? hit.col : hit.fromCol;
-        int placeRow = hit.top ? hit.row : hit.fromRow;
+        // The cell the ray was in when it met the face — on all three axes, not
+        // just the two on the ground plane. That third one is the difference
+        // between placing a block against the wall you are looking at and
+        // dropping it on top of the column the wall belongs to, and it is what
+        // "blocks place at the bottom of the stack" was: the layer was thrown
+        // away here and re-derived from the column further down.
         return new TerrainPainter.Aim(hit.col, hit.row, hit.layer, hit.top,
-                placeCol, placeRow);
+                hit.fromCol, hit.fromRow, hit.fromLayer);
     }
 
     /**
@@ -1451,23 +1978,29 @@ public final class SolidPainter {
      * @return {@code {x, y, z}} in world coordinates, never {@code null}
      */
     public static double[] aimPoint(EyeCamera eye, Level level, double reach) {
-        Hit hit = march(eye, level, reach);
+        return aimPoint(eye, level, reach, eye.dirX(), eye.dirY(), eye.dirZ());
+    }
+
+    /** {@link #aimPoint(EyeCamera, Level, double)} along a ray of the caller's own. */
+    public static double[] aimPoint(EyeCamera eye, Level level, double reach,
+                                    double dx, double dy, double dz) {
+        Hit hit = march(eye, level, reach, dx, dy, dz);
         double t = hit != null ? hit.distance : reach;
         return new double[]{
-                eye.x() + eye.dirX() * t,
-                eye.y() + eye.dirY() * t,
-                Math.max(0, eye.z() + eye.dirZ() * t)
+                eye.x() + dx * t,
+                eye.y() + dy * t,
+                Math.max(0, eye.z() + dz * t)
         };
     }
 
     /** Where a march stopped: the cell struck, the face, and how far away. */
     private record Hit(int col, int row, int layer, boolean top,
-                       int fromCol, int fromRow, double distance) {}
+                       int fromCol, int fromRow, int fromLayer, double distance) {}
 
-    private static Hit march(EyeCamera eye, Level level, double reach) {
+    private static Hit march(EyeCamera eye, Level level, double reach,
+                             double dx, double dy, double dz) {
         int ts = level == null ? 0 : level.tileSize;
         if (ts <= 0 || reach <= 0) return null;
-        double dx = eye.dirX(), dy = eye.dirY(), dz = eye.dirZ();
 
         int col = (int) Math.floor(eye.x() / ts);
         int row = (int) Math.floor(eye.y() / ts);
@@ -1480,7 +2013,7 @@ public final class SolidPainter {
         if (solid(level, col, row, box)) {
             // The eye is inside something. Nothing sensible is "in front of"
             // it, so this is what it is looking at.
-            return new Hit(col, row, box + 1, true, col, row, 0);
+            return new Hit(col, row, box + 1, true, col, row, box + 1, 0);
         }
 
         int stepX = dx > 0 ? 1 : dx < 0 ? -1 : 0;
@@ -1493,13 +2026,14 @@ public final class SolidPainter {
         double stridY = stepY == 0 ? Double.POSITIVE_INFINITY : ts / Math.abs(dy);
         double stridZ = stepZ == 0 ? Double.POSITIVE_INFINITY : ts / Math.abs(dz);
 
-        int fromCol = col, fromRow = row;
+        int fromCol = col, fromRow = row, fromBox = box;
         int layers = level.layerCount();
         while (true) {
             double t;
             boolean vertical = false;
             fromCol = col;
             fromRow = row;
+            fromBox = box;
             if (tNextX <= tNextY && tNextX <= tNextZ) {
                 t = tNextX;
                 col += stepX;
@@ -1521,7 +2055,7 @@ public final class SolidPainter {
             if (stepZ < 0 && box < -1) return null;
             if (solid(level, col, row, box)) {
                 return new Hit(col, row, box + 1, vertical && stepZ < 0,
-                        fromCol, fromRow, t);
+                        fromCol, fromRow, fromBox + 1, t);
             }
         }
     }
@@ -1544,6 +2078,27 @@ public final class SolidPainter {
      */
     public static boolean filled(Level level, int col, int row, int box) {
         return solid(level, col, row, box);
+    }
+
+    /**
+     * Whether the box at this grid position is filled with something that would
+     * <em>blind</em> an eye standing in it — a whole opaque block, and not a
+     * flower or a pane of glass.
+     *
+     * <p>The question {@link #filled} was being asked for and does not answer.
+     * An eye inside a block sees nothing because every face around it is turned
+     * away; an eye inside a flower sees the world, because a flower is a stem
+     * and a sprite. Ducking out of one is a camera lurching downward for no
+     * reason a player can see.
+     */
+    public static boolean opaque(Level level, int col, int row, int box) {
+        if (box < -1) return false;
+        if (level == null) return false;
+        if (col < 0 || row < 0 || col >= level.width || row >= level.height) return false;
+        int id = level.tileAt(col, row, box + 1);
+        if (id <= 0) return false;
+        Block b = level.blocks.get(id);
+        return b == null || b.covers();
     }
 
     /** Whether the box at this grid position stops a ray; see {@link #march}. */

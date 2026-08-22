@@ -73,6 +73,16 @@ public class InputManager
     private int wheel;
     private int wheelLatch;
 
+    // How far the hand has moved since something last read it, and where the
+    // last move event put the pointer. See moveMouse and consumeMouseMotion.
+    private int lastMoveX = UNSEEN, lastMoveY;
+    private int motionX, motionY;
+    private boolean warpPending;
+    private int warpX, warpY;
+
+    /** No move event has been seen yet, so there is no motion to measure from. */
+    private static final int UNSEEN = Integer.MIN_VALUE;
+
     // Presses in the order they arrived, for binding capture (see
     // consumeAnyPress). Scoped to a tick like every other edge state.
     private final Deque<InputBinding> pressLatch = new ArrayDeque<>();
@@ -231,10 +241,73 @@ public class InputManager
         buttonsDown.remove(button);
     }
 
-    /** The pointer moved, in the same coordinates the frame is drawn in. */
-    public void moveMouse(int x, int y) {
+    /**
+     * The pointer moved, in the same coordinates the frame is drawn in.
+     *
+     * <p>Two things are recorded, and a view that steers with the mouse needs
+     * the second one: where the pointer <em>is</em>, and how far the hand
+     * <em>moved</em>. They stop being the same number the moment something
+     * puts the pointer back — see {@link #consumeMouseMotion} and
+     * {@link #pointerWarped}.
+     */
+    public synchronized void moveMouse(int x, int y) {
+        if (warpPending && x == warpX && y == warpY) {
+            // The pointer arriving where the game put it is not the hand
+            // moving, so it starts a fresh origin rather than counting.
+            warpPending = false;
+        } else if (lastMoveX != UNSEEN) {
+            motionX += x - lastMoveX;
+            motionY += y - lastMoveY;
+        }
+        lastMoveX = x;
+        lastMoveY = y;
         mouseX = x;
         mouseY = y;
+    }
+
+    /**
+     * Tell the tracker the game has just put the pointer at ({@code x},
+     * {@code y}) itself, so the move event that lands there is not read as the
+     * player having flung the mouse across the desk.
+     *
+     * <p><b>Matched on the position rather than on a timestamp</b> because the
+     * event is delivered asynchronously: a real move that was already in the
+     * queue when the warp went out arrives after it, and discarding "the next
+     * event" would throw that one away and count the warp instead. Only an
+     * event landing exactly on the requested pixel is the warp.
+     */
+    public synchronized void pointerWarped(int x, int y) {
+        warpPending = true;
+        warpX = x;
+        warpY = y;
+    }
+
+    /**
+     * How far the hand has moved since this was last called, into
+     * {@code out} as {@code {dx, dy}}, and reset to zero.
+     *
+     * <p><b>What a mouse-look reads instead of the position.</b> A locked
+     * pointer is held in the middle of the window, so its position says nothing
+     * at all; the motion between events is the whole of what the player did,
+     * and it survives every recentre because {@link #pointerWarped} tells this
+     * class which of the moves were its own.
+     */
+    public synchronized void consumeMouseMotion(int[] out) {
+        if (out == null || out.length < 2) return;
+        out[0] = motionX;
+        out[1] = motionY;
+        motionX = 0;
+        motionY = 0;
+    }
+
+    /**
+     * Throw away the motion accumulated so far — what a view calls as it takes
+     * the mouse over, so travel the pointer did while it was an arrow is not
+     * banked as one flick of the camera.
+     */
+    public synchronized void discardMouseMotion() {
+        motionX = 0;
+        motionY = 0;
     }
 
     /** The wheel turned, positive away from the user — AWT's sign convention. */

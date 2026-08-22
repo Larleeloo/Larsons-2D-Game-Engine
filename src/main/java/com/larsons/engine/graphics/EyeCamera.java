@@ -106,7 +106,21 @@ public final class EyeCamera {
     private double cosYaw = 1, sinYaw = 0;
     private double cosPitch = 1, sinPitch = 0;
 
-    public EyeCamera() {}
+    /**
+     * The frustum's four side planes, as inward normals through the eye —
+     * {@code left, right, bottom, top}, three numbers each.
+     *
+     * <p>Kept rather than derived because {@link #boxVisible} is asked once per
+     * cell of the terrain sweep, tens of thousands of times a frame, and
+     * building them needs two tangents and six products. They change only when
+     * the eye turns, the window resizes or the field of view moves, so they are
+     * rebuilt there instead.
+     */
+    private final double[] planes = new double[4 * 3];
+
+    public EyeCamera() {
+        rebuildFrustum();
+    }
 
     public EyeCamera(int viewportWidth, int viewportHeight) {
         setViewport(viewportWidth, viewportHeight);
@@ -141,6 +155,7 @@ public final class EyeCamera {
         this.sinYaw = snap(Math.sin(this.yaw));
         this.cosPitch = snap(Math.cos(this.pitch));
         this.sinPitch = snap(Math.sin(this.pitch));
+        rebuildFrustum();
     }
 
     /**
@@ -159,6 +174,7 @@ public final class EyeCamera {
     public void setViewport(int w, int h) {
         this.viewportWidth = Math.max(1, w);
         this.viewportHeight = Math.max(1, h);
+        rebuildFrustum();
     }
 
     public int viewportWidth() { return viewportWidth; }
@@ -171,6 +187,70 @@ public final class EyeCamera {
     /** Set the vertical field of view, clamped to something a screen can show. */
     public void setFov(double radians) {
         this.fov = Math.max(Math.toRadians(20), Math.min(Math.toRadians(130), radians));
+        rebuildFrustum();
+    }
+
+    // --- the frustum -----------------------------------------------------------
+
+    /**
+     * Rebuild {@link #planes} from the current heading, tilt and field of view.
+     *
+     * <p>In the eye's own frame the view volume is
+     * {@code |right| ≤ tanH·depth} and {@code |high| ≤ tanV·depth}, so the left
+     * boundary is the plane {@code right + tanH·depth = 0} — inward normal
+     * {@code (1, 0, tanH)} in that frame, which is {@code R + tanH·F} in the
+     * world's. The other three are the same sentence with a sign or an axis
+     * changed. All four pass through the eye, which is what makes the test
+     * below a dot product and nothing else.
+     */
+    private void rebuildFrustum() {
+        double tanV = Math.tan(fov / 2);
+        double tanH = tanV * (viewportWidth / (double) viewportHeight);
+        // The eye's three axes in world coordinates; see toEye, which is where
+        // these three rows come from.
+        double rx = cosYaw, ry = sinYaw, rz = 0;
+        double ux = -sinYaw * sinPitch, uy = cosYaw * sinPitch, uz = cosPitch;
+        double fx = sinYaw * cosPitch, fy = -cosYaw * cosPitch, fz = sinPitch;
+        set(0, rx + tanH * fx, ry + tanH * fy, rz + tanH * fz);      // left
+        set(1, -rx + tanH * fx, -ry + tanH * fy, -rz + tanH * fz);   // right
+        set(2, ux + tanV * fx, uy + tanV * fy, uz + tanV * fz);      // bottom
+        set(3, -ux + tanV * fx, -uy + tanV * fy, -uz + tanV * fz);   // top
+    }
+
+    private void set(int plane, double nx, double ny, double nz) {
+        planes[plane * 3] = nx;
+        planes[plane * 3 + 1] = ny;
+        planes[plane * 3 + 2] = nz;
+    }
+
+    /**
+     * Whether any part of an axis-aligned world box could be on screen.
+     *
+     * <p><b>Exact rather than a margin around a heading.</b> A frustum is not a
+     * box in azimuth and elevation — those two coordinates shear into each
+     * other as the eye tilts — so "within half the field of view of the way I
+     * am looking" is wrong at the corners of the screen in one direction and
+     * wasteful in the other. Four planes through the eye say it exactly, and a
+     * box is outside one of them when its <em>most positive corner</em> along
+     * that normal still falls behind it, which is the standard
+     * {@code centre·n + extent·|n|} test and costs three products and three
+     * absolute values per plane.
+     *
+     * <p>The near plane is left out on purpose: {@link #clipNear} handles it
+     * per polygon, and a box straddling it is a box you are standing in.
+     */
+    public boolean boxVisible(double minX, double minY, double minZ,
+                              double maxX, double maxY, double maxZ) {
+        double cx = (minX + maxX) / 2 - x;
+        double cy = (minY + maxY) / 2 - y;
+        double cz = (minZ + maxZ) / 2 - z;
+        double ex = (maxX - minX) / 2, ey = (maxY - minY) / 2, ez = (maxZ - minZ) / 2;
+        for (int i = 0; i < 4; i++) {
+            double nx = planes[i * 3], ny = planes[i * 3 + 1], nz = planes[i * 3 + 2];
+            double reach = Math.abs(nx) * ex + Math.abs(ny) * ey + Math.abs(nz) * ez;
+            if (cx * nx + cy * ny + cz * nz + reach < 0) return false;
+        }
+        return true;
     }
 
     // --- directions ----------------------------------------------------------
@@ -274,6 +354,44 @@ public final class EyeCamera {
         out[0] = centreX() + right * f / depth;
         out[1] = centreY() - high * f / depth;
         return true;
+    }
+
+    /**
+     * The world direction a screen pixel looks along, written into {@code out}
+     * as a unit vector {@code {x, y, z}}.
+     *
+     * <p>The projection run backwards: a pixel {@code (sx, sy)} is the eye-frame
+     * ray {@code (sx − centreX, centreY − sy, focal)}, which is then turned by
+     * the pitch and the yaw back into the world. Normalised, because every
+     * caller marches along it and a grid march divides by the components.
+     *
+     * <p><b>Why a camera in the world still needs this.</b> A view whose mouse
+     * is a pointer rather than a steering wheel — the plan view — aims at
+     * whatever is under the cursor, not at the middle of the screen. The flat
+     * camera answered that by inverting its own projection onto the floor; an
+     * eye answers it with a ray, which is the same question and a better answer,
+     * because a ray meets the side of a tower where a floor point does not.
+     */
+    public void rayThrough(double screenX, double screenY, double[] out) {
+        double right = screenX - centreX();
+        double high = centreY() - screenY;
+        double depth = focal();
+        // Undo the pitch: the forward/up pair was rotated about the right axis.
+        double forward = depth * cosPitch - high * sinPitch;
+        double up = high * cosPitch + depth * sinPitch;
+        // …and the yaw, which mixed east/south into right/forward.
+        double dx = right * cosYaw + forward * sinYaw;
+        double dy = right * sinYaw - forward * cosYaw;
+        double len = Math.sqrt(dx * dx + dy * dy + up * up);
+        if (len <= 0) {
+            out[0] = dirX();
+            out[1] = dirY();
+            out[2] = dirZ();
+            return;
+        }
+        out[0] = dx / len;
+        out[1] = dy / len;
+        out[2] = up / len;
     }
 
     /**

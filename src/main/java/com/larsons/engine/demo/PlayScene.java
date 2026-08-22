@@ -226,8 +226,14 @@ public class PlayScene extends AbstractScene {
     private double lookYaw;
     /** How far the eye is tilted, radians, positive looking up. */
     private double lookPitch;
-    /** Last frame's pointer position, for the mouse-look delta. -1 = no reading yet. */
-    private int lookFromX = -1, lookFromY = -1;
+    /**
+     * This frame's pointer motion, {@code {dx, dy}} — filled by
+     * {@link InputManager#consumeMouseMotion} and reused rather than allocated,
+     * because it is read every frame a mouse-look view is up.
+     */
+    private final int[] lookMotion = new int[2];
+    /** Whether the motion banked so far predates this view and must be dropped. */
+    private boolean lookMotionStale = true;
     /** Whether the pointer has moved since this view was entered; see {@link #steerLook}. */
     private boolean pointerMoved;
 
@@ -276,6 +282,7 @@ public class PlayScene extends AbstractScene {
      * identical accumulation and broadcasts the authoritative break.
      */
     private int netMineCol = Integer.MIN_VALUE, netMineRow = Integer.MIN_VALUE;
+    private int netMineLayer = Integer.MIN_VALUE;
     private double netMineProgress;
 
     // Offline world simulation (mobs, items, drops). Online the server owns it.
@@ -905,7 +912,7 @@ public class PlayScene extends AbstractScene {
         // third person behind, third person in front.
         if (KeyBinds.pressed(input, GameAction.TOGGLE_VIEW)) cycleViewpoint();
 
-        if (solidView()) {
+        if (solidView() && viewpoint.freeLook()) {
             // The eye is steered rather than snapped; the flat camera is left
             // exactly where it was, because the pivot a billboard is placed
             // against is measured through it (SolidPainter.billboard) and
@@ -917,8 +924,7 @@ public class PlayScene extends AbstractScene {
             // of the world behind it. Forgetting the last reading is what stops
             // closing the panel from banking the whole journey as one flick.
             if (showInventory || craftingPanel != null || containerPanel != null) {
-                lookFromX = -1;
-                lookFromY = -1;
+                input.discardMouseMotion();
                 // The pointer is arranging stacks, so it is a pointer again:
                 // visible, and left where the player put it.
                 Pointer.restore();
@@ -965,6 +971,14 @@ public class PlayScene extends AbstractScene {
             if (KeyBinds.down(input, GameAction.LOOK_DOWN)) {
                 camera.tilt(-Camera.TILT_SPEED * dt);
             }
+            // …and the plan view stands an eye at the end of that heading and
+            // tilt, because it is drawn through one now (Viewpoint). The flat
+            // camera keeps owning the two angles: it is what snaps them to the
+            // eight the character art has frames for, and what animates between
+            // them. Placed from the simulation's own position for the reason
+            // the branch above is — the aim has to agree with the step, not
+            // with a frame drawn between two of them.
+            if (solidView()) placeEye(me.x + hitSize() / 2.0, me.y + hitSize(), me.z);
         }
 
         if (craftingPanel != null) {
@@ -1569,6 +1583,12 @@ public class PlayScene extends AbstractScene {
         int row = at != null ? at.row() : (int) Math.floor(aim[1] / ts);
         int placeCol = at != null ? at.placeCol() : col;
         int placeRow = at != null ? at.placeRow() : row;
+        // Which block of that column, and which box of the neighbouring one.
+        // A crosshair names both exactly; a pointer over a plan view names
+        // neither, and the column rules stand in for it (TerrainPainter.Aim).
+        int aimLayer = at != null ? at.layer()
+                : Math.max(Level.LAYER_GROUND, level.stackHeight(col, row) - 1);
+        int placeLayer = at != null ? at.placeLayer(level) : level.placeLayer(placeCol, placeRow);
         boolean inReach = Math.hypot(aim[0] - (me.x + hitSize() / 2), aim[1] - (me.y + hitSize() / 2))
                 <= REACH_TILES * ts;
 
@@ -1586,14 +1606,16 @@ public class PlayScene extends AbstractScene {
             in.mine = true;
             in.mineCol = col;
             in.mineRow = row;
-            predictMining(col, row, held, dt);
+            in.mineLayer = aimLayer;
+            predictMining(col, row, aimLayer, held, dt);
         } else if (miningNow) {
             swingTime = Math.max(swingTime, 0.1);
-            // The tool bites the top of the stack: the block standing on the
-            // floor where there is one, the floor itself where there isn't.
-            if (level.topBlockAt(col, row) == null) {
+            // The block the crosshair is on — which in a plan view, where the
+            // pointer names a column rather than a box of one, is still the top
+            // of the stack (aimLayer above).
+            if (level.blockAt(col, row, aimLayer) == null) {
                 // Legacy palette tile with no block definition: instant break.
-                if (leftClick && level.setTile(col, row, 0)) {
+                if (leftClick && level.setTile(col, row, aimLayer, 0)) {
                     stats.add("blocks_mined", 1);
                     playerSound("mine_break");
                     if (p.particlesEnabled) {
@@ -1604,14 +1626,15 @@ public class PlayScene extends AbstractScene {
                 }
             } else {
                 // The scrape of the tool against the block, while it lasts.
-                Block digging = level.topBlockAt(col, row);
+                Block digging = level.blockAt(col, row, aimLayer);
                 mineSoundTimer -= dt;
                 if (digging != null && mineSoundTimer <= 0) {
                     mineSoundTimer = MINE_SOUND_INTERVAL;
                     Sounds.actor(character.key, SoundKeys.block(digging.key(), "mine"),
                             "mine", 0.5);
                 }
-                Block mined = world.continueMining(col, row, held, p.itemsEnabled, dt);
+                Block mined = world.continueMining(col, row, aimLayer, held,
+                        p.itemsEnabled, dt);
                 if (mined != null) {
                     stats.add("blocks_mined", 1);
                     blockSound(mined, "break", "mine_break");
@@ -1642,7 +1665,7 @@ public class PlayScene extends AbstractScene {
             }
         }
         if (rightClick && p.blockEditingEnabled && inReach) {
-            placeAt(placeCol, placeRow, p);
+            placeAt(placeCol, placeRow, placeLayer, p);
         }
     }
 
@@ -1651,15 +1674,17 @@ public class PlayScene extends AbstractScene {
      * hardness/tool formula the server runs, for the crack overlay. The break
      * itself arrives as an authoritative {@code block} broadcast.
      */
-    private void predictMining(int col, int row, ItemDef held, double dt) {
-        if (col != netMineCol || row != netMineRow) {
+    private void predictMining(int col, int row, int layer, ItemDef held, double dt) {
+        if (col != netMineCol || row != netMineRow || layer != netMineLayer) {
             netMineCol = col;
             netMineRow = row;
+            netMineLayer = layer;
             netMineProgress = 0;
         }
         // The client predicts against the block the server will bite into:
-        // the top of the stack, not the floor beneath it.
-        Block b = level.topBlockAt(col, row);
+        // the one the crosshair named, which the input command carries.
+        Block b = level.blockAt(col, row, layer);
+        if (b == null) b = level.topBlockAt(col, row);
         double hardness = b == null || b.liquid() ? 0 : b.hardness();
         if (hardness <= 0) {
             netMineProgress = 1;
@@ -1672,6 +1697,7 @@ public class PlayScene extends AbstractScene {
 
     private void cancelPredictedMining() {
         netMineCol = netMineRow = Integer.MIN_VALUE;
+        netMineLayer = Integer.MIN_VALUE;
         netMineProgress = 0;
     }
 
@@ -1701,19 +1727,24 @@ public class PlayScene extends AbstractScene {
         return true;
     }
 
-    private void placeAt(int col, int row, GameProfile p) {
+    /**
+     * Put the held block in one box of one cell.
+     *
+     * <p>{@code layer} is the aim's answer rather than the column's: a
+     * crosshair on the side of a wall builds outward from that face, at that
+     * height, which is what every block game does and what "blocks place at the
+     * bottom of the stack" was not. A plan view's pointer names a column and
+     * nothing more, so it passes {@link Level#placeLayer}'s bottom-up answer and
+     * behaves exactly as it always has.
+     */
+    private void placeAt(int col, int row, int layer, GameProfile p) {
         ItemDef def = p.itemsEnabled ? inventory.selectedDef() : null;
         if (p.itemsEnabled && (def == null || def.category() != ItemDef.Category.BLOCK)) {
             return; // nothing placeable selected
         }
         String blockKey = def != null ? def.blockKey() : "dirt";
         Block b = level.blocks.get(blockKey);
-        // A stack is built from the bottom up: a hole is floored first, and a
-        // cell that already has a floor gets the block stood on it. Liquid
-        // cells accept placement either way — covering water with a block is
-        // how pools are removed, since liquids can't be mined.
-        int layer = level.placeLayer(col, row);
-        if (b == null || layer < 0) return;
+        if (b == null || layer < 0 || layer >= level.layerLimit()) return;
         // Don't wall yourself in. Flooring a hole under your feet is not
         // walling yourself in — it is the opposite — so only a placement that
         // would actually close the cell counts. "Where I am" is the shape the
@@ -1732,10 +1763,10 @@ public class PlayScene extends AbstractScene {
         if (wouldClose && overlapsMe) return;
 
         if (net != null) {
-            net.client().sendBlockEdit(col, row, b.id(), "play");
+            net.client().sendBlockEdit(col, row, b.id(), "play", layer);
             return;
         }
-        if (world.placeBlock(col, row, b.id())) {
+        if (world.placeBlock(col, row, layer, b.id())) {
             if (p.itemsEnabled) inventory.consumeSelected();
             stats.add("blocks_placed", 1);
             blockSound(b, "place", "place");
@@ -2516,7 +2547,7 @@ public class PlayScene extends AbstractScene {
         phase("terrain", () -> drawTiles(target, standing)); // queues cracks with the block
         if (p.gridVisible) drawGrid(target); // projects to a diamond lattice in isometric
         if (!sceneryBehind) phase("decor", () -> drawDecorLayer(target, false, standing));
-        drawDoors(target);
+        drawDoors(target, standing);
         phase("entities", () -> drawWorldEntities(target, p, standing));
         if (mgView != null) MiniGameHud.drawWorld(target, camera, level, mgView, animClock);
         if (net != null) drawRemotePlayers(target, standing);
@@ -2560,11 +2591,11 @@ public class PlayScene extends AbstractScene {
      * {@link SolidPainter}'s, and every actor is drawn by exactly the same
      * methods the plan view draws them with, routed through
      * {@link #standingAt} into the painter's queue instead of the flat depth
-     * pass. What is missing rather than reimplemented is listed on
-     * {@link Viewpoint} — scenery, the grid, painted doors, the parallax
-     * backdrop and particles are all plan-view painters that project through
-     * the flat camera, and giving each of them a second projection is a job of
-     * its own rather than a line here.
+     * pass. Scenery joins them, as billboards queued into the same painter —
+     * see {@link DecorPainter#drawSolid} and {@link SurfaceDecorPainter#drawSolid}.
+     * What is still missing rather than reimplemented is the grid, painted
+     * doors, the parallax backdrop and particles, all of which project through
+     * the flat camera.
      */
     private void renderSolid(DrawTarget target, GameProfile p) {
         // Per frame rather than on a change, because the setting is a global
@@ -2572,14 +2603,35 @@ public class PlayScene extends AbstractScene {
         // listener on — and because it costs an integer compare.
         applyViewDistance(p);
         solid.begin(target, eye, level, animClock);
+        // Anything standing between a long camera arm and the player is drawn
+        // see-through, so walking indoors is not walking into a roof. Only the
+        // plan view asks: the mouse-look views pull their camera in instead,
+        // which is the right answer at three tiles and the wrong one at twelve
+        // (SolidPainter.setCutaway, PlayScene.placePlanEye).
+        if (!viewpoint.freeLook()) {
+            solid.setCutaway(drawX() + hitSize() / 2.0, drawY() + hitSize(),
+                    drawZ() + drawSize() * EYE_HEIGHT, ts() * CUTAWAY_TILES);
+        }
         phase("terrain", solid::terrain);
         // After the detailed sweep and drawn behind it; see SolidPainter.distant.
         phase("distant", solid::distant);
+        // Both scenery layers, queued into the same painter. "Behind the
+        // actors" and "in front of them" is a flat picture's way of saying what
+        // depth says for itself once there is an eye standing in the world, so
+        // the two are the same call twice rather than two passes with the
+        // actors between them.
+        phase("decor", () -> {
+            DecorPainter.drawSolid(target, level, camera, solid, false, animClock);
+            DecorPainter.drawSolid(target, level, camera, solid, true, animClock);
+            SurfaceDecorPainter.drawSolid(target, level, solid, false, animClock);
+            SurfaceDecorPainter.drawSolid(target, level, solid, true, animClock);
+        });
         // Nothing queues into this in a solid view — standingAt routes to the
         // painter instead — but it is passed and flushed all the same, so that
         // anything that ever did queue into it directly would be drawn rather
         // than silently dropped.
         DepthPass standing = DepthPass.sorted();
+        drawDoors(target, standing);
         phase("entities", () -> drawWorldEntities(target, p, standing));
         if (net != null) drawRemotePlayers(target, standing);
         if (drawsOwnBody()) {
@@ -2593,11 +2645,17 @@ public class PlayScene extends AbstractScene {
                         meleeItem, melee.action(), melee.progress(), meleeProfile(p));
             });
         }
+        if (p.particlesEnabled) {
+            phase("particles", () -> particles.renderSolid(target, camera, solid));
+        }
         phase("depth-flush", () -> {
             solid.flush();
             standing.flush();
         });
-        drawCrosshair(target);
+        // The crosshair belongs to the views that took the pointer away. The
+        // plan view still has one, and two pointers on one screen is exactly
+        // the confusion the crosshair exists to prevent.
+        if (viewpoint.freeLook()) drawCrosshair(target);
         if (viewpoint == Viewpoint.FIRST_PERSON) drawHandItem(target, p);
     }
 
@@ -2614,7 +2672,9 @@ public class PlayScene extends AbstractScene {
         GameProfile p = profile();
         int view = p != null && p.terrain != null
                 ? p.terrain.renderDistance : SolidPainter.DEFAULT_VIEW_TILES;
-        level.streamTerrain(me.x + hitSize() / 2, me.y + hitSize() / 2, view);
+        // With the player's height, so digging down stops streaming a disc of
+        // surface world nobody can see any of (Level.streamTerrain).
+        level.streamTerrain(me.x + hitSize() / 2, me.y + hitSize() / 2, me.z, view);
     }
 
     /**
@@ -3398,7 +3458,7 @@ public class PlayScene extends AbstractScene {
      * and only one of them is the one the picture is actually drawn at.
      */
     private double viewYaw() {
-        return solidView() ? lookYaw : camera.viewYaw();
+        return solidView() && viewpoint.freeLook() ? lookYaw : camera.viewYaw();
     }
 
     /**
@@ -3427,15 +3487,13 @@ public class PlayScene extends AbstractScene {
             ruleStatusTime = 2.5;
             return;
         }
-        boolean wasSolid = viewpoint.solid();
+        boolean wasFree = viewpoint.freeLook();
         viewpoint = next;
-        if (!wasSolid && viewpoint.solid()) {
+        if (!wasFree && viewpoint.freeLook()) {
             lookYaw = camera.viewYaw();
             lookPitch = 0;
-            lookFromX = -1;
-            lookFromY = -1;
-            pointerMoved = false;
-        } else if (wasSolid && !viewpoint.solid()) {
+            forgetLookMotion();
+        } else if (wasFree && !viewpoint.freeLook()) {
             camera.setYaw(Math.floorMod((int) Math.round(lookYaw / Camera.EIGHTH_TURN), 8)
                     * Camera.EIGHTH_TURN);
         }
@@ -3487,71 +3545,61 @@ public class PlayScene extends AbstractScene {
     /**
      * Aim the eye: the mouse turns it, and the rotate/look keys turn it too.
      *
-     * <p><b>Why the mouse both drags and steers.</b> Every 3D game locks the
-     * pointer to the middle of the window and reads its motion forever. This
-     * engine cannot: it draws through two window systems — an AWT canvas and
-     * the GL backend's GLFW window — and neither the {@code BackendWindow}
-     * interface nor AWT without a {@code Robot} has a way to say "hold the
-     * cursor here". Reading the raw motion alone is most of the feel and fails
-     * at exactly one moment, the one where the pointer reaches the edge of the
-     * window and the turn stops halfway round. So resting in the outer tenth of
-     * the window keeps turning, at a rate set by how far into it you are —
-     * which is a control anyone who has played a game with a stick already has,
-     * and which makes running out of desk a non-event rather than the thing
-     * that ends the turn.
+     * <p><b>The pointer is locked, and the motion is what is read.</b> Every 3D
+     * game holds the cursor in one place and reads how far the hand moved
+     * between frames, never where the arrow ended up, and that is what happens
+     * here: {@link Pointer#lockTo} hides the pointer and pins it to the middle
+     * of the window every frame — natively where the window can hold it (the GL
+     * backend's GLFW window), through a {@code Robot} where it can only be
+     * moved (AWT) — and {@link InputManager#consumeMouseMotion} hands back the
+     * hand's own travel with the recentring discounted out of it. There is
+     * therefore no edge to run out of and no turn that stops halfway round,
+     * which is what "the mouse runs out of space" was.
+     *
+     * <p><b>Recentred every frame rather than at the edges.</b> Warping only
+     * once the arrow neared an edge was the previous scheme and it is worse in
+     * both directions: between recentres the pointer really is sliding across
+     * the desk, so an alt-tab or a click lands wherever it happens to have got
+     * to, and every recentre had to throw a frame of motion away because the
+     * reading was a <em>position</em> difference. Motion that survives a warp
+     * costs nothing to recentre, so it is done always and the pointer never
+     * leaves the middle of the window at all.
+     *
+     * <p>Edge-steering stays for the one window that can do neither — a
+     * headless canvas, a desktop that refuses a {@code Robot} — where resting
+     * in the outer tenth of the window keeps turning, which is the control that
+     * makes running out of desk survivable when the pointer cannot be held.
      *
      * <p>Nothing here is bound to a level or a session: it is the local
      * player's view and stays entirely on this client (C10).
      */
     private void steerLook(InputManager input, double dt) {
         int mx = input.getMouseX(), my = input.getMouseY();
-        double step = lookStep(), pitchSign = lookPitchSign();
-        if (lookFromX >= 0) {
-            if (mx != lookFromX || my != lookFromY) pointerMoved = true;
-            lookYaw += (mx - lookFromX) * step;
-            lookPitch += (my - lookFromY) * step * pitchSign;
-        }
-        lookFromX = mx;
-        lookFromY = my;
-
-        // <b>Not drawn, and put back in the middle before it runs out of
-        // window.</b> The arrow is hidden because the crosshair is the pointer
-        // here — two pointers on one screen, one of which the game ignores, is
-        // what "the mouse doesn't match" describes — and the pointer is carried
-        // back to the centre as it nears an edge, so a turn is never cut short
-        // by the desk running out. Where the platform cannot move the pointer
-        // ({@link Pointer#canWarp()}) the edge-steering below still does that
-        // job, which is why it stays.
-        //
-        // …and where the window <em>holds</em> the pointer — a real lock, which
-        // the GL window has and AWT has not — neither is wanted. There is no
-        // edge to reach, so recentring would throw away a frame of motion for
-        // nothing and edge-steering would spin the world on a reading that is
-        // simply a long way from where the cursor started. Both are answers to
-        // a limitation that window does not have.
-        boolean locked = holdPointer();
-        boolean held = Pointer.held();
         int w = Math.max(1, viewportWidth), h = Math.max(1, viewportHeight);
-        double marginX = w * LOOK_EDGE, marginY = h * LOOK_EDGE;
-        if (!held && locked && (mx < marginX || mx > w - marginX
-                || my < marginY || my > h - marginY)
-                && Pointer.warpTo(w / 2, h / 2)) {
-            // The warp's own motion is not the player's, and the event carrying
-            // it arrives after this frame — so the next reading starts a fresh
-            // origin instead of being measured against a position the pointer
-            // has already left. One frame's motion is lost per recentre, which
-            // is why this happens at the edges rather than every frame: in the
-            // middle of the window the reading is exactly what the hand did.
-            lookFromX = -1;
-            lookFromY = -1;
-        }
+        // Hidden first, then held: hiding the arrow is how this view says it
+        // has taken the mouse over, and Pointer.lockTo refuses to pin a pointer
+        // that is still being drawn.
+        Pointer.setVisible(false);
+        boolean locked = Pointer.lockTo(input, w / 2, h / 2);
 
+        input.consumeMouseMotion(lookMotion);
+        if (lookMotionStale) {
+            lookMotionStale = false;
+            lookMotion[0] = 0;
+            lookMotion[1] = 0;
+        }
+        double step = lookStep(), pitchSign = lookPitchSign();
+        if (lookMotion[0] != 0 || lookMotion[1] != 0) pointerMoved = true;
+        lookYaw += lookMotion[0] * step;
+        lookPitch += lookMotion[1] * step * pitchSign;
+
+        double marginX = w * LOOK_EDGE, marginY = h * LOOK_EDGE;
         // Steering from the edges, so a turn is never cut short by the window
         // — but only once the pointer has been moved at least once since this
         // view was entered. Without that a cursor that simply happens to be
         // resting in a corner when the key is pressed spins the world on its
         // own, which is the one way this control can behave like a fault.
-        if (pointerMoved && !locked && !held) {
+        if (pointerMoved && !locked) {
             if (mx < marginX) lookYaw -= edgePush(marginX - mx, marginX) * dt;
             else if (mx > w - marginX) lookYaw += edgePush(mx - (w - marginX), marginX) * dt;
             // Inverted the same way the drag is: resting against an edge is the
@@ -3576,18 +3624,6 @@ public class PlayScene extends AbstractScene {
         // reads is always a heading and never an accumulated total.
         lookYaw = wrapAngle(lookYaw);
         lookPitch = Math.max(-EyeCamera.MAX_PITCH, Math.min(EyeCamera.MAX_PITCH, lookPitch));
-    }
-
-    /**
-     * Hide the pointer for a view that steers with it.
-     *
-     * @return whether this window can also <em>move</em> the pointer, which is
-     *         what lets the view recentre it instead of steering from the
-     *         window's edges
-     */
-    private boolean holdPointer() {
-        Pointer.setVisible(false);
-        return Pointer.canWarp();
     }
 
     /** Turn rate for a pointer {@code into} pixels inside an edge of {@code margin}. */
@@ -3623,6 +3659,17 @@ public class PlayScene extends AbstractScene {
     private double eyeDistance;
 
     /**
+     * How wide the plan view's see-through channel is, in tiles.
+     *
+     * <p>About two, so a doorway's worth of wall goes and the room beside it
+     * stays: narrower and the player's own sprite is still half behind a block
+     * corner, wider and half the building disappears every time you stand near
+     * it. The channel fades out toward its rim, so the clear part of it is a
+     * good deal less than this.
+     */
+    private static final double CUTAWAY_TILES = 1.9;
+
+    /**
      * Place the eye for this frame: at the player's own eyes in first person,
      * and pulled back along the view for the third-person stops.
      *
@@ -3643,9 +3690,13 @@ public class PlayScene extends AbstractScene {
     private void placeEye(double cx, double cy, double bodyZ) {
         double ts = ts();
         double eyeZ = eyeOutOfBlocks(cx, cy, bodyZ + drawSize() * EYE_HEIGHT);
+        eye.setViewport(viewportWidth, viewportHeight);
+        if (!viewpoint.freeLook()) {
+            placePlanEye(cx, cy, eyeZ);
+            return;
+        }
         double yaw = viewpoint.reversed() ? wrapAngle(lookYaw + Math.PI) : lookYaw;
         double pitch = viewpoint.reversed() ? -lookPitch : lookPitch;
-        eye.setViewport(viewportWidth, viewportHeight);
         eye.look(yaw, pitch);
         eyeDistance = 0;
         double back = viewpoint.distanceTiles() * ts;
@@ -3676,6 +3727,70 @@ public class PlayScene extends AbstractScene {
     }
 
     /**
+     * The shortest the plan view's arm may get, in tiles, however far the
+     * player has zoomed in. Below this the camera is over the player's shoulder
+     * rather than over the world, which is a different view and there are three
+     * of those on the same key.
+     */
+    private static final double PLAN_MIN_TILES = 5;
+
+    /**
+     * Place the plan view's camera: back and up from the player, along the flat
+     * camera's own heading and tilt.
+     *
+     * <p><b>Three things come from the flat camera and one does not.</b> The
+     * heading is {@link Camera#viewYaw()}, which snaps to the eight compass
+     * points the character sprites have frames for and animates between them;
+     * the tilt is {@link Camera#pitch()}, which a player sweeps with the look
+     * keys and which reads here as it always did — {@code 90°} is straight
+     * down, {@code 0°} is along the ground. The distance is the {@link Camera#zoom}
+     * turned inside out: zooming in is walking the camera closer, which is what
+     * a zoom <em>is</em> once the projection divides by depth, and it keeps the
+     * zoom keys meaning what they have always meant.
+     *
+     * <p>What does not come from it is the collision. The mouse-look views pull
+     * their camera in until nothing is in the way; a dozen tiles of arm cannot
+     * do that without becoming a first-person view every time the player walks
+     * under a roof, so the arm is kept and whatever is standing in it is drawn
+     * see-through instead ({@link SolidPainter#setCutaway}). The one case that
+     * still moves the camera is it ending up <em>inside</em> something, where
+     * there is nothing to see through because every face is turned away: then
+     * it comes in until it is in open air.
+     */
+    private void placePlanEye(double cx, double cy, double eyeZ) {
+        double ts = ts();
+        // Straight down is where a heading stops meaning anything, so the eye
+        // stops just short of it — the same bound every mouse-look has, applied
+        // to a tilt a level may legitimately have authored at ninety degrees.
+        double pitch = -Math.min(camera.pitch(), EyeCamera.MAX_PITCH);
+        eye.look(camera.viewYaw(), pitch);
+        double zoom = Math.max(0.05, camera.zoom);
+        double back = Math.max(PLAN_MIN_TILES, viewpoint.distanceTiles() / zoom) * ts;
+        double from = eyeZ + ts * 0.35;
+        eyeDistance = back;
+        double px = cx - eye.dirX() * back;
+        double py = cy - eye.dirY() * back;
+        double pz = Math.max(0.1, from - eye.dirZ() * back);
+        // Inside a block, and only then: walk the arm in until it is not. The
+        // march runs from the player outward, so the point it stops at is the
+        // furthest the camera can stand and still be in the open.
+        if (SolidPainter.opaque(level, (int) Math.floor(px / ts),
+                (int) Math.floor(py / ts), (int) Math.floor(pz / ts))) {
+            eye.place(cx, cy, from);
+            eye.look(wrapAngle(camera.viewYaw() + Math.PI), -pitch);
+            double[] behind = SolidPainter.aimPoint(eye, level, back);
+            double blocked = Math.hypot(Math.hypot(behind[0] - cx, behind[1] - cy),
+                    behind[2] - from) - ts * 0.3;
+            eyeDistance = Math.max(ts * 1.5, Math.min(back, blocked));
+            eye.look(camera.viewYaw(), pitch);
+            px = cx - eye.dirX() * eyeDistance;
+            py = cy - eye.dirY() * eyeDistance;
+            pz = Math.max(0.1, from - eye.dirZ() * eyeDistance);
+        }
+        eye.place(px, py, pz);
+    }
+
+    /**
      * {@code eyeZ}, brought below whatever it is standing inside.
      *
      * <p>A character's eyes are just under the top of their sprite, and a
@@ -3692,7 +3807,7 @@ public class PlayScene extends AbstractScene {
         if (ts <= 0 || !level.layered()) return eyeZ;
         int col = (int) Math.floor(cx / ts), row = (int) Math.floor(cy / ts);
         int box = (int) Math.floor(eyeZ / ts);
-        if (!SolidPainter.filled(level, col, row, box)) return eyeZ;
+        if (!SolidPainter.opaque(level, col, row, box)) return eyeZ;
         return Math.max(0.1, box * (double) ts - ts * 0.08);
     }
 
@@ -3742,9 +3857,17 @@ public class PlayScene extends AbstractScene {
         camera.setHeightFollow(Camera.HeightFollow.EASED);
         lookYaw = camera.viewYaw();
         lookPitch = 0;
-        lookFromX = -1;
-        lookFromY = -1;
+        forgetLookMotion();
+    }
+
+    /**
+     * Start the mouse-look from a standstill: whatever travel the pointer has
+     * banked while it was an arrow is not a flick of the camera, and neither is
+     * a cursor that happens to be resting in a corner.
+     */
+    private void forgetLookMotion() {
         pointerMoved = false;
+        lookMotionStale = true;
     }
 
     private double clampZoom(double z, GameProfile p) {
@@ -3794,10 +3917,38 @@ public class PlayScene extends AbstractScene {
      */
     private double[] aimPoint() {
         if (solidView()) {
-            double[] hit = SolidPainter.aimPoint(eye, level, REACH_TILES * ts() * 4);
+            double[] dir = aimRay();
+            double[] hit = SolidPainter.aimPoint(eye, level, REACH_TILES * ts() * 4,
+                    dir[0], dir[1], dir[2]);
             return new double[]{hit[0], hit[1]};
         }
         return camera.screenToWorld(mouseX, mouseY);
+    }
+
+    /** Scratch for the ray a solid view aims along; see {@link #aimRay}. */
+    private final double[] aimDir = new double[3];
+
+    /**
+     * The direction this frame aims along, from the eye.
+     *
+     * <p>Two views, two rays, and the difference is who the mouse belongs to. A
+     * mouse-look view has taken the pointer over to steer with, so what it is
+     * aiming at is whatever the crosshair — the middle of the screen — is on.
+     * The plan view still has a pointer, so it aims through the pixel that
+     * pointer is on, which is the same thing the flat camera's
+     * {@code screenToWorld} used to answer and a better answer than that one
+     * was: a ray meets the side of a tower where an inverted floor point
+     * resolves to the cell behind it.
+     */
+    private double[] aimRay() {
+        if (viewpoint.freeLook()) {
+            aimDir[0] = eye.dirX();
+            aimDir[1] = eye.dirY();
+            aimDir[2] = eye.dirZ();
+            return aimDir;
+        }
+        eye.rayThrough(mouseX, mouseY, aimDir);
+        return aimDir;
     }
 
     /**
@@ -3819,7 +3970,9 @@ public class PlayScene extends AbstractScene {
      */
     private TerrainPainter.Aim aimBlock() {
         if (solidView()) {
-            return SolidPainter.pick(eye, level, REACH_TILES * ts() + eyeDistance);
+            double[] dir = aimRay();
+            return SolidPainter.pick(eye, level, REACH_TILES * ts() + eyeDistance,
+                    dir[0], dir[1], dir[2]);
         }
         return TerrainPainter.pick(camera, level, mouseX, mouseY);
     }
@@ -3981,22 +4134,39 @@ public class PlayScene extends AbstractScene {
         standingAt(into, x, y, hitSize(), sprite);
     }
 
-    /** Painted doors: tinted door shapes anchored at their base. */
-    private void drawDoors(DrawTarget target) {
+    /**
+     * Painted doors: tinted door shapes anchored at their base.
+     *
+     * <p>Routed through {@link #standingAt} rather than drawn straight to the
+     * screen, which is what puts them in the solid views as well — a door is a
+     * flat shape standing on the floor, so it is a billboard there and a
+     * depth-sorted sprite here, and either way it is this one piece of drawing.
+     * They were missing from every view but the flat one, which is a poor thing
+     * for a door: it is the way out of the level.
+     */
+    private void drawDoors(DrawTarget target, DepthPass into) {
         double ts = ts();
         for (Level.EntitySpawn e : level.entities) {
             if (!"door".equals(e.kind)) continue;
             DoorLink link = doors.get(e.type);
             Color tint = link != null ? link.color() : new Color(150, 105, 60);
-            int dw = Math.max(8, (int) Math.round(ts * 0.9 * camera.zoom));
-            int dh = Math.max(12, (int) Math.round(ts * 1.6 * camera.zoom));
-            camera.worldToScreen(e.x, e.y, corner);
-            int x = corner[0] - dw / 2, y = corner[1] - dh;
-            target.fillRoundRect(x, y, dw, dh, dw / 3, dw / 3, tint);
-            target.drawRoundRect(x, y, dw, dh, dw / 3, dw / 3, tint.darker(), 2f);
-            int knob = Math.max(2, dw / 6);
-            target.fillOval(x + dw - knob * 2, y + dh / 2, knob, knob, new Color(255, 235, 170));
+            // Anchored at the door's own foot: standingAt takes the corner of a
+            // box and reads its ground contact point off the far side, so the
+            // spawn point is handed to it as the middle of a tile-sized one.
+            standingAt(into, e.x - ts / 2, e.y - ts, ts, 0,
+                    () -> drawDoor(target, e, tint, ts));
         }
+    }
+
+    private void drawDoor(DrawTarget target, Level.EntitySpawn e, Color tint, double ts) {
+        int dw = Math.max(8, (int) Math.round(ts * 0.9 * camera.zoom));
+        int dh = Math.max(12, (int) Math.round(ts * 1.6 * camera.zoom));
+        camera.worldToScreen(e.x, e.y, corner);
+        int x = corner[0] - dw / 2, y = corner[1] - dh;
+        target.fillRoundRect(x, y, dw, dh, dw / 3, dw / 3, tint);
+        target.drawRoundRect(x, y, dw, dh, dw / 3, dw / 3, tint.darker(), 2f);
+        int knob = Math.max(2, dw / 6);
+        target.fillOval(x + dw - knob * 2, y + dh / 2, knob, knob, new Color(255, 235, 170));
     }
 
     /** "[E] Enter …" prompt while standing at a linked door. */
@@ -4415,7 +4585,7 @@ public class PlayScene extends AbstractScene {
      * what makes it a thing art can be chosen by.
      */
     private boolean overheadView() {
-        return !solidView() && PlayerSprites.overhead(camera);
+        return !viewpoint.freeLook() && PlayerSprites.overhead(camera);
     }
 
     private void drawMeleeArc(DrawTarget target, MeleeProfile profile) {

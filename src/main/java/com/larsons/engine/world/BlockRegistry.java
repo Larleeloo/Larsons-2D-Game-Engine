@@ -65,6 +65,20 @@ public final class BlockRegistry {
         byKey.put(tuned.key(), tuned);
     }
 
+    /**
+     * Change what a registered block is drawn as in place — the shape hook the
+     * standard set uses for the handful of plants that also had to be something
+     * else first (a glow mushroom is a light source, so it is registered as one
+     * and reshaped here rather than needing a second factory).
+     */
+    public void setShape(String key, Block.Shape shape) {
+        Block b = byKey.get(key);
+        if (b == null || shape == null || b.shape() == shape) return;
+        Block next = b.withShape(shape);
+        byId.put(next.id(), next);
+        byKey.put(next.key(), next);
+    }
+
     /** Toggle a registered block's gravity behaviour in place (sand, gravel…). */
     public void setFalling(String key, boolean falling) {
         Block b = byKey.get(key);
@@ -197,14 +211,16 @@ public final class BlockRegistry {
                 true, 0, null, "emerald"));
         r.register(new Block(58, "amethyst_ore", "Amethyst Ore", new Color(150, 110, 190),
                 true, 0, null, "amethyst"));
-        // Nature (passable).
-        r.register(Block.passable(59, "flower_red", "Red Flower", new Color(220, 80, 80)));
-        r.register(Block.passable(60, "flower_yellow", "Yellow Flower", new Color(235, 210, 90)));
-        r.register(Block.passable(61, "flower_blue", "Blue Flower", new Color(110, 140, 235)));
-        r.register(Block.passable(62, "tall_grass", "Tall Grass", new Color(105, 170, 90)));
-        r.register(Block.passable(63, "fern", "Fern", new Color(80, 140, 75)));
-        r.register(Block.passable(64, "dead_bush", "Dead Bush", new Color(160, 130, 85)));
-        r.register(Block.passable(65, "mushroom", "Mushroom", new Color(190, 130, 100)));
+        // Nature. Growing things are PLANT-shaped: a stem you can walk
+        // through with a sprite on it, rather than a cube of petal colour
+        // (Block.Shape).
+        r.register(Block.plant(59, "flower_red", "Red Flower", new Color(220, 80, 80)));
+        r.register(Block.plant(60, "flower_yellow", "Yellow Flower", new Color(235, 210, 90)));
+        r.register(Block.plant(61, "flower_blue", "Blue Flower", new Color(110, 140, 235)));
+        r.register(Block.plant(62, "tall_grass", "Tall Grass", new Color(105, 170, 90)));
+        r.register(Block.plant(63, "fern", "Fern", new Color(80, 140, 75)));
+        r.register(Block.plant(64, "dead_bush", "Dead Bush", new Color(160, 130, 85)));
+        r.register(Block.plant(65, "mushroom", "Mushroom", new Color(190, 130, 100)));
         r.register(Block.passable(66, "roots", "Roots", new Color(110, 85, 60)));
         r.register(Block.passable(67, "web", "Cobweb", new Color(225, 225, 230)));
         // Hazards.
@@ -274,6 +290,13 @@ public final class BlockRegistry {
         r.setFalling("gravel", true);
         r.setFalling("red_sand", true);
         r.setFalling("ash", true);
+        // Growing things that had to be registered as something else first: a
+        // glow mushroom is a light source and a lily pad is a mat on the water,
+        // and both are still plants rather than cubes of their own colour.
+        for (String k : new String[]{"glow_mushroom", "lily_pad", "vines", "roots",
+                "icicle", "stalagmite"}) {
+            r.setShape(k, Block.Shape.PLANT);
+        }
         return r;
     }
 
@@ -347,24 +370,24 @@ public final class BlockRegistry {
 
         // Water: the shallows a coast is worth swimming out to.
         r.register(Block.terrain(130, "prismarine", "Prismarine", new Color(94, 160, 150)));
-        r.register(Block.passable(131, "coral_pink", "Pink Coral", new Color(240, 128, 168)));
-        r.register(Block.passable(132, "coral_blue", "Blue Coral", new Color(96, 150, 240)));
-        r.register(Block.passable(133, "coral_yellow", "Yellow Coral", new Color(244, 208, 96)));
-        r.register(Block.passable(134, "sea_grass", "Sea Grass", new Color(70, 150, 110)));
+        r.register(Block.plant(131, "coral_pink", "Pink Coral", new Color(240, 128, 168)));
+        r.register(Block.plant(132, "coral_blue", "Blue Coral", new Color(96, 150, 240)));
+        r.register(Block.plant(133, "coral_yellow", "Yellow Coral", new Color(244, 208, 96)));
+        r.register(Block.plant(134, "sea_grass", "Sea Grass", new Color(70, 150, 110)));
         r.register(Block.passable(135, "lily_pad", "Lily Pad", new Color(88, 158, 88)));
 
         // Ground cover and crops.
-        r.register(Block.passable(136, "berry_bush", "Berry Bush", new Color(84, 122, 68)));
-        r.register(Block.passable(137, "sugar_cane", "Sugar Cane", new Color(150, 196, 118)));
+        r.register(Block.plant(136, "berry_bush", "Berry Bush", new Color(84, 122, 68)));
+        r.register(Block.plant(137, "sugar_cane", "Sugar Cane", new Color(150, 196, 118)));
         r.register(Block.terrain(138, "pumpkin", "Pumpkin", new Color(226, 140, 52)));
-        r.register(Block.passable(139, "orchid", "Orchid", new Color(206, 116, 216)));
-        r.register(Block.passable(140, "lavender", "Lavender", new Color(168, 140, 224)));
-        r.register(Block.passable(141, "tulip_pink", "Pink Tulip", new Color(236, 140, 176)));
-        r.register(Block.passable(142, "desert_shrub", "Desert Shrub", new Color(168, 148, 96)));
-        r.register(Block.passable(143, "cattail", "Cattail", new Color(120, 148, 84)));
-        r.register(Block.passable(144, "jungle_fern", "Jungle Fern", new Color(58, 132, 66)));
-        r.register(Block.passable(145, "tundra_shrub", "Tundra Shrub", new Color(122, 140, 124)));
-        r.register(Block.passable(146, "bamboo_shoot", "Bamboo Shoot", new Color(162, 196, 96)));
+        r.register(Block.plant(139, "orchid", "Orchid", new Color(206, 116, 216)));
+        r.register(Block.plant(140, "lavender", "Lavender", new Color(168, 140, 224)));
+        r.register(Block.plant(141, "tulip_pink", "Pink Tulip", new Color(236, 140, 176)));
+        r.register(Block.plant(142, "desert_shrub", "Desert Shrub", new Color(168, 148, 96)));
+        r.register(Block.plant(143, "cattail", "Cattail", new Color(120, 148, 84)));
+        r.register(Block.plant(144, "jungle_fern", "Jungle Fern", new Color(58, 132, 66)));
+        r.register(Block.plant(145, "tundra_shrub", "Tundra Shrub", new Color(122, 140, 124)));
+        r.register(Block.plant(146, "bamboo_shoot", "Bamboo Shoot", new Color(162, 196, 96)));
 
         // Buildings: villages, temples and the ruins of both.
         r.register(Block.terrain(147, "ancient_bricks", "Ancient Bricks", new Color(158, 148, 122)));

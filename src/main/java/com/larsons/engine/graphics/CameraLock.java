@@ -254,10 +254,19 @@ public final class CameraLock {
         }
     }
 
-    /** Whether any solid view is reachable at all. */
+    /**
+     * Whether any mouse-look view is reachable at all — the three a level may
+     * switch off, as against the plan view it may not.
+     *
+     * <p>Asked of {@link Viewpoint#freeLook()} rather than of
+     * {@link Viewpoint#solid()}: every view is drawn through the eye now, so
+     * "solid" no longer separates the optional stops of the cycle from the
+     * compulsory one, and the question this method exists to answer is still
+     * the second.
+     */
     public boolean allowsAnySolidView() {
         for (Viewpoint v : Viewpoint.values()) {
-            if (v.solid() && allows(v)) return true;
+            if (v.freeLook() && allows(v)) return true;
         }
         return false;
     }
