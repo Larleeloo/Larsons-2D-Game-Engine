@@ -344,6 +344,9 @@ public final class SolidPainter {
      * frame in {@link #begin}. See {@link #covers(int)}.
      */
     private boolean[] coversById = new boolean[0];
+    /** The registry {@link #coversById} was built from, and how big it was. */
+    private com.larsons.engine.world.BlockRegistry coversFrom;
+    private int coversCount = -1;
 
     /** The cell the eye is standing in, so the faces around it are never culled. */
     private int eyeCol, eyeRow, eyeLayer;
@@ -418,6 +421,20 @@ public final class SolidPainter {
     /** How far the eye can see, in tiles. */
     public int viewTiles() { return viewTiles; }
 
+    /**
+     * Whether a point on the world plane is inside this frame's view distance.
+     *
+     * <p>For callers that have their own list to walk — the scenery painters,
+     * which hold every decoration in the level and would otherwise project all
+     * of them to find out that ten are on screen. {@link #billboard} answers the
+     * same question for what it is handed; this lets the walk stop earlier.
+     */
+    public boolean inRange(double wx, double wy) {
+        if (eye == null) return false;
+        double dx = wx - eye.x(), dy = wy - eye.y();
+        return dx * dx + dy * dy <= viewDistance * viewDistance;
+    }
+
     /** Set how far the eye can see, in tiles. */
     public void setViewTiles(int tiles) {
         this.viewTiles = Math.max(2, Math.min(MAX_VIEW_TILES, tiles));
@@ -488,7 +505,7 @@ public final class SolidPainter {
      * zero: a wall you can see the outline of is a wall, and one that has
      * simply gone is a hole in the world.
      */
-    private static final double CUTAWAY_MIN = 0.18;
+    private static final double CUTAWAY_MIN = 0.13;
 
     // --- a frame -----------------------------------------------------------
 
@@ -563,9 +580,20 @@ public final class SolidPainter {
         }
     }
 
-    /** Fill {@link #coversById} from this level's block registry. */
+    /**
+     * Fill {@link #coversById} from this level's block registry, when it is not
+     * already the table for that registry.
+     *
+     * <p>Rebuilt on a change rather than every frame: the registry is a couple
+     * of hundred entries and a scan of it is nothing beside a frame, but it is
+     * also nothing that ever needs doing twice, and a creator adding a block
+     * mid-session is what the size check catches.
+     */
     private void buildCoversTable() {
         java.util.List<Block> all = level.blocks.all();
+        if (level.blocks == coversFrom && all.size() == coversCount) return;
+        coversFrom = level.blocks;
+        coversCount = all.size();
         int top = 0;
         for (Block b : all) top = Math.max(top, b.id());
         if (coversById.length < top + 1) coversById = new boolean[top + 1];
@@ -603,6 +631,15 @@ public final class SolidPainter {
      *       nothing, correctly, because on an open plain you can see the
      *       plain.</li>
      * </ul>
+     *
+     * <p><b>What the two are worth.</b> Over generated terrain at
+     * 1280&times;720, measured: 12&nbsp;ms a frame becomes 9 at the default
+     * render distance of twenty tiles, 60 becomes 20 at sixty-four, 256 becomes
+     * 34 at a hundred and twenty-eight, and 688&nbsp;ms becomes 47 at the
+     * slider's own ceiling of a hundred and ninety-two. The far end of that is
+     * the point: a long render distance used to be a setting that could not be
+     * used, and what it costs now grows with how much of the world can be seen
+     * rather than with the area of the disc.
      *
      * <p><b>Which is why the sweep runs in rings.</b> Line of sight is only
      * sound if a cell is tested against occluders that are actually in front of
@@ -666,8 +703,10 @@ public final class SolidPainter {
 
         double centre = Math.sqrt(centreSq);
         double near = Math.hypot(axisGap(eye.x(), x0, x1), axisGap(eye.y(), y0, y1));
+        double far = Math.hypot(Math.max(Math.abs(eye.x() - x0), Math.abs(eye.x() - x1)),
+                Math.max(Math.abs(eye.y() - y0), Math.abs(eye.y() - y1)));
         double angle = pseudoAngle(dx, dy);
-        if (hiddenBehindHorizon(angle, near, topZ)) return;
+        if (hiddenBehindHorizon(angle, near, far, topZ)) return;
 
         column(col, row);
         raiseHorizon(angle, centre, groundedTopZ(col, row, depth));
@@ -698,14 +737,15 @@ public final class SolidPainter {
     private final double[] horizonAt = new double[HORIZON_SECTORS];
 
     /**
-     * The widest a cell may be allowed to span, as a fraction of the whole
-     * circle, before the line-of-sight test gives up and draws it.
+     * The widest half-span a cell may have, in {@link #pseudoAngle} units,
+     * before the line-of-sight test gives up and draws it.
      *
-     * <p>A cell close enough to fill a tenth of the horizon is a cell you are
+     * <p>Four tenths of a unit is a twentieth of the circle either side of the
+     * cell's middle. A cell that subtends more than that is a cell you are
      * standing next to, which is never the one worth culling, and testing it
-     * would walk a tenth of the buffer for that answer.
+     * would walk a tenth of the buffer to find that out.
      */
-    private static final double MAX_TEST_SPAN = 0.1;
+    private static final double MAX_TEST_SPAN = 0.4;
 
     private void clearHorizon() {
         java.util.Arrays.fill(horizonSlope, Double.NEGATIVE_INFINITY);
@@ -750,16 +790,27 @@ public final class SolidPainter {
      * that reaches this cell got past the ground, and there is nothing here to
      * draw.
      *
-     * @param near the shortest horizontal distance to the cell, so the
-     *             steepest line the cell could be seen along
+     * <p><b>Which distance the steepest line uses depends on which side of the
+     * eye the cell's top is.</b> Above the eye the line is steepest at the
+     * cell's <em>near</em> edge, because the rise is divided by less. Below it
+     * the numerator is negative, so the same division makes the angle
+     * <em>more</em> negative, and the shallowest — that is, highest — line to a
+     * cell below you is the one to its far edge. Using the near distance for
+     * both is the one way this test can be wrong in the direction that matters:
+     * it would understate how high a low cell can be seen along, and cull
+     * something the player is looking straight at.
+     *
+     * @param near the shortest horizontal distance to the cell
+     * @param far  the longest, which is the one a cell below the eye is seen
+     *             along most shallowly
      * @param topZ the highest point anything in this cell reaches
      */
-    private boolean hiddenBehindHorizon(double angle, double near, double topZ) {
+    private boolean hiddenBehindHorizon(double angle, double near, double far, double topZ) {
         int ts = level.tileSize;
         if (near < ts) return false;      // standing in it, or against it
         double span = SPAN_SKEW * (ts * 0.7072 / near);
-        if (span > MAX_TEST_SPAN * 4) return false;
-        double slope = (topZ - eye.z()) / (topZ >= eye.z() ? near : Math.max(near, 1e-6));
+        if (span > MAX_TEST_SPAN) return false;
+        double slope = (topZ - eye.z()) / Math.max(1e-6, topZ >= eye.z() ? near : far);
         int from = sectorOf(angle - span), to = sectorOf(angle + span);
         int count = Math.floorMod(to - from, HORIZON_SECTORS);
         for (int i = 0; i <= count; i++) {

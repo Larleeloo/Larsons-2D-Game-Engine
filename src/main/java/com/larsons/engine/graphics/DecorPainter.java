@@ -70,7 +70,7 @@ public final class DecorPainter {
      */
     public static void draw(DrawTarget target, Level level, Camera camera,
                             boolean foreground, double animClock, DepthPass into) {
-        for (Placed p : collect(level, camera, foreground, animClock, true)) {
+        for (Placed p : collect(level, camera, foreground, animClock, true, null)) {
             into.at(p.tile(), p.depth(), () ->
                     target.drawImage(p.sprite(), p.x(), p.y(), p.size(), p.size()));
         }
@@ -105,10 +105,12 @@ public final class DecorPainter {
                                  SolidPainter solid, boolean foreground,
                                  double animClock) {
         int ts = Math.max(1, level.tileSize);
-        // Not culled against the viewport: that rectangle is the flat camera's,
-        // and the eye is looking somewhere else entirely. The painter's own
-        // view-distance test is what bounds this one (SolidPainter.billboard).
-        for (Placed p : collect(level, camera, foreground, animClock, false)) {
+        // Bounded by the eye's own reach rather than by the flat camera's
+        // viewport rectangle, which is a different region of the world
+        // entirely. Done inside collect rather than here, so a wood of two
+        // thousand trees costs a subtraction each for the ones out of range
+        // instead of a projection and a sprite lookup.
+        for (Placed p : collect(level, camera, foreground, animClock, false, solid)) {
             int col = (int) Math.floor(p.worldX() / ts);
             int row = (int) Math.floor(p.worldY() / ts);
             double z = level.verticality()
@@ -127,10 +129,11 @@ public final class DecorPainter {
      *             true for the plan view, whose screen rectangle is exactly
      *             what is visible, and false for a solid view, where the flat
      *             camera's projection is only supplying a pivot and a scale
+     * @param reach the eye to bound against instead, or {@code null}
      */
     private static List<Placed> collect(Level level, Camera camera,
                                         boolean foreground, double animClock,
-                                        boolean cull) {
+                                        boolean cull, SolidPainter reach) {
         List<Placed> batch = new ArrayList<>();
         if (level.entities.isEmpty()) return batch;
         String kind = kindFor(foreground);
@@ -140,6 +143,7 @@ public final class DecorPainter {
             if (!kind.equals(e.kind)) continue;
             Decor def = registry.get(e.type);
             if (def == null) continue;
+            if (reach != null && !reach.inRange(e.x, e.y)) continue;
             int size = Math.max(8, (int) Math.round(
                     def.sizeTiles() * level.tileSize * camera.zoom));
             camera.worldToScreen(e.x, e.y, anchor);

@@ -3661,12 +3661,13 @@ public class PlayScene extends AbstractScene {
     /**
      * How wide the plan view's see-through channel is, in tiles.
      *
-     * <p>A little over one, so a doorway's worth of wall goes and the room
-     * beside it stays: narrower and the player's own sprite is still behind a
-     * block corner, wider and half the building disappears every time you stand
-     * near it.
+     * <p>About two, so a doorway's worth of wall goes and the room beside it
+     * stays: narrower and the player's own sprite is still half behind a block
+     * corner, wider and half the building disappears every time you stand near
+     * it. The channel fades out toward its rim, so the clear part of it is a
+     * good deal less than this.
      */
-    private static final double CUTAWAY_TILES = 1.4;
+    private static final double CUTAWAY_TILES = 1.9;
 
     /**
      * Place the eye for this frame: at the player's own eyes in first person,

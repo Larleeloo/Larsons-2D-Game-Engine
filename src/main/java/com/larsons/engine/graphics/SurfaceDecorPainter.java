@@ -108,6 +108,9 @@ public final class SurfaceDecorPainter {
         double pivotScale = BILLBOARD_PIXELS / ts;
         for (SurfaceDecor.Placement p : level.surfaceDecor) {
             if (p.foreground() != foreground) continue;
+            // The eye's reach first: a level may hold thousands of these and
+            // the cheapest thing that can rule one out should.
+            if (!solid.inRange((p.col() + 0.5) * ts, (p.row() + 0.5) * ts)) continue;
             if (!visible(level, p)) continue;
             SurfaceDecor def = registry.get(p.key());
             if (def == null) continue;
