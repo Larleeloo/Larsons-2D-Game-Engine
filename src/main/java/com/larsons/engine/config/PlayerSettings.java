@@ -99,10 +99,37 @@ public final class PlayerSettings {
      */
     public boolean distantTerrain = false;
 
+    /**
+     * How far the world is drawn <em>block by block</em>, in blocks. Past it
+     * the same world is drawn coarsely, out to whatever the render distance is.
+     *
+     * <p><b>The setting that makes a long render distance affordable.</b> What
+     * the detailed sweep costs grows with the area it covers — a frame that
+     * queues a thousand faces at twenty blocks queues two hundred and sixty
+     * thousand at a hundred and ninety-two — so a render distance worth having
+     * cannot be paid for a block at a time however well each block is culled.
+     * Past this the world is drawn as boxed landforms, which cost a few
+     * thousand quads whatever the distance is, and the frame stops caring how
+     * far you have asked to see.
+     *
+     * <p>A player setting for the same reason {@link #distantTerrain} is one:
+     * it is a statement about the machine in front of the person playing, and
+     * it says nothing about the level. It does nothing at all until the render
+     * distance is set past it, so a level played at the default distance looks
+     * exactly as it always did.
+     *
+     * @see com.larsons.engine.graphics.SolidPainter#setDetailTiles(int)
+     */
+    public int detailDistance = com.larsons.engine.graphics.SolidPainter.DEFAULT_DETAIL_TILES;
+
     public static final double MIN_SENSITIVITY = 0.1;
     public static final double MAX_SENSITIVITY = 5.0;
     public static final double MIN_HUD_SCALE = 0.75;
     public static final double MAX_HUD_SCALE = 3.0;
+    public static final int MIN_DETAIL_DISTANCE =
+            com.larsons.engine.graphics.SolidPainter.MIN_DETAIL_TILES;
+    public static final int MAX_DETAIL_DISTANCE =
+            com.larsons.engine.graphics.SolidPainter.MAX_VIEW_TILES;
 
     public PlayerSettings copy() {
         return fromMap(toMap());
@@ -115,6 +142,7 @@ public final class PlayerSettings {
         musicVolume = clamp01(musicVolume);
         lookSensitivity = clamp(lookSensitivity, MIN_SENSITIVITY, MAX_SENSITIVITY);
         hudScale = clamp(hudScale, MIN_HUD_SCALE, MAX_HUD_SCALE);
+        detailDistance = (int) clamp(detailDistance, MIN_DETAIL_DISTANCE, MAX_DETAIL_DISTANCE);
     }
 
     public Map<String, Object> toMap() {
@@ -126,6 +154,7 @@ public final class PlayerSettings {
         m.put("invertLook", invertLook);
         m.put("hudScale", hudScale);
         m.put("distantTerrain", distantTerrain);
+        m.put("detailDistance", detailDistance);
         return m;
     }
 
@@ -146,6 +175,8 @@ public final class PlayerSettings {
         s.hudScale = dbl(m, "hudScale", s.hudScale);
         s.distantTerrain = m.get("distantTerrain") instanceof Boolean d
                 ? d : s.distantTerrain;
+        s.detailDistance = m.get("detailDistance") instanceof Number n
+                ? n.intValue() : s.detailDistance;
         s.normalize();
         return s;
     }

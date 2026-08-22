@@ -72,9 +72,38 @@ class PauseMenuTest {
         store.save(lvl);
     }
 
+    /** The same level, expanded into a generated world. */
+    private static void authorWorld(Path levelsDir) {
+        LevelStore store = new LevelStore(levelsDir.toString(), TYPE);
+        Level lvl = store.load("Hollow");
+        assertNotNull(lvl, "the level authored above");
+        GameProfile settings = lvl.settings != null ? lvl.settings : new GameProfile(TYPE);
+        settings.verticality = true;
+        com.larsons.engine.world.gen.TerrainSettings terrain =
+                new com.larsons.engine.world.gen.TerrainSettings();
+        terrain.enabled = true;
+        terrain.seed = 909;
+        terrain.worldSize = com.larsons.engine.world.gen.TerrainSettings.MIN_WORLD_SIZE;
+        terrain.normalize();
+        settings.terrain = terrain;
+        lvl.captureSettings(settings);
+        store.save(lvl);
+    }
+
+    private PlayScene enterWorld(Path dir) {
+        Path levelsDir = dir.resolve("levels");
+        author(levelsDir);
+        authorWorld(levelsDir);
+        return open(dir, levelsDir);
+    }
+
     private PlayScene enter(Path dir) {
         Path levelsDir = dir.resolve("levels");
         author(levelsDir);
+        return open(dir, levelsDir);
+    }
+
+    private PlayScene open(Path dir, Path levelsDir) {
 
         GameContext ctx = new GameContext(null, new GameTypeStore(dir.toString()));
         GameProfile profile = new GameProfile(TYPE);
@@ -200,6 +229,57 @@ class PauseMenuTest {
         assertTrue(labels.contains("Save and Quit"));
         assertTrue(labels.contains("Quit to Menu"));
         assertEquals("Resume", labels.get(0), "the way out should be the first thing offered");
+    }
+
+    /**
+     * <b>How far to draw is set while you are looking at it.</b> The render
+     * distance and the horizon used to live in the editor's level-settings
+     * form, which is the one place a player cannot reach: judging a view
+     * distance means seeing the view, and answering "is this what is costing me
+     * the frame rate" meant leaving the level, opening the editor, changing a
+     * number and coming back. All three now sit in the pause menu, beside each
+     * other, because they are one decision.
+     */
+    @Test
+    void theViewDistancesAreOnThePauseMenu(@TempDir Path dir) {
+        List<String> labels = labels(enterWorld(dir).pauseFormForTest());
+        assertTrue(labels.stream().anyMatch(l -> l.startsWith("Render distance")),
+                "the render distance is set here now: " + labels);
+        assertTrue(labels.stream().anyMatch(l -> l.startsWith("Detail distance")),
+                "and so is how much of it is drawn a block at a time: " + labels);
+        assertTrue(labels.stream().anyMatch(l -> l.startsWith("Horizon")),
+                "and the horizon behind it: " + labels);
+        assertEquals("Resume", labels.get(0),
+                "the way out is still the first thing offered");
+    }
+
+    /** And they are gone from the level-settings form they came out of. */
+    @Test
+    void theLevelSettingsFormNoLongerSetsThem() {
+        GameProfile p = new GameProfile(TYPE);
+        p.terrain = new com.larsons.engine.world.gen.TerrainSettings();
+        ConfigForm form = new ConfigForm("Settings");
+        TerrainForms.addTerrainOptions(form, p, () -> {});
+        for (String label : labels(form)) {
+            assertFalse(label.startsWith("Render distance"),
+                    "the render distance moved to the pause menu");
+            assertFalse(label.startsWith("Distant generation"),
+                    "so did the horizon");
+        }
+    }
+
+    /** A level with no generated world has no distances worth offering. */
+    @Test
+    void anOrdinaryLevelIsNotOfferedThem(@TempDir Path dir) {
+        List<String> labels = labels(enter(dir).pauseFormForTest());
+        assertTrue(labels.stream().noneMatch(l -> l.startsWith("Render distance")),
+                "a hand-built level is drawn to its own edges: " + labels);
+    }
+
+    private static List<String> labels(ConfigForm form) {
+        List<String> labels = new ArrayList<>();
+        for (ConfigForm.Option o : form.options()) labels.add(o.label());
+        return labels;
     }
 
     // --- the screen itself -----------------------------------------------------

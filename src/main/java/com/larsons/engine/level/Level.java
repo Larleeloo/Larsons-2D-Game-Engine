@@ -362,6 +362,29 @@ public class Level {
     }
 
     /**
+     * Whether reading a cell of a generated world may <em>build</em> the chunk
+     * it belongs to, on the calling thread. Returns what it was, so a caller
+     * can put it back.
+     *
+     * <p><b>On for the simulation and off for the frame that draws.</b> The
+     * two are asking different questions of the same world. Physics has to have
+     * an answer: a body standing on ground that has not been generated yet
+     * falls through it, so a read near the player builds what it needs and
+     * takes the cost. The renderer does not: it is looking at ground up to a
+     * hundred and ninety-two blocks away, and a chunk is tens of milliseconds
+     * to generate — so a sweep that built what it wanted to draw paid for
+     * whole chunks on the game loop's thread, which is the stutter every time
+     * the view distance reached ground the streamer had not got to. What is
+     * missing this frame is missing at the far edge of the view, in the fog,
+     * for as long as it takes a worker thread to hand it over.
+     *
+     * @see com.larsons.engine.world.gen.WorldTerrain#setBuildOnRead(boolean)
+     */
+    public boolean setBuildOnRead(boolean build) {
+        return terrain == null || terrain.setBuildOnRead(build);
+    }
+
+    /**
      * Make this level a generated world, replacing whatever storage it had.
      * Only {@link com.larsons.engine.world.gen.WorldExpansion} calls this — it
      * is what carries the authored blocks across.
@@ -1064,8 +1087,15 @@ public class Level {
 
     /**
      * The tallest ground in a rectangle of cells and what it is made of, for
-     * the coarse pass that draws the horizon —
-     * {@code out[0]} the layer, {@code out[1]} the block id.
+     * the coarse pass that draws the horizon — {@code out[0]} the layer,
+     * {@code out[1]} the block id, {@code out[2]} the <em>lowest</em> ground in
+     * the same rectangle.
+     *
+     * <p>That third number is what a line-of-sight cull may treat the whole
+     * rectangle as solid up to. The box drawn for a group stands at the height
+     * of its tallest column, but claiming a group occludes to the top of the
+     * one spike in it would cull the valley behind that spike, so the low mark
+     * is the honest one to occlude with.
      *
      * <p>On an ordinary level this is the obvious sweep of the cells. On a
      * generated world it is answered from sampled heights instead, because the
@@ -1083,11 +1113,14 @@ public class Level {
         r1 = Math.min(height, r1);
         if (c0 >= c1 || r0 >= r1) return false;
         if (terrain != null) return terrain.groupTop(c0, r0, c1, r1, out);
-        int tallest = -1, tallestId = 0;
+        int tallest = -1, tallestId = 0, lowest = Integer.MAX_VALUE;
         for (int r = r0; r < r1; r++) {
             for (int c = c0; c < c1; c++) {
                 int floor = tileAt(c, r);
-                if (floor <= 0) continue;
+                if (floor <= 0) {
+                    lowest = 0;   // open ground occludes nothing
+                    continue;
+                }
                 int layer = 0, id = floor;
                 int depth = columnDepth(c, r);
                 for (int l = 1; l < depth; l++) {
@@ -1101,11 +1134,13 @@ public class Level {
                     tallest = layer;
                     tallestId = id;
                 }
+                if (layer < lowest) lowest = layer;
             }
         }
         if (tallest < 0) return false;
         out[0] = tallest;
         out[1] = tallestId;
+        out[2] = Math.max(0, Math.min(tallest, lowest));
         return true;
     }
 

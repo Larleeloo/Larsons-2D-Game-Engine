@@ -3154,6 +3154,7 @@ text you can copy between machines):
 | invert look (Y axis) | for whom an uninvertible Y axis means those views may as well not exist |
 | HUD size | 75–300%, for a HUD sized in pixels on a 4K display |
 | distant terrain | draw the world past the view distance, coarsely — see below |
+| detail distance | how much of the render distance is drawn *block by block* — see below |
 
 They are edited from **Options** in the pause menu — the first place in the
 engine a player rather than an author can change how the game feels — and from
@@ -3796,13 +3797,51 @@ never turn generation on.
   from the floor
   ([`Level.visibleLayers`](src/main/java/com/larsons/engine/level/Level.java)) —
   the difference between drawing a mountain and drawing every block inside one.
+  *Walled in* means hidden by something that actually hides it: a flower, a pane
+  of glass and the surface of a lake do not, which is why the ground under
+  everything the generator scatters is drawn rather than seen through. A
+  neighbour of the *same* block does, which is what keeps a lake from costing a
+  face per layer of its depth.
+- **A frame never builds the world it is drawing.** The sweep reads the world as
+  it stands and draws nothing where a chunk has not arrived yet — at the far
+  edge of the view, in the fog, for as long as it takes a worker thread to hand
+  it over. Reads that *must* have an answer (a body standing on ground) still
+  build what they need.
 - **A horizon that costs the same at any distance.** The coarse pass draws
   landforms in rings whose box size is proportional to how far away they are, so
   pushing the horizon out further no longer multiplies the number of boxes.
 
-**Render distance** slides to **192 blocks** and **distant generation** reaches
-**2048**. The horizon also needs *Distant terrain* on in Options, which stays the
-player's own say over what their machine draws.
+**Render distance** slides to **192 blocks** and the **horizon** behind it
+reaches **2048**. Both are set from the **pause menu** while you are looking at
+what they change, rather than from the editor's level settings — judging a view
+distance means seeing the view, and answering *"is this what is costing me the
+frame rate"* used to mean leaving the level, opening the editor, changing a
+number and coming back. The horizon also needs *Distant terrain* on in Options,
+which stays the player's own say over what their machine draws.
+
+Beside them is the number that decides what a frame costs. **Detail distance**
+is how much of the render distance is drawn a block at a time; past it the same
+world is drawn by the coarse pass. It has to be a separate number because the
+detailed sweep's cost grows with the *area* it covers — four times the distance
+is sixteen times the faces however well each one is culled — so a render
+distance worth having cannot be paid for a block at a time. Past the detail
+distance the cost is a function of *angle* instead, and stops caring how far you
+have asked to see. Measured over generated terrain at 1280×720, a frame:
+
+| render distance | before | after |
+|---|---|---|
+| 24 blocks | 17.7 ms | 13.7 ms |
+| 48 blocks | 44.2 ms | 21.1 ms |
+| 96 blocks | 154.2 ms | 30.1 ms |
+| 192 blocks | **601.6 ms** | **33.9 ms** |
+
+It defaults to **32 blocks**, which is past the render distance a level starts
+at — so a level played at the distance it was authored for is drawn exactly as
+it always was (the 24-block row above is the micro-cost of the sweep coming
+down, not the cap doing anything), and the cap is reached only by a player who
+has asked to see further than a renderer can draw a block at a time. Turn it up
+for a sharper middle distance and down for a faster frame; from an ordinary eye
+height the two pictures differ only in the treeline.
 
 Seen from the **plan view** a generated world is drawn as a height-shaded map
 rather than as extrusions: lifting a column of three hundred one tile per layer

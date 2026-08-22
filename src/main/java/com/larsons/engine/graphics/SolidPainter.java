@@ -139,6 +139,43 @@ public final class SolidPainter {
     public static final int MAX_VIEW_TILES =
             com.larsons.engine.world.gen.TerrainSettings.MAX_RENDER_DISTANCE;
 
+    /**
+     * How far the world is drawn block by block by default, in tiles.
+     *
+     * <p><b>The number that decides whether a long render distance is a
+     * setting or a slideshow.</b> What the detailed sweep costs grows with the
+     * <em>area</em> it covers, so four times the distance is sixteen times the
+     * faces however well each one is culled: measured over generated terrain at
+     * 1280&times;720, a frame took 17.7&nbsp;ms at a render distance of
+     * twenty-four, 44 at forty-eight, 154 at ninety-six and <b>602 at a hundred
+     * and ninety-two</b>. Past this the same world is drawn by the coarse pass
+     * instead, whose cost is a few thousand quads <em>whatever</em> the
+     * distance is, because a box is drawn at the size it subtends rather than
+     * at the size it is ({@link #distant}). The same four distances then cost
+     * 13.7, 21, 30 and <b>34</b>&nbsp;ms.
+     *
+     * <p>Thirty-two, which is a third further than the render distance the
+     * detailed sweep was tuned at and about where a block stops being something
+     * you can see the texture of. Bigger buys a sharper middle distance for a
+     * cost that squares — forty costs half as much again as this, and
+     * forty-eight twice; smaller is what a slower machine sets it to. It is the
+     * near half of the two-number arrangement every game with a real view
+     * distance ends up with — Minecraft's render distance beside Distant
+     * Horizons' — and the reason both numbers exist is that they are answering
+     * different questions: how far can you see, and how much of that is worth a
+     * block each.
+     *
+     * <p>Note what it does <em>not</em> change: a level played at the engine's
+     * default render distance of twenty-four is inside this, so the detailed
+     * sweep still draws all of it and the picture is the one it always was.
+     * The cap is only reached by a player who has asked to see further than the
+     * renderer can draw a block at a time, which is exactly who it is for.
+     */
+    public static final int DEFAULT_DETAIL_TILES = 32;
+
+    /** The least the detailed sweep may be squeezed to, in tiles. */
+    public static final int MIN_DETAIL_TILES = 8;
+
     /** The furthest the coarse horizon may be set to, in tiles. */
     public static final int MAX_DISTANT_TILES =
             com.larsons.engine.world.gen.TerrainSettings.MAX_DISTANT_DISTANCE;
@@ -298,8 +335,16 @@ public final class SolidPainter {
     private Level level;
     private int viewTiles = DEFAULT_VIEW_TILES;
     private int distantTiles;
+    /**
+     * How far the world is drawn a block at a time, in tiles. Uncapped by
+     * default so that a caller which never mentions it gets exactly the picture
+     * this painter drew before there was a coarse pass to hand the rest to.
+     */
+    private int detailTiles = MAX_VIEW_TILES;
     private double viewDistance;
     private double distantDistance;
+    /** {@link #detailTiles} in world units, never past {@link #viewDistance}. */
+    private double detailDistance;
     /**
      * How far a face may be and still be queued, which is the detailed reach
      * for the ordinary sweep and the whole horizon while {@link #distant} runs.
@@ -333,8 +378,11 @@ public final class SolidPainter {
     /** Sort keys, {@code (depth, index)} packed into a long; see {@link #flush}. */
     private long[] order = new long[1024];
 
-    /** One coarse box's answer from {@link Level#groupTop}: {layer, block id}. */
-    private final int[] groupScratch = new int[2];
+    /**
+     * One coarse box's answer from {@link Level#groupTop}: the tallest layer in
+     * the group, its block id, and the lowest layer in the same group.
+     */
+    private final int[] groupScratch = new int[3];
 
     /** One column's worth of layers to look at; see {@link Level#visibleLayers}. */
     private final int[] layerScratch = new int[Level.MAX_LAYERS];
@@ -344,7 +392,9 @@ public final class SolidPainter {
      * frame in {@link #begin}. See {@link #covers(int)}.
      */
     private boolean[] coversById = new boolean[0];
-    /** The registry {@link #coversById} was built from, and how big it was. */
+    /** The blocks themselves, indexed the same way; see {@link #blockOf}. */
+    private Block[] blockById = new Block[0];
+    /** The registry {@link #coversById} was built from, and its revision then. */
     private com.larsons.engine.world.BlockRegistry coversFrom;
     private int coversCount = -1;
 
@@ -376,8 +426,15 @@ public final class SolidPainter {
      * patch per level.
      */
     private final int[] work = new int[STRIDE * (MAX_SPLIT_DEPTH + MAX_NEAR_CUTS + 2)];
-    /** Per-frame texture lookups, so a block's sheet is resolved once a frame. */
+    /** Per-frame texture lookups, so a texture key is resolved once a frame. */
     private final java.util.Map<String, BufferedImage> textures = new java.util.HashMap<>();
+
+    /** Per-frame sheets by block id, and the frame they were resolved in. */
+    private BufferedImage[] topById = new BufferedImage[0];
+    private BufferedImage[] sideById = new BufferedImage[0];
+    private int[] sheetFrame = new int[0];
+    /** Which frame this is, counted so a stale entry above needs no clearing. */
+    private int frameSeq;
 
     /** One queued thing: a filled polygon, or an actor's sprite. */
     private static final class Entry {
@@ -432,12 +489,33 @@ public final class SolidPainter {
     public boolean inRange(double wx, double wy) {
         if (eye == null) return false;
         double dx = wx - eye.x(), dy = wy - eye.y();
-        return dx * dx + dy * dy <= viewDistance * viewDistance;
+        // The detail distance rather than the view distance, because that is
+        // how far the world this sprite stands on is drawn a block at a time.
+        // Past it the ground is coarse boxes, which sort behind everything the
+        // detailed pass queued — so a sprite out there would be drawn in front
+        // of the hill it is standing behind rather than hidden by it.
+        return dx * dx + dy * dy <= detailDistance * detailDistance;
     }
 
     /** Set how far the eye can see, in tiles. */
     public void setViewTiles(int tiles) {
         this.viewTiles = Math.max(2, Math.min(MAX_VIEW_TILES, tiles));
+    }
+
+    /** How far the world is drawn block by block, in tiles. */
+    public int detailTiles() { return detailTiles; }
+
+    /**
+     * Set how far the world is drawn a block at a time. Everything between
+     * this and {@link #setViewTiles the view distance} is drawn by the coarse
+     * pass instead — see {@link #DEFAULT_DETAIL_TILES} for why the two are
+     * separate numbers, and {@link #distant()} for what the far one draws.
+     *
+     * <p>Never further than the view distance: a detail radius past the edge of
+     * the world you can see is a number with nothing to do.
+     */
+    public void setDetailTiles(int tiles) {
+        this.detailTiles = Math.max(MIN_DETAIL_TILES, Math.min(MAX_VIEW_TILES, tiles));
     }
 
     /** How far the coarse pass reaches, in tiles; {@code 0} when it is off. */
@@ -538,18 +616,30 @@ public final class SolidPainter {
         this.eye = eye;
         this.level = level;
         this.animClock = animClock;
+        if (++frameSeq == Integer.MAX_VALUE) {
+            frameSeq = 1;
+            java.util.Arrays.fill(sheetFrame, 0);
+        }
         this.textures.clear();
+        java.util.Arrays.fill(shadedFrom, 0, shadedCount, null);
+        java.util.Arrays.fill(shadedTo, 0, shadedCount, null);
+        this.shadedCount = 0;
         this.used = 0;
         int ts = Math.max(1, level.tileSize);
         this.viewDistance = viewTiles * (double) ts;
         this.distantDistance = distantTiles > viewTiles ? distantTiles * (double) ts : 0;
-        this.faceReach = viewDistance;
+        this.detailDistance = Math.min(viewDistance, detailTiles * (double) ts);
+        this.faceReach = detailDistance;
         this.orderBias = 0;
         this.cutRadius = 0;
         this.eyeCol = (int) Math.floor(eye.x() / ts);
         this.eyeRow = (int) Math.floor(eye.y() / ts);
         this.eyeLayer = (int) Math.floor(eye.z() / ts) + 1;
         buildCoversTable();
+        // Emptied here rather than only in the sweep, so a caller that draws the
+        // horizon without the detailed pass in front of it culls against this
+        // frame's terrain instead of against the last frame's.
+        clearHorizon();
         // Fog is measured against the furthest thing that will be drawn, which
         // is the coarse horizon when there is one. That is not bookkeeping: fog
         // exists to hide the edge of what is drawn, so pushing the edge out
@@ -582,27 +672,54 @@ public final class SolidPainter {
 
     /**
      * Fill {@link #coversById} from this level's block registry, when it is not
-     * already the table for that registry.
+     * already the table for that registry as it now stands.
      *
      * <p>Rebuilt on a change rather than every frame: the registry is a couple
      * of hundred entries and a scan of it is nothing beside a frame, but it is
-     * also nothing that ever needs doing twice, and a creator adding a block
-     * mid-session is what the size check catches.
+     * also nothing that ever needs doing twice. What says it changed is the
+     * registry's own {@linkplain
+     * com.larsons.engine.world.BlockRegistry#revision() revision} rather than
+     * how many blocks it holds — reshaping a block into a plant replaces a row
+     * in place, so the count says nothing and this table stayed wrong for the
+     * rest of the session.
      */
     private void buildCoversTable() {
-        java.util.List<Block> all = level.blocks.all();
-        if (level.blocks == coversFrom && all.size() == coversCount) return;
+        int revision = level.blocks.revision();
+        if (level.blocks == coversFrom && revision == coversCount) return;
         coversFrom = level.blocks;
-        coversCount = all.size();
+        coversCount = revision;
+        java.util.List<Block> all = level.blocks.all();
         int top = 0;
         for (Block b : all) top = Math.max(top, b.id());
         if (coversById.length < top + 1) coversById = new boolean[top + 1];
+        if (blockById.length < top + 1) blockById = new Block[top + 1];
+        if (sheetFrame.length < top + 1) {
+            sheetFrame = new int[top + 1];
+            topById = new BufferedImage[top + 1];
+            sideById = new BufferedImage[top + 1];
+        }
+        java.util.Arrays.fill(sheetFrame, frameSeq - 1);   // nothing resolved yet
         // A level in palette mode has no block definitions at all, and its tile
         // ids are opaque paint: every one of them covers, which is what the
         // default of "no entry" has to mean rather than "not opaque".
         java.util.Arrays.fill(coversById, true);
+        java.util.Arrays.fill(blockById, null);
         coversById[0] = false;
-        for (Block b : all) coversById[b.id()] = b.covers();
+        for (Block b : all) {
+            coversById[b.id()] = b.covers();
+            blockById[b.id()] = b;
+        }
+    }
+
+    /**
+     * The block an id names, from the same table {@link #covers} reads — one
+     * array index where the column sweep used to hash an {@code Integer} per
+     * layer of every cell it drew.
+     */
+    private Block blockOf(int id) {
+        if (id <= 0) return null;
+        if (id < blockById.length) return blockById[id];
+        return level.blocks.get(id);
     }
 
     /**
@@ -652,9 +769,26 @@ public final class SolidPainter {
      */
     public void terrain() {
         if (level == null || eye == null) return;
+        // Drawn from the world as it stands, not from a world this frame builds
+        // for itself. A generated chunk is tens of milliseconds, the sweep asks
+        // for one every time the view distance reaches ground the streamer has
+        // not got to yet, and it asks on the loop thread — so the frame that
+        // walks over a chunk line used to pay for a chunk, or several. What is
+        // missing this frame is drawn next frame, at the far edge of the view,
+        // in the fog. See Level.setBuildOnRead.
+        boolean building = level.setBuildOnRead(false);
+        try {
+            sweep();
+        } finally {
+            level.setBuildOnRead(building);
+        }
+    }
+
+    /** {@link #terrain()}, once the world has been told not to grow under it. */
+    private void sweep() {
         int ts = level.tileSize;
         if (ts <= 0) return;
-        double reach = viewDistance;
+        double reach = detailDistance;
         int c0 = Math.max(0, (int) Math.floor((eye.x() - reach) / ts));
         int c1 = Math.min(level.width - 1, (int) Math.floor((eye.x() + reach) / ts));
         int r0 = Math.max(0, (int) Math.floor((eye.y() - reach) / ts));
@@ -702,14 +836,30 @@ public final class SolidPainter {
         if (!eye.boxVisible(x0, y0, -ts, x1, y1, topZ)) return;
 
         double centre = Math.sqrt(centreSq);
-        double near = Math.hypot(axisGap(eye.x(), x0, x1), axisGap(eye.y(), y0, y1));
-        double far = Math.hypot(Math.max(Math.abs(eye.x() - x0), Math.abs(eye.x() - x1)),
+        double near = length(axisGap(eye.x(), x0, x1), axisGap(eye.y(), y0, y1));
+        double far = length(Math.max(Math.abs(eye.x() - x0), Math.abs(eye.x() - x1)),
                 Math.max(Math.abs(eye.y() - y0), Math.abs(eye.y() - y1)));
         double angle = pseudoAngle(dx, dy);
-        if (hiddenBehindHorizon(angle, near, far, topZ)) return;
+        if (hiddenBehindHorizon(angle, near, far, topZ, ts)) return;
 
         column(col, row);
-        raiseHorizon(angle, centre, groundedTopZ(col, row, depth));
+        raiseHorizon(angle, centre, groundedTopZ(col, row, depth), ts);
+    }
+
+    /**
+     * {@code √(x² + y²)}, which is what {@link Math#hypot} means and about
+     * twenty times what it costs.
+     *
+     * <p>That method's contract is that it never overflows and never loses
+     * precision to an intermediate square, which it pays for with a branchy
+     * scaled algorithm that the JIT does not intrinsify on every platform. The
+     * distances here are tile counts on a level whose coordinates fit in an
+     * {@code int}, so the overflow it is guarding against cannot happen — and
+     * the guard was being paid for twice per cell of a sweep that visits a
+     * hundred thousand of them.
+     */
+    private static double length(double x, double y) {
+        return Math.sqrt(x * x + y * y);
     }
 
     /**
@@ -804,11 +954,14 @@ public final class SolidPainter {
      * @param far  the longest, which is the one a cell below the eye is seen
      *             along most shallowly
      * @param topZ the highest point anything in this cell reaches
+     * @param width how wide the thing being tested is on the ground, in world
+     *              units — one tile for a cell of the sweep, a whole group for
+     *              a box of the coarse pass
      */
-    private boolean hiddenBehindHorizon(double angle, double near, double far, double topZ) {
-        int ts = level.tileSize;
-        if (near < ts) return false;      // standing in it, or against it
-        double span = SPAN_SKEW * (ts * 0.7072 / near);
+    private boolean hiddenBehindHorizon(double angle, double near, double far, double topZ,
+                                        double width) {
+        if (near < width) return false;   // standing in it, or against it
+        double span = SPAN_SKEW * (width * 0.7072 / near);
         if (span > MAX_TEST_SPAN) return false;
         double slope = (topZ - eye.z()) / Math.max(1e-6, topZ >= eye.z() ? near : far);
         int from = sectorOf(angle - span), to = sectorOf(angle + span);
@@ -831,11 +984,10 @@ public final class SolidPainter {
      * culled; over-claiming would delete something the player can see, which is
      * the failure a cull is not allowed to have.
      */
-    private void raiseHorizon(double angle, double centre, double topZ) {
+    private void raiseHorizon(double angle, double centre, double topZ, double width) {
         if (topZ == Double.NEGATIVE_INFINITY) return;
-        int ts = level.tileSize;
-        if (centre < ts * 0.5) return;
-        double span = SPAN_SKEW_SAFE * (ts * 0.4 / centre);
+        if (centre < width * 0.5) return;
+        double span = SPAN_SKEW_SAFE * (width * 0.4 / centre);
         double slope = (topZ - eye.z()) / centre;
         int from = sectorOf(angle - span), to = sectorOf(angle + span);
         int count = Math.floorMod(to - from, HORIZON_SECTORS);
@@ -888,7 +1040,17 @@ public final class SolidPainter {
     /**
      * Queue the world beyond the detailed distance as coarse boxes — the
      * engine's answer to a landscape that otherwise ends in fog thirty paces
-     * out. Off unless {@link #setDistantTiles} asked for it.
+     * out, and to a render distance nothing could afford a block at a time.
+     *
+     * <p><b>Where it starts and where it stops.</b> It starts at
+     * {@link #setDetailTiles the detail distance}, so the world between there
+     * and the render distance is drawn <em>here</em> rather than not at all;
+     * and it stops at the further of the render distance and whatever extra
+     * horizon {@link #setDistantTiles} asked for. That is the whole reason a
+     * render distance of a hundred and ninety-two blocks is now a setting a
+     * machine can hold a frame rate at: the detailed sweep's cost is bounded by
+     * the detail radius, and everything past it costs a few thousand quads
+     * whatever the number says.
      *
      * <p><b>What is drawn.</b> One box per square group of cells, standing on
      * the floor, as tall as the tallest column in the group and in that
@@ -922,14 +1084,27 @@ public final class SolidPainter {
      * detailed pass, whatever the cell arithmetic says.
      */
     public void distant() {
-        if (level == null || eye == null || distantDistance <= viewDistance) return;
+        if (level == null || eye == null) return;
         int ts = level.tileSize;
         if (ts <= 0) return;
-        double inner = viewDistance;
-        for (int behind = 1; inner < distantDistance && behind <= MAX_RINGS; behind++) {
-            double outer = Math.min(distantDistance, inner * RING_SPLIT);
-            ring(groupFor(inner), inner, outer, behind);
-            inner = outer;
+        double outermost = horizon();
+        double inner = detailDistance;
+        if (outermost <= inner) return;
+        // As with the detailed sweep: what the horizon draws is the world that
+        // is already there. A coarse box asks the level for the tallest column
+        // in a group of cells, and on a generated world that is answered from
+        // sampled heights rather than from chunks — but an ordinary level's
+        // groupTop reads cells, and a level that is both would otherwise build
+        // ground two thousand blocks away to put a box on it.
+        boolean building = level.setBuildOnRead(false);
+        try {
+            for (int behind = 1; inner < outermost && behind <= MAX_RINGS; behind++) {
+                double outer = Math.min(outermost, inner * RING_SPLIT);
+                ring(groupFor(inner), inner, outer, behind);
+                inner = outer;
+            }
+        } finally {
+            level.setBuildOnRead(building);
         }
     }
 
@@ -950,12 +1125,21 @@ public final class SolidPainter {
      * twenty, sixteen at sixty — and goes on meaning the same thing at any
      * other.
      */
-    private static int groupFor(double innerDistance) {
-        double tiles = innerDistance / 32.0;
+    private int groupFor(double innerDistance) {
+        double tiles = innerDistance / Math.max(1, level.tileSize);
         return Math.max(NEAR_RING_CELLS, (int) Math.round(tiles * RING_ANGLE));
     }
 
-    /** One ring of coarse boxes, {@code group} cells to a box. */
+    /**
+     * One ring of coarse boxes, {@code group} cells to a box.
+     *
+     * <p><b>Nearest group first, for the same reason the detailed sweep visits
+     * cells in rings:</b> line of sight is only sound if a box is tested
+     * against terrain that is actually in front of it. The horizon buffer
+     * arrives here already carrying the silhouette of everything the detailed
+     * sweep drew, which is what removes the far side of the valley the player
+     * is standing in — and on a landscape that is most of the ring.
+     */
     private void ring(int group, double inner, double outer, int behindDetail) {
         if (outer <= inner) return;
         int ts = level.tileSize;
@@ -964,43 +1148,63 @@ public final class SolidPainter {
         int g1c = Math.min((level.width - 1) / group, (int) Math.floor((eye.x() + outer) / span));
         int g0r = Math.max(0, (int) Math.floor((eye.y() - outer) / span));
         int g1r = Math.min((level.height - 1) / group, (int) Math.floor((eye.y() + outer) / span));
-
-        double outerSq = outer * outer;
-        double half = span / 2;
+        if (g0c > g1c || g0r > g1r) return;
 
         faceReach = outer;
         orderBias = DISTANT_ORDER * behindDetail;
         try {
-            for (int gr = g0r; gr <= g1r; gr++) {
-                for (int gc = g0c; gc <= g1c; gc++) {
-                    double dx = (gc + 0.5) * span - eye.x();
-                    double dy = (gr + 0.5) * span - eye.y();
-                    if (dx * dx + dy * dy > outerSq) continue;
-                    // Kept when any corner of the group is outside the inner
-                    // radius, not when its centre is: a square group straddling
-                    // a round boundary belongs to both sides, and dropping it
-                    // from this one leaves a gap the width of a group.
-                    double reach = Math.hypot(Math.abs(dx) + half, Math.abs(dy) + half);
-                    if (reach <= inner) continue;
-                    // The frustum, exactly, where this used to keep everything
-                    // in the forward half-plane: a horizon ring is thousands of
-                    // groups and three quarters of them are beside or behind
-                    // the screen. The box is given the level's full height,
-                    // since how tall the group is has not been asked yet.
-                    double gx = gc * span, gy = gr * span;
-                    if (!eye.boxVisible(gx, gy, 0, gx + span, gy + span,
-                            level.layerCount() * (double) ts)) continue;
-                    distantBox(gc, gr, group);
+            int ec = Math.max(g0c, Math.min(g1c, (int) Math.floor(eye.x() / span)));
+            int er = Math.max(g0r, Math.min(g1r, (int) Math.floor(eye.y() / span)));
+            int rings = Math.max(Math.max(ec - g0c, g1c - ec), Math.max(er - g0r, g1r - er));
+            for (int k = 0; k <= rings; k++) {
+                if (k == 0) {
+                    distantGroup(ec, er, group, span, inner, outer);
+                    continue;
+                }
+                int left = ec - k, right = ec + k, up = er - k, down = er + k;
+                for (int gc = Math.max(g0c, left); gc <= Math.min(g1c, right); gc++) {
+                    if (up >= g0r) distantGroup(gc, up, group, span, inner, outer);
+                    if (down <= g1r) distantGroup(gc, down, group, span, inner, outer);
+                }
+                for (int gr = Math.max(g0r, up + 1); gr <= Math.min(g1r, down - 1); gr++) {
+                    if (left >= g0c) distantGroup(left, gr, group, span, inner, outer);
+                    if (right <= g1c) distantGroup(right, gr, group, span, inner, outer);
                 }
             }
         } finally {
-            faceReach = viewDistance;
+            faceReach = detailDistance;
             orderBias = 0;
         }
     }
 
+    /** One group of a ring: cull it, and draw the box that stands for it. */
+    private void distantGroup(int gc, int gr, int cells, double span,
+                              double inner, double outer) {
+        double half = span / 2;
+        double dx = (gc + 0.5) * span - eye.x();
+        double dy = (gr + 0.5) * span - eye.y();
+        if (dx * dx + dy * dy > outer * outer) return;
+        // Kept when any corner of the group is outside the inner radius, not
+        // when its centre is: a square group straddling a round boundary
+        // belongs to both sides, and dropping it from this one leaves a gap
+        // the width of a group.
+        if (length(Math.abs(dx) + half, Math.abs(dy) + half) <= inner) return;
+        // The frustum, exactly, where this used to keep everything in the
+        // forward half-plane: a horizon ring is thousands of groups and three
+        // quarters of them are beside or behind the screen. The box is given
+        // the level's full height, since how tall the group is has not been
+        // asked yet.
+        double gx = gc * span, gy = gr * span;
+        int ts = level.tileSize;
+        if (!eye.boxVisible(gx, gy, 0, gx + span, gy + span,
+                level.layerCount() * (double) ts)) {
+            return;
+        }
+        distantBox(gc, gr, cells, span, dx, dy);
+    }
+
     /** One coarse box: the tallest column in a group of cells, as a solid. */
-    private void distantBox(int gc, int gr, int group) {
+    private void distantBox(int gc, int gr, int group, double span, double dx, double dy) {
         int ts = level.tileSize;
         int c0 = gc * group, r0 = gr * group;
         int c1 = Math.min(level.width, c0 + group), r1 = Math.min(level.height, r0 + group);
@@ -1021,6 +1225,28 @@ public final class SolidPainter {
         double y0 = r0 * (double) ts, y1 = r1 * (double) ts;
         double z1 = tallest * (double) ts;
         int col = (c0 + c1) / 2, row = (r0 + r1) / 2;
+
+        // Line of sight, the same test the detailed sweep makes and against the
+        // same buffer — which by now holds the silhouette of everything drawn
+        // in detail, and of the nearer boxes of this ring. It is worth far more
+        // here than the quad count suggests: a coarse box is enormous on
+        // screen, so what the horizon saves is pixels rather than draws, and
+        // the hillside in front of the player hides most of the ring behind it.
+        // Asked once the height is known, because the height is the whole of
+        // what the test is about.
+        double near = length(axisGap(eye.x(), x0, x1), axisGap(eye.y(), y0, y1));
+        double far = length(Math.max(Math.abs(eye.x() - x0), Math.abs(eye.x() - x1)),
+                Math.max(Math.abs(eye.y() - y0), Math.abs(eye.y() - y1)));
+        double angle = pseudoAngle(dx, dy);
+        if (hiddenBehindHorizon(angle, near, far, z1 + ts, span)) return;
+        // …and it raises the horizon in its turn, at the height of the
+        // *lowest* ground in the group rather than the highest. A box is drawn
+        // at the height of its tallest column, and claiming a whole group is
+        // solid to the top of one spike in it would cull the valley behind that
+        // spike — which is the one failure a cull is not allowed to have. The
+        // low mark under-claims by construction, and a range of hills is still
+        // a range of hills.
+        raiseHorizon(angle, length(dx, dy), groupScratch[2] * (double) ts, span);
 
         if (eye.z() > z1) {
             face(col, row, tallest, x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1,
@@ -1056,10 +1282,10 @@ public final class SolidPainter {
         // skipped when a block sits on it, because that block's own underside
         // is the same quad and drawing both is two coplanar fills fighting.
         int floorId = level.tileAt(col, row);
-        if (floorId > 0 && eye.z() > 0 && open(col, row, 1)) {
+        if (floorId > 0 && eye.z() > 0 && open(col, row, 1, floorId)) {
             Color colour = level.colorFor(floorId);
             if (colour != null) {
-                Block ground = level.blocks.get(floorId);
+                Block ground = blockOf(floorId);
                 face(col, row, 0, x0, y0, 0, x1, y0, 0, x1, y1, 0, x0, y1, 0,
                         colour, SHADE_TOP, topTexture(ground));
             }
@@ -1076,7 +1302,7 @@ public final class SolidPainter {
             int layer = layerScratch[i];
             int id = level.tileAt(col, row, layer);
             if (id <= 0) continue;
-            Block block = level.blocks.get(id);
+            Block block = blockOf(id);
             if (block == null) continue;
             if (block.plant()) plant(col, row, block, layer);
             else block(col, row, block, layer, depth);
@@ -1191,27 +1417,28 @@ public final class SolidPainter {
         BufferedImage top = topTexture(block);
         BufferedImage side = sideTexture(block);
 
-        if (eye.z() > z1 && (layer + 1 >= depth || open(col, row, layer + 1))) {
+        int id = block.id();
+        if (eye.z() > z1 && (layer + 1 >= depth || open(col, row, layer + 1, id))) {
             face(col, row, layer, x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1,
                     colour, SHADE_TOP, top);
         }
-        if (eye.z() < z0 && layer > 1 && open(col, row, layer - 1)) {
+        if (eye.z() < z0 && layer > 1 && open(col, row, layer - 1, id)) {
             face(col, row, layer, x0, y0, z0, x0, y1, z0, x1, y1, z0, x1, y0, z0,
                     colour, SHADE_BOTTOM, top);
         }
-        if (eye.y() < y0 && open(col, row - 1, layer)) {
+        if (eye.y() < y0 && open(col, row - 1, layer, id)) {
             face(col, row, layer, x0, y0, z1, x1, y0, z1, x1, y0, z0, x0, y0, z0,
                     colour, SHADE_NORTH_SOUTH, side);
         }
-        if (eye.y() > y1 && open(col, row + 1, layer)) {
+        if (eye.y() > y1 && open(col, row + 1, layer, id)) {
             face(col, row, layer, x1, y1, z1, x0, y1, z1, x0, y1, z0, x1, y1, z0,
                     colour, SHADE_NORTH_SOUTH, side);
         }
-        if (eye.x() > x1 && open(col + 1, row, layer)) {
+        if (eye.x() > x1 && open(col + 1, row, layer, id)) {
             face(col, row, layer, x1, y0, z1, x1, y1, z1, x1, y1, z0, x1, y0, z0,
                     colour, SHADE_EAST_WEST, side);
         }
-        if (eye.x() < x0 && open(col - 1, row, layer)) {
+        if (eye.x() < x0 && open(col - 1, row, layer, id)) {
             face(col, row, layer, x0, y1, z1, x0, y0, z1, x0, y0, z0, x0, y1, z0,
                     colour, SHADE_EAST_WEST, side);
         }
@@ -1231,15 +1458,29 @@ public final class SolidPainter {
      * as covered and could look straight out through the world. The block
      * itself answers both ({@link Block#covers()}).
      *
+     * <p><b>And not "is the neighbour opaque" either.</b> Two cells of the same
+     * block have no surface between them however see-through that block is:
+     * the inside of a lake is water, not a stack of panes, and drawing the
+     * faces between them lays the same translucent blue down forty times and
+     * turns a pool into ink. So a neighbour of {@code selfId} hides this face
+     * as surely as a wall does. {@code WorldTerrain.visibleLayers} makes the
+     * same distinction, which is what keeps the two passes agreeing about which
+     * faces exist at all.
+     *
      * <p>The eye's own cell is always open, whatever is standing in it. That is
      * belt and braces rather than a second rule — a cell the eye can be inside
      * is by definition not a covering one — but it costs a comparison and it is
      * the case the bug was reported from.
+     *
+     * @param selfId the block whose face this is, or {@code 0} to ask only
+     *               whether the neighbour covers
      */
-    private boolean open(int col, int row, int layer) {
+    private boolean open(int col, int row, int layer, int selfId) {
         if (col < 0 || row < 0 || col >= level.width || row >= level.height) return true;
         if (col == eyeCol && row == eyeRow && layer == eyeLayer) return true;
-        return !covers(level.tileAt(col, row, layer));
+        int id = level.tileAt(col, row, layer);
+        if (id == selfId && id > 0) return false;
+        return !covers(id);
     }
 
     /**
@@ -1248,15 +1489,15 @@ public final class SolidPainter {
      *
      * <p>A lookup rather than {@code level.blocks.get(id).covers()} because this
      * runs up to six times per block face and a map lookup per neighbour is a
-     * measurable share of the sweep. The table is rebuilt in {@link #begin} —
-     * a registry is a couple of hundred entries and a frame is thousands of
-     * faces, so a scan a frame is free and cannot go stale.
+     * measurable share of the sweep. The table is the registry's own, rebuilt
+     * there when the set of blocks changes — including when a block is reshaped
+     * in place, which a count of the registry cannot notice and which this used
+     * to keep a stale answer for.
      */
     private boolean covers(int id) {
         if (id <= 0) return false;
         if (id < coversById.length) return coversById[id];
-        Block b = level.blocks.get(id);
-        return b == null || b.covers();
+        return level.blocks.covers(id);
     }
 
     /**
@@ -1267,13 +1508,43 @@ public final class SolidPainter {
      */
     private BufferedImage topTexture(Block block) {
         if (block == null) return null;
-        return texture(block.topTextureKey(), block.textureKey());
+        int id = block.id();
+        if (id <= 0 || id >= sheetFrame.length) {
+            return texture(block.topTextureKey(), block.textureKey());
+        }
+        if (sheetFrame[id] != frameSeq) resolveSheets(block, id);
+        return topById[id];
     }
 
     /** The sheet a block's side faces are drawn with; see {@link #topTexture}. */
     private BufferedImage sideTexture(Block block) {
         if (block == null) return null;
-        return texture(block.sideTextureKey(), block.textureKey());
+        int id = block.id();
+        if (id <= 0 || id >= sheetFrame.length) {
+            return texture(block.sideTextureKey(), block.textureKey());
+        }
+        if (sheetFrame[id] != frameSeq) resolveSheets(block, id);
+        return sideById[id];
+    }
+
+    /**
+     * Work out both of a block's sheets, once per block per frame.
+     *
+     * <p><b>Resolving them per face was the most expensive thing the sweep
+     * did</b>, and none of the cost was the lookup anyone would have suspected.
+     * A block's texture key is <em>built</em> on every ask —
+     * {@code "block/" + key + "_top"} — so a face cost two string
+     * concatenations, two hashes of the results, and two map probes, several
+     * times per cell, for an answer that is the same for every face of that
+     * block in the whole frame. Measured over generated terrain it was more
+     * than a quarter of the sweep. Indexed by block id here, with the frame
+     * number beside it so nothing has to be cleared: an entry from last frame
+     * is simply not this frame's, which also keeps animated sheets moving.
+     */
+    private void resolveSheets(Block block, int id) {
+        topById[id] = texture(block.topTextureKey(), block.textureKey());
+        sideById[id] = texture(block.sideTextureKey(), block.textureKey());
+        sheetFrame[id] = frameSeq;
     }
 
     /** A face's frame, falling back to the block's one flat sheet; cached per frame. */
@@ -1289,6 +1560,42 @@ public final class SolidPainter {
         textures.put(key, img);
         return img;
     }
+
+    /**
+     * {@code sheet} baked for a face with this much light on it, remembered for
+     * the rest of the frame.
+     *
+     * <p>{@link SolidTextures#shaded} is a synchronized method over a
+     * least-recently-used map, which is the right shape for a cache that
+     * outlives a frame and the wrong one to enter <b>per face</b>: a lock, a
+     * hash and a list splice, tens of thousands of times a frame, for an answer
+     * that cannot change while the frame is being drawn. There are four shades
+     * and a level has a handful of sheets, so a frame asks for a couple of
+     * dozen distinct bakes and then asks for them again and again.
+     */
+    private BufferedImage shaded(BufferedImage sheet, double shade) {
+        if (sheet == null) return null;
+        // Two arrays rather than a map: the answer is found by identity in a
+        // list a few entries long, which is quicker than hashing the pair and
+        // allocates nothing.
+        for (int i = 0; i < shadedCount; i++) {
+            if (shadedFrom[i] == sheet && shadedShade[i] == shade) return shadedTo[i];
+        }
+        BufferedImage baked = SolidTextures.shaded(sheet, shade);
+        if (shadedCount < shadedFrom.length) {
+            shadedFrom[shadedCount] = sheet;
+            shadedShade[shadedCount] = shade;
+            shadedTo[shadedCount] = baked;
+            shadedCount++;
+        }
+        return baked;
+    }
+
+    /** This frame's bakes: {@link #shaded}. */
+    private final BufferedImage[] shadedFrom = new BufferedImage[64];
+    private final BufferedImage[] shadedTo = new BufferedImage[64];
+    private final double[] shadedShade = new double[64];
+    private int shadedCount;
 
     /**
      * Project one quad, clip it against the near plane and queue it.
@@ -1386,7 +1693,7 @@ public final class SolidPainter {
             // how it is mapped is decided at draw time, in patches, because one
             // affine map over a whole perspective quad is what made surfaces
             // bend (see drawTextured).
-            e.texture = SolidTextures.shaded(texture, shade);
+            e.texture = shaded(texture, shade);
             e.quad[0] = ax; e.quad[1] = ay; e.quad[2] = az;
             e.quad[3] = bx; e.quad[4] = by; e.quad[5] = bz;
             e.quad[6] = cx; e.quad[7] = cy; e.quad[8] = cz;
@@ -1510,7 +1817,7 @@ public final class SolidPainter {
         double screenX = point[0], screenY = point[1], depth = point[2];
         double distance = Math.sqrt((wx - eye.x()) * (wx - eye.x())
                 + (wy - eye.y()) * (wy - eye.y()) + (wz - eye.z()) * (wz - eye.z()));
-        if (distance > viewDistance) return;
+        if (distance > detailDistance) return;   // see inRange
         Entry e = claim();
         e.sprite = draw;
         e.texture = null;

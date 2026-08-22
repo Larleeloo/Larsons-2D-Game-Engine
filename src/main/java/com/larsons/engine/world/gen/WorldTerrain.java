@@ -62,6 +62,9 @@ public final class WorldTerrain {
     /** Cells per side of one coarse-height sample. */
     private static final int COARSE_STEP = 4;
 
+    /** Most samples a side of one coarse box is measured from; see {@link #groupTop}. */
+    private static final int SAMPLES_PER_GROUP = 8;
+
     /** Coarse tiles held before the oldest are dropped (~4 MB). */
     private static final int MAX_COARSE_TILES = 256;
 
@@ -205,52 +208,143 @@ public final class WorldTerrain {
      * step; a cave mouth or a cliff is every layer, which is exactly where the
      * work belongs.
      *
-     * <p>Filled rather than <em>solid</em>, deliberately: the painter draws a
-     * face against any empty neighbour, so a pane of glass or a curtain of
-     * leaves hides what is behind it as far as this pass is concerned, and
-     * counting it as a gap would put the work back.
+     * <p><b>Hidden rather than merely <em>filled</em>, and that distinction is
+     * the ground under a flower.</b> This used to skip a layer whose six
+     * neighbours were all non-empty, which is not the same question the painter
+     * asks: it draws a face against anything that does not {@linkplain
+     * com.larsons.engine.world.Block#covers() cover} — a flower, a pane of
+     * glass, the surface of a lake — because you can plainly see the block
+     * behind one. A column of grass with a flower growing on it therefore had
+     * its topmost grass block counted as buried, so the ground the flower was
+     * standing on was never drawn and the player looked straight through the
+     * world wherever anything was growing. A wall behind glass was the same
+     * fault with a different decoration.
+     *
+     * <p>What still counts as hidden, so a lake does not cost a face per layer
+     * of its depth, is a neighbour of the <em>same block</em>: water against
+     * water has no surface between it, whatever its alpha says. The painter
+     * agrees ({@code SolidPainter.open}), which is what keeps the two passes
+     * from disagreeing about which faces exist.
+     *
+     * <p><b>It walks runs rather than layers, and it walks each of them once.</b>
+     * Every question here is asked of the run encoding — where does the cell
+     * above this one change, how far up does the column beside it go on being
+     * rock — so the loop keeps a cursor into each of the five columns and
+     * advances it, instead of scanning each array from its start for every
+     * layer it looks at. That is not a micro-optimisation: this method is the
+     * inner loop of the whole renderer (it is asked of every cell of the sweep,
+     * a hundred thousand of them at a long render distance) and the scans made
+     * it cost two microseconds a cell, which was most of the frame.
      */
     public int visibleLayers(int col, int row, int depth, int[] out) {
         int limit = Math.min(depth, out.length);
         if (limit <= 1) return 0;
         int[] self = column(col, row);
+        if (self.length == 0) return 0;
+        // Read once for the whole column rather than per id: the set of blocks
+        // cannot change while one column is being looked at.
+        boolean[] covers = blocks.coversTable();
         int[] west = column(col - 1, row);
         int[] east = column(col + 1, row);
         int[] north = column(col, row - 1);
         int[] south = column(col, row + 1);
         int n = 0;
         int y = 1;
+        int ci = 0, wi = 0, ei = 0, ni = 0, si = 0;
         while (y < limit) {
-            long span = filledSpan(self, y);
-            if (span < 0) {
-                // Empty: nothing to draw, and skipping it would hide the
-                // underside of whatever is sitting on top of it.
-                y++;
+            while (ci < self.length && y >= self[ci]) ci += 2;
+            if (ci >= self.length) break;          // open sky above the column
+            int id = self[ci + 1];
+            if (id == 0) {
+                // Empty: nothing to draw in the gap. Skipping past it does not
+                // hide the underside of whatever sits on top, because that
+                // block finds an empty cell below it and is drawn for it.
+                y = self[ci];
                 continue;
             }
-            int start = (int) (span >>> 32), end = (int) span;
-            if (y == start || y == end - 1) {
+            // A block that covers is hidden by anything else that covers; one
+            // you can see past is hidden only by its own kind, and by cover.
+            int like = hides(id, 0, covers) ? 0 : id;
+            int entryEnd = self[ci];
+            int under = ci == 0 ? 0 : self[ci - 2];
+            int below = y - 1 >= under ? id : (ci >= 2 ? self[ci - 1] : 0);
+            if (!hides(below, like, covers)) {
                 out[n++] = y++;
                 continue;
             }
-            int stop = end - 1;
-            long side = filledSpan(west, y);
-            if (side < 0) { out[n++] = y++; continue; }
+            int above = y + 1 < entryEnd ? id : (ci + 2 < self.length ? self[ci + 3] : 0);
+            if (!hides(above, like, covers)) {
+                out[n++] = y++;
+                continue;
+            }
+            // Never past the run this layer's own block occupies: what follows
+            // is an argument about a cell of this id, and the cell above may be
+            // something else that its neighbours do not hide.
+            int stop = entryEnd - 1;
+            long side = hidesFrom(west, y, like, covers, wi);
+            wi = (int) (side >>> 32);
+            if ((int) side < 0) { out[n++] = y++; continue; }
             stop = Math.min(stop, (int) side);
-            side = filledSpan(east, y);
-            if (side < 0) { out[n++] = y++; continue; }
+            side = hidesFrom(east, y, like, covers, ei);
+            ei = (int) (side >>> 32);
+            if ((int) side < 0) { out[n++] = y++; continue; }
             stop = Math.min(stop, (int) side);
-            side = filledSpan(north, y);
-            if (side < 0) { out[n++] = y++; continue; }
+            side = hidesFrom(north, y, like, covers, ni);
+            ni = (int) (side >>> 32);
+            if ((int) side < 0) { out[n++] = y++; continue; }
             stop = Math.min(stop, (int) side);
-            side = filledSpan(south, y);
-            if (side < 0) { out[n++] = y++; continue; }
+            side = hidesFrom(south, y, like, covers, si);
+            si = (int) (side >>> 32);
+            if ((int) side < 0) { out[n++] = y++; continue; }
             stop = Math.min(stop, (int) side);
             // Everything from here to the next gap in any of the six directions
             // is walled in on all of them.
             y = Math.max(y + 1, stop);
         }
         return n;
+    }
+
+    /**
+     * Whether a cell of block {@code id} hides the face of a neighbouring cell
+     * of block {@code like}.
+     *
+     * <p>Cover does it — an opaque, whole block. So does being the same block:
+     * water against water has no surface between it however see-through it is,
+     * and drawing one would lay the same translucent blue down once per layer
+     * of the lake's depth. Pass {@code like} as {@code 0} to ask only about
+     * cover. An id past the end of the table is one the registry does not know,
+     * and an unknown id covers — see {@code BlockRegistry.covers}.
+     */
+    private static boolean hides(int id, int like, boolean[] covers) {
+        if (id == 0) return false;
+        if (id == like) return true;
+        return id >= covers.length || covers[id];
+    }
+
+    /**
+     * How far a neighbouring column goes on hiding a column of {@code like}
+     * from layer {@code y} upward, as
+     * {@code (scanPosition << 32) | endExclusive} — with an end of {@code -1}
+     * when it does not hide {@code y} at all.
+     *
+     * <p>The scan position comes back so the caller can hand it in again: the
+     * layers a column asks about only ever increase, so each neighbour's runs
+     * are walked once for the whole column rather than once per layer.
+     *
+     * @param from where to resume scanning; must name an entry starting at or
+     *             below {@code y}, which the returned position always does
+     */
+    private static long hidesFrom(int[] runs, int y, int like, boolean[] covers, int from) {
+        int i = from;
+        while (i < runs.length && y >= runs[i]) i += 2;
+        if (i >= runs.length) return ((long) i << 32) | 0xFFFFFFFFL;  // open sky
+        if (!hides(runs[i + 1], like, covers)) return ((long) i << 32) | 0xFFFFFFFFL;
+        int end = runs[i];
+        for (int j = i + 2; j < runs.length; j += 2) {
+            if (!hides(runs[j + 1], like, covers)) break;
+            end = runs[j];
+        }
+        return ((long) i << 32) | (end & 0xFFFFFFFFL);
     }
 
     /**
@@ -400,11 +494,58 @@ public final class WorldTerrain {
      */
     private Chunk chunk(int cx, int cy, boolean materialize) {
         long k = key(cx, cy);
+        // A one-entry memo in front of the map, because the two readers that
+        // matter are both spatially coherent: a sweep walks a chunk's worth of
+        // cells before it moves on, and each of those cells asks for its own
+        // column and its four neighbours' — nine lookups a cell, a million a
+        // frame at a long render distance, all but a thirty-secondth of them
+        // for the chunk the last one was in. Held as one object so a reader on
+        // another thread sees a key and a chunk that belong together.
+        Recent memo = recent;
+        if (memo != null && memo.key == k) return memo.chunk;
         Chunk chunk = chunks.get(k);
-        if (chunk != null || !materialize) return chunk;
-        if (frozen && !explored.contains(k)) return null;
-        return build(k, cx, cy);
+        if (chunk == null) {
+            if (!materialize || !buildOnRead) return null;
+            if (frozen && !explored.contains(k)) return null;
+            chunk = build(k, cx, cy);
+            if (chunk == null) return null;
+        }
+        recent = new Recent(k, chunk);
+        return chunk;
     }
+
+    /** The chunk the last read landed in; see {@link #chunk}. */
+    private record Recent(long key, Chunk chunk) {}
+
+    private volatile Recent recent;
+
+    /**
+     * Drop the memo, because the chunk it names may no longer be the chunk at
+     * that key — anything that removes or replaces an entry of {@link #chunks}
+     * has to say so here. Adding one never does: the memo only ever holds a
+     * chunk that was found, so a key that had none cannot be stale.
+     */
+    private void forgetRecent() {
+        recent = null;
+    }
+
+    /**
+     * Whether a read may generate the chunk it lands in, on the calling thread.
+     *
+     * <p>See {@link com.larsons.engine.level.Level#setBuildOnRead(boolean)} for
+     * why a frame turns this off and the simulation leaves it on. Not per
+     * thread: the renderer and the simulation are both the game loop, and the
+     * worker pool goes through {@link #prefetch} rather than through a read.
+     *
+     * @return what it was, so a caller can put it back
+     */
+    public boolean setBuildOnRead(boolean build) {
+        boolean was = buildOnRead;
+        buildOnRead = build;
+        return was;
+    }
+
+    private volatile boolean buildOnRead = true;
 
     /** Generate one chunk and install it. Safe to call from any thread. */
     private Chunk build(long k, int cx, int cy) {
@@ -572,6 +713,7 @@ public final class WorldTerrain {
                 -distanceSq(keyX(k), keyY(k), centreX, centreY)));
         int drop = Math.min(droppable.size(), chunks.size() - budget);
         for (int i = 0; i < drop; i++) chunks.remove(droppable.get(i));
+        forgetRecent();
     }
 
     private static long distanceSq(int ax, int ay, int bx, int by) {
@@ -600,14 +742,26 @@ public final class WorldTerrain {
      * storage at all, so the distance is affordable at the resolution the
      * distance is drawn at: one sample per {@value #COARSE_STEP} cells.
      *
+     * @param out {@code {tallest layer, its block id, lowest layer}} — three
+     *            numbers, the last of which is what a line-of-sight cull may
+     *            treat the whole group as solid up to
      * @return whether an answer was available; a tile still being sampled says
      *         no, and the horizon fills in over the next few frames
      */
     public boolean groupTop(int c0, int r0, int c1, int r1, int[] out) {
-        int best = -1, bestId = 0;
+        int best = -1, bestId = 0, worst = Integer.MAX_VALUE;
         boolean any = false;
-        for (int r = r0; r < r1; r += COARSE_STEP) {
-            for (int c = c0; c < c1; c += COARSE_STEP) {
+        // At most a handful of samples per side, however wide the group is.
+        // The outermost ring of the horizon draws boxes four hundred cells
+        // across, and reading one sample per four cells of those is ten
+        // thousand reads to decide the height of a box eight pixels tall —
+        // which measured as most of what the whole horizon pass cost. The
+        // answer a box wants is "how high is the ground around here", and
+        // sixty-four samples say that as well as ten thousand do.
+        int step = Math.max(COARSE_STEP,
+                Math.max(c1 - c0, r1 - r0) / SAMPLES_PER_GROUP);
+        for (int r = r0; r < r1; r += step) {
+            for (int c = c0; c < c1; c += step) {
                 int[] tile = coarseTile(Math.floorDiv(c, COARSE_TILE),
                         Math.floorDiv(r, COARSE_TILE));
                 if (tile == null) continue;
@@ -619,12 +773,14 @@ public final class WorldTerrain {
                     best = height;
                     bestId = packed & 0xFFFF;
                 }
+                if (height < worst) worst = height;
                 any = true;
             }
         }
         if (!any || best < 0) return false;
         out[0] = best;
         out[1] = bestId;
+        out[2] = Math.max(0, Math.min(best, worst));
         return true;
     }
 
@@ -760,6 +916,7 @@ public final class WorldTerrain {
     public void restore(Snapshot saved) {
         if (saved == null) return;
         chunks.clear();
+        forgetRecent();
         explored.clear();
         explored.addAll(saved.explored());
         frozen = saved.frozen();
@@ -774,6 +931,7 @@ public final class WorldTerrain {
             }
             chunks.put(e.getKey(), chunk);
         }
+        forgetRecent();
     }
 
     /** Opaque saved state for {@link #snapshot()}/{@link #restore}. */
@@ -888,6 +1046,7 @@ public final class WorldTerrain {
         }
         long k = key(cx, cy);
         chunks.put(k, chunk);
+        forgetRecent();
         explored.add(k);
     }
 

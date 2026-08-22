@@ -86,17 +86,14 @@ final class TerrainForms {
                         v -> t.worldSize = v, TerrainSettings.MIN_WORLD_SIZE,
                         TerrainSettings.MAX_WORLD_SIZE, 1024)
                 .enabledWhen(() -> t.enabled);
-        form.addSlider("Render distance (blocks)", () -> t.renderDistance,
-                        v -> t.renderDistance = v, 2, TerrainSettings.MAX_RENDER_DISTANCE)
-                .enabledWhen(() -> t.enabled);
-        form.addInt("Distant generation (blocks)", () -> t.distantDistance,
-                        v -> t.distantDistance = v, 0,
-                        TerrainSettings.MAX_DISTANT_DISTANCE, 64)
-                .enabledWhen(() -> t.enabled);
-        form.addNote("Render distance is what is drawn block by block; "
-                + "distant generation is the horizon behind it, as landforms.");
-        form.addNote("The horizon also needs \"Distant terrain\" on in Options — "
-                + "the player's own say over what their machine draws.");
+        // How far the world is *drawn* is set while you are looking at it, in
+        // the pause menu, rather than here. It is the one setting on this
+        // screen whose right value is a matter of the machine and of the moment
+        // — a creator judging a vista wants it long, the same creator hunting a
+        // stutter wants it short — and a setting like that belongs where it can
+        // be moved without leaving the level. See PlayScene.buildPauseForm.
+        form.addNote("How far this world is drawn — and how much of it block "
+                + "by block — is set in the pause menu ([Esc]), not here.");
 
         form.addInt("Sea level (layer)", () -> t.seaLevel, v -> t.seaLevel = v,
                 1, TerrainSettings.MAX_LEVEL - 2, 1).enabledWhen(() -> t.enabled);

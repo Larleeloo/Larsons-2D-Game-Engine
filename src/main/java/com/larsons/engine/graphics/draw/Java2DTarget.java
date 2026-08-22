@@ -71,6 +71,10 @@ public final class Java2DTarget implements DrawTarget {
     private float strokeWidth = -1;
     private Stroke stroke;
 
+    /** The colour Graphics2D is holding, so setting it again costs nothing. */
+    private int paintArgb;
+    private Color paint;
+
     // Glyph-atlas state. The scale is the destination's, tracked rather than
     // asked for per draw; the rest is a one-entry memo and two scratch buffers,
     // so a text run costs no allocation once its style has been seen.
@@ -124,42 +128,42 @@ public final class Java2DTarget implements DrawTarget {
     public void clear(int argb) {
         if (width <= 0 || height <= 0) return;   // unsized: nothing to clear
         stats.record(DrawStats.Kind.SHAPE, null);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         g.fillRect(0, 0, width, height);
     }
 
     @Override
     public void fillRect(int x, int y, int w, int h, int argb) {
         stats.record(DrawStats.Kind.SHAPE, null);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         g.fillRect(x, y, w, h);
     }
 
     @Override
     public void fillRoundRect(int x, int y, int w, int h, int arcW, int arcH, int argb) {
         stats.record(DrawStats.Kind.SHAPE, null);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         g.fillRoundRect(x, y, w, h, arcW, arcH);
     }
 
     @Override
     public void fillOval(int x, int y, int w, int h, int argb) {
         stats.record(DrawStats.Kind.SHAPE, null);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         g.fillOval(x, y, w, h);
     }
 
     @Override
     public void fillArc(int x, int y, int w, int h, int startDeg, int arcDeg, int argb) {
         stats.record(DrawStats.Kind.SHAPE, null);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         g.fillArc(x, y, w, h, startDeg, arcDeg);
     }
 
     @Override
     public void fillPolygon(int[] xs, int[] ys, int count, int argb) {
         stats.record(DrawStats.Kind.SHAPE, null);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         g.fillPolygon(xs, ys, count);
     }
 
@@ -167,7 +171,7 @@ public final class Java2DTarget implements DrawTarget {
     public void fillShape(Shape shape, int argb) {
         if (shape == null) return;
         stats.record(DrawStats.Kind.SHAPE, null);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         g.fill(shape);
     }
 
@@ -176,7 +180,7 @@ public final class Java2DTarget implements DrawTarget {
     @Override
     public void drawRect(int x, int y, int w, int h, int argb, float thickness) {
         stats.record(DrawStats.Kind.SHAPE, null);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         applyStroke(thickness);
         g.drawRect(x, y, w, h);
     }
@@ -185,7 +189,7 @@ public final class Java2DTarget implements DrawTarget {
     public void drawRoundRect(int x, int y, int w, int h, int arcW, int arcH,
                               int argb, float thickness) {
         stats.record(DrawStats.Kind.SHAPE, null);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         applyStroke(thickness);
         g.drawRoundRect(x, y, w, h, arcW, arcH);
     }
@@ -193,7 +197,7 @@ public final class Java2DTarget implements DrawTarget {
     @Override
     public void drawOval(int x, int y, int w, int h, int argb, float thickness) {
         stats.record(DrawStats.Kind.SHAPE, null);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         applyStroke(thickness);
         g.drawOval(x, y, w, h);
     }
@@ -202,7 +206,7 @@ public final class Java2DTarget implements DrawTarget {
     public void drawArc(int x, int y, int w, int h, int startDeg, int arcDeg,
                         int argb, float thickness) {
         stats.record(DrawStats.Kind.SHAPE, null);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         applyStroke(thickness);
         g.drawArc(x, y, w, h, startDeg, arcDeg);
     }
@@ -210,7 +214,7 @@ public final class Java2DTarget implements DrawTarget {
     @Override
     public void drawPolygon(int[] xs, int[] ys, int count, int argb, float thickness) {
         stats.record(DrawStats.Kind.SHAPE, null);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         applyStroke(thickness);
         g.drawPolygon(xs, ys, count);
     }
@@ -218,7 +222,7 @@ public final class Java2DTarget implements DrawTarget {
     @Override
     public void drawLine(int x1, int y1, int x2, int y2, int argb, float thickness) {
         stats.record(DrawStats.Kind.SHAPE, null);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         applyStroke(thickness);
         g.drawLine(x1, y1, x2, y2);
     }
@@ -227,7 +231,7 @@ public final class Java2DTarget implements DrawTarget {
     public void drawDashedLine(int x1, int y1, int x2, int y2, int argb,
                                float thickness, float dash, float gap) {
         stats.record(DrawStats.Kind.SHAPE, null);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         // Not routed through applyStroke: that caches on width alone, and a
         // dashed stroke and a plain one of the same width are different
         // strokes. Caching them together would draw a dashed line solid, or
@@ -269,6 +273,25 @@ public final class Java2DTarget implements DrawTarget {
                 new Point2D.Float(cx, cy), radius, fractions, colors));
         g.fillOval(cx - radius, cy - radius, radius * 2, radius * 2);
         g.setPaint(previous);
+    }
+
+    /**
+     * Put a packed ARGB on the {@link Graphics2D}, building a {@link Color} for
+     * it only when it is not the one already there.
+     *
+     * <p>The same argument as {@link #applyStroke}, and it matters here for the
+     * same reason it did not before: the solid views put several thousand flat
+     * quads down a frame and a run of them is nearly always one colour — a
+     * face's fill and then its own outline, a coarse box's three faces, a ring
+     * of hillside in one block's colour. A {@code Color} per call was an object
+     * per shape and a fresh {@code SurfaceData} colour lookup with it.
+     */
+    private void paint(int argb) {
+        if (paint == null || argb != paintArgb) {
+            paintArgb = argb;
+            paint = new Color(argb, true);
+        }
+        g.setColor(paint);
     }
 
     /** Only build a {@link BasicStroke} when the width actually changed. */
@@ -403,7 +426,7 @@ public final class Java2DTarget implements DrawTarget {
             return;
         }
         g.setFont(font);
-        g.setColor(new Color(argb, true));
+        paint(argb);
         g.drawString(text, x, y);
     }
 
