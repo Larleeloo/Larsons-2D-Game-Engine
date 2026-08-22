@@ -61,14 +61,52 @@ import java.awt.Color;
  *                    than a global step height, because one number is either
  *                    too small for a staircase or too large for a wall
  *                    ({@code HEIGHT_PLAN.md} W2)
+ * @param shape       what a view standing inside the world builds for it — a
+ *                    whole cube, or a stem with a camera-facing sprite on it.
+ *                    See {@link Shape}
  */
 public record Block(int id, String key, String displayName, Color color,
                     boolean solid, double lightRadius, Color lightColor,
                     String drops, boolean liquid, double damage,
                     double hardness, String tool, boolean falling,
-                    boolean topTexture, boolean sideTexture, boolean step) {
+                    boolean topTexture, boolean sideTexture, boolean step,
+                    Shape shape) {
+
+    /**
+     * What a block <em>looks like</em> in a view that stands inside the world —
+     * the geometry the solid painter builds for it, as opposed to the volume
+     * the simulation collides with.
+     *
+     * <p><b>Why this exists.</b> Every block in this engine was a full cube,
+     * and a great many of them are flowers. A flower drawn as a cube of flower
+     * colour is bad enough seen from above; seen from inside the world it is a
+     * solid block you can walk through, which is two separate faults at once —
+     * it looks like a wall, and because it fills its cell it hides the faces of
+     * everything around it, so walking into one lets you look straight out
+     * through the terrain (see {@link #covers()}).
+     */
+    public enum Shape {
+        /** A whole block, filling its cell. What terrain is. */
+        FULL,
+        /**
+         * A stem standing in the middle of the cell with a sprite growing out
+         * of it that turns to face the camera — a flower, a tuft of grass, a
+         * shrub, a mushroom.
+         *
+         * <p>Both halves matter and they answer different complaints. The stem
+         * is geometry: it stays where it is put, so a plant has a position in
+         * the world you can walk round and it does not swim as you turn. The
+         * sprite is a billboard: a flower has no thickness worth modelling, and
+         * a flat picture of one facing you is what every game from Doom onward
+         * has drawn instead — a cross of two quads is the usual alternative and
+         * it goes edge-on to the camera twice a turn, which is exactly the
+         * moment a player notices the trick.
+         */
+        PLANT
+    }
 
     public Block {
+        if (shape == null) shape = Shape.FULL;
         if (id <= 0) throw new IllegalArgumentException("Block ids must be > 0 (0 = empty)");
         if (key == null || key.isBlank()) throw new IllegalArgumentException("Block key required");
         if (color == null) color = Color.GRAY;
@@ -91,6 +129,20 @@ public record Block(int id, String key, String displayName, Color color,
                  double hardness, String tool, boolean falling) {
         this(id, key, displayName, color, solid, lightRadius, lightColor, drops,
                 liquid, damage, hardness, tool, falling, true, true, false);
+    }
+
+    /**
+     * Pre-shape constructor shape. A block that does not say otherwise fills
+     * its cell, which is what every block did before {@link Shape} existed.
+     */
+    public Block(int id, String key, String displayName, Color color,
+                 boolean solid, double lightRadius, Color lightColor,
+                 String drops, boolean liquid, double damage,
+                 double hardness, String tool, boolean falling,
+                 boolean topTexture, boolean sideTexture, boolean step) {
+        this(id, key, displayName, color, solid, lightRadius, lightColor, drops,
+                liquid, damage, hardness, tool, falling, topTexture, sideTexture,
+                step, Shape.FULL);
     }
 
     /**
@@ -132,13 +184,22 @@ public record Block(int id, String key, String displayName, Color color,
     /** Copy with the given durability tuning ({@link BlockRegistry#tune}). */
     public Block withDurability(double hardness, String tool) {
         return new Block(id, key, displayName, color, solid, lightRadius, lightColor,
-                drops, liquid, damage, hardness, tool, falling, topTexture, sideTexture, step);
+                drops, liquid, damage, hardness, tool, falling, topTexture, sideTexture,
+                step, shape);
     }
 
     /** Copy with gravity behaviour toggled ({@link BlockRegistry#setFalling}). */
     public Block withFalling(boolean falling) {
         return new Block(id, key, displayName, color, solid, lightRadius, lightColor,
-                drops, liquid, damage, hardness, tool, falling, topTexture, sideTexture, step);
+                drops, liquid, damage, hardness, tool, falling, topTexture, sideTexture,
+                step, shape);
+    }
+
+    /** Copy drawn as {@code shape} — see {@link Shape}. */
+    public Block withShape(Shape shape) {
+        return new Block(id, key, displayName, color, solid, lightRadius, lightColor,
+                drops, liquid, damage, hardness, tool, falling, topTexture, sideTexture,
+                step, shape);
     }
 
     /**
@@ -147,13 +208,14 @@ public record Block(int id, String key, String displayName, Color color,
      */
     public Block withStep(boolean step) {
         return new Block(id, key, displayName, color, solid, lightRadius, lightColor,
-                drops, liquid, damage, hardness, tool, falling, topTexture, sideTexture, step);
+                drops, liquid, damage, hardness, tool, falling, topTexture, sideTexture,
+                step, shape);
     }
 
     /** Copy declaring which plan-view faces this block supplies art for. */
     public Block withFaceTextures(boolean top, boolean side) {
         return new Block(id, key, displayName, color, solid, lightRadius, lightColor,
-                drops, liquid, damage, hardness, tool, falling, top, side, step);
+                drops, liquid, damage, hardness, tool, falling, top, side, step, shape);
     }
 
     /** Convenience for plain terrain: solid, no light, drops itself. */
@@ -161,9 +223,23 @@ public record Block(int id, String key, String displayName, Color color,
         return new Block(id, key, name, color, true, 0, null, key);
     }
 
-    /** Convenience for passable decoration (leaves, vines, flowers…). */
+    /** Convenience for passable decoration (leaves, vines…). */
     public static Block passable(int id, String key, String name, Color color) {
         return new Block(id, key, name, color, false, 0, null, null);
+    }
+
+    /**
+     * Convenience for a growing thing — a flower, a tuft of grass, a shrub, a
+     * mushroom: passable, and drawn as a stem with a sprite on it rather than
+     * as a cube of its own colour. See {@link Shape#PLANT}.
+     *
+     * <p>Drops itself, unlike bare {@link #passable} scenery: a plant is
+     * something a player picks, and a flower that vanishes when you touch it is
+     * the kind of thing that reads as the block being broken by mistake.
+     */
+    public static Block plant(int id, String key, String name, Color color) {
+        return new Block(id, key, name, color, false, 0, null, key, false, 0,
+                0, null, false, true, true, false, Shape.PLANT);
     }
 
     /** Convenience for a light source: non-solid, emits light. */
@@ -194,6 +270,30 @@ public record Block(int id, String key, String displayName, Color color,
 
     public boolean emitsLight() {
         return lightRadius > 0;
+    }
+
+    /**
+     * Whether this block hides whatever is on the far side of it — the one
+     * question a renderer asks of a <em>neighbour</em>, and the reason it is a
+     * method rather than a field.
+     *
+     * <p>Two things disqualify a block, and the engine had bugs from both. A
+     * block you can see <em>through</em> — glass, water, anything whose colour
+     * carries alpha — obviously cannot hide the face behind it, and treating it
+     * as if it could is a wall that disappears when a pane is put in front of
+     * it. A block that does not <em>fill</em> its cell cannot either: a flower
+     * is a stem and a sprite with sky all round them, and the block behind it
+     * has a face you can plainly see. That second one is what let a player walk
+     * into a flower and look straight out through the world — standing inside
+     * the cell, every face around them was culled as "covered" by a flower.
+     */
+    public boolean covers() {
+        return shape == Shape.FULL && color.getAlpha() >= 255;
+    }
+
+    /** Whether this block is drawn as a stem with a billboard on it. */
+    public boolean plant() {
+        return shape == Shape.PLANT;
     }
 
     /**

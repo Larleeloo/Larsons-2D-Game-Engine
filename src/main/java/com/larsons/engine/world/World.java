@@ -1717,6 +1717,7 @@ public final class World {
     // --- block durability (hold-to-mine) -----------------------------------------
 
     private int mineCol = Integer.MIN_VALUE, mineRow = Integer.MIN_VALUE;
+    private int mineLayer = Integer.MIN_VALUE;
     private double mineProgress;
 
     /**
@@ -1728,34 +1729,53 @@ public final class World {
      * {@code null} while still chipping away.
      */
     public Block continueMining(int col, int row, ItemDef held, boolean withDrops, double dt) {
-        Block b = level.topBlockAt(col, row);
+        return continueMining(col, row, mineLayer(col, row), held, withDrops, dt);
+    }
+
+    /**
+     * {@link #continueMining(int, int, ItemDef, boolean, double)} against one
+     * named layer of the column — what a crosshair aims at.
+     *
+     * <p><b>The layer is the caller's, not the column's.</b> A plan view points
+     * at a cell and the tool bites the top of the stack, which is what the
+     * five-argument form still asks for. A first-person crosshair points at one
+     * <em>face of one block</em>, and re-deriving "the top of that column" from
+     * it is what made a click on the wall in front of you take the block off its
+     * roof.
+     */
+    public Block continueMining(int col, int row, int layer, ItemDef held,
+                                boolean withDrops, double dt) {
+        Block b = level.blockAt(col, row, layer);
+        if (b == null) b = level.topBlockAt(col, row);
         if (b == null || b.liquid()) {
             // Liquids can't be mined away — displace them by placing a block
             // over them instead (see placeBlock).
             cancelMining();
             return null;
         }
-        if (col != mineCol || row != mineRow) {
+        if (col != mineCol || row != mineRow || layer != mineLayer) {
             mineCol = col;
             mineRow = row;
+            mineLayer = layer;
             mineProgress = 0;
         }
         double hardness = b.hardness();
         if (hardness <= 0) {
             cancelMining();
-            return mineBlock(col, row, withDrops);
+            return mineBlock(col, row, layer, withDrops);
         }
         double power = held != null && held.toolClass() != null
                 && held.toolClass().equals(b.tool()) ? held.toolPower() : 1.0;
         mineProgress += dt * power / hardness;
         if (mineProgress < 1) return null;
         cancelMining();
-        return mineBlock(col, row, withDrops);
+        return mineBlock(col, row, layer, withDrops);
     }
 
     /** Stop the current mining stroke (mouse released / aim moved away). */
     public void cancelMining() {
         mineCol = mineRow = Integer.MIN_VALUE;
+        mineLayer = Integer.MIN_VALUE;
         mineProgress = 0;
     }
 
@@ -1806,7 +1826,15 @@ public final class World {
      * {@code false}. Returns the mined block, or {@code null}.
      */
     public Block mineBlock(int col, int row, boolean withDrops) {
-        int layer = mineLayer(col, row);
+        return mineBlock(col, row, mineLayer(col, row), withDrops);
+    }
+
+    /**
+     * {@link #mineBlock(int, int, boolean)} taking one named layer — the block
+     * a crosshair is actually on, rather than the top of the column it belongs
+     * to. See {@link #continueMining(int, int, int, ItemDef, boolean, double)}.
+     */
+    public Block mineBlock(int col, int row, int layer, boolean withDrops) {
         Block b = level.blocks.get(level.tileAt(col, row, layer));
         if (b == null || b.liquid()) return null; // liquids aren't minable
         // Storage blocks spill their second inventory when broken.
@@ -1838,8 +1866,25 @@ public final class World {
      * either way, which is how a pool is filled in.
      */
     public boolean placeBlock(int col, int row, int id) {
-        int layer = level.placeLayer(col, row);
-        if (layer < 0) return false;
+        return placeBlock(col, row, level.placeLayer(col, row), id);
+    }
+
+    /**
+     * {@link #placeBlock(int, int, int)} into one named layer — where a
+     * crosshair's aim says the block goes, which is the box the ray was in when
+     * it met the face it struck.
+     *
+     * <p>The cell has to be free, and it has to be a layer this level has. A
+     * liquid is overwritten rather than refused, which is the same exception
+     * the column rule makes and for the same reason: covering a pool is how
+     * pools are removed.
+     */
+    public boolean placeBlock(int col, int row, int layer, int id) {
+        if (layer < 0 || layer >= level.layerLimit()) return false;
+        Block there = level.blockAt(col, row, layer);
+        if (level.tileAt(col, row, layer) > 0 && (there == null || !there.liquid())) {
+            return false;
+        }
         return level.setTile(col, row, layer, id);
     }
 

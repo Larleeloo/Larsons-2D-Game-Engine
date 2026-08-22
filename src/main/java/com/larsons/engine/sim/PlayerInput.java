@@ -76,6 +76,17 @@ public final class PlayerInput {
     public int mineCol, mineRow;
 
     /**
+     * Which layer of that cell the player is aiming at.
+     *
+     * <p>Rides the command for the same reason {@link #yaw} does: the aim is
+     * derived from a camera the server deliberately never sees (C10), and a
+     * crosshair on the side of a wall names one <em>box</em> of a column rather
+     * than the column. Without it the server re-derived "the top of the stack"
+     * and mined a different block from the one the player was pointing at.
+     */
+    public int mineLayer;
+
+    /**
      * The camera heading the player was looking along when they pressed these
      * keys, in radians — zero in a level that does not turn.
      *
@@ -197,6 +208,7 @@ public final class PlayerInput {
             m.put("mi", true);
             m.put("mc", mineCol);
             m.put("mr", mineRow);
+            m.put("ml", mineLayer);
         }
         if (!melee.isEmpty()) m.put("ml", melee);
         if (shield) m.put("sd", true);
@@ -223,6 +235,7 @@ public final class PlayerInput {
         in.mine = Boolean.TRUE.equals(m.get("mi"));
         in.mineCol = m.get("mc") instanceof Number n ? n.intValue() : 0;
         in.mineRow = m.get("mr") instanceof Number n ? n.intValue() : 0;
+        in.mineLayer = m.get("ml") instanceof Number n ? n.intValue() : 0;
         in.melee = m.get("ml") instanceof String s ? s : "";
         in.shield = Boolean.TRUE.equals(m.get("sd"));
         in.yaw = m.get("y") instanceof Number n ? n.doubleValue() : 0;

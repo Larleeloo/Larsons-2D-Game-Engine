@@ -2,6 +2,7 @@ package com.larsons.engine.fx;
 
 import com.larsons.engine.graphics.Camera;
 import com.larsons.engine.graphics.Skins;
+import com.larsons.engine.graphics.SolidPainter;
 import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.sim.PerspectiveSpace;
 
@@ -391,6 +392,49 @@ public final class Particles {
             }
         }
         if (alphaPushed) target.popAlpha();
+    }
+
+    /**
+     * Draw the flecks through an eye standing in the world, as billboards
+     * queued into {@code solid}.
+     *
+     * <p><b>The same drawing, under a transform.</b> A particle is already a
+     * flat mark that always faces the viewer — which is what a billboard is —
+     * so nothing about how one looks changes here. What changes is where it
+     * lands and how big it is: {@link SolidPainter#billboard} maps the point the
+     * flat camera would have put it at onto the point the eye puts it at, and
+     * scales about it. Writing a second particle renderer against the other
+     * camera would mean two of everything and one of them quietly falling
+     * behind.
+     *
+     * <p>Sorted with the terrain rather than laid over it, so a spark behind a
+     * wall is behind the wall.
+     */
+    public void renderSolid(DrawTarget target, Camera camera, SolidPainter solid) {
+        Style[] styles = Style.values();
+        double lift = camera.liftScale();
+        for (int p = 0; p < count; p++) {
+            final int i = p;
+            double fade = Math.max(0, Math.min(1, life[i] / maxLife[i]));
+            int pivotX = camera.worldToScreenX(x[i], y[i]);
+            int pivotY = camera.worldToScreenY(x[i], y[i])
+                    - (int) Math.round(z[i] * lift * camera.zoom);
+            int s = Math.max(1, (int) (size[i] * camera.zoom
+                    * space.heightScale(z[i], HEIGHT_UNIT)));
+            Style style = styles[styleIdx[i]];
+            BufferedImage tex = Skins.frame(textureKey(style), maxLife[i] - life[i]);
+            int argb = rgb[i] | (Math.max(0, Math.min(255, (int) (255 * fade))) << 24);
+            solid.billboard(x[i], y[i], z[i], pivotX, pivotY, camera.zoom, () -> {
+                if (tex != null) {
+                    int w = Math.max(2, s * 2);
+                    target.pushAlpha((float) fade);
+                    target.drawImage(tex, pivotX - w / 2, pivotY - w / 2, w, w);
+                    target.popAlpha();
+                } else {
+                    target.fillRect(pivotX - s / 2, pivotY - s / 2, s, s, argb);
+                }
+            });
+        }
     }
 
     public int count() {

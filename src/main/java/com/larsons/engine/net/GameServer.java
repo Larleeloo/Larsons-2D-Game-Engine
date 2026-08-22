@@ -589,16 +589,26 @@ public final class GameServer {
             c.resetMining();
             return;
         }
-        // A stack comes apart from the top: the block under the tool is the
-        // one standing on the floor, or the floor itself when nothing is.
-        Block b = level.topBlockAt(col, row);
+        // The box the client's crosshair named, bounded here rather than
+        // recomputed: the aim comes from a camera the server never sees (C10),
+        // so what it can check is that the layer is a layer of this level and
+        // that the cell is in reach — the same rule editAllowed applies. Out of
+        // range, the column rule stands in, which is what a plan-view client
+        // means and what every client meant before the field existed.
+        int layer = in.mineLayer;
+        if (layer < 0 || layer >= level.layerLimit() || level.tileAt(col, row, layer) <= 0) {
+            layer = world.mineLayer(col, row);
+        }
+        Block b = level.blockAt(col, row, layer);
+        if (b == null) b = level.topBlockAt(col, row);
         if (b != null && b.liquid()) { // liquids aren't minable
             c.resetMining();
             return;
         }
-        if (col != c.mineCol || row != c.mineRow) {
+        if (col != c.mineCol || row != c.mineRow || layer != c.mineLayer) {
             c.mineCol = col;
             c.mineRow = row;
+            c.mineLayer = layer;
             c.mineProgress = 0;
         }
         ItemDef held = profile.itemsEnabled ? c.inventory.selectedDef() : null;
@@ -612,8 +622,7 @@ public final class GameServer {
             if (c.mineProgress < 1) return;
         }
         c.resetMining();
-        int layer = world.mineLayer(col, row);
-        Block mined = world.mineBlock(col, row, profile.itemsEnabled);
+        Block mined = world.mineBlock(col, row, layer, profile.itemsEnabled);
         boolean changed = mined != null || level.setTile(col, row, layer, 0);
         if (!changed) return;
         broadcast(Protocol.blockSet(col, row, level.tileAt(col, row, layer), layer));
@@ -703,13 +712,17 @@ public final class GameServer {
                     boolean paint = "paint".equals(msg.get("m"));
                     if (paint ? !profile.creativeEnabled : !profile.blockEditingEnabled) continue;
                     boolean changed;
-                    // Creative painting names the layer it means; play-mode
-                    // placing lets the world choose (a hole is floored before
-                    // anything is stood on it).
-                    int layer = paint ? Protocol.layerOf(msg) : world.placeLayer(col, row);
-                    // A painted layer is a number the client chose, so it is
+                    // Both modes may name the layer they mean now: creative
+                    // painting always did, and a play-mode crosshair names the
+                    // box it is building into rather than the column it belongs
+                    // to. A play-mode client that names nothing — a plan view,
+                    // or one built before the field existed — leaves it at zero
+                    // and the world chooses, which is the bottom-up rule.
+                    int asked = Protocol.layerOf(msg);
+                    int layer = paint || asked > 0 ? asked : world.placeLayer(col, row);
+                    // A named layer is a number the client chose, so it is
                     // bounded here before anything is written with it.
-                    if (paint && !editAllowed(conn, col, row, layer)) continue;
+                    if ((paint || asked > 0) && !editAllowed(conn, col, row, layer)) continue;
                     if (id == 0) {
                         // Creative erase only. Play-mode mining is hold-to-mine
                         // via the input command (see stepMining), so blocks
@@ -720,7 +733,7 @@ public final class GameServer {
                     } else if (paint) {
                         changed = level.setTile(col, row, layer, id);
                     } else {
-                        changed = layer >= 0 && placeFromInventory(conn, col, row, id);
+                        changed = layer >= 0 && placeFromInventory(conn, col, row, layer, id);
                     }
                     if (changed) {
                         broadcast(Protocol.blockSet(col, row,
@@ -770,12 +783,12 @@ public final class GameServer {
      * inventory (when items are on) — the server-side twin of the client's
      * "you can only place what you hold" rule, so placements can't be conjured.
      */
-    private boolean placeFromInventory(Connection conn, int col, int row, int id) {
-        if (!profile.itemsEnabled) return world.placeBlock(col, row, id);
+    private boolean placeFromInventory(Connection conn, int col, int row, int layer, int id) {
+        if (!profile.itemsEnabled) return world.placeBlock(col, row, layer, id);
         Block block = level.blocks.get(id);
         if (block == null || world.itemTypes.get(block.key()) == null) return false;
         if (conn.inventory.remove(block.key(), 1) < 1) return false;
-        boolean placed = world.placeBlock(col, row, id);
+        boolean placed = world.placeBlock(col, row, layer, id);
         if (!placed) {
             conn.inventory.add(block.key(), 1); // cell was occupied: refund
         } else {
@@ -942,12 +955,14 @@ public final class GameServer {
         int lastMeleeSeq = -1;
         /** Hold-to-mine progress on the current cell (tick thread only). */
         int mineCol = Integer.MIN_VALUE, mineRow = Integer.MIN_VALUE;
+        int mineLayer = Integer.MIN_VALUE;
         double mineProgress;
         /** Server-side inventory: what this player has picked up (tick thread only). */
         final Inventory inventory = new Inventory(world.itemTypes);
 
         void resetMining() {
             mineCol = mineRow = Integer.MIN_VALUE;
+            mineLayer = Integer.MIN_VALUE;
             mineProgress = 0;
         }
 

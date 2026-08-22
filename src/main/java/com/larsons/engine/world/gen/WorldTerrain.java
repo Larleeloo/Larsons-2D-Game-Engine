@@ -254,6 +254,22 @@ public final class WorldTerrain {
     }
 
     /**
+     * How many cells stand in an unbroken run on this column's floor — the
+     * height a line-of-sight cull may treat the column as solid to. Zero when
+     * layer 1 is empty, so a column with a hole at its foot occludes nothing.
+     *
+     * <p>Free here, which is the point of asking the terrain rather than the
+     * level: a run-encoded column already knows where its first gap is, and the
+     * alternative is a hundred and fifty reads per cell per frame.
+     */
+    public int groundedDepth(int col, int row) {
+        long span = filledSpan(column(col, row), 1);
+        if (span < 0) return 0;
+        if ((int) (span >>> 32) > 1) return 0;   // the run does not reach the floor
+        return Math.max(0, (int) span - 1);
+    }
+
+    /**
      * The unbroken run of filled cells containing a layer, as
      * {@code (start << 32) | endExclusive}, or {@code -1} when the cell is
      * empty. Runs of different blocks that touch are one span: what matters

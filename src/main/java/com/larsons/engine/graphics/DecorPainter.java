@@ -70,16 +70,67 @@ public final class DecorPainter {
      */
     public static void draw(DrawTarget target, Level level, Camera camera,
                             boolean foreground, double animClock, DepthPass into) {
-        for (Placed p : collect(level, camera, foreground, animClock)) {
+        for (Placed p : collect(level, camera, foreground, animClock, true)) {
             into.at(p.tile(), p.depth(), () ->
                     target.drawImage(p.sprite(), p.x(), p.y(), p.size(), p.size()));
         }
     }
 
+    /**
+     * Draw one decoration layer through an eye standing in the world — the
+     * first- and third-person views' scenery.
+     *
+     * <p><b>Every decoration was missing from those views entirely</b>, and the
+     * reason was not that scenery is hard to project: it is that this painter
+     * only ever spoke to a {@link DepthPass}, which is the flat camera's
+     * ordering, so a solid frame simply never called it. A tree is a flat
+     * picture standing on the ground, which is exactly what
+     * {@link SolidPainter#billboard} draws — so the sprite, its size and its
+     * screen anchor are all the same numbers the plan view computes, handed to
+     * the other camera instead of to the depth pass.
+     *
+     * <p>Two things are added rather than reused. A decoration is stood on the
+     * <em>top of its column</em> rather than on the world's floor, because a
+     * view from inside the world can see the difference between a tree on a
+     * plateau and a tree sunk into one; and it gets the same patch of ground
+     * shadow an actor does, for the same reason — a billboard with nothing
+     * underneath it is a sticker hanging in the air.
+     *
+     * <p>The two layers are still separate calls, and both are queued into the
+     * same painter: "behind" and "in front" are a flat picture's way of saying
+     * what depth says by itself once there is an eye, so a foreground tree is
+     * simply a tree that happens to be nearer.
+     */
+    public static void drawSolid(DrawTarget target, Level level, Camera camera,
+                                 SolidPainter solid, boolean foreground,
+                                 double animClock) {
+        int ts = Math.max(1, level.tileSize);
+        // Not culled against the viewport: that rectangle is the flat camera's,
+        // and the eye is looking somewhere else entirely. The painter's own
+        // view-distance test is what bounds this one (SolidPainter.billboard).
+        for (Placed p : collect(level, camera, foreground, animClock, false)) {
+            int col = (int) Math.floor(p.worldX() / ts);
+            int row = (int) Math.floor(p.worldY() / ts);
+            double z = level.verticality()
+                    ? level.surfaceZ(Math.max(1, level.stackHeight(col, row))) : 0;
+            solid.groundShadow(p.worldX(), p.worldY(), z, ts * 0.3);
+            solid.billboard(p.worldX(), p.worldY(), z, p.pivotX(), p.pivotY(), camera.zoom,
+                    () -> target.drawImage(p.sprite(), p.x(), p.y(), p.size(), p.size()));
+        }
+    }
 
-    /** The visible decorations of one layer, projected and ready to draw. */
+
+    /**
+     * The decorations of one layer, projected and ready to draw.
+     *
+     * @param cull whether to drop anything off the flat camera's viewport —
+     *             true for the plan view, whose screen rectangle is exactly
+     *             what is visible, and false for a solid view, where the flat
+     *             camera's projection is only supplying a pivot and a scale
+     */
     private static List<Placed> collect(Level level, Camera camera,
-                                        boolean foreground, double animClock) {
+                                        boolean foreground, double animClock,
+                                        boolean cull) {
         List<Placed> batch = new ArrayList<>();
         if (level.entities.isEmpty()) return batch;
         String kind = kindFor(foreground);
@@ -93,13 +144,14 @@ public final class DecorPainter {
                     def.sizeTiles() * level.tileSize * camera.zoom));
             camera.worldToScreen(e.x, e.y, anchor);
             int x = anchor[0] - size / 2, y = anchor[1] - size;
-            if (x + size < 0 || x > camera.viewportWidth
-                    || y + size < 0 || y > camera.viewportHeight) continue;
+            if (cull && (x + size < 0 || x > camera.viewportWidth
+                    || y + size < 0 || y > camera.viewportHeight)) continue;
             BufferedImage sprite = Skins.frame("decor/" + e.type, animClock);
             if (sprite == null) sprite = EntitySprites.decor(def, SPRITE_PX);
             batch.add(new Placed(sprite, x, y, size,
                     TerrainPainter.standingDepth(camera, level.tileSize, e.x, e.y),
-                    TerrainPainter.pointDepth(camera, e.x, e.y)));
+                    TerrainPainter.pointDepth(camera, e.x, e.y),
+                    e.x, e.y, anchor[0], anchor[1]));
         }
         return batch;
     }
@@ -112,5 +164,6 @@ public final class DecorPainter {
      * a player pass behind a tree and then in front of it.
      */
     private record Placed(BufferedImage sprite, int x, int y, int size,
-                          int tile, int depth) {}
+                          int tile, int depth,
+                          double worldX, double worldY, int pivotX, int pivotY) {}
 }

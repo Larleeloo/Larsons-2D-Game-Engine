@@ -322,13 +322,42 @@ public final class TerrainPainter {
      *              rule every block game uses and the only one that is not
      *              maddening: point at the top of a wall and you build higher,
      *              point at its face and you build outward from it
+     * @param placeLayer the layer a block placed against this aim occupies, or
+     *              {@link #COLUMN_RULE} when the aim cannot say and the level's
+     *              own bottom-up rule decides — see {@link #placeLayer(Level)}
      */
     public record Aim(int col, int row, int layer, boolean top,
-                      int placeCol, int placeRow) {
+                      int placeCol, int placeRow, int placeLayer) {
 
-        /** The layer a block placed against this aim would occupy. */
+        /**
+         * A placement this aim has no opinion about, so {@link Level#placeLayer}
+         * decides: the plan view's rule, where a cursor points at a
+         * <em>column</em> and a stack is built from the bottom up.
+         */
+        public static final int COLUMN_RULE = Integer.MIN_VALUE;
+
+        /**
+         * An aim that names a cell but not a height — what the flat camera's
+         * {@link #pick} answers, because a parallel projection over a
+         * heightfield resolves to a column rather than to one box of it.
+         */
+        public Aim(int col, int row, int layer, boolean top,
+                   int placeCol, int placeRow) {
+            this(col, row, layer, top, placeCol, placeRow, COLUMN_RULE);
+        }
+
+        /**
+         * The layer a block placed against this aim would occupy.
+         *
+         * <p>An aim that struck one <em>face</em> of one block knows this
+         * exactly — it is the box the ray was in when it met the face, which is
+         * what makes "point at the top of a wall and build higher, point at its
+         * side and build outward" true on both axes. An aim from the flat
+         * camera does not, and falls back to the level's own rule.
+         */
         public int placeLayer(Level level) {
-            return level.stackHeight(placeCol, placeRow);
+            return placeLayer != COLUMN_RULE ? placeLayer
+                    : level.placeLayer(placeCol, placeRow);
         }
     }
 

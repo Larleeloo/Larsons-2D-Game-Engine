@@ -967,6 +967,33 @@ public class Level {
     }
 
     /**
+     * How many blocks stand in an unbroken run on this cell's floor — the
+     * height a renderer may treat this column as solid to.
+     *
+     * <p><b>Not {@link #columnDepth}, and the difference is a cave.</b> That
+     * answers where the column's highest block is; this answers where its first
+     * gap is. Line-of-sight culling needs the second one, because a column with
+     * a hole in it is a column you can see through, and a mountain with a cave
+     * mouth in it is the case where assuming otherwise paints out the world.
+     *
+     * <p>It is also not {@link #stackHeight}, which counts from layer 0 and is
+     * about what holds a body up. This counts the blocks standing <em>on</em>
+     * the floor, so a bare floor answers zero — the ground plane itself is at
+     * height zero and needs no counting.
+     *
+     * <p>Answered from the run encoding on a generated world, where it costs a
+     * scan of a handful of runs rather than of a hundred and fifty layers.
+     */
+    public int groundedDepth(int col, int row) {
+        if (col < 0 || row < 0 || col >= width || row >= height) return 0;
+        if (terrain != null) return terrain.groundedDepth(col, row);
+        int depth = columnDepth(col, row);
+        int n = 0;
+        while (n + 1 < depth && tileAt(col, row, n + 1) > 0) n++;
+        return n;
+    }
+
+    /**
      * The tallest ground in a rectangle of cells and what it is made of, for
      * the coarse pass that draws the horizon —
      * {@code out[0]} the layer, {@code out[1]} the block id.

@@ -83,6 +83,52 @@ public final class SurfaceDecorPainter {
         }
     }
 
+    /**
+     * Draw one layer of a level's surface decor through an eye standing in the
+     * world — the first- and third-person views' block details.
+     *
+     * <p><b>Why the styles are reused unchanged.</b> Every one of them is
+     * written in a {@link FaceFrame}: along the face and out of it, in tiles,
+     * with the camera deciding where that lands. A billboard is simply the
+     * frame where "along" is the screen's horizontal and "out" is up it —
+     * exactly the edge-on frame a side view uses — so the ten styles draw here
+     * for free, and {@link SolidPainter#billboard} turns the result into a card
+     * standing in the world that always faces you.
+     *
+     * <p>Rooted on the top of its own column and leaned toward the face it
+     * belongs to, which is the same placement the plan view makes and for the
+     * same reason: a face is a strip of the block's upper surface once you are
+     * looking down at it at all, and grass on a plateau belongs on the plateau.
+     */
+    public static void drawSolid(DrawTarget target, Level level, SolidPainter solid,
+                                 boolean foreground, double animClock) {
+        if (level.surfaceDecor.isEmpty()) return;
+        SurfaceDecorRegistry registry = SurfaceDecorRegistry.standard();
+        double ts = Math.max(1, level.tileSize);
+        double pivotScale = BILLBOARD_PIXELS / ts;
+        for (SurfaceDecor.Placement p : level.surfaceDecor) {
+            if (p.foreground() != foreground) continue;
+            if (!visible(level, p)) continue;
+            SurfaceDecor def = registry.get(p.key());
+            if (def == null) continue;
+            double ax = (p.col() + 0.5 + p.face().dc * FaceFrame.EDGE_LEAN) * ts;
+            double ay = (p.row() + 0.5 + p.face().dr * FaceFrame.EDGE_LEAN) * ts;
+            double az = level.surfaceZ(Math.max(1, level.stackHeight(p.col(), p.row())));
+            FaceFrame frame = FaceFrame.billboard(ax, ay, BILLBOARD_PIXELS);
+            solid.billboard(ax, ay, az, 0, 0, pivotScale,
+                    () -> drawOne(target, frame, p, def, animClock));
+        }
+    }
+
+    /**
+     * How many pixels across one world tile is while a detail is drawn into a
+     * billboard. The transform that places the card scales whatever this
+     * produces, so it is a resolution rather than a size: high enough that a
+     * grass blade a pace away is not a staircase, low enough that the stroke
+     * widths the styles derive from it stay whole pixels.
+     */
+    private static final double BILLBOARD_PIXELS = 48;
+
     /** Host block still there + the face's open/closed condition holds. */
     public static boolean visible(Level level, SurfaceDecor.Placement p) {
         if (level.tileAt(p.col(), p.row()) <= 0) return false;
@@ -336,7 +382,7 @@ public final class SurfaceDecorPainter {
          * still read as the north/south/east/west side of it; near enough
          * that the detail sits on the block rather than beside it.
          */
-        private static final double EDGE_LEAN = 0.2;
+        static final double EDGE_LEAN = 0.2;
 
         /**
          * How much of a detail's height a plan view actually shows, drawn as a
@@ -396,6 +442,16 @@ public final class SurfaceDecorPainter {
             this.layY = sideOn ? outY : -outY;
             this.hangX = sideOn ? 0 : -outX;
             this.hangY = sideOn ? 1 : -outY;
+        }
+
+        /**
+         * The frame a detail is drawn in when it is going onto a billboard: a
+         * tile is {@code tilePx} across, the face runs along the screen and
+         * standing up off it is up the screen — which is the edge-on frame,
+         * because a card facing the viewer is exactly a face seen edge-on.
+         */
+        static FaceFrame billboard(double anchorX, double anchorY, double tilePx) {
+            return new FaceFrame(0, 0, anchorX, anchorY, tilePx, 1, 0, 0, -1, true);
         }
 
         /** Project a face, or {@code null} when a tile is too small to detail. */
