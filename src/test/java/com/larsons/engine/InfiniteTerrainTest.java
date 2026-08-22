@@ -913,6 +913,75 @@ class InfiniteTerrainTest {
         assertEquals(depth, lvl.columnDepth(col, row), "and the level put it back");
     }
 
+    // --- streaming ------------------------------------------------------------------
+
+    /**
+     * Digging down stops streaming the surface: a player under the ground keeps
+     * far fewer chunks resident than the same player standing on it.
+     *
+     * <p><b>A chunk is a column of world, and walking into one does not mean
+     * the player has anything to do with all of it.</b> Sixty blocks down a
+     * shaft the render distance still says twenty tiles and the four walls of
+     * the shaft say four, so the disc of surface ground that used to be
+     * generated — and, with {@code saveExplored} on, written into the save —
+     * was ground the player could not see a single block of.
+     */
+    @Test
+    void diggingDownStopsStreamingTheSurface() {
+        Level surface = worldLevel(31337);
+        Level buried = worldLevel(31337);
+        int ts = surface.tileSize;
+        int[] authored = surface.terrain().authoredBounds();
+        // Well outside the authored rectangle, where the generator runs.
+        double x = (authored[0] + authored[2] + 300) * (double) ts;
+        double y = (authored[1] + 300) * (double) ts;
+        int col = (int) (x / ts), row = (int) (y / ts);
+        double ground = surface.surfaceZ(Math.max(1, surface.groundedDepth(col, row) + 1));
+
+        surface.streamTerrain(x, y, ground, 48);
+        buried.streamTerrain(x, y, ground - 40 * ts, 48);
+        for (int i = 0; i < 400; i++) sleep();
+
+        assertTrue(buried.terrain().loadedChunks() < surface.terrain().loadedChunks(),
+                "forty blocks down should stream less than standing on top: "
+                        + buried.terrain().loadedChunks() + " vs "
+                        + surface.terrain().loadedChunks());
+        surface.terrain().close();
+        buried.terrain().close();
+    }
+
+    /**
+     * A caller with no height to offer streams exactly as much as it always
+     * did — an editor panning a map, and every call written before the height
+     * was there to pass.
+     */
+    @Test
+    void aCallerWithNoHeightStreamsTheFullRing() {
+        Level withoutZ = worldLevel(4242);
+        Level withZ = worldLevel(4242);
+        int ts = withoutZ.tileSize;
+        int[] authored = withoutZ.terrain().authoredBounds();
+        double x = (authored[0] + authored[2] + 300) * (double) ts;
+        double y = (authored[1] + 300) * (double) ts;
+        int col = (int) (x / ts), row = (int) (y / ts);
+        double ground = withZ.surfaceZ(Math.max(1, withZ.groundedDepth(col, row) + 1));
+
+        withoutZ.streamTerrain(x, y, 48);
+        withZ.streamTerrain(x, y, ground, 48);
+        for (int i = 0; i < 400; i++) sleep();
+
+        // Within a chunk of each other rather than exactly equal: the builds
+        // land on a worker pool, so which of them has finished at the moment
+        // the count is taken is not something either level decides.
+        assertTrue(Math.abs(withZ.terrain().loadedChunks()
+                        - withoutZ.terrain().loadedChunks()) <= 2,
+                "no height offered reads as standing on the ground: "
+                        + withoutZ.terrain().loadedChunks() + " vs "
+                        + withZ.terrain().loadedChunks());
+        withoutZ.terrain().close();
+        withZ.terrain().close();
+    }
+
     private static void assertArrayEqualsInts(int[] a, int[] b, String message) {
         if (a == null && b == null) return;
         assertNotNull(a, message);

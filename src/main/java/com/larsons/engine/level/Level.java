@@ -434,6 +434,38 @@ public class Level {
      *                  chunks kept ready always covers what is being drawn
      */
     public void streamTerrain(double worldX, double worldY, int viewTiles) {
+        streamTerrain(worldX, worldY, Double.NaN, viewTiles);
+    }
+
+    /**
+     * {@link #streamTerrain(double, double, int)} told how high the player is
+     * standing, so the ring of chunks kept ready is a function of what can be
+     * seen rather than only of where the feet are.
+     *
+     * <p><b>Why height belongs in this.</b> A chunk is a column of world, and
+     * walking into one does not mean the player has anything to do with all of
+     * it: standing on a plateau you can see for a hundred tiles, and sixty
+     * blocks down a mine shaft you can see the four walls of the shaft. The
+     * radius was the render distance in both cases, so a player who dug down
+     * went on generating — and, with {@code saveExplored} on, went on
+     * <em>storing</em> — a disc of surface world a hundred and twenty tiles
+     * across that they could not see a single block of.
+     *
+     * <p>So being under the local ground shrinks the ring, in proportion, down
+     * to the handful of chunks the body itself needs to collide with. It is the
+     * streaming half of the same argument the renderer's line-of-sight cull
+     * makes ({@code SolidPainter.terrain}), and the two agree by construction:
+     * what the eye cannot see is what the world need not build.
+     *
+     * <p>Being <em>above</em> the ground does not grow it. A player on a tower
+     * can see further, but what is drawn is still bounded by the render
+     * distance, so a wider ring would build ground nothing is going to ask for.
+     *
+     * @param worldZ how high the player is above the floor, or {@code NaN} when
+     *               the caller has no height to offer (a flat camera, an
+     *               editor) — which keeps the ring at its full radius
+     */
+    public void streamTerrain(double worldX, double worldY, double worldZ, int viewTiles) {
         if (terrain == null) return;
         int ts = Math.max(1, tileSize);
         int col = (int) Math.floor(worldX / ts);
@@ -441,7 +473,44 @@ public class Level {
         int chunks = viewTiles / com.larsons.engine.world.gen.WorldTerrain.CHUNK + 2;
         int radius = Math.max(chunks, settings != null && settings.terrain != null
                 ? settings.terrain.prefetchRadius : 4);
-        terrain.prefetch(col, row, radius);
+        terrain.prefetch(col, row, buriedRadius(col, row, worldZ, radius),
+                EXPLORE_CHUNKS);
+    }
+
+    /**
+     * How many chunks below the local surface a player has to be before the
+     * ring starts closing in, and how many more before it is fully closed.
+     *
+     * <p>A little slack at the top so that walking through a shallow gully or
+     * standing in a doorway does not thrash the streamer, and then a fall-off
+     * measured in blocks rather than in chunks, because how far you can see
+     * underground is about the rock over your head and not about the chunk
+     * grid.
+     */
+    private static final int BURIED_SLACK_BLOCKS = 4;
+    private static final int BURIED_FULL_BLOCKS = 24;
+
+    /**
+     * How many chunks the player is <em>near</em>, as against how many are
+     * built for them to look at. Only these are recorded as explored, because
+     * walking past a hillside at a hundred tiles is not visiting it — see
+     * {@code WorldTerrain.prefetch}.
+     */
+    private static final int EXPLORE_CHUNKS = 2;
+
+    /** {@code radius}, closed in by however far under the ground the player is. */
+    private int buriedRadius(int col, int row, double worldZ, int radius) {
+        if (Double.isNaN(worldZ) || terrain == null) return radius;
+        int ts = Math.max(1, tileSize);
+        double surface = surfaceZ(Math.max(1, groundedDepth(col, row) + 1));
+        double under = (surface - worldZ) / ts;
+        if (under <= BURIED_SLACK_BLOCKS) return radius;
+        double t = Math.min(1, (under - BURIED_SLACK_BLOCKS)
+                / (double) (BURIED_FULL_BLOCKS - BURIED_SLACK_BLOCKS));
+        // Never below the body's own needs: physics reads the cells around the
+        // player whether or not anything is drawn, and a chunk it reaches into
+        // that has not been built is a player falling through the floor.
+        return (int) Math.round(radius + (EXPLORE_CHUNKS - radius) * t);
     }
 
     // --- layer storage ----------------------------------------------------------

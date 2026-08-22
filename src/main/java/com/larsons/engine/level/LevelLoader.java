@@ -364,15 +364,17 @@ public final class LevelLoader {
      * don't need the level file locally.
      */
     public static String readText(String path) {
+        // Through LevelFile either way: a saved level is deflated and a
+        // hand-written or bundled one is text, and which of the two a path
+        // holds is not something a caller should have to know (LevelFile).
         String cp = path.startsWith("/") ? path : "/" + path;
         try (InputStream in = LevelLoader.class.getResourceAsStream(cp)) {
-            if (in != null) return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+            if (in != null) return LevelFile.read(in);
         } catch (IOException ignored) {
             // fall through to filesystem
         }
         try {
-            Path p = Path.of(path);
-            if (Files.exists(p)) return Files.readString(p);
+            return LevelFile.read(Path.of(path));
         } catch (IOException ignored) {
             // fall through to null
         }

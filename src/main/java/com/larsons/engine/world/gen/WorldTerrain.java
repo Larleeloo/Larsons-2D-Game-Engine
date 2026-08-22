@@ -408,6 +408,17 @@ public final class WorldTerrain {
 
     /** Generate one chunk and install it. Safe to call from any thread. */
     private Chunk build(long k, int cx, int cy) {
+        // The synchronous fallback: something is reading this chunk right now,
+        // which is the strongest evidence there is that the player is in it.
+        return build(k, cx, cy, true);
+    }
+
+    /**
+     * {@link #build(long, int, int)}, saying whether this counts as the player
+     * having been <em>in</em> the chunk rather than having had it drawn for
+     * them — see {@link #prefetch(int, int, int, int)}.
+     */
+    private Chunk build(long k, int cx, int cy, boolean visited) {
         Chunk existing = chunks.get(k);
         if (existing != null) return existing;
         Chunk chunk = new Chunk();
@@ -418,8 +429,16 @@ public final class WorldTerrain {
         }
         Chunk raced = chunks.putIfAbsent(k, chunk);
         if (raced != null) return raced;
+        // Explored is the world's boundary — what a frozen world still has —
+        // so anything built at all belongs in it: ground the player has seen
+        // from a hilltop should not vanish the moment generation stops.
         if (explored.size() < MAX_EXPLORED) explored.add(k);
-        if (settings.saveExplored) chunk.dirty = true;
+        // Whether its *contents* are written down is a different question, and
+        // it is the one distance answers. A chunk drawn at the horizon is a
+        // chunk the player has not touched a block of, and a pristine chunk is
+        // a function of the seed — so storing it is storing a megabyte to say
+        // what six bytes already said.
+        if (visited && settings.saveExplored) chunk.dirty = true;
         trim();
         return chunk;
     }
@@ -447,6 +466,32 @@ public final class WorldTerrain {
      * built before the ground behind them.
      */
     public void prefetch(int col, int row, int radiusChunks) {
+        prefetch(col, row, radiusChunks, radiusChunks);
+    }
+
+    /**
+     * {@link #prefetch(int, int, int)} with the two radii told apart: how far
+     * ground is <em>built</em>, and how far of it counts as having been
+     * <em>visited</em>.
+     *
+     * <p><b>They were the same number and should never have been.</b> A chunk
+     * gets built because something is about to draw it, which at a long render
+     * distance is a disc six chunks across. With
+     * {@link TerrainSettings#saveExplored} on, every one of those was written
+     * into the save file in full — four thousand columns of ground the player
+     * had seen at the horizon and not touched a block of. A pristine chunk is a
+     * function of the seed, so that is a megabyte spent saying what the seed
+     * already said.
+     *
+     * <p>What the far ring still does is join {@code explored}, because that is
+     * the world's <em>boundary</em> rather than a record of interference:
+     * ground seen from a hilltop should not vanish when generation stops.
+     *
+     * @param exploreChunks how near the player has to be for a chunk's contents
+     *                      to be worth storing; further out they are built,
+     *                      drawn, and left to the seed
+     */
+    public void prefetch(int col, int row, int radiusChunks, int exploreChunks) {
         if (frozen && explored.isEmpty()) return;
         int cx = Math.floorDiv(col, CHUNK), cy = Math.floorDiv(row, CHUNK);
         centreKey = key(cx, cy);
@@ -465,9 +510,10 @@ public final class WorldTerrain {
                     if (frozen && !explored.contains(k)) continue;
                     if (!pending.add(k)) continue;
                     final int fx = gx, fy = gy;
+                    final boolean visited = ring <= exploreChunks;
                     pool.execute(() -> {
                         try {
-                            build(k, fx, fy);
+                            build(k, fx, fy, visited);
                         } catch (RuntimeException e) {
                             System.err.println("WorldTerrain: chunk " + fx + "," + fy
                                     + " failed to generate: " + e);

@@ -2672,7 +2672,9 @@ public class PlayScene extends AbstractScene {
         GameProfile p = profile();
         int view = p != null && p.terrain != null
                 ? p.terrain.renderDistance : SolidPainter.DEFAULT_VIEW_TILES;
-        level.streamTerrain(me.x + hitSize() / 2, me.y + hitSize() / 2, view);
+        // With the player's height, so digging down stops streaming a disc of
+        // surface world nobody can see any of (Level.streamTerrain).
+        level.streamTerrain(me.x + hitSize() / 2, me.y + hitSize() / 2, me.z, view);
     }
 
     /**

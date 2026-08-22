@@ -258,7 +258,7 @@ public final class GamePackage {
             if (root.get("levels") instanceof Map<?, ?> levels) {
                 for (Map.Entry<?, ?> e : levels.entrySet()) {
                     Path lf = levelsDir.resolve(GameTypeStore.fileName(String.valueOf(e.getKey())));
-                    Files.writeString(lf, Json.stringify(e.getValue()));
+                    com.larsons.engine.level.LevelFile.write(lf, Json.stringify(e.getValue()));
                 }
             }
             if (root.get("doors") != null) {
@@ -340,7 +340,10 @@ public final class GamePackage {
 
     private static Object readJson(Path file) {
         try {
-            return Json.parse(Files.readString(file));
+            // Level files are deflated on disk (LevelFile) and the sidecars
+            // beside them are not; reading both through the same door is what
+            // keeps a package's contents plain JSON whichever it collected.
+            return Json.parse(com.larsons.engine.level.LevelFile.read(file));
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
