@@ -11,6 +11,7 @@ import com.larsons.engine.world.gen.Biomes;
 import com.larsons.engine.world.gen.TerrainSettings;
 import com.larsons.engine.world.gen.WorldExpansion;
 import com.larsons.engine.world.gen.WorldGenerator;
+import com.larsons.engine.world.gen.WorldLod;
 import com.larsons.engine.world.gen.WorldTerrain;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -24,6 +25,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -565,6 +569,126 @@ class InfiniteTerrainTest {
         return false;
     }
 
+    // --- the column mesh -----------------------------------------------------------
+
+    /**
+     * <b>A column's faces are worked out once and kept.</b> This is the chunk
+     * mesh, in the shape this engine's storage takes, and it is the largest
+     * thing the detailed sweep stopped doing: the question "is this face
+     * exposed" is answered from five columns of neighbours and cannot change
+     * unless one of them does, while a frame used to ask it again for every
+     * cell of the view distance a hundred and twenty times a second.
+     */
+    @Test
+    void aColumnsFacesAreWorkedOutOnceAndKept() {
+        Level lvl = worldLevel(2468);
+        int[] authored = lvl.terrain().authoredBounds();
+        int col = authored[0] + authored[2] + 70, row = authored[1] + 70;
+
+        int[] first = lvl.columnFaces(col, row);
+        assertNotNull(first);
+        assertTrue(first.length > 0, "there is ground here");
+        assertSame(first, lvl.columnFaces(col, row), "asked twice, answered once");
+
+        // Every entry names a layer that is actually filled, and at least one
+        // face of it — an entry with no faces would be work with nothing to do.
+        int previous = -1;
+        for (int packed : first) {
+            int layer = (packed >>> WorldTerrain.FACE_BITS) & WorldTerrain.LAYER_MASK;
+            int mask = packed & ((1 << WorldTerrain.FACE_BITS) - 1);
+            int id = packed >>> (WorldTerrain.FACE_BITS + WorldTerrain.LAYER_BITS);
+            assertTrue(layer > previous, "faces come back in order");
+            previous = layer;
+            assertNotEquals(0, mask, "a listed layer has a face");
+            assertEquals(lvl.tileAt(col, row, layer), id, "and it carries its own block");
+        }
+    }
+
+    /**
+     * Putting a block down forgets the mesh of the column it landed in
+     * <em>and</em> of the four beside it — a face is a fact about two cells, so
+     * a block placed here is a face that stopped existing next door.
+     */
+    @Test
+    void aBlockPlacedForgetsItsNeighboursMeshes() {
+        Level lvl = worldLevel(1357);
+        int[] authored = lvl.terrain().authoredBounds();
+        int col = authored[0] + authored[2] + 70, row = authored[1] + 70;
+        int layer = Math.max(1, lvl.columnDepth(col, row));
+
+        int[] before = lvl.columnFaces(col + 1, row);
+        assertNotNull(before);
+        assertTrue(lvl.setTile(col, row, layer, lvl.blocks.get("stone").id()));
+        assertNotSame(before, lvl.columnFaces(col + 1, row),
+                "the neighbour's mesh has to be worked out again");
+
+        // …and the answer has to be the new one: the face the neighbour used to
+        // show toward this column is now against a block.
+        assertTrue(lvl.columnFaces(col, row).length > 0, "the new block is drawn");
+    }
+
+    // --- the level-of-detail tree --------------------------------------------------
+
+    /**
+     * <b>Flat ground is a handful of quads, not a thousand.</b> A tile is
+     * {@value com.larsons.engine.world.gen.WorldLod#SAMPLES}&sup2; samples of
+     * the surface; greedy meshing merges every run that shares a height and a
+     * block before anything is drawn, which is what makes a horizon two hundred
+     * and fifty-six chunks deep affordable — the plains and the seabed that
+     * make up most of any world collapse to almost nothing.
+     */
+    @Test
+    void theDistantTreeMergesGroundIntoRuns() {
+        Level lvl = worldLevel(864);
+        WorldLod lod = lvl.terrain().lod();
+        assertNotNull(lod);
+        // A tile the test's world actually has: its worldSize is the smallest
+        // the settings offer, so the coarser levels are only a tile or two
+        // across it.
+        int level = 1;
+        int tile = Math.min(1, lod.tilesAcross(level) - 1);
+        int[] mesh = null;
+        for (int i = 0; i < 400 && mesh == null; i++) {
+            mesh = lod.tile(level, tile, tile);
+            if (mesh == null) sleep();
+        }
+        assertNotNull(mesh, "the tile is built on a worker and arrives");
+        int boxes = mesh.length / WorldLod.BOX_STRIDE;
+        assertTrue(boxes > 0, "a tile of world has ground in it");
+        assertTrue(boxes < WorldLod.SAMPLES * WorldLod.SAMPLES / 2,
+                "greedy meshing has to be worth having: " + boxes + " boxes of "
+                        + (WorldLod.SAMPLES * WorldLod.SAMPLES) + " samples");
+
+        // Every box is a rectangle inside its own tile, at a height on the axis.
+        int side = WorldLod.tileCells(level);
+        for (int i = 0; i < mesh.length; i += WorldLod.BOX_STRIDE) {
+            assertTrue(mesh[i] < mesh[i + 2], "a box has width");
+            assertTrue(mesh[i + 1] < mesh[i + 3], "and depth");
+            assertTrue(mesh[i] >= tile * side && mesh[i + 2] <= (tile + 1) * side,
+                    "and stays inside its tile");
+            assertTrue(mesh[i + 4] >= 0 && mesh[i + 4] < TerrainSettings.MAX_LEVEL);
+        }
+        assertSame(mesh, lod.tile(level, tile, tile), "built once, then kept");
+    }
+
+    /**
+     * The level a tile is drawn at grows with how far away it is — which is the
+     * whole level-of-detail policy, and the reason each ring of the horizon
+     * costs what the one inside it did rather than nine times as much.
+     */
+    @Test
+    void theDistantTreeGetsCoarserWithDistance() {
+        int ts = 32;
+        int near = WorldLod.levelFor(64 * ts, ts, 0.10);
+        int mid = WorldLod.levelFor(512 * ts, ts, 0.10);
+        int far = WorldLod.levelFor(4096 * ts, ts, 0.10);
+        assertTrue(near <= mid, "further is never finer: " + near + " then " + mid);
+        assertTrue(mid < far, "and a long way further is coarser: " + mid + " then " + far);
+        assertTrue(far <= WorldLod.MAX_LEVEL, "and it stops at the coarsest there is");
+        assertTrue(WorldLod.stepCells(far) > WorldLod.stepCells(near),
+                "a coarser level samples the ground less often");
+    }
+
     /** An ordinary level's sweep is unchanged: every layer, from the floor up. */
     @Test
     void anOrdinaryLevelSweepsEveryLayer() {
@@ -877,11 +1001,15 @@ class InfiniteTerrainTest {
 
     // --- settings ------------------------------------------------------------------
 
-    /** The render distance slider reaches 192 and the horizon reaches 2048. */
+    /**
+     * The render distance slider reaches ninety chunks and distant generation
+     * reaches two hundred and fifty-six — and the painter accepts both.
+     */
     @Test
     void theSlidersReachWhatTheyWereAskedTo() {
-        assertEquals(192, TerrainSettings.MAX_RENDER_DISTANCE);
-        assertEquals(2048, TerrainSettings.MAX_DISTANT_DISTANCE);
+        assertEquals(16, TerrainSettings.BLOCKS_PER_CHUNK, "a chunk is Minecraft's chunk");
+        assertEquals(90 * 16, TerrainSettings.MAX_RENDER_DISTANCE);
+        assertEquals(256 * 16, TerrainSettings.MAX_DISTANT_DISTANCE);
         assertEquals(TerrainSettings.MAX_RENDER_DISTANCE,
                 com.larsons.engine.graphics.SolidPainter.MAX_VIEW_TILES,
                 "the painter has to accept what the slider offers");
@@ -892,8 +1020,8 @@ class InfiniteTerrainTest {
         t.renderDistance = 5000;
         t.distantDistance = 99999;
         t.normalize();
-        assertEquals(192, t.renderDistance);
-        assertEquals(2048, t.distantDistance);
+        assertEquals(90 * 16, t.renderDistance);
+        assertEquals(256 * 16, t.distantDistance);
     }
 
     /** The settings round-trip through a level's own settings block. */

@@ -3155,6 +3155,7 @@ text you can copy between machines):
 | HUD size | 75–300%, for a HUD sized in pixels on a 4K display |
 | distant terrain | draw the world past the view distance, coarsely — see below |
 | detail distance | how much of the render distance is drawn *block by block* — see below |
+| decorations | how far flowers, grass and scenery are drawn — see below |
 
 They are edited from **Options** in the pause menu — the first place in the
 engine a player rather than an author can change how the game feels — and from
@@ -3792,11 +3793,14 @@ never turn generation on.
   threads well ahead of where you are walking, dropped furthest-first once the
   budget is passed, and rebuilt *identically* from the seed when you come back.
   Generation never happens on the frame that needs it.
-- **Only what can be seen is drawn.** The solid painter's column sweep visits
-  the layers that are not walled in on all six sides rather than every layer
-  from the floor
-  ([`Level.visibleLayers`](src/main/java/com/larsons/engine/level/Level.java)) —
-  the difference between drawing a mountain and drawing every block inside one.
+- **Only what can be seen is drawn, and it is worked out once.** Which faces of
+  a column are exposed is a fact about five columns of neighbours and cannot
+  change unless one of them does — so it is computed when the ground changes and
+  kept, and a frame reads an array
+  ([`WorldTerrain.columnFaces`](src/main/java/com/larsons/engine/world/gen/WorldTerrain.java)).
+  That is Minecraft's chunk mesh in the shape this engine's storage takes, and
+  it halved the detailed sweep: 22.4 ms to 10.8 at a four-chunk detail distance,
+  measured.
   *Walled in* means hidden by something that actually hides it: a flower, a pane
   of glass and the surface of a lake do not, which is why the ground under
   everything the generator scatters is drawn rather than seen through. A
@@ -3807,41 +3811,59 @@ never turn generation on.
   edge of the view, in the fog, for as long as it takes a worker thread to hand
   it over. Reads that *must* have an answer (a body standing on ground) still
   build what they need.
-- **A horizon that costs the same at any distance.** The coarse pass draws
-  landforms in rings whose box size is proportional to how far away they are, so
-  pushing the horizon out further no longer multiplies the number of boxes.
+- **A horizon that costs the same at any distance.** The far field is a cached
+  level-of-detail tree
+  ([`WorldLod`](src/main/java/com/larsons/engine/world/gen/WorldLod.java)) whose
+  tiles are chosen so a sample subtends the same angle wherever it is, so
+  pushing the horizon out adds rings that each cost what the first one did.
+- **The far field is built once, not per frame.** A tile is meshed on a worker
+  thread and kept until something edits the ground under it. The pass it
+  replaced re-sampled the whole horizon every frame, which at two thousand
+  blocks was most of what the horizon cost.
+- **Greedy-meshed.** A tile's samples are merged into the largest rectangles
+  that share a height and a block before anything is drawn, so a plain, a
+  seabed or a plateau is a handful of quads rather than a thousand — and a
+  merged box is level across its whole footprint, so it can be trusted to
+  occlude what is behind it.
 
-**Render distance** slides to **192 blocks** and the **horizon** behind it
-reaches **2048**. Both are set from the **pause menu** while you are looking at
-what they change, rather than from the editor's level settings — judging a view
-distance means seeing the view, and answering *"is this what is costing me the
-frame rate"* used to mean leaving the level, opening the editor, changing a
-number and coming back. The horizon also needs *Distant terrain* on in Options,
-which stays the player's own say over what their machine draws.
+### How far you can see, and how much of it is blocks
 
-Beside them is the number that decides what a frame costs. **Detail distance**
-is how much of the render distance is drawn a block at a time; past it the same
-world is drawn by the coarse pass. It has to be a separate number because the
-detailed sweep's cost grows with the *area* it covers — four times the distance
-is sixteen times the faces however well each one is culled — so a render
-distance worth having cannot be paid for a block at a time. Past the detail
-distance the cost is a function of *angle* instead, and stops caring how far you
-have asked to see. Measured over generated terrain at 1280×720, a frame:
+Four sliders, all in the **pause menu** while you are looking at what they
+change (a chunk is 16 blocks, as in Minecraft):
 
-| render distance | before | after |
+| slider | reaches | what it costs |
 |---|---|---|
-| 24 blocks | 17.7 ms | 13.7 ms |
-| 48 blocks | 44.2 ms | 21.1 ms |
-| 96 blocks | 154.2 ms | 30.1 ms |
-| 192 blocks | **601.6 ms** | **33.9 ms** |
+| **Render distance** | 90 chunks (1440 blocks) | almost nothing — it is drawn by the level-of-detail tree |
+| **Detail distance** | 90 chunks, defaults to **4** | *this is the frame*: it grows with the area it covers |
+| **Decorations** | 90 chunks, defaults to 12 | a stem and a billboard each, so its own dial |
+| **Distant generation** | 256 chunks (4096 blocks) | a millisecond and a half at full stretch |
 
-It defaults to **32 blocks**, which is past the render distance a level starts
-at — so a level played at the distance it was authored for is drawn exactly as
-it always was (the 24-block row above is the micro-cost of the sweep coming
-down, not the cap doing anything), and the cap is reached only by a player who
-has asked to see further than a renderer can draw a block at a time. Turn it up
-for a sharper middle distance and down for a faster frame; from an ordinary eye
-height the two pictures differ only in the treeline.
+They were on the editor's level-settings screen, which is the one place a
+player cannot reach: judging a view distance means seeing the view, and
+answering *"is this what is costing me the frame rate"* used to mean leaving
+the level, opening the editor, changing a number and coming back.
+
+**Detail distance is the one that matters**, and the reason is arithmetic: the
+detailed sweep's cost grows with the *area* it covers, so four times the
+distance is sixteen times the faces however well each one is culled. Measured
+over generated terrain at 1280×720, the sweep alone — 2 chunks 2.4 ms, 4
+chunks 10.3, 6 chunks 26.9, 8 chunks 53.5. Everything past it is drawn by the
+tree instead, for about a millisecond however far the render distance goes.
+Which is why one of these sliders reaches ninety chunks and the other one
+should not.
+
+What that buys, measured on the same ground and the same camera at the default
+detail distance of four chunks:
+
+| view | frame | of which CPU (sweep + far field) |
+|---|---|---|
+| 12 chunks, no distant generation | 38.0 ms | 11.4 ms |
+| 90 chunks, no distant generation | 45.4 ms | 11.8 ms |
+| 90 chunks + 256 chunks of distant generation | 48.4 ms | 12.7 ms |
+
+Seven times the view distance and a horizon four thousand blocks deep for
+**1.3 ms** of processor. The rest of each frame is Java2D rasterising the
+quads in software, which is what the GPU backend exists to take over.
 
 Seen from the **plan view** a generated world is drawn as a height-shaded map
 rather than as extrusions: lifting a column of three hundred one tile per layer

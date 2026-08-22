@@ -3,6 +3,7 @@ package com.larsons.engine.graphics;
 import com.larsons.engine.graphics.draw.DrawTarget;
 import com.larsons.engine.level.Level;
 import com.larsons.engine.world.Block;
+import com.larsons.engine.world.gen.WorldTerrain;
 
 import java.awt.Color;
 import java.awt.geom.AffineTransform;
@@ -154,27 +155,45 @@ public final class SolidPainter {
      * at the size it is ({@link #distant}). The same four distances then cost
      * 13.7, 21, 30 and <b>34</b>&nbsp;ms.
      *
-     * <p>Thirty-two, which is a third further than the render distance the
-     * detailed sweep was tuned at and about where a block stops being something
-     * you can see the texture of. Bigger buys a sharper middle distance for a
-     * cost that squares — forty costs half as much again as this, and
-     * forty-eight twice; smaller is what a slower machine sets it to. It is the
-     * near half of the two-number arrangement every game with a real view
-     * distance ends up with — Minecraft's render distance beside Distant
-     * Horizons' — and the reason both numbers exist is that they are answering
-     * different questions: how far can you see, and how much of that is worth a
-     * block each.
+     * <p><b>Four chunks</b>, and the number is a measurement rather than a
+     * taste. What the sweep costs on one machine, over generated terrain,
+     * against the same view: two chunks 2.4&nbsp;ms, four 10.3, six 26.9,
+     * eight 53.5. It squares, because the disc does. Four is where it still
+     * fits inside a frame with the rest of the game in it, and everything past
+     * it is drawn by {@link #distant} for about a millisecond however far the
+     * render distance goes — which is why the render distance can be ninety
+     * chunks and this cannot.
      *
-     * <p>Note what it does <em>not</em> change: a level played at the engine's
-     * default render distance of twenty-four is inside this, so the detailed
-     * sweep still draws all of it and the picture is the one it always was.
-     * The cap is only reached by a player who has asked to see further than the
-     * renderer can draw a block at a time, which is exactly who it is for.
+     * <p>It is the near half of the two-number arrangement every game with a
+     * real view distance ends up with — Minecraft's render distance beside
+     * Distant Horizons' — and the reason both numbers exist is that they are
+     * answering different questions: how far can you see, and how much of that
+     * is worth a block each. The slider goes to the render distance's own
+     * ceiling for a machine that can spend it.
      */
-    public static final int DEFAULT_DETAIL_TILES = 32;
+    public static final int DEFAULT_DETAIL_TILES =
+            4 * com.larsons.engine.world.gen.TerrainSettings.BLOCKS_PER_CHUNK;
 
-    /** The least the detailed sweep may be squeezed to, in tiles. */
-    public static final int MIN_DETAIL_TILES = 8;
+    /** The least the detailed sweep may be squeezed to, in tiles — one chunk. */
+    public static final int MIN_DETAIL_TILES =
+            com.larsons.engine.world.gen.TerrainSettings.BLOCKS_PER_CHUNK;
+
+    /**
+     * How far decorations are drawn by default, in tiles.
+     *
+     * <p>Scenery — a flower, a tuft of grass, a mushroom — is a billboard and a
+     * stem each, and there are more of them on a hillside than there are blocks
+     * of the hillside. They are also the first thing that stops being legible
+     * with distance: past a dozen chunks a flower is one pixel of green that
+     * costs the same as a flower you can see. So they get their own reach, and
+     * it is shorter than the ground's.
+     *
+     * <p>Never further than the detail distance, whatever this says: a
+     * decoration stands on a block, and past the detail distance there are no
+     * blocks for it to stand on — only the landforms that stand in for them.
+     */
+    public static final int DEFAULT_DECOR_TILES =
+            12 * com.larsons.engine.world.gen.TerrainSettings.BLOCKS_PER_CHUNK;
 
     /** The furthest the coarse horizon may be set to, in tiles. */
     public static final int MAX_DISTANT_TILES =
@@ -341,10 +360,14 @@ public final class SolidPainter {
      * this painter drew before there was a coarse pass to hand the rest to.
      */
     private int detailTiles = MAX_VIEW_TILES;
+    /** How far decorations are drawn, in tiles; see {@link #DEFAULT_DECOR_TILES}. */
+    private int decorTiles = MAX_VIEW_TILES;
     private double viewDistance;
     private double distantDistance;
     /** {@link #detailTiles} in world units, never past {@link #viewDistance}. */
     private double detailDistance;
+    /** {@link #decorTiles} in world units, never past {@link #detailDistance}. */
+    private double decorDistance;
     /**
      * How far a face may be and still be queued, which is the detailed reach
      * for the ordinary sweep and the whole horizon while {@link #distant} runs.
@@ -489,12 +512,13 @@ public final class SolidPainter {
     public boolean inRange(double wx, double wy) {
         if (eye == null) return false;
         double dx = wx - eye.x(), dy = wy - eye.y();
-        // The detail distance rather than the view distance, because that is
-        // how far the world this sprite stands on is drawn a block at a time.
-        // Past it the ground is coarse boxes, which sort behind everything the
-        // detailed pass queued — so a sprite out there would be drawn in front
-        // of the hill it is standing behind rather than hidden by it.
-        return dx * dx + dy * dy <= detailDistance * detailDistance;
+        // The decoration reach rather than the view distance. Two reasons, and
+        // the second is the one that bites: past the detail distance the ground
+        // is landforms, which sort behind everything the detailed pass queued,
+        // so a tuft of grass out there would be drawn in front of the hill it
+        // is standing behind rather than hidden by it. And scenery is the first
+        // thing that stops being worth its cost with distance.
+        return dx * dx + dy * dy <= decorDistance * decorDistance;
     }
 
     /** Set how far the eye can see, in tiles. */
@@ -516,6 +540,18 @@ public final class SolidPainter {
      */
     public void setDetailTiles(int tiles) {
         this.detailTiles = Math.max(MIN_DETAIL_TILES, Math.min(MAX_VIEW_TILES, tiles));
+    }
+
+    /** How far decorations are drawn, in tiles. */
+    public int decorTiles() { return decorTiles; }
+
+    /**
+     * Set how far scenery is drawn — flowers, grass, the level's decor objects.
+     * Clamped to the detail distance when the frame is built, because a
+     * decoration stands on a block. See {@link #DEFAULT_DECOR_TILES}.
+     */
+    public void setDecorTiles(int tiles) {
+        this.decorTiles = Math.max(1, Math.min(MAX_VIEW_TILES, tiles));
     }
 
     /** How far the coarse pass reaches, in tiles; {@code 0} when it is off. */
@@ -629,6 +665,7 @@ public final class SolidPainter {
         this.viewDistance = viewTiles * (double) ts;
         this.distantDistance = distantTiles > viewTiles ? distantTiles * (double) ts : 0;
         this.detailDistance = Math.min(viewDistance, detailTiles * (double) ts);
+        this.decorDistance = Math.min(detailDistance, decorTiles * (double) ts);
         this.faceReach = detailDistance;
         this.orderBias = 0;
         this.cutRadius = 0;
@@ -1096,16 +1133,176 @@ public final class SolidPainter {
         // sampled heights rather than from chunks — but an ordinary level's
         // groupTop reads cells, and a level that is both would otherwise build
         // ground two thousand blocks away to put a box on it.
+        com.larsons.engine.world.gen.WorldLod lod = level.lod();
         boolean building = level.setBuildOnRead(false);
         try {
             for (int behind = 1; inner < outermost && behind <= MAX_RINGS; behind++) {
                 double outer = Math.min(outermost, inner * RING_SPLIT);
-                ring(groupFor(inner), inner, outer, behind);
+                if (lod != null) lodBand(lod, inner, outer, behind);
+                else ring(groupFor(inner), inner, outer, behind);
                 inner = outer;
             }
         } finally {
             level.setBuildOnRead(building);
         }
+    }
+
+    /**
+     * How wide one sample of the level-of-detail terrain is drawn, as a
+     * fraction of how far away it is.
+     *
+     * <p>The whole level-of-detail policy in one number: a sample subtends this
+     * much wherever it is, so what the far field costs is a function of the
+     * <em>screen</em> rather than of the distance, and pushing the horizon from
+     * four hundred blocks to four thousand adds rings that each cost what the
+     * first one did. A tenth of a radian is about a fifteenth of the screen's
+     * width at an ordinary field of view — coarse, which is what a landscape
+     * two thousand blocks away is entitled to be, and finer than the fifth of a
+     * radian this drew before {@link com.larsons.engine.world.gen.WorldLod}
+     * made the samples cheap enough to merge.
+     */
+    private static final double LOD_SAMPLE_ANGLE = 0.10;
+
+    /**
+     * One band of the level-of-detail terrain: the tiles between {@code inner}
+     * and {@code outer}, at the level whose samples are the right size there.
+     *
+     * <p>Nearest tile first, so the line-of-sight cull is testing against
+     * ground that is actually in front — the same order and the same buffer the
+     * detailed sweep uses, which by now holds the silhouette of everything
+     * drawn in detail.
+     */
+    private void lodBand(com.larsons.engine.world.gen.WorldLod lod,
+                         double inner, double outer, int behind) {
+        int ts = level.tileSize;
+        int lodLevel = com.larsons.engine.world.gen.WorldLod.levelFor(inner, ts,
+                LOD_SAMPLE_ANGLE);
+        int cells = com.larsons.engine.world.gen.WorldLod.tileCells(lodLevel);
+        double side = cells * (double) ts;
+        int across = lod.tilesAcross(lodLevel);
+        int t0c = Math.max(0, (int) Math.floor((eye.x() - outer) / side));
+        int t1c = Math.min(across - 1, (int) Math.floor((eye.x() + outer) / side));
+        int t0r = Math.max(0, (int) Math.floor((eye.y() - outer) / side));
+        int t1r = Math.min(across - 1, (int) Math.floor((eye.y() + outer) / side));
+        if (t0c > t1c || t0r > t1r) return;
+
+        faceReach = outer;
+        orderBias = DISTANT_ORDER * behind;
+        try {
+            int ec = Math.max(t0c, Math.min(t1c, (int) Math.floor(eye.x() / side)));
+            int er = Math.max(t0r, Math.min(t1r, (int) Math.floor(eye.y() / side)));
+            int rings = Math.max(Math.max(ec - t0c, t1c - ec), Math.max(er - t0r, t1r - er));
+            for (int k = 0; k <= rings; k++) {
+                if (k == 0) {
+                    lodTile(lod, lodLevel, ec, er, side, inner, outer);
+                    continue;
+                }
+                int left = ec - k, right = ec + k, up = er - k, down = er + k;
+                for (int tc = Math.max(t0c, left); tc <= Math.min(t1c, right); tc++) {
+                    if (up >= t0r) lodTile(lod, lodLevel, tc, up, side, inner, outer);
+                    if (down <= t1r) lodTile(lod, lodLevel, tc, down, side, inner, outer);
+                }
+                for (int tr = Math.max(t0r, up + 1); tr <= Math.min(t1r, down - 1); tr++) {
+                    if (left >= t0c) lodTile(lod, lodLevel, left, tr, side, inner, outer);
+                    if (right <= t1c) lodTile(lod, lodLevel, right, tr, side, inner, outer);
+                }
+            }
+        } finally {
+            faceReach = detailDistance;
+            orderBias = 0;
+        }
+    }
+
+    /** One tile of a band: cull the whole tile, then draw the boxes it merged into. */
+    private void lodTile(com.larsons.engine.world.gen.WorldLod lod, int lodLevel,
+                         int tc, int tr, double side, double inner, double outer) {
+        int ts = level.tileSize;
+        double x0 = tc * side, y0 = tr * side;
+        double cx = x0 + side / 2 - eye.x(), cy = y0 + side / 2 - eye.y();
+        // A tile is square and the band is round, so a tile is kept when any of
+        // it falls in the band rather than when its middle does — otherwise the
+        // boundary between two bands is a ring of missing world a tile wide.
+        double nearest = length(axisGap(eye.x(), x0, x0 + side),
+                axisGap(eye.y(), y0, y0 + side));
+        if (nearest > outer) return;
+        if (length(Math.abs(cx) + side / 2, Math.abs(cy) + side / 2) <= inner) return;
+        // The whole tile against the frustum before a single box of it is read:
+        // this is what a thousand samples costs when the tile is behind you.
+        if (!eye.boxVisible(x0, y0, 0, x0 + side, y0 + side,
+                level.layerCount() * (double) ts)) {
+            return;
+        }
+        int[] mesh = lod.tile(lodLevel, tc, tr);
+        if (mesh == null) return;   // still being built; it arrives in a frame or two
+        int stride = com.larsons.engine.world.gen.WorldLod.BOX_STRIDE;
+        for (int i = 0; i + stride <= mesh.length; i += stride) {
+            lodBox(mesh[i], mesh[i + 1], mesh[i + 2], mesh[i + 3],
+                    mesh[i + 4], mesh[i + 5], inner, outer);
+        }
+    }
+
+    /**
+     * One merged box of level-of-detail ground, as a solid.
+     *
+     * <p><b>Its height is exact over its whole footprint</b>, which the coarse
+     * pass this replaced could not say: that drew a fixed group of cells at the
+     * height of the <em>tallest</em> column in it, so it could neither be
+     * trusted to occlude (a spike would have culled the valley behind it) nor
+     * drawn without inventing ground that is not there. A greedy-meshed box is
+     * a rectangle the ground is level across, so it occludes at its own height
+     * and draws at its own height, and both are the truth.
+     */
+    private void lodBox(int c0, int r0, int c1, int r1, int layer, int id,
+                        double inner, double outer) {
+        if (c0 >= c1 || r0 >= r1) return;
+        int ts = level.tileSize;
+        double x0 = c0 * (double) ts, x1 = c1 * (double) ts;
+        double y0 = r0 * (double) ts, y1 = r1 * (double) ts;
+        double nearest = length(axisGap(eye.x(), x0, x1), axisGap(eye.y(), y0, y1));
+        if (nearest > outer) return;
+        // Inside the band's inner edge is somebody else's to draw — the band
+        // within, or the detailed sweep.
+        double dx = (x0 + x1) / 2 - eye.x(), dy = (y0 + y1) / 2 - eye.y();
+        if (length(Math.abs(dx) + (x1 - x0) / 2, Math.abs(dy) + (y1 - y0) / 2) <= inner) {
+            return;
+        }
+        double z1 = layer * (double) ts;
+        if (!eye.boxVisible(x0, y0, 0, x1, y1, z1 + ts)) return;
+
+        double far = length(Math.max(Math.abs(eye.x() - x0), Math.abs(eye.x() - x1)),
+                Math.max(Math.abs(eye.y() - y0), Math.abs(eye.y() - y1)));
+        double angle = pseudoAngle(dx, dy);
+        double width = Math.max(x1 - x0, y1 - y0);
+        if (hiddenBehindHorizon(angle, nearest, far, z1 + ts, width)) return;
+
+        Color colour = level.colorFor(id);
+        if (colour == null) return;
+        int col = (c0 + c1) / 2, row = (r0 + r1) / 2;
+        if (eye.z() > z1) {
+            face(col, row, layer, x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1,
+                    colour, SHADE_TOP, null);
+        }
+        if (z1 > 0) {
+            if (eye.y() < y0) {
+                face(col, row, layer, x0, y0, z1, x1, y0, z1, x1, y0, 0, x0, y0, 0,
+                        colour, SHADE_NORTH_SOUTH, null);
+            }
+            if (eye.y() > y1) {
+                face(col, row, layer, x1, y1, z1, x0, y1, z1, x0, y1, 0, x1, y1, 0,
+                        colour, SHADE_NORTH_SOUTH, null);
+            }
+            if (eye.x() > x1) {
+                face(col, row, layer, x1, y0, z1, x1, y1, z1, x1, y1, 0, x1, y0, 0,
+                        colour, SHADE_EAST_WEST, null);
+            }
+            if (eye.x() < x0) {
+                face(col, row, layer, x0, y1, z1, x0, y0, z1, x0, y0, 0, x0, y1, 0,
+                        colour, SHADE_EAST_WEST, null);
+            }
+        }
+        // Level across its whole footprint, so this is exact rather than the
+        // under-claim a group of cells had to settle for.
+        raiseHorizon(angle, length(dx, dy), z1, Math.min(x1 - x0, y1 - y0));
     }
 
     /**
@@ -1292,11 +1489,26 @@ public final class SolidPainter {
         }
 
         int depth = level.columnDepth(col, row);
-        // The layers worth looking at, rather than all of them. Every layer of
-        // the column on an ordinary level — there is nothing to save in a stack
-        // of three — and on a generated world the handful that are not walled
-        // in on all six sides, which is the difference between drawing a
-        // mountain and drawing every block inside one. See Level.visibleLayers.
+        // The column's own mesh, where there is one: which faces of which
+        // layers exist, worked out when the ground last changed rather than
+        // now. See WorldTerrain.columnFaces — it is the largest single thing
+        // this pass does not do any more.
+        int[] mesh = level.columnFaces(col, row);
+        if (mesh != null) {
+            for (int packed : mesh) {
+                int layer = (packed >>> WorldTerrain.FACE_BITS) & WorldTerrain.LAYER_MASK;
+                if (layer >= depth) break;
+                int id = packed >>> (WorldTerrain.FACE_BITS + WorldTerrain.LAYER_BITS);
+                Block block = blockOf(id);
+                if (block == null) continue;
+                if (block.plant()) plant(col, row, block, layer);
+                else meshed(col, row, block, layer, packed & FACE_MASK);
+            }
+            return;
+        }
+        // Every layer of the column on a level whose columns are a handful of
+        // blocks deep: there is nothing to save by picking through a stack of
+        // three, and nothing to cache it on.
         int count = level.visibleLayers(col, row, layerScratch);
         for (int i = 0; i < count; i++) {
             int layer = layerScratch[i];
@@ -1306,6 +1518,79 @@ public final class SolidPainter {
             if (block == null) continue;
             if (block.plant()) plant(col, row, block, layer);
             else block(col, row, block, layer, depth);
+        }
+    }
+
+    /** Every bit of a packed face entry that is a face. */
+    private static final int FACE_MASK = (1 << WorldTerrain.FACE_BITS) - 1;
+
+    /**
+     * The faces of one block, from the column's cached mesh: which of them
+     * <em>exist</em> is read rather than worked out, and which of them face the
+     * eye is still asked here.
+     *
+     * <p><b>The two questions are different and only one of them can be
+     * cached.</b> Whether a face is exposed is a fact about six cells of the
+     * world and changes only when one of them does; whether it points at the
+     * eye changes every time the player moves, and is one comparison. Splitting
+     * them is what makes a chunk mesh worth keeping — see
+     * {@link WorldTerrain#columnFaces}.
+     */
+    private void meshed(int col, int row, Block block, int layer, int mask) {
+        int ts = level.tileSize;
+        double x0 = col * (double) ts, x1 = x0 + ts;
+        double y0 = row * (double) ts, y1 = y0 + ts;
+        double z0 = (layer - 1) * (double) ts;
+        double z1 = layer * (double) ts;
+        Color colour = block.color();
+        // The eye's own cell is open whatever is standing in it. The mesh
+        // cannot know that — it is a fact about where somebody is, not about
+        // the world — so the handful of cells around the eye put the faces back
+        // by hand. Only the handful: this is nine cells of the hundred thousand
+        // a sweep visits.
+        if (Math.abs(col - eyeCol) <= 1 && Math.abs(row - eyeRow) <= 1) {
+            int id = block.id();
+            if (open(col, row, layer + 1, id)) mask |= WorldTerrain.FACE_UP;
+            if (layer > 1 && open(col, row, layer - 1, id)) mask |= WorldTerrain.FACE_DOWN;
+            if (open(col, row - 1, layer, id)) mask |= WorldTerrain.FACE_NORTH;
+            if (open(col, row + 1, layer, id)) mask |= WorldTerrain.FACE_SOUTH;
+            if (open(col + 1, row, layer, id)) mask |= WorldTerrain.FACE_EAST;
+            if (open(col - 1, row, layer, id)) mask |= WorldTerrain.FACE_WEST;
+        }
+        BufferedImage top = null, side = null;
+        if ((mask & (WorldTerrain.FACE_UP | WorldTerrain.FACE_DOWN)) != 0) {
+            top = topTexture(block);
+        }
+        if ((mask & (WorldTerrain.FACE_NORTH | WorldTerrain.FACE_SOUTH
+                | WorldTerrain.FACE_EAST | WorldTerrain.FACE_WEST)) != 0) {
+            side = sideTexture(block);
+        }
+        if ((mask & WorldTerrain.FACE_UP) != 0 && eye.z() > z1) {
+            face(col, row, layer, x0, y0, z1, x1, y0, z1, x1, y1, z1, x0, y1, z1,
+                    colour, SHADE_TOP, top);
+        }
+        // Layer 1 stands on the floor, which is a surface rather than a cell:
+        // its underside is the same quad as the floor's own lid, and drawing
+        // both is two coplanar fills fighting over the pixels.
+        if ((mask & WorldTerrain.FACE_DOWN) != 0 && layer > 1 && eye.z() < z0) {
+            face(col, row, layer, x0, y0, z0, x0, y1, z0, x1, y1, z0, x1, y0, z0,
+                    colour, SHADE_BOTTOM, top);
+        }
+        if ((mask & WorldTerrain.FACE_NORTH) != 0 && eye.y() < y0) {
+            face(col, row, layer, x0, y0, z1, x1, y0, z1, x1, y0, z0, x0, y0, z0,
+                    colour, SHADE_NORTH_SOUTH, side);
+        }
+        if ((mask & WorldTerrain.FACE_SOUTH) != 0 && eye.y() > y1) {
+            face(col, row, layer, x1, y1, z1, x0, y1, z1, x0, y1, z0, x1, y1, z0,
+                    colour, SHADE_NORTH_SOUTH, side);
+        }
+        if ((mask & WorldTerrain.FACE_EAST) != 0 && eye.x() > x1) {
+            face(col, row, layer, x1, y0, z1, x1, y1, z1, x1, y1, z0, x1, y0, z0,
+                    colour, SHADE_EAST_WEST, side);
+        }
+        if ((mask & WorldTerrain.FACE_WEST) != 0 && eye.x() < x0) {
+            face(col, row, layer, x0, y1, z1, x0, y0, z1, x0, y0, z0, x0, y1, z0,
+                    colour, SHADE_EAST_WEST, side);
         }
     }
 
@@ -1329,6 +1614,13 @@ public final class SolidPainter {
     private void plant(int col, int row, Block block, int layer) {
         int ts = level.tileSize;
         double cx = (col + 0.5) * ts, cy = (row + 0.5) * ts;
+        // Scenery has its own reach, and it is shorter than the ground's: a
+        // plant is a stem and a billboard where a block is one quad, there are
+        // more of them on a hillside than there are blocks of hillside, and at
+        // a dozen chunks a flower is a green pixel that costs what a flower
+        // costs. See DEFAULT_DECOR_TILES.
+        double px = cx - eye.x(), py = cy - eye.y();
+        if (px * px + py * py > decorDistance * decorDistance) return;
         double z0 = (layer - 1) * (double) ts;
         double half = ts * STEM_HALF_WIDTH;
         double stemTop = z0 + ts * STEM_HEIGHT;

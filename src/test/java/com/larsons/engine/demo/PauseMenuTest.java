@@ -247,8 +247,10 @@ class PauseMenuTest {
                 "the render distance is set here now: " + labels);
         assertTrue(labels.stream().anyMatch(l -> l.startsWith("Detail distance")),
                 "and so is how much of it is drawn a block at a time: " + labels);
-        assertTrue(labels.stream().anyMatch(l -> l.startsWith("Horizon")),
-                "and the horizon behind it: " + labels);
+        assertTrue(labels.stream().anyMatch(l -> l.startsWith("Decorations")),
+                "and how far the flowers go: " + labels);
+        assertTrue(labels.stream().anyMatch(l -> l.startsWith("Distant generation")),
+                "and the landscape behind it all: " + labels);
         assertEquals("Resume", labels.get(0),
                 "the way out is still the first thing offered");
     }

@@ -122,6 +122,22 @@ public final class PlayerSettings {
      */
     public int detailDistance = com.larsons.engine.graphics.SolidPainter.DEFAULT_DETAIL_TILES;
 
+    /**
+     * How far scenery is drawn, in blocks — flowers, grass, the level's decor
+     * objects and its painted surface details.
+     *
+     * <p>Its own number because it is its own cost. A decoration is a stem and
+     * a billboard each and there are more of them on a hillside than there are
+     * blocks of the hillside, so they are the cheapest thing to give up and the
+     * last thing anyone notices going: past a dozen chunks a flower is one
+     * pixel of green. Never drawn further than {@link #detailDistance},
+     * whatever this says — a decoration stands on a block, and past the detail
+     * distance there are no blocks for it to stand on.
+     *
+     * @see com.larsons.engine.graphics.SolidPainter#setDecorTiles(int)
+     */
+    public int decorDistance = com.larsons.engine.graphics.SolidPainter.DEFAULT_DECOR_TILES;
+
     public static final double MIN_SENSITIVITY = 0.1;
     public static final double MAX_SENSITIVITY = 5.0;
     public static final double MIN_HUD_SCALE = 0.75;
@@ -129,6 +145,10 @@ public final class PlayerSettings {
     public static final int MIN_DETAIL_DISTANCE =
             com.larsons.engine.graphics.SolidPainter.MIN_DETAIL_TILES;
     public static final int MAX_DETAIL_DISTANCE =
+            com.larsons.engine.graphics.SolidPainter.MAX_VIEW_TILES;
+    public static final int MIN_DECOR_DISTANCE =
+            com.larsons.engine.world.gen.TerrainSettings.BLOCKS_PER_CHUNK;
+    public static final int MAX_DECOR_DISTANCE =
             com.larsons.engine.graphics.SolidPainter.MAX_VIEW_TILES;
 
     public PlayerSettings copy() {
@@ -143,6 +163,7 @@ public final class PlayerSettings {
         lookSensitivity = clamp(lookSensitivity, MIN_SENSITIVITY, MAX_SENSITIVITY);
         hudScale = clamp(hudScale, MIN_HUD_SCALE, MAX_HUD_SCALE);
         detailDistance = (int) clamp(detailDistance, MIN_DETAIL_DISTANCE, MAX_DETAIL_DISTANCE);
+        decorDistance = (int) clamp(decorDistance, MIN_DECOR_DISTANCE, MAX_DECOR_DISTANCE);
     }
 
     public Map<String, Object> toMap() {
@@ -155,6 +176,7 @@ public final class PlayerSettings {
         m.put("hudScale", hudScale);
         m.put("distantTerrain", distantTerrain);
         m.put("detailDistance", detailDistance);
+        m.put("decorDistance", decorDistance);
         return m;
     }
 
@@ -177,6 +199,8 @@ public final class PlayerSettings {
                 ? d : s.distantTerrain;
         s.detailDistance = m.get("detailDistance") instanceof Number n
                 ? n.intValue() : s.detailDistance;
+        s.decorDistance = m.get("decorDistance") instanceof Number d
+                ? d.intValue() : s.decorDistance;
         s.normalize();
         return s;
     }
