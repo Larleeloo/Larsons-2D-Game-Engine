@@ -102,6 +102,17 @@ public final class PlayerOptionsForm {
             settings.distantTerrain = v;
             changed.run();
         });
+        // The performance dial of the solid views, and the one setting here a
+        // player changes because of their machine rather than because of their
+        // taste. It is also on the pause menu, beside the render distance it
+        // is measured against, because that is where somebody notices they need
+        // it — this copy is for the player who goes looking in Options.
+        form.addSlider("Detail distance (blocks)", () -> settings.detailDistance, v -> {
+            settings.detailDistance = v;
+            changed.run();
+        }, PlayerSettings.MIN_DETAIL_DISTANCE, PlayerSettings.MAX_DETAIL_DISTANCE);
+        form.addNote("How much of the render distance is drawn block by block. "
+                + "Past it the world is drawn as landforms.");
 
         form.addAction("Reset to defaults", () -> {
             PlayerSettings defaults = new PlayerSettings();
@@ -112,6 +123,7 @@ public final class PlayerOptionsForm {
             settings.invertLook = defaults.invertLook;
             settings.hudScale = defaults.hudScale;
             settings.distantTerrain = defaults.distantTerrain;
+            settings.detailDistance = defaults.detailDistance;
             changed.run();
         });
         if (onDone != null) form.addAction("Back", onDone);

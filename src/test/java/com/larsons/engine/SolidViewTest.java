@@ -456,6 +456,127 @@ class SolidViewTest {
         assertNull(SolidPainter.pick(eye, lvl, 10_000), "straight up, out of the world");
     }
 
+    // --- how far the world is drawn, and how much of it a block at a time ------
+
+    /**
+     * <b>A long render distance costs what the detail distance costs.</b> The
+     * reported fault was a frame rate that fell apart as the render distance
+     * went up, and the reason it had to was arithmetic: the detailed sweep's
+     * cost grows with the <em>area</em> it covers, so four times the distance is
+     * sixteen times the faces however well each one is culled. Past the detail
+     * distance the same world is now drawn by the coarse pass, whose cost is a
+     * function of angle rather than of distance — so this is the property the
+     * fix has to have, and the only one worth pinning: <b>eight times the
+     * render distance is not eight times the frame</b>.
+     */
+    @Test
+    void aLongRenderDistanceCostsWhatTheDetailDistanceCosts() {
+        Level plain = rolling(220);
+        int near = faces(plain, plainEye(), 24, 24);
+        int far = faces(plain, plainEye(), 192, 24);
+        assertTrue(far > near, "the world past the detail distance is still drawn: "
+                + far + " vs " + near);
+        assertTrue(far < near * 3, "…and drawing eight times as far cost " + far
+                + " faces against " + near + ", which is not a coarse pass at all");
+
+        // What it would have cost without one, at the same distance.
+        int uncapped = faces(plain, plainEye(), 192, 192);
+        assertTrue(uncapped > far * 4, "the detail cap has to be worth having: "
+                + uncapped + " faces uncapped against " + far);
+    }
+
+    /**
+     * And it changes nothing until the render distance passes it: a level
+     * played at the distance it was authored for is drawn exactly as it was.
+     */
+    @Test
+    void theDetailCapDoesNothingInsideTheRenderDistance() {
+        Level plain = rolling(220);
+        assertEquals(faces(plain, plainEye(), 24, 192), faces(plain, plainEye(), 24, 40),
+                "a detail distance past the render distance has nothing to cap");
+    }
+
+    /**
+     * Drawing a generated world does not <em>build</em> any of it.
+     *
+     * <p>The other half of the frame-rate fault, and the one that showed up as
+     * a stutter rather than as a low average: a chunk is tens of milliseconds
+     * to generate, the sweep asked for whatever it wanted to draw, and it asked
+     * on the thread rendering the frame. Walking toward unstreamed ground
+     * therefore paid for chunks a frame at a time. What is not built yet is
+     * simply not drawn this frame, at the far edge of the view, in the fog.
+     */
+    @Test
+    void drawingAWorldDoesNotBuildIt() {
+        Level lvl = LevelFormat.THREE_D.starterLevel("World", 64, 64, TILE);
+        GameProfile settings = new GameProfile("solid-test");
+        settings.verticality = true;
+        settings.perspective = lvl.perspective;
+        com.larsons.engine.world.gen.TerrainSettings terrain =
+                new com.larsons.engine.world.gen.TerrainSettings();
+        terrain.enabled = true;
+        terrain.seed = 4242;
+        terrain.worldSize = com.larsons.engine.world.gen.TerrainSettings.MIN_WORLD_SIZE;
+        terrain.normalize();
+        settings.terrain = terrain;
+        lvl.settings = settings;
+        lvl.applyTerrainSettings();
+
+        int[] bounds = lvl.terrain().authoredBounds();
+        // Ground nothing has streamed: a long way outside the authored level,
+        // and outside anything the level's own set-up touched.
+        double x = (bounds[0] + bounds[2] + 600) * (double) TILE;
+        double y = (bounds[1] + 600) * (double) TILE;
+        int before = lvl.terrain().loadedChunks();
+
+        RecordingTarget target = new RecordingTarget(400, 300);
+        SolidPainter painter = new SolidPainter();
+        painter.setViewTiles(192);
+        painter.setDetailTiles(48);
+        painter.setDistantTiles(0);
+        painter.begin(target, eyeAt(x, y, 160 * TILE, 0.6, -0.2), lvl);
+        painter.terrain();
+        painter.distant();
+        painter.flush();
+
+        assertEquals(before, lvl.terrain().loadedChunks(),
+                "a frame must not generate the world it is drawing");
+        lvl.terrain().close();
+    }
+
+    /** How many faces one frame queues at these two distances. */
+    private static int faces(Level lvl, EyeCamera eye, int viewTiles, int detailTiles) {
+        RecordingTarget target = new RecordingTarget(eye.viewportWidth(), eye.viewportHeight());
+        SolidPainter painter = new SolidPainter();
+        painter.setViewTiles(viewTiles);
+        painter.setDetailTiles(detailTiles);
+        painter.setDistantTiles(0);
+        painter.begin(target, eye, lvl);
+        painter.terrain();
+        painter.distant();
+        painter.flush();
+        return target.count("fillPolygon");
+    }
+
+    /** An eye standing on the plain of {@link #rolling}, looking across it. */
+    private static EyeCamera plainEye() {
+        return eyeAt(110 * TILE, 200 * TILE, TILE * 2.5, 0, -0.1);
+    }
+
+    /**
+     * A square of ground with a block on every eighth cell — flat enough that
+     * the line-of-sight cull removes almost nothing, so what is being measured
+     * is the sweep's own reach rather than the shape of a hill.
+     */
+    private static Level rolling(int size) {
+        Level lvl = bare(size, size);
+        lvl.fillFloor(lvl.blocks.get("stone_path").id());
+        for (int col = 0; col < size; col += 8) {
+            for (int row = 0; row < size; row += 8) lvl.setTile(col, row, 1, stone(lvl));
+        }
+        return lvl;
+    }
+
     // --- what the eye cannot see ----------------------------------------------
 
     /**

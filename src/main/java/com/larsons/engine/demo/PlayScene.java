@@ -10,6 +10,7 @@ import com.larsons.engine.config.CustomContentStore;
 import com.larsons.engine.config.GameContext;
 import com.larsons.engine.config.GameProfile;
 import com.larsons.engine.config.PlayerSettings;
+import com.larsons.engine.config.PlayerSettingsStore;
 import com.larsons.engine.audio.AudioManager.Sfx;
 import com.larsons.engine.audio.SceneSounds;
 import com.larsons.engine.audio.SoundKeys;
@@ -95,6 +96,7 @@ import com.larsons.engine.ui.MenuTheme;
 import com.larsons.engine.ui.PlayerOptionsForm;
 import com.larsons.engine.world.Block;
 import com.larsons.engine.world.World;
+import com.larsons.engine.world.gen.TerrainSettings;
 
 import java.awt.Color;
 import java.awt.Font;
@@ -2672,6 +2674,11 @@ public class PlayScene extends AbstractScene {
         GameProfile p = profile();
         int view = p != null && p.terrain != null
                 ? p.terrain.renderDistance : SolidPainter.DEFAULT_VIEW_TILES;
+        // Only as far as the world is drawn a block at a time. Past that it is
+        // drawn from sampled heights rather than from chunks, so building the
+        // chunks out there would be generating — and holding in memory — a disc
+        // of world that nothing is going to read a cell of.
+        view = Math.min(view, PlayerSettings.active().detailDistance);
         // With the player's height, so digging down stops streaming a disc of
         // surface world nobody can see any of (Level.streamTerrain).
         level.streamTerrain(me.x + hitSize() / 2, me.y + hitSize() / 2, me.z, view);
@@ -2688,6 +2695,12 @@ public class PlayScene extends AbstractScene {
      * stays the player's ({@link PlayerSettings#distantTerrain}), because it is
      * a statement about their machine; a level that asks for one is asking, and
      * a player who has turned it off is answering.
+     *
+     * <p>So is how much of the render distance is drawn a block at a time
+     * ({@link PlayerSettings#detailDistance}). That one does nothing until the
+     * render distance is set past it — see
+     * {@link SolidPainter#setDetailTiles(int)} for why the two numbers are
+     * separate, and what draws the world between them.
      */
     private void applyViewDistance(GameProfile p) {
         var terrain = p != null ? p.terrain : null;
@@ -2695,6 +2708,7 @@ public class PlayScene extends AbstractScene {
         int view = terrain != null && world
                 ? terrain.renderDistance : SolidPainter.DEFAULT_VIEW_TILES;
         solid.setViewTiles(view);
+        solid.setDetailTiles(PlayerSettings.active().detailDistance);
         int horizon = terrain != null && world
                 ? terrain.distantDistance : SolidPainter.DISTANT_VIEW_TILES;
         solid.setDistantTiles(PlayerSettings.active().distantTerrain ? horizon : 0);
@@ -3064,6 +3078,15 @@ public class PlayScene extends AbstractScene {
      * Settings</em> rather than here: those belong to the level and outlive the
      * session, and a pause menu that quietly rewrites the level being played is
      * how this engine used to lose people's work.
+     *
+     * <p><b>The view distances are the exception, and they earn it.</b> They
+     * were on that settings screen, which is the one place a player cannot
+     * reach them: how far to draw is a judgement about the machine and about
+     * the moment — the vista you climbed a mountain for wants it long, the
+     * fight that started stuttering wants it short — and answering it used to
+     * mean leaving the level, opening the editor's settings, and coming back to
+     * find out whether it had helped. Here they are three sliders you drag
+     * while looking at what they change.
      */
     private void buildPauseForm() {
         GameProfile p = profile();
@@ -3080,6 +3103,8 @@ public class PlayScene extends AbstractScene {
                 quitToMenu();
             }).enabledWhen(() -> run != null);
         }
+
+        addViewDistanceRows(p);
 
         pauseForm.addNote("");
         pauseForm.addAction("Options", this::openOptions);
@@ -3103,6 +3128,56 @@ public class PlayScene extends AbstractScene {
             pauseForm.addAction(net.isHost() ? "Stop Server & Quit" : "Disconnect & Quit",
                     this::leaveSession);
         }
+    }
+
+    /**
+     * The three sliders that say how far this frame draws, live.
+     *
+     * <p><b>Render distance</b> is how far of the world you can see at all, and
+     * belongs to the level: a creator who built a world to be looked across
+     * says how far across. <b>Detail distance</b> is how much of that is drawn
+     * a block at a time, and belongs to the player, because it is the one
+     * number that decides what a frame costs — everything past it is drawn as
+     * landforms, for a few thousand quads however far the render distance
+     * reaches ({@link SolidPainter#setDetailTiles}). <b>Horizon</b> is the
+     * coarse landscape drawn <em>beyond</em> the render distance, which is
+     * scenery rather than world.
+     *
+     * <p>Only on a generated world, because that is the only kind of level
+     * these numbers mean anything on: a hand-built level is drawn to its own
+     * edges whatever they say.
+     */
+    private void addViewDistanceRows(GameProfile p) {
+        if (level == null || !level.isWorld() || p == null || p.terrain == null) return;
+        var terrain = p.terrain;
+        PlayerSettings settings = PlayerSettings.active();
+        PlayerSettingsStore store = new PlayerSettingsStore();
+
+        pauseForm.addNote("");
+        pauseForm.addNote("— VIEW —");
+        pauseForm.addSlider("Render distance (blocks)", () -> terrain.renderDistance,
+                v -> {
+                    terrain.renderDistance = v;
+                    // The horizon is measured from the render distance, so it
+                    // cannot be inside it — the coarse pass would have nothing
+                    // to draw and the setting would read as broken.
+                    if (terrain.distantDistance > 0 && terrain.distantDistance < v) {
+                        terrain.distantDistance = v;
+                    }
+                }, 2, TerrainSettings.MAX_RENDER_DISTANCE);
+        pauseForm.addSlider("Detail distance (blocks)", () -> settings.detailDistance,
+                v -> {
+                    settings.detailDistance = v;
+                    store.trySave(settings);
+                }, PlayerSettings.MIN_DETAIL_DISTANCE, PlayerSettings.MAX_DETAIL_DISTANCE);
+        pauseForm.addSlider("Horizon (blocks, 0 = off)", () -> terrain.distantDistance,
+                        v -> terrain.distantDistance = v == 0 ? 0
+                                : Math.max(v, terrain.renderDistance),
+                        0, TerrainSettings.MAX_DISTANT_DISTANCE)
+                .enabledWhen(() -> PlayerSettings.active().distantTerrain);
+        pauseForm.addNote("Past the detail distance the world is drawn as "
+                + "landforms — cheaper, and the same however far you see.");
+        pauseForm.addNote("The horizon needs \"Distant terrain\" on in Options.");
     }
 
     /** Open the controls sheet over the pause menu (see {@link #updatePaused}). */

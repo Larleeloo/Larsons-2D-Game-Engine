@@ -33,11 +33,32 @@ public final class BlockRegistry {
     private final Map<Integer, Block> byId = new LinkedHashMap<>();
     private final Map<String, Block> byKey = new LinkedHashMap<>();
 
+    /**
+     * Bumped by every change to the set — what a cache over it watches.
+     *
+     * <p>Renderers build per-id lookup tables out of this registry (which ids
+     * hide what is behind them, mainly) because a map lookup per block face is
+     * a measurable share of a frame. A table is only safe to keep if there is
+     * something to notice a change by, and the size is not it: {@link #tune},
+     * {@link #setShape} and {@link #setFalling} all replace a row in place, so
+     * a creative session that reshapes a block into a plant leaves the count
+     * exactly where it was and every cached table quietly wrong.
+     */
+    private volatile int revision;
+
     private static final BlockRegistry STANDARD = createStandard();
 
     /** The engine's built-in block set (shared, immutable by convention). */
     public static BlockRegistry standard() {
         return STANDARD;
+    }
+
+    /**
+     * How many times this set has changed — the number a cache over it keeps
+     * beside its table. See {@link #revision}.
+     */
+    public int revision() {
+        return revision;
     }
 
     /** Register a block; rejects duplicate ids/keys so ids stay stable. */
@@ -50,6 +71,7 @@ public final class BlockRegistry {
         }
         byId.put(b.id(), b);
         byKey.put(b.key(), b);
+        revision++;
     }
 
     /**
@@ -63,6 +85,7 @@ public final class BlockRegistry {
         Block tuned = b.withDurability(hardness, tool);
         byId.put(tuned.id(), tuned);
         byKey.put(tuned.key(), tuned);
+        revision++;
     }
 
     /**
@@ -77,6 +100,7 @@ public final class BlockRegistry {
         Block next = b.withShape(shape);
         byId.put(next.id(), next);
         byKey.put(next.key(), next);
+        revision++;
     }
 
     /** Toggle a registered block's gravity behaviour in place (sand, gravel…). */
@@ -86,6 +110,7 @@ public final class BlockRegistry {
         Block next = b.withFalling(falling);
         byId.put(next.id(), next);
         byKey.put(next.key(), next);
+        revision++;
     }
 
     /**
@@ -95,6 +120,7 @@ public final class BlockRegistry {
     public void unregister(String key) {
         Block b = byKey.remove(key);
         if (b != null) byId.remove(b.id());
+        revision++;
     }
 
     /** The block with this id, or {@code null} (id 0 = empty). */
@@ -115,6 +141,72 @@ public final class BlockRegistry {
     public boolean isSolid(int id) {
         Block b = byId.get(id);
         return b != null && b.solid();
+    }
+
+    /**
+     * Whether block {@code id} hides whatever is behind it — {@link
+     * Block#covers()}, answered from a table rather than from the map.
+     *
+     * <p><b>An array read because of where this is asked from.</b> Every pass
+     * that draws the world asks it of all six neighbours of every block face it
+     * is thinking about queueing, which on a generated world is millions of
+     * times a frame; a {@code HashMap} lookup and a record field read is a
+     * measurable share of the frame at that rate, and the answer is a single
+     * bit per id. The table is rebuilt when {@link #revision()} moves, so a
+     * creator who reshapes a block into a plant mid-session gets the new answer
+     * on the next call rather than on the next level load.
+     *
+     * <p>An id this set does not know <b>covers</b>. That is not a guess about
+     * missing data: a level in palette mode has no block definitions at all and
+     * its tile ids are opaque paint, so "unknown" has to mean solid or every
+     * such level is drawn see-through.
+     */
+    public boolean covers(int id) {
+        if (id <= 0) return false;
+        boolean[] table = coversById;
+        if (coversRevision != revision) table = buildCovers();
+        if (id < table.length) return table[id];
+        Block b = byId.get(id);
+        return b == null || b.covers();
+    }
+
+    /**
+     * The whole {@link #covers} table, for a caller about to ask it thousands
+     * of times in one loop — <b>read only</b>; writing to it corrupts every
+     * renderer in the process.
+     *
+     * <p>Handed out rather than asked per id because the per-id call reads two
+     * {@code volatile} fields to check the table is current, and the loops that
+     * want this — a column sweep, a chunk mesher — are asking about a world
+     * that cannot change underneath them while they run. An id past the end of
+     * the array is one this set does not know, and so covers; see
+     * {@link #covers(int)}.
+     */
+    public boolean[] coversTable() {
+        boolean[] table = coversById;
+        return coversRevision == revision ? table : buildCovers();
+    }
+
+    /** Ids that hide what is behind them, indexed by id; see {@link #covers}. */
+    private volatile boolean[] coversById = new boolean[0];
+    private volatile int coversRevision = -1;
+
+    private synchronized boolean[] buildCovers() {
+        int rev = revision;
+        if (coversRevision == rev) return coversById;
+        int top = 0;
+        for (Integer id : byId.keySet()) top = Math.max(top, id);
+        boolean[] table = new boolean[top + 1];
+        // Unknown ids cover; see the note on covers(int).
+        java.util.Arrays.fill(table, true);
+        table[0] = false;
+        for (Map.Entry<Integer, Block> e : byId.entrySet()) {
+            int id = e.getKey();
+            if (id > 0 && id < table.length) table[id] = e.getValue().covers();
+        }
+        coversById = table;
+        coversRevision = rev;
+        return table;
     }
 
     /** Render colour for a tile id, or {@code null} for empty/unknown. */

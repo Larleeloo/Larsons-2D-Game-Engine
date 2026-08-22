@@ -457,6 +457,114 @@ class InfiniteTerrainTest {
                         + " layers swept of " + depthPerColumn);
     }
 
+    /**
+     * <b>The ground under a flower is drawn.</b> The reported fault, and the
+     * reason it was invisible in the code: the sweep skipped a layer whose six
+     * neighbours were all <em>non-empty</em>, and a flower is non-empty. So
+     * every column with anything growing on it lost its top block — the one
+     * the player is looking at — and the world was see-through wherever the
+     * generator had scattered a decoration, which on grassland is everywhere.
+     *
+     * <p>The test walks generated ground rather than a hand-placed flower on
+     * purpose: this is the path a world takes, and the hand-built path
+     * ({@link #anOrdinaryLevelSweepsEveryLayer}) never had the bug.
+     */
+    @Test
+    void theGroundUnderSomethingGrowingIsStillDrawn() {
+        Level lvl = worldLevel(1234);
+        int[] authored = lvl.terrain().authoredBounds();
+        int[] layers = new int[Level.MAX_LAYERS];
+        int planted = 0;
+        for (int col = authored[0] + authored[2] + 100; col < authored[0] + authored[2] + 164;
+                col++) {
+            for (int row = authored[1]; row < authored[1] + 64; row++) {
+                int depth = lvl.columnDepth(col, row);
+                if (depth < 3) continue;
+                Block top = lvl.blocks.get(lvl.tileAt(col, row, depth - 1));
+                if (top == null || !top.plant()) continue;   // nothing growing here
+                int under = depth - 2;
+                Block ground = lvl.blocks.get(lvl.tileAt(col, row, under));
+                if (ground == null || !ground.covers()) continue;
+                planted++;
+
+                int count = lvl.visibleLayers(col, row, layers);
+                boolean listed = false;
+                for (int i = 0; i < count; i++) {
+                    if (layers[i] == under) listed = true;
+                }
+                assertTrue(listed, "the block under the plant at " + col + "," + row
+                        + " (layer " + under + " of " + depth + ") was not drawn");
+            }
+        }
+        assertTrue(planted > 20, "this patch of world should be growing something: " + planted);
+    }
+
+    /**
+     * A neighbour you can see <em>through</em> does not hide the face behind
+     * it either — the same fault as the flower, wearing glass.
+     */
+    @Test
+    void aPaneOfGlassDoesNotHideTheWallBehindIt() {
+        Level lvl = worldLevel(77);
+        int[] authored = lvl.terrain().authoredBounds();
+        int col = authored[0] + authored[2] + 60, row = authored[1] + 60;
+        int depth = lvl.columnDepth(col, row);
+        int layer = Math.max(1, depth - 6);          // well inside the rock
+        int stone = lvl.blocks.get("stone").id();
+        int glass = lvl.blocks.get("glass").id();
+        for (int d = -1; d <= 1; d++) {
+            for (int e = -1; e <= 1; e++) {
+                for (int l = layer - 1; l <= layer + 1; l++) {
+                    lvl.setTile(col + d, row + e, l, stone);
+                }
+            }
+        }
+        int[] layers = new int[Level.MAX_LAYERS];
+        assertFalse(listed(lvl, col, row, layer, layers),
+                "walled in on all six sides by rock, it is not drawn");
+
+        lvl.setTile(col + 1, row, layer, glass);
+        assertTrue(listed(lvl, col, row, layer, layers),
+                "with a pane beside it, the face you can see through it is drawn");
+    }
+
+    /**
+     * A lake is not a face per layer of its depth. The rule that puts the
+     * ground back under a flower — draw against anything that does not cover —
+     * would say every cell of forty blocks of water has six visible faces, so
+     * it is qualified by the one exception that is always right: a block never
+     * shows a face to <em>itself</em>.
+     */
+    @Test
+    void waterAgainstWaterIsNotASurface() {
+        Level lvl = worldLevel(99);
+        int[] authored = lvl.terrain().authoredBounds();
+        int col = authored[0] + authored[2] + 90, row = authored[1] + 90;
+        int water = lvl.blocks.get("water").id();
+        int floor = lvl.columnDepth(col, row);
+        for (int d = -1; d <= 1; d++) {
+            for (int e = -1; e <= 1; e++) {
+                for (int l = floor; l < floor + 24; l++) lvl.setTile(col + d, row + e, l, water);
+            }
+        }
+        int[] layers = new int[Level.MAX_LAYERS];
+        int count = lvl.visibleLayers(col, row, layers);
+        int inside = 0;
+        for (int i = 0; i < count; i++) {
+            if (layers[i] > floor && layers[i] < floor + 23) inside++;
+        }
+        assertTrue(inside <= 2, "the middle of the pool has no faces in it: " + inside
+                + " of " + count + " layers drawn");
+    }
+
+    private static boolean listed(Level lvl, int col, int row, int layer, int[] layers) {
+        int count = lvl.visibleLayers(col, row, layers);
+        for (int i = 0; i < count; i++) {
+            if (layers[i] == layer) return true;
+        }
+        return false;
+    }
+
     /** An ordinary level's sweep is unchanged: every layer, from the floor up. */
     @Test
     void anOrdinaryLevelSweepsEveryLayer() {
@@ -477,7 +585,9 @@ class InfiniteTerrainTest {
         Level lvl = worldLevel(555);
         WorldTerrain world = lvl.terrain();
         int loadedBefore = world.loadedChunks();
-        int[] out = new int[2];
+        // Three: the tallest ground, what it is made of, and the lowest ground
+        // in the same group — which is what the horizon occludes with.
+        int[] out = new int[3];
         // Somewhere a very long way off, in the coarse pass's own group size.
         int col = 3000, row = 3000;
         // The first ask queues the sample tile; it lands on a worker thread.
